@@ -1,0 +1,14 @@
+# radroots_cli
+
+This is the README for `cli` which provides the `radroots` command-line
+interface for Rad Roots.
+
+## Copyright
+
+Except as otherwise noted, all files in the `radroots_cli` distribution are
+
+    Copyright (c) 2026 Tyson Lupul
+
+## License
+
+This repository is licensed under GPL-3.0-or-later. See LICENSE.

@@ -1,0 +1,17 @@
+[package]
+name = "radroots-cli"
+version = "0.1.0"
+edition = "2024"
+authors = ["Radroots Authors"]
+rust-version = "1.92.0"
+license = "GPL-3.0-or-later"
+description = "Radroots command-line interface for accounts, listings, trades, and sync"
+
+[[bin]]
+name = "radroots"
+path = "src/main.rs"
+
+[workspace]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
