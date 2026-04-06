@@ -1,0 +1,190 @@
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
+
+use assert_cmd::prelude::*;
+use radroots_identity::RadrootsIdentity;
+use serde_json::{Value, json};
+use tempfile::tempdir;
+
+#[test]
+fn myc_status_reports_ready_for_valid_full_status_payload() {
+    let dir = tempdir().expect("tempdir");
+    let executable = write_fake_myc(
+        dir.path(),
+        successful_status_script(sample_status_payload(true).to_string()).as_str(),
+    );
+
+    let output = Command::cargo_bin("radroots")
+        .expect("binary")
+        .args([
+            "--json",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "myc",
+            "status",
+        ])
+        .output()
+        .expect("run myc status");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["state"], "ready");
+    assert_eq!(json["ready"], true);
+    assert_eq!(json["service_status"], "healthy");
+    assert_eq!(json["local_signer"]["availability"], "secret_backed");
+    assert_eq!(json["custody"]["signer"]["resolved"], true);
+    assert_eq!(
+        json["custody"]["user"]["selected_account_state"],
+        "public_only"
+    );
+}
+
+#[test]
+fn myc_status_reports_unavailable_for_invalid_status_payload() {
+    let dir = tempdir().expect("tempdir");
+    let executable = write_fake_myc(dir.path(), "#!/bin/sh\nprintf '%s\\n' 'this is not json'\n");
+
+    let output = Command::cargo_bin("radroots")
+        .expect("binary")
+        .args([
+            "--json",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "myc",
+            "status",
+        ])
+        .output()
+        .expect("run myc status");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["state"], "unavailable");
+    assert_eq!(json["ready"], false);
+    assert!(
+        json["reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("not valid JSON"))
+    );
+}
+
+#[test]
+fn signer_status_reports_myc_backend_details_when_configured() {
+    let dir = tempdir().expect("tempdir");
+    let executable = write_fake_myc(
+        dir.path(),
+        successful_status_script(sample_status_payload(false).to_string()).as_str(),
+    );
+
+    let output = Command::cargo_bin("radroots")
+        .expect("binary")
+        .args([
+            "--json",
+            "--signer-backend",
+            "myc",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "signer",
+            "status",
+        ])
+        .output()
+        .expect("run signer status");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["backend"], "myc");
+    assert_eq!(json["state"], "degraded");
+    assert_eq!(json["myc"]["state"], "degraded");
+    assert_eq!(json["myc"]["service_status"], "degraded");
+    assert!(
+        json["reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("transport quorum is below target"))
+    );
+}
+
+#[test]
+fn myc_status_reports_unavailable_when_executable_is_missing() {
+    let dir = tempdir().expect("tempdir");
+    let missing = dir.path().join("missing-myc");
+
+    let output = Command::cargo_bin("radroots")
+        .expect("binary")
+        .args([
+            "--json",
+            "--myc-executable",
+            missing.to_str().expect("missing path"),
+            "myc",
+            "status",
+        ])
+        .output()
+        .expect("run myc status");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["state"], "unavailable");
+    assert!(
+        json["reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("was not found"))
+    );
+}
+
+fn write_fake_myc(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
+    let path = dir.join("fake-myc");
+    fs::write(&path, script).expect("write fake myc");
+    let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("chmod fake myc");
+    path
+}
+
+fn successful_status_script(payload_json: String) -> String {
+    format!(
+        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"full\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\ncat <<'JSON'\n{payload_json}\nJSON\n"
+    )
+}
+
+fn sample_status_payload(ready: bool) -> Value {
+    let signer_identity = RadrootsIdentity::generate().to_public();
+    let user_identity = RadrootsIdentity::generate().to_public();
+    let service_status = if ready { "healthy" } else { "degraded" };
+    let reasons = if ready {
+        Vec::<String>::new()
+    } else {
+        vec!["transport quorum is below target".to_owned()]
+    };
+
+    json!({
+        "status": service_status,
+        "ready": ready,
+        "reasons": reasons,
+        "signer_backend": {
+            "local_signer": {
+                "account_id": signer_identity.id,
+                "public_identity": signer_identity,
+                "availability": "SecretBacked"
+            }
+        },
+        "custody": {
+            "signer": {
+                "resolved": true,
+                "selected_account_id": "signer-account",
+                "selected_account_state": "ready",
+                "identity_id": signer_identity.id,
+                "public_key_hex": signer_identity.public_key_hex
+            },
+            "user": {
+                "resolved": true,
+                "selected_account_id": "user-account",
+                "selected_account_state": "public_only",
+                "identity_id": user_identity.id,
+                "public_key_hex": user_identity.public_key_hex
+            }
+        }
+    })
+}

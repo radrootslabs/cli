@@ -32,6 +32,7 @@ pub struct CliArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     Identity(IdentityArgs),
+    Myc(MycArgs),
     Runtime(RuntimeArgs),
     Signer(SignerArgs),
 }
@@ -60,6 +61,17 @@ pub enum IdentityCommand {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct MycArgs {
+    #[command(subcommand)]
+    pub command: MycCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum MycCommand {
+    Status,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct SignerArgs {
     #[command(subcommand)]
     pub command: SignerCommand,
@@ -72,14 +84,16 @@ pub enum SignerCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::{CliArgs, Command, IdentityCommand, RuntimeCommand, SignerCommand};
+    use super::{CliArgs, Command, IdentityCommand, MycCommand, RuntimeCommand, SignerCommand};
     use clap::Parser;
 
     #[test]
     fn parses_runtime_show_command() {
         let parsed = CliArgs::parse_from(["radroots", "runtime", "show"]);
         match parsed.command {
-            Command::Identity(_) | Command::Signer(_) => panic!("unexpected command variant"),
+            Command::Identity(_) | Command::Myc(_) | Command::Signer(_) => {
+                panic!("unexpected command variant")
+            }
             Command::Runtime(runtime) => match runtime.command {
                 RuntimeCommand::Show => {}
             },
@@ -142,7 +156,9 @@ mod tests {
                 IdentityCommand::Init => {}
                 IdentityCommand::Show => panic!("unexpected identity subcommand"),
             },
-            Command::Runtime(_) | Command::Signer(_) => panic!("unexpected command variant"),
+            Command::Myc(_) | Command::Runtime(_) | Command::Signer(_) => {
+                panic!("unexpected command variant")
+            }
         }
 
         let show = CliArgs::parse_from(["radroots", "identity", "show"]);
@@ -151,7 +167,9 @@ mod tests {
                 IdentityCommand::Show => {}
                 IdentityCommand::Init => panic!("unexpected identity subcommand"),
             },
-            Command::Runtime(_) | Command::Signer(_) => panic!("unexpected command variant"),
+            Command::Myc(_) | Command::Runtime(_) | Command::Signer(_) => {
+                panic!("unexpected command variant")
+            }
         }
     }
 
@@ -162,7 +180,22 @@ mod tests {
             Command::Signer(signer) => match signer.command {
                 SignerCommand::Status => {}
             },
-            Command::Identity(_) | Command::Runtime(_) => panic!("unexpected command variant"),
+            Command::Identity(_) | Command::Myc(_) | Command::Runtime(_) => {
+                panic!("unexpected command variant")
+            }
+        }
+    }
+
+    #[test]
+    fn parses_myc_status() {
+        let parsed = CliArgs::parse_from(["radroots", "myc", "status"]);
+        match parsed.command {
+            Command::Myc(myc) => match myc.command {
+                MycCommand::Status => {}
+            },
+            Command::Identity(_) | Command::Runtime(_) | Command::Signer(_) => {
+                panic!("unexpected command variant")
+            }
         }
     }
 }

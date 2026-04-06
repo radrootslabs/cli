@@ -45,6 +45,9 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
                 view.public_identity.public_key_npub
             )?;
         }
+        CommandOutput::MycStatus(view) => {
+            render_myc_status(&mut stdout, view)?;
+        }
         CommandOutput::RuntimeShow(view) => {
             writeln!(stdout, "runtime")?;
             writeln!(stdout, "  output format: {}", view.output_format)?;
@@ -88,20 +91,10 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
                 view.reason.as_deref().unwrap_or("<none>")
             )?;
             if let Some(local) = &view.local {
-                writeln!(stdout, "local signer")?;
-                writeln!(stdout, "  account id: {}", local.account_id)?;
-                writeln!(
-                    stdout,
-                    "  public key hex: {}",
-                    local.public_identity.public_key_hex
-                )?;
-                writeln!(
-                    stdout,
-                    "  public key npub: {}",
-                    local.public_identity.public_key_npub
-                )?;
-                writeln!(stdout, "  availability: {}", local.availability)?;
-                writeln!(stdout, "  secret backed: {}", yes_no(local.secret_backed))?;
+                render_local_signer(&mut stdout, "local signer", local)?;
+            }
+            if let Some(myc) = &view.myc {
+                render_myc_status(&mut stdout, myc)?;
             }
         }
     }
@@ -119,6 +112,10 @@ fn render_json(output: &CommandOutput) -> Result<(), RuntimeError> {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
+        CommandOutput::MycStatus(view) => {
+            serde_json::to_writer_pretty(&mut stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandOutput::RuntimeShow(view) => {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
@@ -133,6 +130,100 @@ fn render_json(output: &CommandOutput) -> Result<(), RuntimeError> {
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+fn render_local_signer(
+    stdout: &mut dyn Write,
+    heading: &str,
+    local: &crate::domain::runtime::LocalSignerStatusView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "{heading}")?;
+    writeln!(stdout, "  account id: {}", local.account_id)?;
+    writeln!(
+        stdout,
+        "  public key hex: {}",
+        local.public_identity.public_key_hex
+    )?;
+    writeln!(
+        stdout,
+        "  public key npub: {}",
+        local.public_identity.public_key_npub
+    )?;
+    writeln!(stdout, "  availability: {}", local.availability)?;
+    writeln!(stdout, "  secret backed: {}", yes_no(local.secret_backed))?;
+    Ok(())
+}
+
+fn render_myc_status(
+    stdout: &mut dyn Write,
+    view: &crate::domain::runtime::MycStatusView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "myc")?;
+    writeln!(stdout, "  executable: {}", view.executable)?;
+    writeln!(stdout, "  state: {}", view.state)?;
+    writeln!(stdout, "  ready: {}", yes_no(view.ready))?;
+    writeln!(
+        stdout,
+        "  service status: {}",
+        view.service_status.as_deref().unwrap_or("<unknown>")
+    )?;
+    writeln!(
+        stdout,
+        "  reason: {}",
+        view.reason.as_deref().unwrap_or("<none>")
+    )?;
+    if !view.reasons.is_empty() {
+        writeln!(stdout, "  reasons: {}", view.reasons.join(" | "))?;
+    }
+    if let Some(local_signer) = &view.local_signer {
+        render_local_signer(stdout, "myc local signer", local_signer)?;
+    }
+    if let Some(custody) = &view.custody {
+        render_myc_custody_identity(stdout, "myc custody signer", &custody.signer)?;
+        render_myc_custody_identity(stdout, "myc custody user", &custody.user)?;
+        if let Some(discovery_app) = &custody.discovery_app {
+            render_myc_custody_identity(stdout, "myc custody discovery app", discovery_app)?;
+        }
+    }
+    Ok(())
+}
+
+fn render_myc_custody_identity(
+    stdout: &mut dyn Write,
+    heading: &str,
+    identity: &crate::domain::runtime::MycCustodyIdentityView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "{heading}")?;
+    writeln!(stdout, "  resolved: {}", yes_no(identity.resolved))?;
+    writeln!(
+        stdout,
+        "  selected account id: {}",
+        identity.selected_account_id.as_deref().unwrap_or("<none>")
+    )?;
+    writeln!(
+        stdout,
+        "  selected account state: {}",
+        identity
+            .selected_account_state
+            .as_deref()
+            .unwrap_or("<none>")
+    )?;
+    writeln!(
+        stdout,
+        "  identity id: {}",
+        identity.identity_id.as_deref().unwrap_or("<none>")
+    )?;
+    writeln!(
+        stdout,
+        "  public key hex: {}",
+        identity.public_key_hex.as_deref().unwrap_or("<none>")
+    )?;
+    writeln!(
+        stdout,
+        "  error: {}",
+        identity.error.as_deref().unwrap_or("<none>")
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

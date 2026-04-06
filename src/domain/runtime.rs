@@ -4,6 +4,7 @@ use serde::Serialize;
 pub enum CommandOutput {
     IdentityInit(IdentityInitView),
     IdentityShow(IdentityShowView),
+    MycStatus(MycStatusView),
     RuntimeShow(RuntimeShowView),
     SignerStatus(SignerStatusView),
 }
@@ -78,6 +79,7 @@ pub struct SignerStatusView {
     pub state: String,
     pub reason: Option<String>,
     pub local: Option<LocalSignerStatusView>,
+    pub myc: Option<MycStatusView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,4 +88,37 @@ pub struct LocalSignerStatusView {
     pub public_identity: IdentityPublicView,
     pub availability: String,
     pub secret_backed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MycStatusView {
+    pub executable: String,
+    pub state: String,
+    pub service_status: Option<String>,
+    pub ready: bool,
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_signer: Option<LocalSignerStatusView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custody: Option<MycCustodyView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MycCustodyView {
+    pub signer: MycCustodyIdentityView,
+    pub user: MycCustodyIdentityView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_app: Option<MycCustodyIdentityView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MycCustodyIdentityView {
+    pub resolved: bool,
+    pub selected_account_id: Option<String>,
+    pub selected_account_state: Option<String>,
+    pub identity_id: Option<String>,
+    pub public_key_hex: Option<String>,
+    pub error: Option<String>,
 }
