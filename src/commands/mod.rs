@@ -1,6 +1,8 @@
+pub mod identity;
 pub mod runtime;
+pub mod signer;
 
-use crate::cli::{Command, RuntimeCommand};
+use crate::cli::{Command, IdentityCommand, RuntimeCommand, SignerCommand};
 use crate::domain::CommandOutput;
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -12,8 +14,15 @@ pub fn dispatch(
     logging: &LoggingState,
 ) -> Result<CommandOutput, RuntimeError> {
     match command {
+        Command::Identity(identity) => match identity.command {
+            IdentityCommand::Init => Ok(CommandOutput::IdentityInit(identity::init(config)?)),
+            IdentityCommand::Show => Ok(CommandOutput::IdentityShow(identity::show(config)?)),
+        },
         Command::Runtime(runtime) => match runtime.command {
             RuntimeCommand::Show => Ok(CommandOutput::RuntimeShow(runtime::show(config, logging))),
+        },
+        Command::Signer(signer) => match signer.command {
+            SignerCommand::Status => Ok(CommandOutput::SignerStatus(signer::status(config))),
         },
     }
 }

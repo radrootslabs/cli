@@ -31,7 +31,9 @@ pub struct CliArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
+    Identity(IdentityArgs),
     Runtime(RuntimeArgs),
+    Signer(SignerArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -45,15 +47,39 @@ pub enum RuntimeCommand {
     Show,
 }
 
+#[derive(Debug, Clone, Args)]
+pub struct IdentityArgs {
+    #[command(subcommand)]
+    pub command: IdentityCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum IdentityCommand {
+    Init,
+    Show,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SignerArgs {
+    #[command(subcommand)]
+    pub command: SignerCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SignerCommand {
+    Status,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CliArgs, Command, RuntimeCommand};
+    use super::{CliArgs, Command, IdentityCommand, RuntimeCommand, SignerCommand};
     use clap::Parser;
 
     #[test]
     fn parses_runtime_show_command() {
         let parsed = CliArgs::parse_from(["radroots", "runtime", "show"]);
         match parsed.command {
+            Command::Identity(_) | Command::Signer(_) => panic!("unexpected command variant"),
             Command::Runtime(runtime) => match runtime.command {
                 RuntimeCommand::Show => {}
             },
@@ -106,5 +132,37 @@ mod tests {
                 .and_then(|path| path.to_str()),
             Some("bin/myc")
         );
+    }
+
+    #[test]
+    fn parses_identity_commands() {
+        let init = CliArgs::parse_from(["radroots", "identity", "init"]);
+        match init.command {
+            Command::Identity(identity) => match identity.command {
+                IdentityCommand::Init => {}
+                IdentityCommand::Show => panic!("unexpected identity subcommand"),
+            },
+            Command::Runtime(_) | Command::Signer(_) => panic!("unexpected command variant"),
+        }
+
+        let show = CliArgs::parse_from(["radroots", "identity", "show"]);
+        match show.command {
+            Command::Identity(identity) => match identity.command {
+                IdentityCommand::Show => {}
+                IdentityCommand::Init => panic!("unexpected identity subcommand"),
+            },
+            Command::Runtime(_) | Command::Signer(_) => panic!("unexpected command variant"),
+        }
+    }
+
+    #[test]
+    fn parses_signer_status() {
+        let parsed = CliArgs::parse_from(["radroots", "signer", "status"]);
+        match parsed.command {
+            Command::Signer(signer) => match signer.command {
+                SignerCommand::Status => {}
+            },
+            Command::Identity(_) | Command::Runtime(_) => panic!("unexpected command variant"),
+        }
     }
 }
