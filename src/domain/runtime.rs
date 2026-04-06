@@ -1,7 +1,63 @@
+use std::process::ExitCode;
+
 use serde::Serialize;
 
 #[derive(Debug, Clone)]
-pub enum CommandOutput {
+pub struct CommandOutput {
+    disposition: CommandDisposition,
+    view: CommandView,
+}
+
+impl CommandOutput {
+    pub fn success(view: CommandView) -> Self {
+        Self {
+            disposition: CommandDisposition::Success,
+            view,
+        }
+    }
+
+    pub fn unconfigured(view: CommandView) -> Self {
+        Self {
+            disposition: CommandDisposition::Unconfigured,
+            view,
+        }
+    }
+
+    pub fn external_unavailable(view: CommandView) -> Self {
+        Self {
+            disposition: CommandDisposition::ExternalUnavailable,
+            view,
+        }
+    }
+
+    pub fn exit_code(&self) -> ExitCode {
+        self.disposition.exit_code()
+    }
+
+    pub fn view(&self) -> &CommandView {
+        &self.view
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandDisposition {
+    Success,
+    Unconfigured,
+    ExternalUnavailable,
+}
+
+impl CommandDisposition {
+    pub fn exit_code(self) -> ExitCode {
+        match self {
+            Self::Success => ExitCode::SUCCESS,
+            Self::Unconfigured => ExitCode::from(3),
+            Self::ExternalUnavailable => ExitCode::from(4),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum CommandView {
     IdentityInit(IdentityInitView),
     IdentityShow(IdentityShowView),
     MycStatus(MycStatusView),
@@ -82,6 +138,16 @@ pub struct SignerStatusView {
     pub myc: Option<MycStatusView>,
 }
 
+impl SignerStatusView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalSignerStatusView {
     pub account_id: String,
@@ -103,6 +169,16 @@ pub struct MycStatusView {
     pub local_signer: Option<LocalSignerStatusView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custody: Option<MycCustodyView>,
+}
+
+impl MycStatusView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            _ => CommandDisposition::Success,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

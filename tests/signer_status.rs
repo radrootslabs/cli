@@ -65,7 +65,7 @@ fn signer_status_reports_local_unconfigured_when_identity_is_missing() {
         .output()
         .expect("run signer status");
 
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(3));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
     assert_eq!(json["backend"], "local");

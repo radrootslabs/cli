@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use crate::domain::runtime::CommandOutput;
+use crate::domain::runtime::{CommandOutput, CommandView};
 use crate::runtime::RuntimeError;
 use crate::runtime::config::OutputFormat;
 
@@ -13,8 +13,8 @@ pub fn render_output(output: &CommandOutput, format: OutputFormat) -> Result<(),
 
 fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
     let mut stdout = io::stdout().lock();
-    match output {
-        CommandOutput::IdentityInit(view) => {
+    match output.view() {
+        CommandView::IdentityInit(view) => {
             writeln!(stdout, "identity init")?;
             writeln!(stdout, "  path: {}", view.path)?;
             writeln!(stdout, "  created: {}", yes_no(view.created))?;
@@ -30,7 +30,7 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
                 view.public_identity.public_key_npub
             )?;
         }
-        CommandOutput::IdentityShow(view) => {
+        CommandView::IdentityShow(view) => {
             writeln!(stdout, "identity")?;
             writeln!(stdout, "  path: {}", view.path)?;
             writeln!(stdout, "  id: {}", view.public_identity.id)?;
@@ -45,10 +45,10 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
                 view.public_identity.public_key_npub
             )?;
         }
-        CommandOutput::MycStatus(view) => {
+        CommandView::MycStatus(view) => {
             render_myc_status(&mut stdout, view)?;
         }
-        CommandOutput::RuntimeShow(view) => {
+        CommandView::RuntimeShow(view) => {
             writeln!(stdout, "runtime")?;
             writeln!(stdout, "  output format: {}", view.output_format)?;
             writeln!(stdout, "logging")?;
@@ -81,7 +81,7 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
             writeln!(stdout, "myc")?;
             writeln!(stdout, "  executable: {}", view.myc.executable)?;
         }
-        CommandOutput::SignerStatus(view) => {
+        CommandView::SignerStatus(view) => {
             writeln!(stdout, "signer")?;
             writeln!(stdout, "  backend: {}", view.backend)?;
             writeln!(stdout, "  state: {}", view.state)?;
@@ -103,24 +103,24 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
 
 fn render_json(output: &CommandOutput) -> Result<(), RuntimeError> {
     let mut stdout = io::stdout().lock();
-    match output {
-        CommandOutput::IdentityInit(view) => {
+    match output.view() {
+        CommandView::IdentityInit(view) => {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
-        CommandOutput::IdentityShow(view) => {
+        CommandView::IdentityShow(view) => {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
-        CommandOutput::MycStatus(view) => {
+        CommandView::MycStatus(view) => {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
-        CommandOutput::RuntimeShow(view) => {
+        CommandView::RuntimeShow(view) => {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
-        CommandOutput::SignerStatus(view) => {
+        CommandView::SignerStatus(view) => {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
