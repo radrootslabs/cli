@@ -79,11 +79,6 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
             )?;
             writeln!(stdout, "identity")?;
             writeln!(stdout, "  path: {}", view.identity.path)?;
-            writeln!(
-                stdout,
-                "  allow generate: {}",
-                yes_no(view.identity.allow_generate)
-            )?;
             writeln!(stdout, "signer")?;
             writeln!(stdout, "  backend: {}", view.signer.backend)?;
             writeln!(stdout, "myc")?;
@@ -255,7 +250,6 @@ mod tests {
                 },
                 identity: IdentityConfig {
                     path: "identity.json".into(),
-                    allow_generate: false,
                 },
                 signer: SignerConfig {
                     backend: SignerBackend::Local,

@@ -86,7 +86,6 @@ fn identity_show_json_reports_unconfigured_without_creating_identity() {
             "--json",
             "--identity-path",
             identity_path.to_str().expect("identity path"),
-            "--allow-generate-identity",
             "identity",
             "show",
         ])

@@ -9,7 +9,6 @@ const ENV_LOG_FILTER: &str = "RADROOTS_LOG_FILTER";
 const ENV_LOG_DIR: &str = "RADROOTS_LOG_DIR";
 const ENV_LOG_STDOUT: &str = "RADROOTS_LOG_STDOUT";
 const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
-const ENV_IDENTITY_ALLOW_GENERATE: &str = "RADROOTS_IDENTITY_ALLOW_GENERATE";
 const ENV_SIGNER_BACKEND: &str = "RADROOTS_SIGNER_BACKEND";
 const ENV_MYC_EXECUTABLE: &str = "RADROOTS_MYC_EXECUTABLE";
 
@@ -38,7 +37,6 @@ pub struct LoggingConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityConfig {
     pub path: PathBuf,
-    pub allow_generate: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,15 +119,6 @@ impl RuntimeConfig {
                     .clone()
                     .or_else(|| env.var(ENV_IDENTITY_PATH).map(PathBuf::from))
                     .unwrap_or_else(|| PathBuf::from("identity.json")),
-                allow_generate: resolve_bool_pair(
-                    args.allow_generate_identity,
-                    args.no_allow_generate_identity,
-                    ENV_IDENTITY_ALLOW_GENERATE,
-                    false,
-                    env,
-                    "--allow-generate-identity",
-                    "--no-allow-generate-identity",
-                )?,
             },
             signer: SignerConfig {
                 backend: args
@@ -242,7 +231,6 @@ mod tests {
             "--log-stdout",
             "--identity-path",
             "custom-identity.json",
-            "--allow-generate-identity",
             "--signer-backend",
             "local",
             "--myc-executable",
@@ -258,10 +246,6 @@ mod tests {
                 "RADROOTS_IDENTITY_PATH".to_owned(),
                 "env-identity.json".to_owned(),
             ),
-            (
-                "RADROOTS_IDENTITY_ALLOW_GENERATE".to_owned(),
-                "false".to_owned(),
-            ),
             ("RADROOTS_SIGNER_BACKEND".to_owned(), "myc".to_owned()),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "env-myc".to_owned()),
         ]));
@@ -274,7 +258,6 @@ mod tests {
             resolved.identity.path,
             PathBuf::from("custom-identity.json")
         );
-        assert!(resolved.identity.allow_generate);
         assert_eq!(resolved.signer.backend, SignerBackend::Local);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc-cli"));
     }
@@ -294,10 +277,6 @@ mod tests {
                 "RADROOTS_IDENTITY_PATH".to_owned(),
                 "state/identity.json".to_owned(),
             ),
-            (
-                "RADROOTS_IDENTITY_ALLOW_GENERATE".to_owned(),
-                "true".to_owned(),
-            ),
             ("RADROOTS_SIGNER_BACKEND".to_owned(), "myc".to_owned()),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "bin/myc".to_owned()),
         ]));
@@ -311,7 +290,6 @@ mod tests {
         );
         assert!(resolved.logging.stdout);
         assert_eq!(resolved.identity.path, PathBuf::from("state/identity.json"));
-        assert!(resolved.identity.allow_generate);
         assert_eq!(resolved.signer.backend, SignerBackend::Myc);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
     }

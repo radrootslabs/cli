@@ -17,10 +17,6 @@ pub struct CliArgs {
     pub no_log_stdout: bool,
     #[arg(long, global = true)]
     pub identity_path: Option<PathBuf>,
-    #[arg(long = "allow-generate-identity", global = true, action = ArgAction::SetTrue)]
-    pub allow_generate_identity: bool,
-    #[arg(long = "no-allow-generate-identity", global = true, action = ArgAction::SetTrue)]
-    pub no_allow_generate_identity: bool,
     #[arg(long, global = true)]
     pub signer_backend: Option<String>,
     #[arg(long, global = true)]
@@ -112,7 +108,6 @@ mod tests {
             "--log-stdout",
             "--identity-path",
             "identity.local.json",
-            "--allow-generate-identity",
             "--signer-backend",
             "myc",
             "--myc-executable",
@@ -137,7 +132,6 @@ mod tests {
                 .and_then(|path| path.to_str()),
             Some("identity.local.json")
         );
-        assert!(parsed.allow_generate_identity);
         assert_eq!(parsed.signer_backend.as_deref(), Some("myc"));
         assert_eq!(
             parsed

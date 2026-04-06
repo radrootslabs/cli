@@ -23,7 +23,6 @@ pub fn show(config: &RuntimeConfig, logging: &LoggingState) -> RuntimeShowView {
         },
         identity: IdentityRuntimeView {
             path: config.identity.path.display().to_string(),
-            allow_generate: config.identity.allow_generate,
         },
         signer: SignerRuntimeView {
             backend: config.signer.backend.as_str().to_owned(),

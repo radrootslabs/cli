@@ -86,7 +86,6 @@ pub struct LoggingRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct IdentityRuntimeView {
     pub path: String,
-    pub allow_generate: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

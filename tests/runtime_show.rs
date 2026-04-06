@@ -32,7 +32,6 @@ fn runtime_show_json_reflects_environment_configuration() {
         .env("RADROOTS_LOG_DIR", "logs/runtime")
         .env("RADROOTS_LOG_STDOUT", "false")
         .env("RADROOTS_IDENTITY_PATH", "state/identity.json")
-        .env("RADROOTS_IDENTITY_ALLOW_GENERATE", "true")
         .env("RADROOTS_SIGNER_BACKEND", "myc")
         .env("RADROOTS_MYC_EXECUTABLE", "bin/myc")
         .args(["runtime", "show"])
@@ -45,7 +44,6 @@ fn runtime_show_json_reflects_environment_configuration() {
     assert_eq!(json["logging"]["filter"], "debug");
     assert_eq!(json["logging"]["directory"], "logs/runtime");
     assert_eq!(json["identity"]["path"], "state/identity.json");
-    assert_eq!(json["identity"]["allow_generate"], true);
     assert_eq!(json["signer"]["backend"], "myc");
     assert_eq!(json["myc"]["executable"], "bin/myc");
 }
