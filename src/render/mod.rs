@@ -33,17 +33,25 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
         CommandView::IdentityShow(view) => {
             writeln!(stdout, "identity")?;
             writeln!(stdout, "  path: {}", view.path)?;
-            writeln!(stdout, "  id: {}", view.public_identity.id)?;
+            writeln!(stdout, "  state: {}", view.state)?;
             writeln!(
                 stdout,
-                "  public key hex: {}",
-                view.public_identity.public_key_hex
+                "  reason: {}",
+                view.reason.as_deref().unwrap_or("<none>")
             )?;
-            writeln!(
-                stdout,
-                "  public key npub: {}",
-                view.public_identity.public_key_npub
-            )?;
+            if let Some(public_identity) = &view.public_identity {
+                writeln!(stdout, "  id: {}", public_identity.id)?;
+                writeln!(
+                    stdout,
+                    "  public key hex: {}",
+                    public_identity.public_key_hex
+                )?;
+                writeln!(
+                    stdout,
+                    "  public key npub: {}",
+                    public_identity.public_key_npub
+                )?;
+            }
         }
         CommandView::MycStatus(view) => {
             render_myc_status(&mut stdout, view)?;

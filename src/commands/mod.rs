@@ -19,9 +19,7 @@ pub fn dispatch(
             IdentityCommand::Init => Ok(CommandOutput::success(CommandView::IdentityInit(
                 identity::init(config)?,
             ))),
-            IdentityCommand::Show => Ok(CommandOutput::success(CommandView::IdentityShow(
-                identity::show(config)?,
-            ))),
+            IdentityCommand::Show => identity::show(config),
         },
         Command::Myc(myc) => match myc.command {
             MycCommand::Status => Ok(myc::status(config)),

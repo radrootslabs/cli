@@ -119,7 +119,20 @@ impl IdentityPublicView {
 #[derive(Debug, Clone, Serialize)]
 pub struct IdentityShowView {
     pub path: String,
-    pub public_identity: IdentityPublicView,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_identity: Option<IdentityPublicView>,
+}
+
+impl IdentityShowView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
