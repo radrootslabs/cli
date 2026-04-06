@@ -1,6 +1,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use assert_cmd::prelude::*;
 use radroots_identity::RadrootsIdentity;
@@ -9,6 +10,7 @@ use tempfile::tempdir;
 
 #[test]
 fn myc_status_reports_ready_for_valid_full_status_payload() {
+    let _guard = myc_test_guard();
     let dir = tempdir().expect("tempdir");
     let executable = write_fake_myc(
         dir.path(),
@@ -43,6 +45,7 @@ fn myc_status_reports_ready_for_valid_full_status_payload() {
 
 #[test]
 fn myc_status_reports_unavailable_for_invalid_status_payload() {
+    let _guard = myc_test_guard();
     let dir = tempdir().expect("tempdir");
     let executable = write_fake_myc(dir.path(), "#!/bin/sh\nprintf '%s\\n' 'this is not json'\n");
 
@@ -72,6 +75,7 @@ fn myc_status_reports_unavailable_for_invalid_status_payload() {
 
 #[test]
 fn signer_status_reports_myc_backend_details_when_configured() {
+    let _guard = myc_test_guard();
     let dir = tempdir().expect("tempdir");
     let executable = write_fake_myc(
         dir.path(),
@@ -108,6 +112,7 @@ fn signer_status_reports_myc_backend_details_when_configured() {
 
 #[test]
 fn myc_status_reports_unavailable_when_executable_is_missing() {
+    let _guard = myc_test_guard();
     let dir = tempdir().expect("tempdir");
     let missing = dir.path().join("missing-myc");
 
@@ -134,6 +139,67 @@ fn myc_status_reports_unavailable_when_executable_is_missing() {
     );
 }
 
+#[test]
+fn myc_status_reports_unavailable_for_non_zero_exit() {
+    let _guard = myc_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let executable = write_fake_myc(
+        dir.path(),
+        "#!/bin/sh\nprintf '%s\\n' 'transport unavailable' >&2\nexit 42\n",
+    );
+
+    let output = Command::cargo_bin("radroots")
+        .expect("binary")
+        .args([
+            "--json",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "myc",
+            "status",
+        ])
+        .output()
+        .expect("run myc status");
+
+    assert_eq!(output.status.code(), Some(4));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["state"], "unavailable");
+    let reason = json["reason"].as_str().expect("reason string");
+    assert!(reason.contains("status code 42") || reason.contains("transport unavailable"));
+}
+
+#[test]
+fn myc_status_reports_unavailable_for_timeout() {
+    let _guard = myc_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let executable = write_fake_myc(
+        dir.path(),
+        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"full\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\nexec sleep 5\n",
+    );
+
+    let output = Command::cargo_bin("radroots")
+        .expect("binary")
+        .args([
+            "--json",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "myc",
+            "status",
+        ])
+        .output()
+        .expect("run myc status");
+
+    assert_eq!(output.status.code(), Some(4));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["state"], "unavailable");
+    assert!(
+        json["reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("timed out"))
+    );
+}
+
 fn write_fake_myc(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
     let path = dir.join("fake-myc");
     fs::write(&path, script).expect("write fake myc");
@@ -141,6 +207,13 @@ fn write_fake_myc(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
     permissions.set_mode(0o755);
     fs::set_permissions(&path, permissions).expect("chmod fake myc");
     path
+}
+
+fn myc_test_guard() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("lock myc integration tests")
 }
 
 fn successful_status_script(payload_json: String) -> String {

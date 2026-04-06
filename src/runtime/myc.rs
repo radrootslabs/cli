@@ -1,4 +1,7 @@
-use std::process::Command;
+use std::io::Read;
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use radroots_nostr_signer::prelude::RadrootsNostrLocalSignerCapability;
 use serde::Deserialize;
@@ -8,6 +11,9 @@ use crate::domain::runtime::{
     MycStatusView,
 };
 use crate::runtime::config::MycConfig;
+
+const MYC_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
+const MYC_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub fn resolve_status(config: &MycConfig) -> MycStatusView {
     let executable = config.executable.display().to_string();
@@ -19,12 +25,9 @@ pub fn resolve_status(config: &MycConfig) -> MycStatusView {
         );
     }
 
-    let output = match Command::new(&config.executable)
-        .args(["status", "--view", "full"])
-        .output()
-    {
+    let output = match run_status_command(config) {
         Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(MycCommandError::NotFound) => {
             return unavailable_status(
                 executable,
                 "unavailable",
@@ -34,12 +37,32 @@ pub fn resolve_status(config: &MycConfig) -> MycStatusView {
                 ),
             );
         }
-        Err(error) => {
+        Err(MycCommandError::Start(error)) => {
             return unavailable_status(
                 executable,
                 "unavailable",
                 format!(
                     "failed to start myc status command at {}: {error}",
+                    config.executable.display()
+                ),
+            );
+        }
+        Err(MycCommandError::Timeout) => {
+            return unavailable_status(
+                executable,
+                "unavailable",
+                format!(
+                    "myc status command timed out after {}ms",
+                    MYC_STATUS_TIMEOUT.as_millis()
+                ),
+            );
+        }
+        Err(MycCommandError::Wait(error)) | Err(MycCommandError::Read(error)) => {
+            return unavailable_status(
+                executable,
+                "unavailable",
+                format!(
+                    "failed to capture myc status command output at {}: {error}",
                     config.executable.display()
                 ),
             );
@@ -112,6 +135,58 @@ pub fn resolve_status(config: &MycConfig) -> MycStatusView {
     }
 }
 
+fn run_status_command(config: &MycConfig) -> Result<Output, MycCommandError> {
+    let mut child = Command::new(&config.executable)
+        .args(["status", "--view", "full"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => MycCommandError::NotFound,
+            _ => MycCommandError::Start(error),
+        })?;
+
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return collect_output(child, status),
+            Ok(None) => {
+                if started_at.elapsed() >= MYC_STATUS_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(MycCommandError::Timeout);
+                }
+                thread::sleep(MYC_STATUS_POLL_INTERVAL);
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(MycCommandError::Wait(error));
+            }
+        }
+    }
+}
+
+fn collect_output(mut child: Child, status: ExitStatus) -> Result<Output, MycCommandError> {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout)
+            .map_err(MycCommandError::Read)?;
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr)
+            .map_err(MycCommandError::Read)?;
+    }
+
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 fn local_signer_status_view(
     capability: RadrootsNostrLocalSignerCapability,
 ) -> LocalSignerStatusView {
@@ -152,6 +227,14 @@ fn unavailable_status(executable: String, state: &str, reason: String) -> MycSta
         local_signer: None,
         custody: None,
     }
+}
+
+enum MycCommandError {
+    NotFound,
+    Start(std::io::Error),
+    Wait(std::io::Error),
+    Read(std::io::Error),
+    Timeout,
 }
 
 #[derive(Debug, Deserialize)]
