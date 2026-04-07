@@ -25,6 +25,8 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
         "RADROOTS_MYC_EXECUTABLE",
+        "RADROOTS_RPC_URL",
+        "RADROOTS_RPC_BEARER_TOKEN",
     ] {
         command.env_remove(key);
     }
@@ -50,9 +52,7 @@ fn listing_new_scaffolds_a_toml_draft_with_account_and_farm_defaults() {
     let seller_pubkey = account_json["public_identity"]["public_key_hex"]
         .as_str()
         .expect("seller pubkey");
-    let account_id = account_json["account"]["id"]
-        .as_str()
-        .expect("account id");
+    let account_id = account_json["account"]["id"].as_str().expect("account id");
     let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
     seed_farm(dir.path(), seller_pubkey, farm_d_tag, "La Huerta");
 

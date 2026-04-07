@@ -24,6 +24,8 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
         "RADROOTS_MYC_EXECUTABLE",
+        "RADROOTS_RPC_URL",
+        "RADROOTS_RPC_BEARER_TOKEN",
     ] {
         command.env_remove(key);
     }

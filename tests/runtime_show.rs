@@ -24,6 +24,8 @@ fn runtime_show_command_in(workdir: &Path) -> Command {
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
         "RADROOTS_MYC_EXECUTABLE",
+        "RADROOTS_RPC_URL",
+        "RADROOTS_RPC_BEARER_TOKEN",
     ] {
         command.env_remove(key);
     }
@@ -114,6 +116,8 @@ fn config_show_json_reports_default_bootstrap_state() {
             .to_string()
     );
     assert_eq!(json["myc"]["executable"], "myc");
+    assert_eq!(json["rpc"]["url"], "http://127.0.0.1:7070");
+    assert_eq!(json["rpc"]["bridge_auth_configured"], false);
 }
 
 #[test]
@@ -129,6 +133,8 @@ fn config_show_json_reflects_environment_configuration() {
         .env("RADROOTS_SIGNER", "myc")
         .env("RADROOTS_RELAYS", "wss://relay.one,wss://relay.two")
         .env("RADROOTS_MYC_EXECUTABLE", "bin/myc")
+        .env("RADROOTS_RPC_URL", "https://rpc.radroots.test/jsonrpc")
+        .env("RADROOTS_RPC_BEARER_TOKEN", "secret")
         .args(["config", "show"])
         .output()
         .expect("run config show");
@@ -149,6 +155,8 @@ fn config_show_json_reflects_environment_configuration() {
     assert_eq!(json["relay"]["urls"][0], "wss://relay.one");
     assert_eq!(json["relay"]["source"], "environment · local first");
     assert_eq!(json["myc"]["executable"], "bin/myc");
+    assert_eq!(json["rpc"]["url"], "https://rpc.radroots.test/jsonrpc");
+    assert_eq!(json["rpc"]["bridge_auth_configured"], true);
 }
 
 #[test]
@@ -229,6 +237,28 @@ fn config_show_json_reads_workspace_relay_config() {
     assert_eq!(json["relay"]["urls"][0], "wss://relay.workspace");
     assert_eq!(json["relay"]["urls"][1], "wss://relay.backup");
     assert_eq!(json["relay"]["source"], "workspace config · local first");
+}
+
+#[test]
+fn config_show_reads_workspace_rpc_config() {
+    let dir = tempdir().expect("tempdir");
+    let config_dir = dir.path().join(".radroots");
+    fs::create_dir_all(&config_dir).expect("workspace config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        "[rpc]\nurl = \"https://rpc.workspace.test/jsonrpc\"\n",
+    )
+    .expect("write workspace config");
+
+    let output = runtime_show_command_in(dir.path())
+        .args(["--json", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+    assert_eq!(json["rpc"]["url"], "https://rpc.workspace.test/jsonrpc");
+    assert_eq!(json["rpc"]["bridge_auth_configured"], false);
 }
 
 #[test]

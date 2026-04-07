@@ -18,6 +18,7 @@ const DEFAULT_LOCAL_STATE_DIR: &str = "replica";
 const DEFAULT_LOCAL_DB_FILE: &str = "replica.sqlite";
 const DEFAULT_LOCAL_BACKUPS_DIR: &str = "backups";
 const DEFAULT_LOCAL_EXPORTS_DIR: &str = "exports";
+const DEFAULT_RPC_URL: &str = "http://127.0.0.1:7070";
 const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
 const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
 const ENV_CLI_LOG_FILTER: &str = "RADROOTS_CLI_LOGGING_FILTER";
@@ -31,6 +32,8 @@ const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
 const ENV_SIGNER: &str = "RADROOTS_SIGNER";
 const ENV_RELAYS: &str = "RADROOTS_RELAYS";
 const ENV_MYC_EXECUTABLE: &str = "RADROOTS_MYC_EXECUTABLE";
+const ENV_RPC_URL: &str = "RADROOTS_RPC_URL";
+const ENV_RPC_BEARER_TOKEN: &str = "RADROOTS_RPC_BEARER_TOKEN";
 const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_OUTPUT,
     ENV_CLI_LOG_FILTER,
@@ -44,6 +47,8 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_SIGNER,
     ENV_RELAYS,
     ENV_MYC_EXECUTABLE,
+    ENV_RPC_URL,
+    ENV_RPC_BEARER_TOKEN,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +189,12 @@ pub struct MycConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RpcConfig {
+    pub url: String,
+    pub bridge_bearer_token: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeConfig {
     pub output: OutputConfig,
     pub paths: PathsConfig,
@@ -194,6 +205,7 @@ pub struct RuntimeConfig {
     pub relay: RelayConfig,
     pub local: LocalConfig,
     pub myc: MycConfig,
+    pub rpc: RpcConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,12 +221,18 @@ struct EnvFileValues(BTreeMap<String, String>);
 #[derive(Debug, Default, Deserialize)]
 struct CliConfigFile {
     relay: Option<RelayFileConfig>,
+    rpc: Option<RpcFileConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct RelayFileConfig {
     urls: Option<Vec<String>>,
     publish_policy: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RpcFileConfig {
+    url: Option<String>,
 }
 
 pub trait Environment {
@@ -338,6 +356,12 @@ impl RuntimeConfig {
                     .or_else(|| env_value(env, env_file, &[ENV_MYC_EXECUTABLE]).map(PathBuf::from))
                     .unwrap_or_else(|| PathBuf::from("myc")),
             },
+            rpc: resolve_rpc_config(
+                env,
+                env_file,
+                user_config.as_ref(),
+                workspace_config.as_ref(),
+            )?,
         })
     }
 }
@@ -381,6 +405,31 @@ fn load_cli_config_file(path: &Path) -> Result<Option<CliConfigFile>, RuntimeErr
                 path.display()
             ))
         })
+}
+
+fn resolve_rpc_config(
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<RpcConfig, RuntimeError> {
+    let url = env_value(env, env_file, &[ENV_RPC_URL])
+        .or_else(|| {
+            user_config
+                .and_then(|config| config.rpc.as_ref())
+                .and_then(|rpc| rpc.url.clone())
+        })
+        .or_else(|| {
+            workspace_config
+                .and_then(|config| config.rpc.as_ref())
+                .and_then(|rpc| rpc.url.clone())
+        })
+        .unwrap_or_else(|| DEFAULT_RPC_URL.to_owned());
+
+    Ok(RpcConfig {
+        url: validate_rpc_url(url.as_str())?,
+        bridge_bearer_token: env_value(env, env_file, &[ENV_RPC_BEARER_TOKEN]),
+    })
 }
 
 fn resolve_relay_config(
@@ -464,6 +513,21 @@ fn parse_relay_publish_policy(value: &str) -> Result<RelayPublishPolicy, Runtime
             "[relay].publish_policy must be `any`, got `{other}`"
         ))),
     }
+}
+
+fn validate_rpc_url(value: &str) -> Result<String, RuntimeError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(RuntimeError::Config("rpc url must not be empty".to_owned()));
+    }
+    let parsed = Url::parse(trimmed)
+        .map_err(|err| RuntimeError::Config(format!("rpc url `{trimmed}` is invalid: {err}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(RuntimeError::Config(format!(
+            "rpc url must use http or https, got `{trimmed}`"
+        )));
+    }
+    Ok(trimmed.to_owned())
 }
 
 fn parse_relay_env_value(value: &str, key: &str) -> Result<Vec<String>, RuntimeError> {

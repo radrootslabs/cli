@@ -141,6 +141,8 @@ impl Command {
                     command: RelayCommand::Ls,
                 }) | Self::Job(JobArgs {
                     command: JobCommand::Ls,
+                }) | Self::Job(JobArgs {
+                    command: JobCommand::Watch(_),
                 }) | Self::Rpc(RpcArgs {
                     command: RpcCommand::Sessions,
                 }) | Self::Order(OrderArgs {
@@ -355,7 +357,16 @@ pub struct JobArgs {
 pub enum JobCommand {
     Ls,
     Get(RecordKeyArgs),
-    Watch(RecordKeyArgs),
+    Watch(JobWatchArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct JobWatchArgs {
+    pub key: String,
+    #[arg(long)]
+    pub frames: Option<usize>,
+    #[arg(long, default_value_t = 1_000)]
+    pub interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -395,9 +406,9 @@ pub struct RecordKeyArgs {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, ListingCommand, LocalCommand,
-        LocalExportFormatArg, MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand,
-        SignerCommand, SyncCommand, SyncWatchArgs,
+        AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, JobWatchArgs, ListingCommand,
+        LocalCommand, LocalExportFormatArg, MycCommand, NetCommand, OrderCommand, RelayCommand,
+        RpcCommand, SignerCommand, SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     use clap::Parser;
@@ -652,8 +663,7 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
-        let listing_publish =
-            CliArgs::parse_from(["radroots", "listing", "publish", "draft.toml"]);
+        let listing_publish = CliArgs::parse_from(["radroots", "listing", "publish", "draft.toml"]);
         match listing_publish.command {
             Command::Listing(args) => match args.command {
                 ListingCommand::Publish(file) => {
@@ -678,6 +688,32 @@ mod tests {
             Command::Job(args) => match args.command {
                 JobCommand::Get(key) => assert_eq!(key.key, "job_123"),
                 _ => panic!("unexpected job subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let job_watch = CliArgs::parse_from([
+            "radroots",
+            "job",
+            "watch",
+            "job_123",
+            "--frames",
+            "2",
+            "--interval-ms",
+            "5",
+        ]);
+        match job_watch.command {
+            Command::Job(args) => match args.command {
+                JobCommand::Watch(JobWatchArgs {
+                    key,
+                    frames,
+                    interval_ms,
+                }) => {
+                    assert_eq!(key, "job_123");
+                    assert_eq!(frames, Some(2));
+                    assert_eq!(interval_ms, 5);
+                }
+                _ => panic!("unexpected job watch subcommand"),
             },
             _ => panic!("unexpected command variant"),
         }

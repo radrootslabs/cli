@@ -75,6 +75,9 @@ pub enum CommandView {
     ConfigShow(ConfigShowView),
     Doctor(DoctorView),
     Find(FindView),
+    JobGet(JobGetView),
+    JobList(JobListView),
+    JobWatch(JobWatchView),
     ListingGet(ListingGetView),
     ListingNew(ListingNewView),
     ListingValidate(ListingValidateView),
@@ -84,6 +87,8 @@ pub enum CommandView {
     LocalStatus(LocalStatusView),
     MycStatus(MycStatusView),
     NetStatus(NetStatusView),
+    RpcSessions(RpcSessionsView),
+    RpcStatus(RpcStatusView),
     RelayList(RelayListView),
     SignerStatus(SignerStatusView),
     SyncPull(SyncActionView),
@@ -104,6 +109,7 @@ pub struct ConfigShowView {
     pub relay: RelayRuntimeView,
     pub local: LocalRuntimeView,
     pub myc: MycRuntimeView,
+    pub rpc: RpcRuntimeView,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,6 +175,12 @@ pub struct LocalRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct MycRuntimeView {
     pub executable: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RpcRuntimeView {
+    pub url: String,
+    pub bridge_auth_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -353,6 +365,96 @@ impl FindView {
             _ => CommandDisposition::Success,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JobListView {
+    pub state: String,
+    pub source: String,
+    pub rpc_url: String,
+    pub count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub jobs: Vec<JobSummaryView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JobGetView {
+    pub state: String,
+    pub source: String,
+    pub rpc_url: String,
+    pub lookup: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<JobDetailView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JobWatchView {
+    pub state: String,
+    pub source: String,
+    pub rpc_url: String,
+    pub job_id: String,
+    pub interval_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub frames: Vec<JobWatchFrameView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JobSummaryView {
+    pub id: String,
+    pub command: String,
+    pub state: String,
+    pub terminal: bool,
+    pub signer: String,
+    pub requested_at_unix: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix: Option<u64>,
+    pub recovered_after_restart: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JobDetailView {
+    pub id: String,
+    pub command: String,
+    pub state: String,
+    pub terminal: bool,
+    pub signer: String,
+    pub requested_at_unix: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix: Option<u64>,
+    pub recovered_after_restart: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_addr: Option<String>,
+    pub delivery_policy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_quorum: Option<usize>,
+    pub relay_count: usize,
+    pub acknowledged_relay_count: usize,
+    pub required_acknowledged_relay_count: usize,
+    pub attempt_count: usize,
+    pub relay_outcome_summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempt_summaries: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JobWatchFrameView {
+    pub sequence: usize,
+    pub observed_at_unix: u64,
+    pub state: String,
+    pub terminal: bool,
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -589,6 +691,76 @@ impl NetStatusView {
             _ => CommandDisposition::Success,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RpcStatusView {
+    pub state: String,
+    pub source: String,
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_signer_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_signer_modes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_ready: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_nip46_signer_sessions: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_status_retention: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_jobs: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_jobs: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_jobs: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_jobs: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovered_failed_jobs: Option<usize>,
+    pub session_surface_enabled: bool,
+    pub methods_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RpcSessionsView {
+    pub state: String,
+    pub source: String,
+    pub url: String,
+    pub count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub sessions: Vec<RpcSessionView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RpcSessionView {
+    pub session_id: String,
+    pub role: String,
+    pub client_pubkey: String,
+    pub signer_pubkey: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_pubkey: Option<String>,
+    pub relay_count: usize,
+    pub permissions_count: usize,
+    pub auth_required: bool,
+    pub authorized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -24,8 +24,8 @@ use serde_json::Value;
 
 use crate::cli::{ListingFileArgs, ListingNewArgs, RecordKeyArgs};
 use crate::domain::runtime::{
-    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView,
-    ListingNewView, ListingValidationIssueView, ListingValidateView, SyncFreshnessView,
+    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingNewView,
+    ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -431,8 +431,9 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<ListingGetVie
 }
 
 fn scaffold_contents(draft: &ListingDraftDocument) -> Result<String, RuntimeError> {
-    let toml = toml::to_string_pretty(draft)
-        .map_err(|error| RuntimeError::Config(format!("failed to render listing draft: {error}")))?;
+    let toml = toml::to_string_pretty(draft).map_err(|error| {
+        RuntimeError::Config(format!("failed to render listing draft: {error}"))
+    })?;
     Ok(format!(
         "# radroots listing draft v1\n# fill the empty fields, then run `radroots listing validate <file>`\n\n{toml}"
     ))
@@ -527,11 +528,13 @@ fn canonicalize_draft(
     let quantity = RadrootsCoreQuantity::new(quantity_amount, quantity_unit)
         .with_optional_label(non_empty(draft.primary_bin.label.clone()))
         .to_canonical()
-        .map_err(|error| issue_for_field(
-            contents,
-            "primary_bin.quantity_unit",
-            format!("invalid primary_bin quantity unit conversion: {error}"),
-        ))?;
+        .map_err(|error| {
+            issue_for_field(
+                contents,
+                "primary_bin.quantity_unit",
+                format!("invalid primary_bin quantity unit conversion: {error}"),
+            )
+        })?;
 
     let price_amount = parse_decimal_field(
         draft.primary_bin.price_amount.as_str(),
@@ -739,49 +742,37 @@ fn issue_from_trade_validation(
             "listing.seller_pubkey",
             "listing author does not match the farm pubkey",
         ),
-        RadrootsTradeListingValidationError::MissingTitle => issue_for_field(
-            contents,
-            "product.title",
-            "missing listing title",
-        ),
-        RadrootsTradeListingValidationError::MissingDescription => issue_for_field(
-            contents,
-            "product.summary",
-            "missing listing description",
-        ),
-        RadrootsTradeListingValidationError::MissingProductType => issue_for_field(
-            contents,
-            "product.category",
-            "missing listing product type",
-        ),
+        RadrootsTradeListingValidationError::MissingTitle => {
+            issue_for_field(contents, "product.title", "missing listing title")
+        }
+        RadrootsTradeListingValidationError::MissingDescription => {
+            issue_for_field(contents, "product.summary", "missing listing description")
+        }
+        RadrootsTradeListingValidationError::MissingProductType => {
+            issue_for_field(contents, "product.category", "missing listing product type")
+        }
         RadrootsTradeListingValidationError::MissingBins
         | RadrootsTradeListingValidationError::MissingPrimaryBin
-        | RadrootsTradeListingValidationError::InvalidBin => issue_for_field(
-            contents,
-            "primary_bin.bin_id",
-            error.to_string(),
-        ),
+        | RadrootsTradeListingValidationError::InvalidBin => {
+            issue_for_field(contents, "primary_bin.bin_id", error.to_string())
+        }
         RadrootsTradeListingValidationError::InvalidPrice => issue_for_field(
             contents,
             "primary_bin.price_amount",
             "invalid listing price",
         ),
         RadrootsTradeListingValidationError::MissingInventory
-        | RadrootsTradeListingValidationError::InvalidInventory => issue_for_field(
-            contents,
-            "inventory.available",
-            error.to_string(),
-        ),
+        | RadrootsTradeListingValidationError::InvalidInventory => {
+            issue_for_field(contents, "inventory.available", error.to_string())
+        }
         RadrootsTradeListingValidationError::MissingAvailability => issue_for_field(
             contents,
             "availability.status",
             "missing listing availability",
         ),
-        RadrootsTradeListingValidationError::MissingLocation => issue_for_field(
-            contents,
-            "location.primary",
-            "missing listing location",
-        ),
+        RadrootsTradeListingValidationError::MissingLocation => {
+            issue_for_field(contents, "location.primary", "missing listing location")
+        }
         RadrootsTradeListingValidationError::MissingDeliveryMethod => issue_for_field(
             contents,
             "delivery.method",
@@ -795,8 +786,7 @@ fn query_listing_rows(
     executor: &SqliteExecutor,
     lookup: &str,
 ) -> Result<Vec<ListingRow>, RuntimeError> {
-    let sql =
-        "SELECT tp.id, tp.key, tp.category, tp.title, tp.summary, tp.qty_amt, tp.qty_unit, tp.qty_label, tp.qty_avail, tp.price_amt, tp.price_currency, tp.price_qty_amt, tp.price_qty_unit, loc.location_primary \
+    let sql = "SELECT tp.id, tp.key, tp.category, tp.title, tp.summary, tp.qty_amt, tp.qty_unit, tp.qty_label, tp.qty_avail, tp.price_amt, tp.price_currency, tp.price_qty_amt, tp.price_qty_unit, loc.location_primary \
          FROM trade_product tp \
          LEFT JOIN (\
              SELECT tpl.tb_tp AS trade_product_id, MIN(COALESCE(gl.label, gl.gc_name, gl.gc_admin1_name, gl.gc_country_name, gl.d_tag)) AS location_primary \
@@ -853,7 +843,11 @@ fn parse_unit_field(
     field: &str,
 ) -> Result<RadrootsCoreUnit, ListingValidationIssueView> {
     value.parse::<RadrootsCoreUnit>().map_err(|_| {
-        issue_for_field(contents, field, format!("`{field}` must be a valid unit code"))
+        issue_for_field(
+            contents,
+            field,
+            format!("`{field}` must be a valid unit code"),
+        )
     })
 }
 
@@ -948,8 +942,7 @@ fn generate_d_tag() -> String {
 }
 
 fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut output = String::with_capacity(22);
     let mut index = 0usize;
     while index + 3 <= bytes.len() {

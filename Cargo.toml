@@ -17,6 +17,7 @@ path = "src/main.rs"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.5", features = ["derive"] }
 radroots-core = { path = "../lib/crates/core", features = ["std", "serde"] }
 radroots-events = { path = "../lib/crates/events" }
@@ -29,6 +30,7 @@ radroots-replica-db = { path = "../lib/crates/replica-db" }
 radroots-replica-sync = { path = "../lib/crates/replica-sync" }
 radroots-sql-core = { path = "../lib/crates/sql-core", features = ["native"] }
 radroots-trade = { path = "../lib/crates/trade" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"

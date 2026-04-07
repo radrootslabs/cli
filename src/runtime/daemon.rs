@@ -1,0 +1,498 @@
+use std::time::Duration;
+
+use reqwest::blocking::Client;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::domain::runtime::{
+    CommandOutput, CommandView, JobDetailView, JobSummaryView, RpcSessionView, RpcSessionsView,
+    RpcStatusView,
+};
+use crate::runtime::config::RuntimeConfig;
+
+const RPC_SOURCE: &str = "daemon rpc · durable write plane";
+const BRIDGE_SOURCE: &str = "daemon bridge · durable write plane";
+const RPC_TIMEOUT_SECS: u64 = 2;
+
+#[derive(Debug)]
+pub enum DaemonRpcError {
+    Unconfigured(String),
+    Unauthorized(String),
+    MethodUnavailable(String),
+    UnknownJob(String),
+    External(String),
+    InvalidResponse(String),
+    Remote(String),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RpcAuthMode {
+    None,
+    BridgeBearer,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonRpcRequest<'a> {
+    jsonrpc: &'static str,
+    id: u64,
+    method: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonRpcResponse<T> {
+    result: Option<T>,
+    error: Option<JsonRpcResponseError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonRpcResponseError {
+    code: i64,
+    message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BridgeStatusRemote {
+    enabled: bool,
+    ready: bool,
+    auth_mode: String,
+    signer_mode: String,
+    default_signer_mode: String,
+    #[serde(default)]
+    supported_signer_modes: Vec<String>,
+    available_nip46_signer_sessions: usize,
+    relay_count: usize,
+    job_status_retention: usize,
+    retained_jobs: usize,
+    accepted_jobs: usize,
+    published_jobs: usize,
+    failed_jobs: usize,
+    recovered_failed_jobs: usize,
+    #[serde(default)]
+    methods: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BridgeJobRemote {
+    job_id: String,
+    command: String,
+    status: String,
+    terminal: bool,
+    recovered_after_restart: bool,
+    requested_at_unix: u64,
+    completed_at_unix: Option<u64>,
+    signer_mode: String,
+    event_id: Option<String>,
+    event_addr: Option<String>,
+    delivery_policy: String,
+    delivery_quorum: Option<usize>,
+    relay_count: usize,
+    acknowledged_relay_count: usize,
+    required_acknowledged_relay_count: usize,
+    attempt_count: usize,
+    relay_outcome_summary: String,
+    #[serde(default)]
+    attempt_summaries: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Nip46SessionRemote {
+    session_id: String,
+    role: String,
+    client_pubkey: String,
+    signer_pubkey: String,
+    user_pubkey: Option<String>,
+    #[serde(default)]
+    relays: Vec<String>,
+    #[serde(default)]
+    permissions: Vec<String>,
+    auth_required: bool,
+    authorized: bool,
+    expires_in_secs: Option<u64>,
+}
+
+pub fn status(config: &RuntimeConfig) -> CommandOutput {
+    match bridge_status(config) {
+        Ok(status) => CommandOutput::success(CommandView::RpcStatus(RpcStatusView {
+            state: if status.ready {
+                "ready".to_owned()
+            } else {
+                "degraded".to_owned()
+            },
+            source: RPC_SOURCE.to_owned(),
+            url: config.rpc.url.clone(),
+            reason: if status.ready {
+                None
+            } else {
+                Some("bridge is reachable but not ready for durable publish traffic".to_owned())
+            },
+            auth_mode: Some(status.auth_mode),
+            signer_mode: Some(status.signer_mode),
+            default_signer_mode: Some(status.default_signer_mode),
+            supported_signer_modes: status.supported_signer_modes,
+            bridge_enabled: Some(status.enabled),
+            bridge_ready: Some(status.ready),
+            relay_count: Some(status.relay_count),
+            available_nip46_signer_sessions: Some(status.available_nip46_signer_sessions),
+            job_status_retention: Some(status.job_status_retention),
+            retained_jobs: Some(status.retained_jobs),
+            accepted_jobs: Some(status.accepted_jobs),
+            published_jobs: Some(status.published_jobs),
+            failed_jobs: Some(status.failed_jobs),
+            recovered_failed_jobs: Some(status.recovered_failed_jobs),
+            session_surface_enabled: status
+                .methods
+                .iter()
+                .any(|method| method == "nip46.session.list"),
+            methods_count: status.methods.len(),
+            actions: if status.ready {
+                Vec::new()
+            } else {
+                vec!["radroots relay ls".to_owned()]
+            },
+        })),
+        Err(DaemonRpcError::Unconfigured(reason))
+        | Err(DaemonRpcError::Unauthorized(reason))
+        | Err(DaemonRpcError::MethodUnavailable(reason)) => {
+            CommandOutput::unconfigured(CommandView::RpcStatus(RpcStatusView {
+                state: "unconfigured".to_owned(),
+                source: RPC_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                reason: Some(reason),
+                auth_mode: None,
+                signer_mode: None,
+                default_signer_mode: None,
+                supported_signer_modes: Vec::new(),
+                bridge_enabled: None,
+                bridge_ready: None,
+                relay_count: None,
+                available_nip46_signer_sessions: None,
+                job_status_retention: None,
+                retained_jobs: None,
+                accepted_jobs: None,
+                published_jobs: None,
+                failed_jobs: None,
+                recovered_failed_jobs: None,
+                session_surface_enabled: false,
+                methods_count: 0,
+                actions: vec![
+                    "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell".to_owned(),
+                    "start radrootsd with bridge ingress enabled".to_owned(),
+                ],
+            }))
+        }
+        Err(DaemonRpcError::External(reason)) => {
+            CommandOutput::external_unavailable(CommandView::RpcStatus(RpcStatusView {
+                state: "unavailable".to_owned(),
+                source: RPC_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                reason: Some(reason),
+                auth_mode: None,
+                signer_mode: None,
+                default_signer_mode: None,
+                supported_signer_modes: Vec::new(),
+                bridge_enabled: None,
+                bridge_ready: None,
+                relay_count: None,
+                available_nip46_signer_sessions: None,
+                job_status_retention: None,
+                retained_jobs: None,
+                accepted_jobs: None,
+                published_jobs: None,
+                failed_jobs: None,
+                recovered_failed_jobs: None,
+                session_surface_enabled: false,
+                methods_count: 0,
+                actions: vec!["start radrootsd and verify the rpc url".to_owned()],
+            }))
+        }
+        Err(DaemonRpcError::InvalidResponse(reason)) | Err(DaemonRpcError::Remote(reason)) => {
+            CommandOutput::internal_error(CommandView::RpcStatus(RpcStatusView {
+                state: "error".to_owned(),
+                source: RPC_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                reason: Some(reason),
+                auth_mode: None,
+                signer_mode: None,
+                default_signer_mode: None,
+                supported_signer_modes: Vec::new(),
+                bridge_enabled: None,
+                bridge_ready: None,
+                relay_count: None,
+                available_nip46_signer_sessions: None,
+                job_status_retention: None,
+                retained_jobs: None,
+                accepted_jobs: None,
+                published_jobs: None,
+                failed_jobs: None,
+                recovered_failed_jobs: None,
+                session_surface_enabled: false,
+                methods_count: 0,
+                actions: vec!["inspect the daemon rpc response contract".to_owned()],
+            }))
+        }
+        Err(DaemonRpcError::UnknownJob(reason)) => {
+            CommandOutput::internal_error(CommandView::RpcStatus(RpcStatusView {
+                state: "error".to_owned(),
+                source: RPC_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                reason: Some(reason),
+                auth_mode: None,
+                signer_mode: None,
+                default_signer_mode: None,
+                supported_signer_modes: Vec::new(),
+                bridge_enabled: None,
+                bridge_ready: None,
+                relay_count: None,
+                available_nip46_signer_sessions: None,
+                job_status_retention: None,
+                retained_jobs: None,
+                accepted_jobs: None,
+                published_jobs: None,
+                failed_jobs: None,
+                recovered_failed_jobs: None,
+                session_surface_enabled: false,
+                methods_count: 0,
+                actions: Vec::new(),
+            }))
+        }
+    }
+}
+
+pub fn sessions(config: &RuntimeConfig) -> CommandOutput {
+    match nip46_sessions(config) {
+        Ok(sessions) => {
+            let entries = sessions
+                .into_iter()
+                .map(map_session_view)
+                .collect::<Vec<_>>();
+            let state = if entries.is_empty() { "empty" } else { "ready" };
+            CommandOutput::success(CommandView::RpcSessions(RpcSessionsView {
+                state: state.to_owned(),
+                source: RPC_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                count: entries.len(),
+                reason: None,
+                sessions: entries,
+                actions: Vec::new(),
+            }))
+        }
+        Err(DaemonRpcError::MethodUnavailable(reason)) => {
+            CommandOutput::unconfigured(CommandView::RpcSessions(RpcSessionsView {
+                state: "unconfigured".to_owned(),
+                source: RPC_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                count: 0,
+                reason: Some(reason),
+                sessions: Vec::new(),
+                actions: vec!["enable nip46.public_jsonrpc_enabled in radrootsd".to_owned()],
+            }))
+        }
+        Err(DaemonRpcError::External(reason)) => {
+            CommandOutput::external_unavailable(CommandView::RpcSessions(RpcSessionsView {
+                state: "unavailable".to_owned(),
+                source: RPC_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                count: 0,
+                reason: Some(reason),
+                sessions: Vec::new(),
+                actions: vec!["start radrootsd and verify the rpc url".to_owned()],
+            }))
+        }
+        Err(DaemonRpcError::Unconfigured(reason))
+        | Err(DaemonRpcError::Unauthorized(reason))
+        | Err(DaemonRpcError::InvalidResponse(reason))
+        | Err(DaemonRpcError::Remote(reason))
+        | Err(DaemonRpcError::UnknownJob(reason)) => {
+            CommandOutput::internal_error(CommandView::RpcSessions(RpcSessionsView {
+                state: "error".to_owned(),
+                source: RPC_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                count: 0,
+                reason: Some(reason),
+                sessions: Vec::new(),
+                actions: Vec::new(),
+            }))
+        }
+    }
+}
+
+pub fn bridge_job_list(config: &RuntimeConfig) -> Result<Vec<JobSummaryView>, DaemonRpcError> {
+    bridge_jobs(config).map(|jobs| jobs.into_iter().map(map_job_summary_view).collect())
+}
+
+pub fn bridge_job(
+    config: &RuntimeConfig,
+    job_id: &str,
+) -> Result<Option<JobDetailView>, DaemonRpcError> {
+    match bridge_job_status(config, job_id) {
+        Ok(job) => Ok(Some(map_job_detail_view(job))),
+        Err(DaemonRpcError::UnknownJob(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn bridge_status(config: &RuntimeConfig) -> Result<BridgeStatusRemote, DaemonRpcError> {
+    call(config, "bridge.status", None, RpcAuthMode::BridgeBearer)
+}
+
+fn bridge_jobs(config: &RuntimeConfig) -> Result<Vec<BridgeJobRemote>, DaemonRpcError> {
+    call(config, "bridge.job.list", None, RpcAuthMode::BridgeBearer)
+}
+
+fn bridge_job_status(
+    config: &RuntimeConfig,
+    job_id: &str,
+) -> Result<BridgeJobRemote, DaemonRpcError> {
+    call(
+        config,
+        "bridge.job.status",
+        Some(serde_json::json!({ "job_id": job_id })),
+        RpcAuthMode::BridgeBearer,
+    )
+}
+
+fn nip46_sessions(config: &RuntimeConfig) -> Result<Vec<Nip46SessionRemote>, DaemonRpcError> {
+    call(config, "nip46.session.list", None, RpcAuthMode::None)
+}
+
+fn call<T: DeserializeOwned>(
+    config: &RuntimeConfig,
+    method: &str,
+    params: Option<Value>,
+    auth_mode: RpcAuthMode,
+) -> Result<T, DaemonRpcError> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(RPC_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| DaemonRpcError::InvalidResponse(format!("build rpc client: {error}")))?;
+
+    let mut request = client.post(config.rpc.url.as_str()).json(&JsonRpcRequest {
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params,
+    });
+
+    if matches!(auth_mode, RpcAuthMode::BridgeBearer) {
+        let Some(token) = config.rpc.bridge_bearer_token.as_deref() else {
+            return Err(DaemonRpcError::Unconfigured(
+                "bridge bearer token is not configured".to_owned(),
+            ));
+        };
+        request = request.bearer_auth(token);
+    }
+
+    let response = request.send().map_err(|error| {
+        DaemonRpcError::External(format!(
+            "failed to reach daemon rpc at {}: {error}",
+            config.rpc.url
+        ))
+    })?;
+    let status = response.status();
+    let body = response.text().map_err(|error| {
+        DaemonRpcError::InvalidResponse(format!("read daemon rpc response: {error}"))
+    })?;
+    if !status.is_success() {
+        return Err(DaemonRpcError::External(format!(
+            "daemon rpc returned http {}",
+            status.as_u16()
+        )));
+    }
+
+    let envelope: JsonRpcResponse<T> = serde_json::from_str(body.as_str()).map_err(|error| {
+        DaemonRpcError::InvalidResponse(format!("parse daemon rpc response: {error}"))
+    })?;
+    if let Some(result) = envelope.result {
+        return Ok(result);
+    }
+    let Some(error) = envelope.error else {
+        return Err(DaemonRpcError::InvalidResponse(
+            "daemon rpc response did not include a result".to_owned(),
+        ));
+    };
+    Err(map_rpc_error(method, error))
+}
+
+fn map_rpc_error(method: &str, error: JsonRpcResponseError) -> DaemonRpcError {
+    match error.code {
+        -32601 => DaemonRpcError::MethodUnavailable(error.message),
+        -32001 => DaemonRpcError::Unauthorized(error.message),
+        -32000
+            if method == "bridge.job.status"
+                && error.message.starts_with("unknown bridge job:") =>
+        {
+            DaemonRpcError::UnknownJob(error.message)
+        }
+        -32000 => DaemonRpcError::Remote(error.message),
+        _ => DaemonRpcError::InvalidResponse(format!(
+            "daemon rpc returned unexpected error {}: {}",
+            error.code, error.message
+        )),
+    }
+}
+
+fn map_job_command(command: String) -> String {
+    match command.as_str() {
+        "bridge.listing.publish" => "listing.publish".to_owned(),
+        "bridge.order.request" => "order.submit".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn map_job_summary_view(job: BridgeJobRemote) -> JobSummaryView {
+    JobSummaryView {
+        id: job.job_id,
+        command: map_job_command(job.command),
+        state: job.status,
+        terminal: job.terminal,
+        signer: job.signer_mode,
+        requested_at_unix: job.requested_at_unix,
+        completed_at_unix: job.completed_at_unix,
+        recovered_after_restart: job.recovered_after_restart,
+    }
+}
+
+fn map_job_detail_view(job: BridgeJobRemote) -> JobDetailView {
+    JobDetailView {
+        id: job.job_id,
+        command: map_job_command(job.command),
+        state: job.status,
+        terminal: job.terminal,
+        signer: job.signer_mode,
+        requested_at_unix: job.requested_at_unix,
+        completed_at_unix: job.completed_at_unix,
+        recovered_after_restart: job.recovered_after_restart,
+        event_id: job.event_id,
+        event_addr: job.event_addr,
+        delivery_policy: job.delivery_policy,
+        delivery_quorum: job.delivery_quorum,
+        relay_count: job.relay_count,
+        acknowledged_relay_count: job.acknowledged_relay_count,
+        required_acknowledged_relay_count: job.required_acknowledged_relay_count,
+        attempt_count: job.attempt_count,
+        relay_outcome_summary: job.relay_outcome_summary,
+        attempt_summaries: job.attempt_summaries,
+    }
+}
+
+fn map_session_view(session: Nip46SessionRemote) -> RpcSessionView {
+    RpcSessionView {
+        session_id: session.session_id,
+        role: session.role,
+        client_pubkey: session.client_pubkey,
+        signer_pubkey: session.signer_pubkey,
+        user_pubkey: session.user_pubkey,
+        relay_count: session.relays.len(),
+        permissions_count: session.permissions.len(),
+        auth_required: session.auth_required,
+        authorized: session.authorized,
+        expires_in_secs: session.expires_in_secs,
+    }
+}
+
+pub fn bridge_source() -> &'static str {
+    BRIDGE_SOURCE
+}

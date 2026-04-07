@@ -2,9 +2,10 @@ use std::io::{self, Write};
 
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
-    FindView, ListingGetView, ListingNewView, ListingValidateView, LocalBackupView,
-    LocalExportView, LocalInitView, LocalStatusView, NetStatusView, RelayListView, SyncActionView,
-    SyncStatusView, SyncWatchView,
+    FindView, JobGetView, JobListView, JobWatchView, ListingGetView, ListingNewView,
+    ListingValidateView, LocalBackupView, LocalExportView, LocalInitView, LocalStatusView,
+    NetStatusView, RelayListView, RpcSessionsView, RpcStatusView, SyncActionView, SyncStatusView,
+    SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -77,6 +78,12 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         CommandView::NetStatus(view) => {
             render_net_status(stdout, view)?;
         }
+        CommandView::RpcSessions(view) => {
+            render_rpc_sessions(stdout, view)?;
+        }
+        CommandView::RpcStatus(view) => {
+            render_rpc_status(stdout, view)?;
+        }
         CommandView::ConfigShow(view) => {
             render_config_show(stdout, view)?;
         }
@@ -85,6 +92,15 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::Find(view) => {
             render_find(stdout, view)?;
+        }
+        CommandView::JobGet(view) => {
+            render_job_get(stdout, view)?;
+        }
+        CommandView::JobList(view) => {
+            render_job_list(stdout, view)?;
+        }
+        CommandView::JobWatch(view) => {
+            render_job_watch(stdout, view)?;
         }
         CommandView::ListingGet(view) => {
             render_listing_get(stdout, view)?;
@@ -189,6 +205,14 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
+        CommandView::RpcSessions(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::RpcStatus(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandView::ConfigShow(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
@@ -198,6 +222,18 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::Find(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::JobGet(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::JobList(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::JobWatch(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -281,6 +317,27 @@ fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<()
         CommandView::Find(view) => {
             for result in &view.results {
                 serde_json::to_writer(&mut *stdout, result)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
+        CommandView::JobList(view) => {
+            for job in &view.jobs {
+                serde_json::to_writer(&mut *stdout, job)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
+        CommandView::JobWatch(view) => {
+            for frame in &view.frames {
+                serde_json::to_writer(&mut *stdout, frame)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
+        CommandView::RpcSessions(view) => {
+            for session in &view.sessions {
+                serde_json::to_writer(&mut *stdout, session)?;
                 writeln!(stdout)?;
             }
             Ok(())
@@ -421,6 +478,17 @@ fn render_config_show(
         "myc",
         &[("executable", view.myc.executable.as_str())],
     )?;
+    render_pairs(
+        stdout,
+        "rpc",
+        &[
+            ("url", view.rpc.url.as_str()),
+            (
+                "bridge auth configured",
+                yes_no(view.rpc.bridge_auth_configured),
+            ),
+        ],
+    )?;
     writeln!(stdout, "source: {}", view.source)?;
     Ok(())
 }
@@ -514,10 +582,136 @@ fn render_find(stdout: &mut dyn Write, view: &FindView) -> Result<(), RuntimeErr
     Ok(())
 }
 
-fn render_listing_new(
-    stdout: &mut dyn Write,
-    view: &ListingNewView,
-) -> Result<(), RuntimeError> {
+fn render_job_list(stdout: &mut dyn Write, view: &JobListView) -> Result<(), RuntimeError> {
+    let context = match view.state.as_str() {
+        "ready" => format!(
+            "activity · {} job{}",
+            view.count,
+            if view.count == 1 { "" } else { "s" }
+        ),
+        "empty" => "activity · no retained jobs".to_owned(),
+        "unconfigured" => "activity · jobs unconfigured".to_owned(),
+        "unavailable" => "activity · jobs unavailable".to_owned(),
+        _ => "activity · jobs error".to_owned(),
+    };
+    write_context(stdout, context.as_str())?;
+    if view.jobs.is_empty() {
+        if let Some(reason) = &view.reason {
+            writeln!(stdout, "{reason}")?;
+            writeln!(stdout)?;
+        }
+    } else {
+        let table = Table {
+            headers: &["job", "type", "state", "signer", "updated"],
+            rows: view
+                .jobs
+                .iter()
+                .map(|job| {
+                    let updated_at = job.completed_at_unix.unwrap_or(job.requested_at_unix);
+                    vec![
+                        job.id.clone(),
+                        job.command.clone(),
+                        job.state.clone(),
+                        job.signer.clone(),
+                        crate::runtime::job::format_timestamp(updated_at),
+                    ]
+                })
+                .collect(),
+        };
+        render_table(stdout, &table)?;
+        writeln!(stdout)?;
+    }
+    writeln!(stdout, "rpc url: {}", view.rpc_url)?;
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_job_get(stdout: &mut dyn Write, view: &JobGetView) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("activity · {}", view.lookup).as_str())?;
+    if let Some(job) = &view.job {
+        render_owned_pairs(
+            stdout,
+            "job",
+            &[
+                ("id", job.id.clone()),
+                ("type", job.command.clone()),
+                ("state", job.state.clone()),
+                ("signer", job.signer.clone()),
+                (
+                    "requested",
+                    crate::runtime::job::format_timestamp(job.requested_at_unix),
+                ),
+                (
+                    "completed",
+                    job.completed_at_unix
+                        .map(crate::runtime::job::format_timestamp)
+                        .unwrap_or_else(|| "pending".to_owned()),
+                ),
+                ("terminal", yes_no(job.terminal).to_owned()),
+                (
+                    "recovered after restart",
+                    yes_no(job.recovered_after_restart).to_owned(),
+                ),
+                ("delivery policy", job.delivery_policy.clone()),
+                ("relay outcome", job.relay_outcome_summary.clone()),
+            ],
+        )?;
+        if !job.attempt_summaries.is_empty() {
+            writeln!(stdout, "attempts")?;
+            for attempt in &job.attempt_summaries {
+                writeln!(stdout, "  {attempt}")?;
+            }
+            writeln!(stdout)?;
+        }
+    } else if let Some(reason) = &view.reason {
+        writeln!(stdout, "{reason}")?;
+        writeln!(stdout)?;
+    }
+    writeln!(stdout, "rpc url: {}", view.rpc_url)?;
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_job_watch(stdout: &mut dyn Write, view: &JobWatchView) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("activity · watch {}", view.job_id).as_str())?;
+    if view.frames.is_empty() {
+        if let Some(reason) = &view.reason {
+            writeln!(stdout, "{reason}")?;
+            writeln!(stdout)?;
+        } else {
+            writeln!(stdout, "no frames collected")?;
+            writeln!(stdout)?;
+        }
+    } else {
+        let table = Table {
+            headers: &["frame", "time", "state", "terminal", "summary"],
+            rows: view
+                .frames
+                .iter()
+                .map(|frame| {
+                    vec![
+                        frame.sequence.to_string(),
+                        crate::runtime::job::format_clock(frame.observed_at_unix),
+                        frame.state.clone(),
+                        yes_no(frame.terminal).to_owned(),
+                        frame.summary.clone(),
+                    ]
+                })
+                .collect(),
+        };
+        render_table(stdout, &table)?;
+        writeln!(stdout)?;
+    }
+    writeln!(stdout, "interval ms: {}", view.interval_ms)?;
+    writeln!(stdout, "rpc url: {}", view.rpc_url)?;
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_listing_new(stdout: &mut dyn Write, view: &ListingNewView) -> Result<(), RuntimeError> {
     write_context(stdout, "listing · draft created")?;
     let mut rows = vec![
         ("file", view.file.as_str()),
@@ -590,10 +784,7 @@ fn render_listing_validate(
     Ok(())
 }
 
-fn render_listing_get(
-    stdout: &mut dyn Write,
-    view: &ListingGetView,
-) -> Result<(), RuntimeError> {
+fn render_listing_get(stdout: &mut dyn Write, view: &ListingGetView) -> Result<(), RuntimeError> {
     let context = view
         .listing_id
         .clone()
@@ -730,6 +921,95 @@ fn render_net_status(stdout: &mut dyn Write, view: &NetStatusView) -> Result<(),
     if let Some(reason) = &view.reason {
         writeln!(stdout, "reason: {reason}")?;
     }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_rpc_status(stdout: &mut dyn Write, view: &RpcStatusView) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("rpc · {}", view.state).as_str())?;
+    let mut rows = vec![("url", view.url.as_str()), ("status", view.state.as_str())];
+    if let Some(auth_mode) = &view.auth_mode {
+        rows.push(("auth mode", auth_mode.as_str()));
+    }
+    if let Some(signer_mode) = &view.signer_mode {
+        rows.push(("signer mode", signer_mode.as_str()));
+    }
+    if let Some(default_signer_mode) = &view.default_signer_mode {
+        rows.push(("default signer", default_signer_mode.as_str()));
+    }
+    render_pairs(stdout, "rpc", rows.as_slice())?;
+
+    let mut bridge_rows = Vec::<(&str, String)>::new();
+    if let Some(enabled) = view.bridge_enabled {
+        bridge_rows.push(("bridge enabled", yes_no(enabled).to_owned()));
+    }
+    if let Some(ready) = view.bridge_ready {
+        bridge_rows.push(("bridge ready", yes_no(ready).to_owned()));
+    }
+    if let Some(relay_count) = view.relay_count {
+        bridge_rows.push(("relay count", relay_count.to_string()));
+    }
+    if let Some(retained_jobs) = view.retained_jobs {
+        bridge_rows.push(("retained jobs", retained_jobs.to_string()));
+    }
+    if let Some(job_status_retention) = view.job_status_retention {
+        bridge_rows.push(("job retention", job_status_retention.to_string()));
+    }
+    if !bridge_rows.is_empty() {
+        render_owned_pairs(stdout, "bridge", bridge_rows.as_slice())?;
+    }
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_rpc_sessions(stdout: &mut dyn Write, view: &RpcSessionsView) -> Result<(), RuntimeError> {
+    let context = match view.state.as_str() {
+        "ready" => format!(
+            "rpc · {} session{}",
+            view.count,
+            if view.count == 1 { "" } else { "s" }
+        ),
+        "empty" => "rpc · no public sessions".to_owned(),
+        "unconfigured" => "rpc · sessions unconfigured".to_owned(),
+        "unavailable" => "rpc · sessions unavailable".to_owned(),
+        _ => "rpc · sessions error".to_owned(),
+    };
+    write_context(stdout, context.as_str())?;
+    if view.sessions.is_empty() {
+        if let Some(reason) = &view.reason {
+            writeln!(stdout, "{reason}")?;
+            writeln!(stdout)?;
+        }
+    } else {
+        let table = Table {
+            headers: &["session", "role", "auth", "authorized", "relays", "expires"],
+            rows: view
+                .sessions
+                .iter()
+                .map(|session| {
+                    vec![
+                        session.session_id.clone(),
+                        session.role.clone(),
+                        yes_no(session.auth_required).to_owned(),
+                        yes_no(session.authorized).to_owned(),
+                        session.relay_count.to_string(),
+                        session
+                            .expires_in_secs
+                            .map(|secs| format!("{secs}s"))
+                            .unwrap_or_else(|| "n/a".to_owned()),
+                    ]
+                })
+                .collect(),
+        };
+        render_table(stdout, &table)?;
+        writeln!(stdout)?;
+    }
+    writeln!(stdout, "rpc url: {}", view.url)?;
     writeln!(stdout, "source: {}", view.source)?;
     render_actions(stdout, &view.actions)?;
     Ok(())
@@ -1178,6 +1458,9 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
         CommandView::Find(_) => "find",
+        CommandView::JobGet(_) => "job get",
+        CommandView::JobList(_) => "job ls",
+        CommandView::JobWatch(_) => "job watch",
         CommandView::ListingGet(_) => "listing get",
         CommandView::ListingNew(_) => "listing new",
         CommandView::ListingValidate(_) => "listing validate",
@@ -1187,6 +1470,8 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::LocalStatus(_) => "local status",
         CommandView::MycStatus(_) => "myc status",
         CommandView::NetStatus(_) => "net status",
+        CommandView::RpcSessions(_) => "rpc sessions",
+        CommandView::RpcStatus(_) => "rpc status",
         CommandView::RelayList(_) => "relay ls",
         CommandView::SignerStatus(_) => "signer status",
         CommandView::SyncPull(_) => "sync pull",
@@ -1206,7 +1491,7 @@ mod tests {
     };
     use crate::runtime::config::{
         AccountConfig, IdentityConfig, LocalConfig, LoggingConfig, MycConfig, OutputConfig,
-        OutputFormat, PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy,
+        OutputFormat, PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig,
         RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
@@ -1256,6 +1541,10 @@ mod tests {
                 },
                 myc: MycConfig {
                     executable: "myc".into(),
+                },
+                rpc: RpcConfig {
+                    url: "http://127.0.0.1:7070".to_owned(),
+                    bridge_bearer_token: None,
                 },
             },
             &LoggingState {
@@ -1349,6 +1638,10 @@ mod tests {
                 },
                 myc: MycConfig {
                     executable: "myc".into(),
+                },
+                rpc: RpcConfig {
+                    url: "http://127.0.0.1:7070".to_owned(),
+                    bridge_bearer_token: None,
                 },
             },
             &LoggingState {

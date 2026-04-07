@@ -1,7 +1,7 @@
 use crate::domain::runtime::{
     AccountRuntimeView, ConfigFilesRuntimeView, ConfigShowView, LocalRuntimeView,
     LoggingRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
-    SignerRuntimeView,
+    RpcRuntimeView, SignerRuntimeView,
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
@@ -61,6 +61,10 @@ pub fn show(config: &RuntimeConfig, logging: &LoggingState) -> ConfigShowView {
         },
         myc: MycRuntimeView {
             executable: config.myc.executable.display().to_string(),
+        },
+        rpc: RpcRuntimeView {
+            url: config.rpc.url.clone(),
+            bridge_auth_configured: config.rpc.bridge_bearer_token.is_some(),
         },
     }
 }

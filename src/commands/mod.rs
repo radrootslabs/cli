@@ -1,11 +1,13 @@
 pub mod doctor;
 pub mod find;
 pub mod identity;
+pub mod job;
 pub mod listing;
 pub mod local;
 pub mod myc;
 pub mod net;
 pub mod relay;
+pub mod rpc;
 pub mod runtime;
 pub mod signer;
 pub mod sync;
@@ -49,9 +51,9 @@ pub fn dispatch(
         Command::Doctor => doctor::report(config, logging),
         Command::Find(find_args) => find::search(config, find_args),
         Command::Job(job) => match &job.command {
-            JobCommand::Ls => unimplemented_command("job ls"),
-            JobCommand::Get(_) => unimplemented_command("job get"),
-            JobCommand::Watch(_) => unimplemented_command("job watch"),
+            JobCommand::Ls => Ok(job::list(config)),
+            JobCommand::Get(args) => Ok(job::get(config, args.key.as_str())),
+            JobCommand::Watch(args) => job::watch(config, args),
         },
         Command::Listing(listing) => match &listing.command {
             ListingCommand::New(args) => listing::new(config, args),
@@ -83,8 +85,8 @@ pub fn dispatch(
             RelayCommand::Ls => Ok(relay::list(config)),
         },
         Command::Rpc(rpc) => match &rpc.command {
-            RpcCommand::Status => unimplemented_command("rpc status"),
-            RpcCommand::Sessions => unimplemented_command("rpc sessions"),
+            RpcCommand::Status => Ok(rpc::status(config)),
+            RpcCommand::Sessions => Ok(rpc::sessions(config)),
         },
         Command::Sync(sync) => match &sync.command {
             SyncCommand::Status => sync::status(config),
