@@ -106,7 +106,7 @@ impl Command {
                 OrderCommand::New(_) => "order new",
                 OrderCommand::Get(_) => "order get",
                 OrderCommand::Ls => "order ls",
-                OrderCommand::Submit => "order submit",
+                OrderCommand::Submit(_) => "order submit",
                 OrderCommand::Watch(_) => "order watch",
                 OrderCommand::Cancel(_) => "order cancel",
                 OrderCommand::History => "order history",
@@ -146,7 +146,7 @@ impl Command {
                 }) | Self::Rpc(RpcArgs {
                     command: RpcCommand::Sessions,
                 }) | Self::Order(OrderArgs {
-                    command: OrderCommand::Ls | OrderCommand::History,
+                    command: OrderCommand::Ls | OrderCommand::Watch(_) | OrderCommand::History,
                 }) | Self::Sync(SyncArgs {
                     command: SyncCommand::Watch(_),
                 }) | Self::Find(_)
@@ -166,7 +166,7 @@ impl Command {
             }) | Self::Listing(ListingArgs {
                 command: ListingCommand::New(_),
             }) | Self::Order(OrderArgs {
-                command: OrderCommand::New(_) | OrderCommand::Submit | OrderCommand::Cancel(_),
+                command: OrderCommand::New(_) | OrderCommand::Cancel(_),
             })
         )
     }
@@ -400,8 +400,8 @@ pub enum OrderCommand {
     New(OrderNewArgs),
     Get(RecordKeyArgs),
     Ls,
-    Submit,
-    Watch(RecordKeyArgs),
+    Submit(OrderSubmitArgs),
+    Watch(OrderWatchArgs),
     Cancel(RecordKeyArgs),
     History,
 }
@@ -419,6 +419,22 @@ pub struct OrderNewArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct OrderSubmitArgs {
+    pub key: String,
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderWatchArgs {
+    pub key: String,
+    #[arg(long)]
+    pub frames: Option<usize>,
+    #[arg(long, default_value_t = 1_000)]
+    pub interval_ms: u64,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct RecordKeyArgs {
     pub key: String,
 }
@@ -427,8 +443,8 @@ pub struct RecordKeyArgs {
 mod tests {
     use super::{
         AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, JobWatchArgs, ListingCommand,
-        LocalCommand, LocalExportFormatArg, MycCommand, NetCommand, OrderCommand, RelayCommand,
-        RpcCommand, SignerCommand, SyncCommand, SyncWatchArgs,
+        LocalCommand, LocalExportFormatArg, MycCommand, NetCommand, OrderCommand, OrderWatchArgs,
+        RelayCommand, RpcCommand, SignerCommand, SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     use clap::Parser;
@@ -819,6 +835,51 @@ mod tests {
             },
             _ => panic!("unexpected command variant"),
         }
+
+        let order_submit = CliArgs::parse_from([
+            "radroots",
+            "order",
+            "submit",
+            "ord_demo",
+            "--idempotency-key",
+            "submit-1",
+        ]);
+        match order_submit.command {
+            Command::Order(args) => match args.command {
+                OrderCommand::Submit(submit) => {
+                    assert_eq!(submit.key, "ord_demo");
+                    assert_eq!(submit.idempotency_key.as_deref(), Some("submit-1"));
+                }
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let order_watch = CliArgs::parse_from([
+            "radroots",
+            "order",
+            "watch",
+            "ord_demo",
+            "--frames",
+            "3",
+            "--interval-ms",
+            "25",
+        ]);
+        match order_watch.command {
+            Command::Order(args) => match args.command {
+                OrderCommand::Watch(OrderWatchArgs {
+                    key,
+                    frames,
+                    interval_ms,
+                }) => {
+                    assert_eq!(key, "ord_demo");
+                    assert_eq!(frames, Some(3));
+                    assert_eq!(interval_ms, 25);
+                }
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
     }
 
     #[test]
@@ -854,5 +915,16 @@ mod tests {
                 .command
                 .supports_output_format(OutputFormat::Ndjson)
         );
+
+        let order_watch = CliArgs::parse_from(["radroots", "order", "watch", "ord_demo"]);
+        assert!(
+            order_watch
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
+
+        let order_submit = CliArgs::parse_from(["radroots", "order", "submit", "ord_demo"]);
+        assert_eq!(order_submit.command.display_name(), "order submit");
+        assert!(order_submit.command.supports_dry_run());
     }
 }

@@ -88,9 +88,13 @@ pub enum CommandView {
     LocalStatus(LocalStatusView),
     MycStatus(MycStatusView),
     NetStatus(NetStatusView),
+    OrderCancel(OrderCancelView),
     OrderGet(OrderGetView),
+    OrderHistory(OrderHistoryView),
     OrderList(OrderListView),
     OrderNew(OrderNewView),
+    OrderSubmit(OrderSubmitView),
+    OrderWatch(OrderWatchView),
     RpcSessions(RpcSessionsView),
     RpcStatus(RpcStatusView),
     RelayList(RelayListView),
@@ -552,6 +556,152 @@ pub struct OrderListView {
 impl OrderListView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderSubmitView {
+    pub state: String,
+    pub source: String,
+    pub order_id: String,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_lookup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub deduplicated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<OrderJobView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderSubmitView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderWatchView {
+    pub state: String,
+    pub source: String,
+    pub order_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    pub interval_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<OrderWatchFrameView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderWatchView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderWatchFrameView {
+    pub sequence: usize,
+    pub observed_at_unix: u64,
+    pub state: String,
+    pub terminal: bool,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderHistoryView {
+    pub state: String,
+    pub source: String,
+    pub count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orders: Vec<OrderHistoryEntryView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderHistoryView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderHistoryEntryView {
+    pub id: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_lookup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submitted_at_unix: Option<u64>,
+    pub updated_at_unix: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<OrderJobView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderCancelView {
+    pub state: String,
+    pub source: String,
+    pub lookup: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<OrderJobView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderCancelView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
             "error" => CommandDisposition::InternalError,
             _ => CommandDisposition::Success,
         }

@@ -4,9 +4,9 @@ use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
     FindView, JobGetView, JobListView, JobWatchView, ListingGetView, ListingMutationView,
     ListingNewView, ListingValidateView, LocalBackupView, LocalExportView, LocalInitView,
-    LocalStatusView, NetStatusView, OrderDraftItemView, OrderGetView, OrderJobView, OrderListView,
-    OrderNewView, RelayListView, RpcSessionsView, RpcStatusView, SyncActionView, SyncStatusView,
-    SyncWatchView,
+    LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView, OrderGetView,
+    OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderWatchView,
+    RelayListView, RpcSessionsView, RpcStatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -79,14 +79,26 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         CommandView::NetStatus(view) => {
             render_net_status(stdout, view)?;
         }
+        CommandView::OrderCancel(view) => {
+            render_order_cancel(stdout, view)?;
+        }
         CommandView::OrderGet(view) => {
             render_order_get(stdout, view)?;
+        }
+        CommandView::OrderHistory(view) => {
+            render_order_history(stdout, view)?;
         }
         CommandView::OrderList(view) => {
             render_order_list(stdout, view)?;
         }
         CommandView::OrderNew(view) => {
             render_order_new(stdout, view)?;
+        }
+        CommandView::OrderSubmit(view) => {
+            render_order_submit(stdout, view)?;
+        }
+        CommandView::OrderWatch(view) => {
+            render_order_watch(stdout, view)?;
         }
         CommandView::RpcSessions(view) => {
             render_rpc_sessions(stdout, view)?;
@@ -218,7 +230,15 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
+        CommandView::OrderCancel(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandView::OrderGet(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::OrderHistory(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -227,6 +247,14 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::OrderNew(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::OrderSubmit(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::OrderWatch(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -364,9 +392,23 @@ fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<()
             }
             Ok(())
         }
+        CommandView::OrderHistory(view) => {
+            for order in &view.orders {
+                serde_json::to_writer(&mut *stdout, order)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
         CommandView::OrderList(view) => {
             for order in &view.orders {
                 serde_json::to_writer(&mut *stdout, order)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
+        CommandView::OrderWatch(view) => {
+            for frame in &view.frames {
+                serde_json::to_writer(&mut *stdout, frame)?;
                 writeln!(stdout)?;
             }
             Ok(())
@@ -887,6 +929,190 @@ fn render_order_list(stdout: &mut dyn Write, view: &OrderListView) -> Result<(),
         };
         render_table(stdout, &table)?;
         writeln!(stdout)?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_order_submit(stdout: &mut dyn Write, view: &OrderSubmitView) -> Result<(), RuntimeError> {
+    let context = match view.state.as_str() {
+        "missing" => format!("order · {} missing", view.order_id),
+        "already_submitted" => format!("order · {} already submitted", view.order_id),
+        "unconfigured" => format!("order · {} not ready", view.order_id),
+        "unavailable" => format!("order · {} submit unavailable", view.order_id),
+        "error" => format!("order · {} error", view.order_id),
+        "dry_run" => format!("order · {} dry run", view.order_id),
+        "deduplicated" => format!("order · {} deduplicated", view.order_id),
+        _ => format!("order · {} submitted", view.order_id),
+    };
+    write_context(stdout, context.as_str())?;
+
+    let mut rows = vec![
+        ("order id", view.order_id.as_str()),
+        ("file", view.file.as_str()),
+    ];
+    if let Some(listing_lookup) = &view.listing_lookup {
+        rows.push(("listing", listing_lookup.as_str()));
+    }
+    if let Some(listing_addr) = &view.listing_addr {
+        rows.push(("listing addr", listing_addr.as_str()));
+    }
+    if let Some(account_id) = &view.buyer_account_id {
+        rows.push(("buyer account", account_id.as_str()));
+    }
+    if let Some(buyer_pubkey) = &view.buyer_pubkey {
+        rows.push(("buyer pubkey", buyer_pubkey.as_str()));
+    }
+    if let Some(seller_pubkey) = &view.seller_pubkey {
+        rows.push(("seller pubkey", seller_pubkey.as_str()));
+    }
+    if view.dry_run {
+        rows.push(("dry run", yes_no(true)));
+    }
+    if view.deduplicated {
+        rows.push(("deduplicated", yes_no(true)));
+    }
+    if let Some(idempotency_key) = &view.idempotency_key {
+        rows.push(("idempotency key", idempotency_key.as_str()));
+    }
+    render_pairs(stdout, "order", rows.as_slice())?;
+    if let Some(job) = &view.job {
+        render_order_job(stdout, job)?;
+    }
+    render_order_issues(stdout, &view.issues)?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_order_watch(stdout: &mut dyn Write, view: &OrderWatchView) -> Result<(), RuntimeError> {
+    let context = match view.state.as_str() {
+        "missing" => format!("order · {} watch missing", view.order_id),
+        "not_submitted" => format!("order · {} not submitted", view.order_id),
+        "unconfigured" => format!("order · {} watch unconfigured", view.order_id),
+        "unavailable" => format!("order · {} watch unavailable", view.order_id),
+        "error" => format!("order · {} watch error", view.order_id),
+        "watching" => format!("order · {} watching", view.order_id),
+        _ => format!("order · {} {}", view.order_id, view.state),
+    };
+    write_context(stdout, context.as_str())?;
+
+    let interval = format!("{} ms", view.interval_ms);
+    let mut rows = vec![("order id", view.order_id.clone()), ("interval", interval)];
+    if let Some(job_id) = &view.job_id {
+        rows.push(("job id", job_id.clone()));
+    }
+    render_owned_pairs(stdout, "watch", rows.as_slice())?;
+    if !view.frames.is_empty() {
+        let table = Table {
+            headers: &["frame", "time", "state", "terminal", "summary"],
+            rows: view
+                .frames
+                .iter()
+                .map(|frame| {
+                    vec![
+                        frame.sequence.to_string(),
+                        crate::runtime::job::format_clock(frame.observed_at_unix),
+                        frame.state.clone(),
+                        yes_no(frame.terminal).to_owned(),
+                        frame.summary.clone(),
+                    ]
+                })
+                .collect(),
+        };
+        render_table(stdout, &table)?;
+        writeln!(stdout)?;
+    }
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_order_history(
+    stdout: &mut dyn Write,
+    view: &OrderHistoryView,
+) -> Result<(), RuntimeError> {
+    let context = match view.state.as_str() {
+        "empty" => "order history · no submitted orders".to_owned(),
+        _ => format!(
+            "order history · {} submitted order{}",
+            view.count,
+            if view.count == 1 { "" } else { "s" }
+        ),
+    };
+    write_context(stdout, context.as_str())?;
+    if view.orders.is_empty() {
+        if let Some(reason) = &view.reason {
+            writeln!(stdout, "{reason}")?;
+            writeln!(stdout)?;
+        }
+    } else {
+        let table = Table {
+            headers: &["order", "listing", "state", "job", "submitted", "updated"],
+            rows: view
+                .orders
+                .iter()
+                .map(|order| {
+                    vec![
+                        order.id.clone(),
+                        order
+                            .listing_lookup
+                            .clone()
+                            .or_else(|| order.listing_addr.clone())
+                            .unwrap_or_default(),
+                        order.state.clone(),
+                        order
+                            .job
+                            .as_ref()
+                            .map(|job| job.job_id.clone())
+                            .unwrap_or_default(),
+                        order
+                            .submitted_at_unix
+                            .map(crate::runtime::job::format_timestamp)
+                            .unwrap_or_default(),
+                        crate::runtime::job::format_timestamp(order.updated_at_unix),
+                    ]
+                })
+                .collect(),
+        };
+        render_table(stdout, &table)?;
+        writeln!(stdout)?;
+        if let Some(reason) = &view.reason {
+            writeln!(stdout, "note: {reason}")?;
+        }
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_order_cancel(stdout: &mut dyn Write, view: &OrderCancelView) -> Result<(), RuntimeError> {
+    let context = match view.state.as_str() {
+        "missing" => format!("order · {} missing", view.lookup),
+        "not_submitted" => format!("order · {} not submitted", view.lookup),
+        "unconfigured" => format!("order · {} cancel unavailable", view.lookup),
+        "unavailable" => format!("order · {} cancel unavailable", view.lookup),
+        "error" => format!("order · {} cancel error", view.lookup),
+        _ => format!("order · {} cancel", view.lookup),
+    };
+    write_context(stdout, context.as_str())?;
+    let mut rows = vec![("lookup", view.lookup.as_str())];
+    if let Some(order_id) = &view.order_id {
+        rows.push(("order id", order_id.as_str()));
+    }
+    render_pairs(stdout, "order", rows.as_slice())?;
+    if let Some(job) = &view.job {
+        render_order_job(stdout, job)?;
+    }
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
     }
     writeln!(stdout, "source: {}", view.source)?;
     render_actions(stdout, &view.actions)?;
@@ -1775,9 +2001,13 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::LocalStatus(_) => "local status",
         CommandView::MycStatus(_) => "myc status",
         CommandView::NetStatus(_) => "net status",
+        CommandView::OrderCancel(_) => "order cancel",
         CommandView::OrderGet(_) => "order get",
+        CommandView::OrderHistory(_) => "order history",
         CommandView::OrderList(_) => "order ls",
         CommandView::OrderNew(_) => "order new",
+        CommandView::OrderSubmit(_) => "order submit",
+        CommandView::OrderWatch(_) => "order watch",
         CommandView::RpcSessions(_) => "rpc sessions",
         CommandView::RpcStatus(_) => "rpc status",
         CommandView::RelayList(_) => "relay ls",

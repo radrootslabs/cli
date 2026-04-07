@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use radroots_events::listing::RadrootsListing;
+use radroots_events::trade::RadrootsTradeOrder;
 use reqwest::blocking::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -132,6 +133,17 @@ pub struct BridgeListingPublishResult {
     pub status: String,
     pub signer_mode: String,
     pub event_kind: Option<u32>,
+    pub event_id: Option<String>,
+    pub event_addr: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BridgeOrderRequestResult {
+    pub deduplicated: bool,
+    pub job_id: String,
+    pub idempotency_key: Option<String>,
+    pub status: String,
+    pub signer_mode: String,
     pub event_id: Option<String>,
     pub event_addr: Option<String>,
 }
@@ -380,6 +392,31 @@ pub fn bridge_listing_publish(
         status: response.job.status,
         signer_mode: response.job.signer_mode,
         event_kind: response.job.event_kind,
+        event_id: response.job.event_id,
+        event_addr: response.job.event_addr,
+    })
+}
+
+pub fn bridge_order_request(
+    config: &RuntimeConfig,
+    order: &RadrootsTradeOrder,
+    idempotency_key: Option<&str>,
+) -> Result<BridgeOrderRequestResult, DaemonRpcError> {
+    let response: BridgePublishResponseRemote = call(
+        config,
+        "bridge.order.request",
+        Some(serde_json::json!({
+            "order": order,
+            "idempotency_key": idempotency_key,
+        })),
+        RpcAuthMode::BridgeBearer,
+    )?;
+    Ok(BridgeOrderRequestResult {
+        deduplicated: response.deduplicated,
+        job_id: response.job.job_id,
+        idempotency_key: response.job.idempotency_key,
+        status: response.job.status,
+        signer_mode: response.job.signer_mode,
         event_id: response.job.event_id,
         event_addr: response.job.event_addr,
     })

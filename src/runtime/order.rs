@@ -1,17 +1,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use radroots_events::kinds::KIND_LISTING;
+use radroots_events::trade::{RadrootsTradeOrder, RadrootsTradeOrderItem};
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{OrderNewArgs, RecordKeyArgs};
+use crate::cli::{OrderNewArgs, OrderSubmitArgs, OrderWatchArgs, RecordKeyArgs};
 use crate::domain::runtime::{
-    OrderDraftItemView, OrderGetView, OrderIssueView, OrderJobView, OrderListView, OrderNewView,
-    OrderSummaryView,
+    OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView, OrderHistoryView,
+    OrderIssueView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView,
+    OrderWatchFrameView, OrderWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -20,6 +23,7 @@ use crate::runtime::daemon::{self, DaemonRpcError};
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
+const ORDER_LIFECYCLE_SOURCE: &str = "local order drafts · durable job lifecycle";
 const ORDERS_DIR: &str = "orders/drafts";
 
 static ORDER_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -63,6 +67,18 @@ struct OrderDraftItem {
 #[serde(deny_unknown_fields)]
 struct OrderDraftSubmission {
     job_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signer_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event_addr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    submitted_at_unix: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,7 +135,7 @@ pub fn scaffold(config: &RuntimeConfig, args: &OrderNewArgs) -> Result<OrderNewV
         buyer_account_id,
         submission: None,
     };
-    fs::write(&file, scaffold_contents(&document)?)?;
+    save_draft(file.as_path(), &document)?;
 
     let mut view: OrderNewView = view_from_loaded(
         config,
@@ -243,6 +259,459 @@ pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
     })
 }
 
+pub fn submit(
+    config: &RuntimeConfig,
+    args: &OrderSubmitArgs,
+) -> Result<OrderSubmitView, RuntimeError> {
+    let file = draft_lookup_path(config, args.key.as_str());
+    if !file.exists() {
+        return Ok(OrderSubmitView {
+            state: "missing".to_owned(),
+            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            order_id: args.key.clone(),
+            file: file.display().to_string(),
+            listing_lookup: None,
+            listing_addr: None,
+            buyer_account_id: None,
+            buyer_pubkey: None,
+            seller_pubkey: None,
+            dry_run: false,
+            deduplicated: false,
+            idempotency_key: args.idempotency_key.clone(),
+            reason: Some(format!("order draft `{}` was not found", args.key)),
+            job: None,
+            issues: Vec::new(),
+            actions: vec![
+                "radroots order ls".to_owned(),
+                "radroots order new".to_owned(),
+            ],
+        });
+    }
+
+    let loaded = match load_draft(file.as_path()) {
+        Ok(loaded) => loaded,
+        Err(reason) => {
+            return Ok(OrderSubmitView {
+                state: "error".to_owned(),
+                source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+                order_id: args.key.clone(),
+                file: file.display().to_string(),
+                listing_lookup: None,
+                listing_addr: None,
+                buyer_account_id: None,
+                buyer_pubkey: None,
+                seller_pubkey: None,
+                dry_run: false,
+                deduplicated: false,
+                idempotency_key: args.idempotency_key.clone(),
+                reason: Some(reason),
+                job: None,
+                issues: Vec::new(),
+                actions: Vec::new(),
+            });
+        }
+    };
+
+    if let Some(job) = submission_job_view(config, &loaded.document, true) {
+        let mut actions = vec![
+            format!("radroots order watch {}", loaded.document.order.order_id),
+            format!("radroots order history"),
+        ];
+        actions.push(format!("radroots job get {}", job.job_id));
+        return Ok(OrderSubmitView {
+            state: "already_submitted".to_owned(),
+            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            order_id: loaded.document.order.order_id.clone(),
+            file: loaded.file.display().to_string(),
+            listing_lookup: loaded.document.listing_lookup.clone(),
+            listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+            buyer_account_id: loaded.document.buyer_account_id.clone(),
+            buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+            seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+            dry_run: false,
+            deduplicated: false,
+            idempotency_key: args.idempotency_key.clone(),
+            reason: Some("order draft already has a recorded submission job".to_owned()),
+            job: Some(job),
+            issues: Vec::new(),
+            actions,
+        });
+    }
+
+    let issues = collect_issues(&loaded.document);
+    if !issues.is_empty() {
+        let mut actions = actions_for_document(&loaded.document, loaded.file.as_path(), &issues);
+        actions.push(format!(
+            "radroots order get {}",
+            loaded.document.order.order_id
+        ));
+        return Ok(OrderSubmitView {
+            state: "unconfigured".to_owned(),
+            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            order_id: loaded.document.order.order_id.clone(),
+            file: loaded.file.display().to_string(),
+            listing_lookup: loaded.document.listing_lookup.clone(),
+            listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+            buyer_account_id: loaded.document.buyer_account_id.clone(),
+            buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+            seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+            dry_run: false,
+            deduplicated: false,
+            idempotency_key: args.idempotency_key.clone(),
+            reason: Some("order draft is not ready for durable submit".to_owned()),
+            job: None,
+            issues,
+            actions,
+        });
+    }
+
+    if config.output.dry_run {
+        return Ok(OrderSubmitView {
+            state: "dry_run".to_owned(),
+            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            order_id: loaded.document.order.order_id.clone(),
+            file: loaded.file.display().to_string(),
+            listing_lookup: loaded.document.listing_lookup.clone(),
+            listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+            buyer_account_id: loaded.document.buyer_account_id.clone(),
+            buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+            seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+            dry_run: true,
+            deduplicated: false,
+            idempotency_key: args.idempotency_key.clone(),
+            reason: Some("dry run requested; daemon order submission skipped".to_owned()),
+            job: Some(OrderJobView {
+                job_id: "not_submitted".to_owned(),
+                state: "not_submitted".to_owned(),
+                command: Some("order.submit".to_owned()),
+                event_id: None,
+                event_addr: None,
+                reason: None,
+            }),
+            issues: Vec::new(),
+            actions: vec![format!(
+                "radroots order submit {}",
+                loaded.document.order.order_id
+            )],
+        });
+    }
+
+    let order = trade_order_from_document(&loaded.document);
+    match daemon::bridge_order_request(config, &order, args.idempotency_key.as_deref()) {
+        Ok(result) => {
+            let mut updated = loaded.document.clone();
+            updated.submission = Some(OrderDraftSubmission {
+                job_id: result.job_id.clone(),
+                state: Some(result.status.clone()),
+                signer_mode: Some(result.signer_mode.clone()),
+                command: Some("order.submit".to_owned()),
+                event_id: result.event_id.clone(),
+                event_addr: result.event_addr.clone(),
+                submitted_at_unix: Some(now_unix()),
+            });
+            save_draft(loaded.file.as_path(), &updated)?;
+
+            let failed = result.status == "failed";
+            let mut actions = Vec::new();
+            if failed {
+                actions.push(format!("radroots job get {}", result.job_id));
+                actions.push("radroots rpc status".to_owned());
+                actions.push("radroots order history".to_owned());
+            } else {
+                actions.push(format!("radroots order watch {}", updated.order.order_id));
+                actions.push(format!("radroots job get {}", result.job_id));
+                actions.push("radroots order history".to_owned());
+            }
+
+            Ok(OrderSubmitView {
+                state: if failed {
+                    "unavailable".to_owned()
+                } else if result.deduplicated {
+                    "deduplicated".to_owned()
+                } else {
+                    result.status.clone()
+                },
+                source: daemon::bridge_source().to_owned(),
+                order_id: updated.order.order_id.clone(),
+                file: loaded.file.display().to_string(),
+                listing_lookup: updated.listing_lookup.clone(),
+                listing_addr: non_empty_string(updated.order.listing_addr.clone()),
+                buyer_account_id: updated.buyer_account_id.clone(),
+                buyer_pubkey: non_empty_string(updated.order.buyer_pubkey.clone()),
+                seller_pubkey: non_empty_string(updated.order.seller_pubkey.clone()),
+                dry_run: false,
+                deduplicated: result.deduplicated,
+                idempotency_key: result.idempotency_key.clone(),
+                reason: failed.then(|| {
+                    "daemon order request failed before relay delivery completed".to_owned()
+                }),
+                job: Some(OrderJobView {
+                    job_id: result.job_id,
+                    state: result.status,
+                    command: Some("order.submit".to_owned()),
+                    event_id: result.event_id,
+                    event_addr: result.event_addr,
+                    reason: None,
+                }),
+                issues: Vec::new(),
+                actions,
+            })
+        }
+        Err(error) => Ok(order_submit_error_view(&loaded, args, error)),
+    }
+}
+
+pub fn watch(
+    config: &RuntimeConfig,
+    args: &OrderWatchArgs,
+) -> Result<OrderWatchView, RuntimeError> {
+    if args.frames == Some(0) {
+        return Err(RuntimeError::Config(
+            "--frames must be greater than zero when provided".to_owned(),
+        ));
+    }
+
+    let file = draft_lookup_path(config, args.key.as_str());
+    if !file.exists() {
+        return Ok(OrderWatchView {
+            state: "missing".to_owned(),
+            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            order_id: args.key.clone(),
+            job_id: None,
+            interval_ms: args.interval_ms,
+            reason: Some(format!("order draft `{}` was not found", args.key)),
+            frames: Vec::new(),
+            actions: vec!["radroots order ls".to_owned()],
+        });
+    }
+
+    let loaded = match load_draft(file.as_path()) {
+        Ok(loaded) => loaded,
+        Err(reason) => {
+            return Ok(OrderWatchView {
+                state: "error".to_owned(),
+                source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+                order_id: args.key.clone(),
+                job_id: None,
+                interval_ms: args.interval_ms,
+                reason: Some(reason),
+                frames: Vec::new(),
+                actions: Vec::new(),
+            });
+        }
+    };
+
+    let Some(submission) = loaded.document.submission.as_ref() else {
+        return Ok(OrderWatchView {
+            state: "not_submitted".to_owned(),
+            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            order_id: loaded.document.order.order_id.clone(),
+            job_id: None,
+            interval_ms: args.interval_ms,
+            reason: Some("order draft does not have a recorded submission job yet".to_owned()),
+            frames: Vec::new(),
+            actions: vec![format!(
+                "radroots order submit {}",
+                loaded.document.order.order_id
+            )],
+        });
+    };
+
+    let job_id = submission.job_id.clone();
+    let max_frames = args.frames.unwrap_or(usize::MAX);
+    let mut frames = Vec::new();
+    loop {
+        match daemon::bridge_job(config, job_id.as_str()) {
+            Ok(Some(job)) => {
+                frames.push(OrderWatchFrameView {
+                    sequence: frames.len() + 1,
+                    observed_at_unix: job.completed_at_unix.unwrap_or(job.requested_at_unix),
+                    state: job.state.clone(),
+                    terminal: job.terminal,
+                    summary: job.relay_outcome_summary.clone(),
+                });
+                if job.terminal || frames.len() >= max_frames {
+                    return Ok(OrderWatchView {
+                        state: if job.terminal {
+                            job.state
+                        } else {
+                            "watching".to_owned()
+                        },
+                        source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+                        order_id: loaded.document.order.order_id.clone(),
+                        job_id: Some(job_id.clone()),
+                        interval_ms: args.interval_ms,
+                        reason: None,
+                        frames,
+                        actions: vec!["radroots order history".to_owned()],
+                    });
+                }
+            }
+            Ok(None) => {
+                return Ok(OrderWatchView {
+                    state: "missing".to_owned(),
+                    source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+                    order_id: loaded.document.order.order_id.clone(),
+                    job_id: Some(job_id.clone()),
+                    interval_ms: args.interval_ms,
+                    reason: Some("recorded job id was not found in radrootsd".to_owned()),
+                    frames,
+                    actions: vec!["radroots order history".to_owned()],
+                });
+            }
+            Err(error) => return Ok(order_watch_error_view(&loaded, args, job_id, frames, error)),
+        }
+
+        thread::sleep(Duration::from_millis(args.interval_ms));
+    }
+}
+
+pub fn history(config: &RuntimeConfig) -> Result<OrderHistoryView, RuntimeError> {
+    let dir = drafts_dir(config);
+    if !dir.exists() {
+        return Ok(OrderHistoryView {
+            state: "empty".to_owned(),
+            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            count: 0,
+            reason: Some("no submitted order drafts recorded yet".to_owned()),
+            orders: Vec::new(),
+            actions: vec!["radroots order ls".to_owned()],
+        });
+    }
+
+    let mut orders = Vec::new();
+    let mut invalid_count = 0usize;
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+            continue;
+        }
+        match load_draft(path.as_path()) {
+            Ok(loaded) => {
+                if loaded.document.submission.is_some() {
+                    orders.push(history_entry_from_loaded(config, &loaded));
+                }
+            }
+            Err(_) => {
+                invalid_count += 1;
+            }
+        }
+    }
+
+    orders.sort_by(|left, right| {
+        right
+            .submitted_at_unix
+            .unwrap_or(right.updated_at_unix)
+            .cmp(&left.submitted_at_unix.unwrap_or(left.updated_at_unix))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let state = if orders.is_empty() {
+        "empty"
+    } else if invalid_count > 0
+        || orders
+            .iter()
+            .any(|order| matches!(order.state.as_str(), "error" | "unavailable"))
+    {
+        "degraded"
+    } else {
+        "ready"
+    };
+
+    let reason = if orders.is_empty() {
+        Some("no submitted order drafts recorded yet".to_owned())
+    } else if invalid_count > 0 {
+        Some(format!(
+            "{invalid_count} invalid order draft file{} skipped while building history",
+            if invalid_count == 1 { "" } else { "s" }
+        ))
+    } else {
+        None
+    };
+
+    Ok(OrderHistoryView {
+        state: state.to_owned(),
+        source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+        count: orders.len(),
+        reason,
+        orders,
+        actions: if state == "empty" {
+            vec!["radroots order new".to_owned()]
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+pub fn cancel(
+    config: &RuntimeConfig,
+    args: &RecordKeyArgs,
+) -> Result<OrderCancelView, RuntimeError> {
+    let file = draft_lookup_path(config, args.key.as_str());
+    if !file.exists() {
+        return Ok(OrderCancelView {
+            state: "missing".to_owned(),
+            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            lookup: args.key.clone(),
+            order_id: None,
+            reason: Some(format!("order draft `{}` was not found", args.key)),
+            job: None,
+            actions: vec!["radroots order ls".to_owned()],
+        });
+    }
+
+    let loaded = match load_draft(file.as_path()) {
+        Ok(loaded) => loaded,
+        Err(reason) => {
+            return Ok(OrderCancelView {
+                state: "error".to_owned(),
+                source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+                lookup: args.key.clone(),
+                order_id: None,
+                reason: Some(reason),
+                job: None,
+                actions: Vec::new(),
+            });
+        }
+    };
+
+    let Some(job) = submission_job_view(config, &loaded.document, false) else {
+        return Ok(OrderCancelView {
+            state: "not_submitted".to_owned(),
+            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            lookup: args.key.clone(),
+            order_id: Some(loaded.document.order.order_id.clone()),
+            reason: Some("order draft has not been submitted yet".to_owned()),
+            job: None,
+            actions: vec![format!(
+                "radroots order submit {}",
+                loaded.document.order.order_id
+            )],
+        });
+    };
+
+    let job_id = loaded
+        .document
+        .submission
+        .as_ref()
+        .map(|submission| submission.job_id.clone());
+    Ok(OrderCancelView {
+        state: "unconfigured".to_owned(),
+        source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+        lookup: args.key.clone(),
+        order_id: Some(loaded.document.order.order_id.clone()),
+        reason: Some(
+            "durable order cancel needs trade-chain root and previous event refs that the current local order read plane does not persist yet".to_owned(),
+        ),
+        job: Some(job),
+        actions: vec![
+            "radroots order history".to_owned(),
+            format!("radroots job get {}", job_id.unwrap_or_default()),
+        ],
+    })
+}
+
 fn validate_scaffold_args(args: &OrderNewArgs) -> Result<(), RuntimeError> {
     match (normalize_optional(args.bin_id.as_deref()), args.bin_count) {
         (None, Some(_)) => Err(RuntimeError::Config(
@@ -273,6 +742,7 @@ fn view_from_loaded(
         actions_for_document(&loaded.document, loaded.file.as_path(), issues.as_slice());
     if let Some(job) = &job {
         actions.push(format!("radroots job get {}", job.job_id));
+        actions.push("radroots order history".to_owned());
     }
 
     OrderGetView {
@@ -327,6 +797,32 @@ fn summary_from_loaded(config: &RuntimeConfig, loaded: &LoadedOrderDraft) -> Ord
         updated_at_unix: loaded.updated_at_unix,
         job,
         issues,
+    }
+}
+
+fn history_entry_from_loaded(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+) -> OrderHistoryEntryView {
+    let job = submission_job_view(config, &loaded.document, true);
+    let submitted_at_unix = loaded
+        .document
+        .submission
+        .as_ref()
+        .and_then(|submission| submission.submitted_at_unix);
+    OrderHistoryEntryView {
+        id: loaded.document.order.order_id.clone(),
+        state: job
+            .as_ref()
+            .map(|job| job.state.clone())
+            .unwrap_or_else(|| "recorded".to_owned()),
+        listing_lookup: loaded.document.listing_lookup.clone(),
+        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        submitted_at_unix,
+        updated_at_unix: loaded.updated_at_unix,
+        job,
+        issues: Vec::new(),
     }
 }
 
@@ -498,19 +994,10 @@ fn submission_job_view(
     document: &OrderDraftDocument,
     enrich: bool,
 ) -> Option<OrderJobView> {
-    let job_id = document
-        .submission
-        .as_ref()
-        .and_then(|submission| normalize_optional(Some(submission.job_id.as_str())))?;
+    let submission = document.submission.as_ref()?;
+    let job_id = normalize_optional(Some(submission.job_id.as_str()))?;
     if !enrich || config.rpc.bridge_bearer_token.is_none() {
-        return Some(OrderJobView {
-            job_id,
-            state: "recorded".to_owned(),
-            command: None,
-            event_id: None,
-            event_addr: None,
-            reason: None,
-        });
+        return Some(recorded_job_view(submission, job_id));
     }
 
     match daemon::bridge_job(config, job_id.as_str()) {
@@ -525,12 +1012,26 @@ fn submission_job_view(
         Ok(None) => Some(OrderJobView {
             job_id,
             state: "missing".to_owned(),
-            command: None,
-            event_id: None,
-            event_addr: None,
+            command: submission.command.clone(),
+            event_id: submission.event_id.clone(),
+            event_addr: submission.event_addr.clone(),
             reason: Some("recorded job id was not found in radrootsd".to_owned()),
         }),
         Err(error) => Some(job_view_from_error(job_id, error)),
+    }
+}
+
+fn recorded_job_view(submission: &OrderDraftSubmission, job_id: String) -> OrderJobView {
+    OrderJobView {
+        job_id,
+        state: submission
+            .state
+            .clone()
+            .unwrap_or_else(|| "recorded".to_owned()),
+        command: submission.command.clone(),
+        event_id: submission.event_id.clone(),
+        event_addr: submission.event_addr.clone(),
+        reason: None,
     }
 }
 
@@ -567,6 +1068,119 @@ fn job_view_from_error(job_id: String, error: DaemonRpcError) -> OrderJobView {
     }
 }
 
+fn order_submit_error_view(
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    error: DaemonRpcError,
+) -> OrderSubmitView {
+    let (state, reason, mut actions) = match error {
+        DaemonRpcError::Unconfigured(reason)
+        | DaemonRpcError::Unauthorized(reason)
+        | DaemonRpcError::MethodUnavailable(reason) => (
+            "unconfigured".to_owned(),
+            reason,
+            vec![
+                "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell".to_owned(),
+                "start radrootsd with bridge ingress enabled".to_owned(),
+            ],
+        ),
+        DaemonRpcError::External(reason) => (
+            "unavailable".to_owned(),
+            reason,
+            vec!["start radrootsd and verify the rpc url".to_owned()],
+        ),
+        DaemonRpcError::InvalidResponse(reason)
+        | DaemonRpcError::Remote(reason)
+        | DaemonRpcError::UnknownJob(reason) => ("error".to_owned(), reason, Vec::new()),
+    };
+    actions.push(format!(
+        "radroots order get {}",
+        loaded.document.order.order_id
+    ));
+
+    OrderSubmitView {
+        state,
+        source: daemon::bridge_source().to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        file: loaded.file.display().to_string(),
+        listing_lookup: loaded.document.listing_lookup.clone(),
+        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        dry_run: false,
+        deduplicated: false,
+        idempotency_key: args.idempotency_key.clone(),
+        reason: Some(reason),
+        job: None,
+        issues: Vec::new(),
+        actions,
+    }
+}
+
+fn order_watch_error_view(
+    loaded: &LoadedOrderDraft,
+    args: &OrderWatchArgs,
+    job_id: String,
+    frames: Vec<OrderWatchFrameView>,
+    error: DaemonRpcError,
+) -> OrderWatchView {
+    let (state, reason, actions) = match error {
+        DaemonRpcError::Unconfigured(reason)
+        | DaemonRpcError::Unauthorized(reason)
+        | DaemonRpcError::MethodUnavailable(reason) => (
+            "unconfigured".to_owned(),
+            reason,
+            vec![
+                "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell".to_owned(),
+                "start radrootsd with bridge ingress enabled".to_owned(),
+            ],
+        ),
+        DaemonRpcError::External(reason) => (
+            "unavailable".to_owned(),
+            reason,
+            vec!["start radrootsd and verify the rpc url".to_owned()],
+        ),
+        DaemonRpcError::InvalidResponse(reason)
+        | DaemonRpcError::Remote(reason)
+        | DaemonRpcError::UnknownJob(reason) => ("error".to_owned(), reason, Vec::new()),
+    };
+
+    OrderWatchView {
+        state,
+        source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        job_id: Some(job_id),
+        interval_ms: args.interval_ms,
+        reason: Some(reason),
+        frames,
+        actions: if actions.is_empty() {
+            Vec::new()
+        } else {
+            actions
+        },
+    }
+}
+
+fn trade_order_from_document(document: &OrderDraftDocument) -> RadrootsTradeOrder {
+    RadrootsTradeOrder {
+        order_id: document.order.order_id.clone(),
+        listing_addr: document.order.listing_addr.clone(),
+        buyer_pubkey: document.order.buyer_pubkey.clone(),
+        seller_pubkey: document.order.seller_pubkey.clone(),
+        items: document
+            .order
+            .items
+            .iter()
+            .map(|item| RadrootsTradeOrderItem {
+                bin_id: item.bin_id.clone(),
+                bin_count: item.bin_count,
+            })
+            .collect(),
+        discounts: None,
+    }
+}
+
 fn load_draft(path: &Path) -> Result<LoadedOrderDraft, String> {
     let contents = fs::read_to_string(path)
         .map_err(|error| format!("read order draft {}: {error}", path.display()))?;
@@ -577,6 +1191,14 @@ fn load_draft(path: &Path) -> Result<LoadedOrderDraft, String> {
         updated_at_unix: modified_unix(path).unwrap_or_default(),
         document,
     })
+}
+
+fn save_draft(path: &Path, draft: &OrderDraftDocument) -> Result<(), RuntimeError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, scaffold_contents(draft)?)?;
+    Ok(())
 }
 
 fn scaffold_contents(draft: &OrderDraftDocument) -> Result<String, RuntimeError> {
@@ -727,7 +1349,10 @@ impl From<OrderGetView> for OrderNewView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, next_order_id};
+    use super::{
+        ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, OrderDraftSubmission,
+        next_order_id,
+    };
 
     #[test]
     fn generated_order_id_uses_stable_prefix() {
@@ -753,11 +1378,20 @@ mod tests {
             },
             listing_lookup: Some("fresh-eggs".to_owned()),
             buyer_account_id: Some("acct_demo".to_owned()),
-            submission: None,
+            submission: Some(OrderDraftSubmission {
+                job_id: "job_01".to_owned(),
+                state: Some("accepted".to_owned()),
+                signer_mode: Some("embedded_service_identity".to_owned()),
+                command: Some("order.submit".to_owned()),
+                event_id: None,
+                event_addr: None,
+                submitted_at_unix: Some(1),
+            }),
         };
 
         let rendered = toml::to_string_pretty(&document).expect("render draft");
         assert!(rendered.contains("kind = \"order_draft_v1\""));
         assert!(rendered.contains("order_id = \"ord_AAAAAAAAAAAAAAAAAAAAAg\""));
+        assert!(rendered.contains("job_id = \"job_01\""));
     }
 }

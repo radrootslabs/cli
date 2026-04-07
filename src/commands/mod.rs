@@ -77,10 +77,10 @@ pub fn dispatch(
             OrderCommand::New(args) => order::new(config, args),
             OrderCommand::Get(args) => order::get(config, args),
             OrderCommand::Ls => order::list(config),
-            OrderCommand::Submit => unimplemented_command("order submit"),
-            OrderCommand::Watch(_) => unimplemented_command("order watch"),
-            OrderCommand::Cancel(_) => unimplemented_command("order cancel"),
-            OrderCommand::History => unimplemented_command("order history"),
+            OrderCommand::Submit(args) => order::submit(config, args),
+            OrderCommand::Watch(args) => order::watch(config, args),
+            OrderCommand::Cancel(args) => order::cancel(config, args),
+            OrderCommand::History => order::history(config),
         },
         Command::Relay(relay) => match &relay.command {
             RelayCommand::Ls => Ok(relay::list(config)),
@@ -96,10 +96,4 @@ pub fn dispatch(
             SyncCommand::Watch(args) => sync::watch(config, args),
         },
     }
-}
-
-fn unimplemented_command(name: &str) -> Result<CommandOutput, RuntimeError> {
-    Err(RuntimeError::Config(format!(
-        "`{name}` is not implemented yet"
-    )))
 }
