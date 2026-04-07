@@ -7,6 +7,8 @@ use std::path::PathBuf;
 pub struct CliArgs {
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub json: bool,
+    #[arg(long = "env-file", global = true)]
+    pub env_file: Option<PathBuf>,
     #[arg(long, global = true)]
     pub log_filter: Option<String>,
     #[arg(long, global = true)]
@@ -101,6 +103,8 @@ mod tests {
         let parsed = CliArgs::parse_from([
             "radroots",
             "--json",
+            "--env-file",
+            ".env.local",
             "--log-filter",
             "debug,radroots_cli=trace",
             "--log-dir",
@@ -116,6 +120,10 @@ mod tests {
             "show",
         ]);
         assert!(parsed.json);
+        assert_eq!(
+            parsed.env_file.as_deref().and_then(|path| path.to_str()),
+            Some(".env.local")
+        );
         assert_eq!(
             parsed.log_filter.as_deref(),
             Some("debug,radroots_cli=trace")
