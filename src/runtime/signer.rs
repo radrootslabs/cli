@@ -1,6 +1,6 @@
 use crate::domain::runtime::{IdentityPublicView, LocalSignerStatusView, SignerStatusView};
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
-use radroots_identity::IdentityError;
+use radroots_nostr_accounts::prelude::RadrootsNostrSelectedAccountStatus;
 use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
     RadrootsNostrSignerCapability,
@@ -14,12 +14,12 @@ pub fn resolve_signer_status(config: &RuntimeConfig) -> SignerStatusView {
 }
 
 fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
-    match crate::runtime::identity::load_identity(&config.identity) {
-        Ok(identity) => {
+    match crate::runtime::accounts::selected_account_status(config) {
+        Ok(RadrootsNostrSelectedAccountStatus::Ready { account }) => {
             let capability = RadrootsNostrSignerCapability::LocalAccount(
                 RadrootsNostrLocalSignerCapability::new(
-                    identity.public_identity.id.clone(),
-                    identity.public_identity.clone(),
+                    account.account_id.clone(),
+                    account.public_identity.clone(),
                     RadrootsNostrLocalSignerAvailability::SecretBacked,
                 ),
             );
@@ -42,18 +42,32 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 myc: None,
             }
         }
-        Err(crate::runtime::RuntimeError::Identity(IdentityError::NotFound(path))) => {
-            SignerStatusView {
-                backend: config.signer.backend.as_str().to_owned(),
-                state: "unconfigured".to_owned(),
-                reason: Some(format!(
-                    "local identity file was not found at {}",
-                    path.display()
-                )),
-                local: None,
-                myc: None,
-            }
-        }
+        Ok(RadrootsNostrSelectedAccountStatus::PublicOnly { account }) => SignerStatusView {
+            backend: config.signer.backend.as_str().to_owned(),
+            state: "unconfigured".to_owned(),
+            reason: Some(format!(
+                "local account {} is present but not secret-backed",
+                account.account_id
+            )),
+            local: Some(LocalSignerStatusView {
+                account_id: account.account_id.to_string(),
+                public_identity: IdentityPublicView::from_public_identity(&account.public_identity),
+                availability: local_availability(RadrootsNostrLocalSignerAvailability::PublicOnly)
+                    .to_owned(),
+                secret_backed: false,
+            }),
+            myc: None,
+        },
+        Ok(RadrootsNostrSelectedAccountStatus::NotConfigured) => SignerStatusView {
+            backend: config.signer.backend.as_str().to_owned(),
+            state: "unconfigured".to_owned(),
+            reason: Some(format!(
+                "no local account is selected in {}",
+                config.account.store_path.display()
+            )),
+            local: None,
+            myc: None,
+        },
         Err(error) => SignerStatusView {
             backend: config.signer.backend.as_str().to_owned(),
             state: "error".to_owned(),

@@ -1,6 +1,8 @@
 use std::io::{self, Write};
 
-use crate::domain::runtime::{CommandOutput, CommandView, DoctorCheckView, DoctorView};
+use crate::domain::runtime::{
+    AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
+};
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
 
@@ -21,42 +23,50 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
 
 fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), RuntimeError> {
     match output.view() {
+        CommandView::AccountList(view) => render_account_list(stdout, view)?,
         CommandView::AccountNew(view) => {
-            writeln!(stdout, "account new")?;
-            writeln!(stdout, "  path: {}", view.path)?;
-            writeln!(stdout, "  created: {}", yes_no(view.created))?;
-            writeln!(stdout, "  id: {}", view.public_identity.id)?;
-            writeln!(
+            write_context(stdout, format!("account · {}", view.state).as_str())?;
+            render_owned_pairs(
                 stdout,
-                "  public key hex: {}",
-                view.public_identity.public_key_hex
+                "account",
+                account_pairs(&view.account, Some(&view.public_identity)).as_slice(),
             )?;
-            writeln!(
+            writeln!(stdout, "source: {}", view.source)?;
+            render_actions(stdout, &view.actions)?;
+        }
+        CommandView::AccountUse(view) => {
+            write_context(stdout, "account · active")?;
+            render_owned_pairs(
                 stdout,
-                "  public key npub: {}",
-                view.public_identity.public_key_npub
+                "account",
+                account_pairs(&view.account, None).as_slice(),
             )?;
+            writeln!(stdout, "active account id: {}", view.active_account_id)?;
+            writeln!(stdout, "source: {}", view.source)?;
         }
         CommandView::AccountWhoami(view) => {
-            writeln!(stdout, "account")?;
-            writeln!(stdout, "  path: {}", view.path)?;
-            writeln!(stdout, "  state: {}", view.state)?;
+            write_context(
+                stdout,
+                match view.state.as_str() {
+                    "ready" => "account · active",
+                    "unconfigured" => "account · unconfigured",
+                    _ => "account",
+                },
+            )?;
+            if let Some(account) = &view.account {
+                render_owned_pairs(
+                    stdout,
+                    "account",
+                    account_pairs(account, view.public_identity.as_ref()).as_slice(),
+                )?;
+            } else {
+                writeln!(stdout, "no local account selected")?;
+                writeln!(stdout)?;
+            }
             if let Some(reason) = &view.reason {
-                writeln!(stdout, "  reason: {reason}")?;
+                writeln!(stdout, "reason: {reason}")?;
             }
-            if let Some(public_identity) = &view.public_identity {
-                writeln!(stdout, "  id: {}", public_identity.id)?;
-                writeln!(
-                    stdout,
-                    "  public key hex: {}",
-                    public_identity.public_key_hex
-                )?;
-                writeln!(
-                    stdout,
-                    "  public key npub: {}",
-                    public_identity.public_key_npub
-                )?;
-            }
+            writeln!(stdout, "source: {}", view.source)?;
         }
         CommandView::MycStatus(view) => {
             render_myc_status(stdout, view)?;
@@ -92,7 +102,15 @@ fn render_json(output: &CommandOutput) -> Result<(), RuntimeError> {
 
 fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), RuntimeError> {
     match output.view() {
+        CommandView::AccountList(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandView::AccountNew(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::AccountUse(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -125,11 +143,20 @@ fn render_ndjson(output: &CommandOutput) -> Result<(), RuntimeError> {
     render_ndjson_to(&mut stdout, output)
 }
 
-fn render_ndjson_to(_stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), RuntimeError> {
-    Err(RuntimeError::Config(format!(
-        "`{}` does not support --ndjson",
-        human_command_name(output.view())
-    )))
+fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), RuntimeError> {
+    match output.view() {
+        CommandView::AccountList(view) => {
+            for account in &view.accounts {
+                serde_json::to_writer(&mut *stdout, account)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
+        _ => Err(RuntimeError::Config(format!(
+            "`{}` does not support --ndjson",
+            human_command_name(output.view())
+        ))),
+    }
 }
 
 fn yes_no(value: bool) -> &'static str {
@@ -138,6 +165,35 @@ fn yes_no(value: bool) -> &'static str {
 
 fn present_absent(value: bool) -> &'static str {
     if value { "present" } else { "absent" }
+}
+
+fn render_account_list(stdout: &mut dyn Write, view: &AccountListView) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("accounts · {} local", view.count).as_str())?;
+    if view.accounts.is_empty() {
+        writeln!(stdout, "no accounts found")?;
+        writeln!(stdout)?;
+    } else {
+        let table = Table {
+            headers: &["account", "display name", "signer", "default"],
+            rows: view
+                .accounts
+                .iter()
+                .map(|account| {
+                    vec![
+                        account.id.clone(),
+                        account.display_name.clone().unwrap_or_default(),
+                        account.signer.clone(),
+                        yes_no(account.is_default).to_owned(),
+                    ]
+                })
+                .collect(),
+        };
+        render_table(stdout, &table)?;
+        writeln!(stdout)?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
 }
 
 fn render_config_show(
@@ -186,11 +242,19 @@ fn render_config_show(
         logging_rows.push(("file", current_file.as_str()));
     }
     render_pairs(stdout, "logging", logging_rows.as_slice())?;
-    render_pairs(
-        stdout,
-        "account",
-        &[("identity path", view.account.identity_path.as_str())],
-    )?;
+
+    let mut account_rows = vec![
+        ("store path", view.account.store_path.as_str()),
+        ("secrets dir", view.account.secrets_dir.as_str()),
+        (
+            "legacy import path",
+            view.account.legacy_identity_path.as_str(),
+        ),
+    ];
+    if let Some(selector) = &view.account.selector {
+        account_rows.insert(0, ("selector", selector.as_str()));
+    }
+    render_pairs(stdout, "account", account_rows.as_slice())?;
     render_pairs(
         stdout,
         "signer",
@@ -238,6 +302,18 @@ fn write_context(stdout: &mut dyn Write, line: &str) -> Result<(), RuntimeError>
     Ok(())
 }
 
+fn render_actions(stdout: &mut dyn Write, actions: &[String]) -> Result<(), RuntimeError> {
+    if actions.is_empty() {
+        return Ok(());
+    }
+    writeln!(stdout)?;
+    writeln!(stdout, "actions")?;
+    for action in actions {
+        writeln!(stdout, "  › {action}")?;
+    }
+    Ok(())
+}
+
 fn render_pairs(
     stdout: &mut dyn Write,
     heading: &str,
@@ -254,6 +330,37 @@ fn render_pairs(
     }
     writeln!(stdout)?;
     Ok(())
+}
+
+fn render_owned_pairs(
+    stdout: &mut dyn Write,
+    heading: &str,
+    rows: &[(&str, String)],
+) -> Result<(), RuntimeError> {
+    let borrowed = rows
+        .iter()
+        .map(|(label, value)| (*label, value.as_str()))
+        .collect::<Vec<_>>();
+    render_pairs(stdout, heading, borrowed.as_slice())
+}
+
+fn account_pairs(
+    account: &AccountSummaryView,
+    public_identity: Option<&crate::domain::runtime::IdentityPublicView>,
+) -> Vec<(&'static str, String)> {
+    let mut rows = vec![
+        ("account id", account.id.clone()),
+        ("signer", account.signer.clone()),
+        ("default", yes_no(account.is_default).to_owned()),
+    ];
+    if let Some(display_name) = &account.display_name {
+        rows.insert(1, ("display name", display_name.clone()));
+    }
+    if let Some(public_identity) = public_identity {
+        rows.push(("public key npub", public_identity.public_key_npub.clone()));
+        rows.push(("public key hex", public_identity.public_key_hex.clone()));
+    }
+    rows
 }
 
 fn render_local_signer(
@@ -333,7 +440,6 @@ fn render_myc_custody_identity(
     Ok(())
 }
 
-#[allow(dead_code)]
 fn render_table(stdout: &mut dyn Write, table: &Table) -> Result<(), RuntimeError> {
     let mut widths: Vec<usize> = table.headers.iter().map(|header| header.len()).collect();
     for row in &table.rows {
@@ -365,7 +471,6 @@ fn render_table(stdout: &mut dyn Write, table: &Table) -> Result<(), RuntimeErro
     Ok(())
 }
 
-#[allow(dead_code)]
 struct Table {
     headers: &'static [&'static str],
     rows: Vec<Vec<String>>,
@@ -373,7 +478,9 @@ struct Table {
 
 fn human_command_name(view: &CommandView) -> &'static str {
     match view {
+        CommandView::AccountList(_) => "account ls",
         CommandView::AccountNew(_) => "account new",
+        CommandView::AccountUse(_) => "account use",
         CommandView::AccountWhoami(_) => "account whoami",
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
@@ -387,11 +494,11 @@ mod tests {
     use super::{Table, render_human_to, render_ndjson_to, render_table};
     use crate::commands::runtime;
     use crate::domain::runtime::{
-        CommandOutput, CommandView, DoctorCheckView, DoctorView, MycStatusView,
+        AccountListView, CommandOutput, CommandView, DoctorCheckView, DoctorView, MycStatusView,
     };
     use crate::runtime::config::{
-        IdentityConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        AccountConfig, IdentityConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat,
+        PathsConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
 
@@ -415,6 +522,11 @@ mod tests {
                     directory: None,
                     stdout: false,
                 },
+                account: AccountConfig {
+                    selector: Some("acct_demo".into()),
+                    store_path: "/home/tester/.local/share/radroots/accounts/store.json".into(),
+                    secrets_dir: "/home/tester/.local/share/radroots/accounts/secrets".into(),
+                },
                 identity: IdentityConfig {
                     path: "identity.json".into(),
                 },
@@ -435,7 +547,12 @@ mod tests {
             view.paths.workspace_config_path,
             "/workspace/.radroots/config.toml"
         );
-        assert_eq!(view.account.identity_path, "identity.json");
+        assert_eq!(view.account.selector.as_deref(), Some("acct_demo"));
+        assert!(
+            view.account
+                .store_path
+                .ends_with(".local/share/radroots/accounts/store.json")
+        );
     }
 
     #[test]
@@ -478,6 +595,11 @@ mod tests {
                     directory: None,
                     stdout: false,
                 },
+                account: AccountConfig {
+                    selector: None,
+                    store_path: "/home/tester/.local/share/radroots/accounts/store.json".into(),
+                    secrets_dir: "/home/tester/.local/share/radroots/accounts/secrets".into(),
+                },
                 identity: IdentityConfig {
                     path: "identity.json".into(),
                 },
@@ -503,6 +625,36 @@ mod tests {
     }
 
     #[test]
+    fn account_list_ndjson_emits_one_json_object_per_account() {
+        let output = CommandOutput::success(CommandView::AccountList(AccountListView {
+            source: "local account store · local first".to_owned(),
+            count: 2,
+            accounts: vec![
+                crate::domain::runtime::AccountSummaryView {
+                    id: "acct_a".to_owned(),
+                    display_name: Some("Alpha".to_owned()),
+                    signer: "local".to_owned(),
+                    is_default: true,
+                },
+                crate::domain::runtime::AccountSummaryView {
+                    id: "acct_b".to_owned(),
+                    display_name: None,
+                    signer: "local".to_owned(),
+                    is_default: false,
+                },
+            ],
+            actions: Vec::new(),
+        }));
+        let mut buffer = Vec::new();
+        render_ndjson_to(&mut buffer, &output).expect("render ndjson");
+        let rendered = String::from_utf8(buffer).expect("utf8");
+        let lines = rendered.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("\"id\":\"acct_a\""));
+        assert!(lines[1].contains("\"id\":\"acct_b\""));
+    }
+
+    #[test]
     fn human_render_doctor_uses_check_table_and_actions() {
         let output = CommandOutput::unconfigured(CommandView::Doctor(DoctorView {
             ok: false,
@@ -516,7 +668,7 @@ mod tests {
                 DoctorCheckView {
                     name: "account".to_owned(),
                     status: "warn".to_owned(),
-                    detail: "no local account at identity.json".to_owned(),
+                    detail: "no local account in store".to_owned(),
                 },
             ],
             source: "local diagnostics".to_owned(),

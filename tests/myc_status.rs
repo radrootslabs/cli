@@ -12,6 +12,7 @@ use tempfile::tempdir;
 fn cli_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
     command.current_dir(workdir);
+    command.env("HOME", workdir.join("home"));
     for key in [
         "RADROOTS_ENV_FILE",
         "RADROOTS_OUTPUT",
@@ -21,6 +22,7 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_FILTER",
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",
+        "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER_BACKEND",
         "RADROOTS_MYC_EXECUTABLE",

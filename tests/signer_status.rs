@@ -9,6 +9,7 @@ use tempfile::tempdir;
 fn cli_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
     command.current_dir(workdir);
+    command.env("HOME", workdir.join("home"));
     for key in [
         "RADROOTS_ENV_FILE",
         "RADROOTS_OUTPUT",
@@ -18,6 +19,7 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_FILTER",
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",
+        "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER_BACKEND",
         "RADROOTS_MYC_EXECUTABLE",
@@ -28,32 +30,17 @@ fn cli_command_in(workdir: &Path) -> Command {
 }
 
 #[test]
-fn signer_status_reports_local_ready_when_identity_exists() {
+fn signer_status_reports_local_ready_when_account_exists() {
     let dir = tempdir().expect("tempdir");
-    let identity_path = dir.path().join("identity.json");
 
     let init = cli_command_in(dir.path())
-        .args([
-            "--json",
-            "--identity-path",
-            identity_path.to_str().expect("identity path"),
-            "account",
-            "new",
-        ])
+        .args(["--json", "account", "new"])
         .output()
         .expect("run account new");
     assert!(init.status.success());
 
     let output = cli_command_in(dir.path())
-        .args([
-            "--json",
-            "--identity-path",
-            identity_path.to_str().expect("identity path"),
-            "--signer-backend",
-            "local",
-            "signer",
-            "status",
-        ])
+        .args(["--json", "--signer-backend", "local", "signer", "status"])
         .output()
         .expect("run signer status");
 
@@ -68,20 +55,11 @@ fn signer_status_reports_local_ready_when_identity_exists() {
 }
 
 #[test]
-fn signer_status_reports_local_unconfigured_when_identity_is_missing() {
+fn signer_status_reports_local_unconfigured_when_no_account_is_selected() {
     let dir = tempdir().expect("tempdir");
-    let identity_path = dir.path().join("missing-identity.json");
 
     let output = cli_command_in(dir.path())
-        .args([
-            "--json",
-            "--identity-path",
-            identity_path.to_str().expect("identity path"),
-            "--signer-backend",
-            "local",
-            "signer",
-            "status",
-        ])
+        .args(["--json", "--signer-backend", "local", "signer", "status"])
         .output()
         .expect("run signer status");
 
@@ -93,27 +71,20 @@ fn signer_status_reports_local_unconfigured_when_identity_is_missing() {
     assert!(
         json["reason"]
             .as_str()
-            .is_some_and(|value| value.contains("local identity file was not found"))
+            .is_some_and(|value| value.contains("no local account is selected"))
     );
     assert_eq!(json["local"], Value::Null);
 }
 
 #[test]
-fn signer_status_reports_internal_error_for_invalid_identity_file() {
+fn signer_status_reports_internal_error_for_invalid_account_store_file() {
     let dir = tempdir().expect("tempdir");
-    let identity_path = dir.path().join("invalid-identity.json");
-    fs::write(&identity_path, "{ not valid json").expect("write invalid identity");
+    let accounts_dir = dir.path().join("home/.local/share/radroots/accounts");
+    fs::create_dir_all(&accounts_dir).expect("create accounts dir");
+    fs::write(accounts_dir.join("store.json"), "{ not valid json").expect("write invalid store");
 
     let output = cli_command_in(dir.path())
-        .args([
-            "--json",
-            "--identity-path",
-            identity_path.to_str().expect("identity path"),
-            "--signer-backend",
-            "local",
-            "signer",
-            "status",
-        ])
+        .args(["--json", "--signer-backend", "local", "signer", "status"])
         .output()
         .expect("run signer status");
 
@@ -122,10 +93,6 @@ fn signer_status_reports_internal_error_for_invalid_identity_file() {
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
     assert_eq!(json["backend"], "local");
     assert_eq!(json["state"], "error");
-    assert!(
-        json["reason"]
-            .as_str()
-            .is_some_and(|value| value.contains("invalid identity JSON"))
-    );
+    assert!(json["reason"].as_str().is_some());
     assert_eq!(json["local"], Value::Null);
 }

@@ -24,8 +24,10 @@ pub fn dispatch(
                 identity::init(config)?,
             ))),
             AccountCommand::Whoami => identity::show(config),
-            AccountCommand::Ls => unimplemented_command("account ls"),
-            AccountCommand::Use(_) => unimplemented_command("account use"),
+            AccountCommand::Ls => identity::list(config),
+            AccountCommand::Use(args) => Ok(CommandOutput::success(CommandView::AccountUse(
+                identity::use_account(config, args.selector.as_str())?,
+            ))),
         },
         Command::Myc(myc) => match &myc.command {
             MycCommand::Status => Ok(myc::status(config)),
@@ -38,7 +40,7 @@ pub fn dispatch(
         Command::Signer(signer) => match &signer.command {
             SignerCommand::Status => Ok(signer::status(config)),
         },
-        Command::Doctor => Ok(doctor::report(config, logging)),
+        Command::Doctor => doctor::report(config, logging),
         Command::Find(_) => unimplemented_command("find"),
         Command::Job(job) => match &job.command {
             JobCommand::Ls => unimplemented_command("job ls"),

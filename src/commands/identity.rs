@@ -1,41 +1,58 @@
 use crate::domain::runtime::{
-    AccountNewView, AccountWhoamiView, CommandDisposition, CommandOutput, CommandView,
-    IdentityPublicView,
+    AccountListView, AccountNewView, AccountSummaryView, AccountUseView, AccountWhoamiView,
+    CommandDisposition, CommandOutput, CommandView, IdentityPublicView,
 };
 use crate::runtime::RuntimeError;
+use crate::runtime::accounts::{
+    AccountCreateMode, AccountRecordView, create_or_migrate_selected_account, resolve_account,
+    select_account, snapshot,
+};
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::identity::{initialize_identity, load_identity};
-use radroots_identity::IdentityError;
 
 pub fn init(config: &RuntimeConfig) -> Result<AccountNewView, RuntimeError> {
-    let identity = initialize_identity(&config.identity)?;
+    let result = create_or_migrate_selected_account(config)?;
+    let account = account_summary(&result.account);
     Ok(AccountNewView {
-        path: identity.path.display().to_string(),
-        created: identity.created,
-        public_identity: IdentityPublicView::from_public_identity(&identity.public_identity),
+        state: match result.mode {
+            AccountCreateMode::Created => "created".to_owned(),
+            AccountCreateMode::Migrated => "migrated".to_owned(),
+        },
+        source: match result.mode {
+            AccountCreateMode::Created => "local account store · local first".to_owned(),
+            AccountCreateMode::Migrated => "legacy identity import · local first".to_owned(),
+        },
+        public_identity: IdentityPublicView::from_public_identity(
+            &result.account.record.public_identity,
+        ),
+        account,
+        actions: vec![
+            "radroots account whoami".to_owned(),
+            "radroots account ls".to_owned(),
+        ],
     })
 }
 
 pub fn show(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
-    let view = match load_identity(&config.identity) {
-        Ok(identity) => AccountWhoamiView {
-            path: identity.path.display().to_string(),
+    let view = match resolve_account(config)? {
+        Some(account) => AccountWhoamiView {
             state: "ready".to_owned(),
+            source: "local account store · local first".to_owned(),
             reason: None,
             public_identity: Some(IdentityPublicView::from_public_identity(
-                &identity.public_identity,
+                &account.record.public_identity,
             )),
+            account: Some(account_summary(&account)),
         },
-        Err(RuntimeError::Identity(IdentityError::NotFound(path))) => AccountWhoamiView {
-            path: path.display().to_string(),
+        None => AccountWhoamiView {
             state: "unconfigured".to_owned(),
+            source: "local account store · local first".to_owned(),
             reason: Some(format!(
-                "local identity file was not found at {}",
-                path.display()
+                "no local account is selected in {}",
+                config.account.store_path.display()
             )),
+            account: None,
             public_identity: None,
         },
-        Err(error) => return Err(error),
     };
 
     Ok(match view.disposition() {
@@ -50,4 +67,40 @@ pub fn show(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
             CommandOutput::internal_error(CommandView::AccountWhoami(view))
         }
     })
+}
+
+pub fn list(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
+    let snapshot = snapshot(config)?;
+    let accounts = snapshot
+        .accounts
+        .iter()
+        .map(account_summary)
+        .collect::<Vec<_>>();
+    let actions = if accounts.is_empty() {
+        vec!["radroots account new".to_owned()]
+    } else {
+        Vec::new()
+    };
+    Ok(CommandOutput::success(CommandView::AccountList(
+        AccountListView {
+            source: "local account store · local first".to_owned(),
+            count: accounts.len(),
+            accounts,
+            actions,
+        },
+    )))
+}
+
+pub fn use_account(config: &RuntimeConfig, selector: &str) -> Result<AccountUseView, RuntimeError> {
+    let account = select_account(config, selector)?;
+    Ok(AccountUseView {
+        state: "active".to_owned(),
+        source: "local account store · local first".to_owned(),
+        active_account_id: account.record.account_id.to_string(),
+        account: account_summary(&account),
+    })
+}
+
+fn account_summary(account: &AccountRecordView) -> AccountSummaryView {
+    AccountSummaryView::from_account_record(&account.record, account.signer, account.selected)
 }

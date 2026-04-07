@@ -32,6 +32,8 @@ pub struct CliArgs {
     #[arg(long = "no-log-stdout", global = true, action = ArgAction::SetTrue)]
     pub no_log_stdout: bool,
     #[arg(long, global = true)]
+    pub account: Option<String>,
+    #[arg(long, global = true)]
     pub identity_path: Option<PathBuf>,
     #[arg(long, global = true)]
     pub signer_backend: Option<String>,
@@ -370,6 +372,8 @@ mod tests {
             "--no-color",
             "--env-file",
             ".env.local",
+            "--account",
+            "acct_demo",
             "--log-filter",
             "debug,radroots_cli=trace",
             "--log-dir",
@@ -400,6 +404,7 @@ mod tests {
             parsed.log_dir.as_deref().and_then(|path| path.to_str()),
             Some("logs")
         );
+        assert_eq!(parsed.account.as_deref(), Some("acct_demo"));
         assert!(parsed.log_stdout);
         assert_eq!(
             parsed

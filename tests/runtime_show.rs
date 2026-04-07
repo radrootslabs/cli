@@ -19,6 +19,7 @@ fn runtime_show_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_FILTER",
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",
+        "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER_BACKEND",
         "RADROOTS_MYC_EXECUTABLE",
@@ -73,7 +74,24 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["logging"]["directory"], Value::Null);
     assert_eq!(json["config_files"]["user_present"], false);
     assert_eq!(json["config_files"]["workspace_present"], false);
-    assert_eq!(json["account"]["identity_path"], "identity.json");
+    assert_eq!(json["account"]["selector"], Value::Null);
+    assert_eq!(
+        json["account"]["store_path"],
+        dir.path()
+            .join("home")
+            .join(".local/share/radroots/accounts/store.json")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        json["account"]["secrets_dir"],
+        dir.path()
+            .join("home")
+            .join(".local/share/radroots/accounts/secrets")
+            .display()
+            .to_string()
+    );
+    assert_eq!(json["account"]["legacy_identity_path"], "identity.json");
     assert_eq!(json["signer"]["backend"], "local");
     assert_eq!(json["myc"]["executable"], "myc");
 }
@@ -86,6 +104,7 @@ fn config_show_json_reflects_environment_configuration() {
         .env("RADROOTS_LOG_FILTER", "debug")
         .env("RADROOTS_LOG_DIR", "logs/runtime")
         .env("RADROOTS_LOG_STDOUT", "false")
+        .env("RADROOTS_ACCOUNT", "acct_demo")
         .env("RADROOTS_IDENTITY_PATH", "state/identity.json")
         .env("RADROOTS_SIGNER_BACKEND", "myc")
         .env("RADROOTS_MYC_EXECUTABLE", "bin/myc")
@@ -99,7 +118,11 @@ fn config_show_json_reflects_environment_configuration() {
     assert_eq!(json["output"]["format"], "json");
     assert_eq!(json["logging"]["filter"], "debug");
     assert_eq!(json["logging"]["directory"], "logs/runtime");
-    assert_eq!(json["account"]["identity_path"], "state/identity.json");
+    assert_eq!(json["account"]["selector"], "acct_demo");
+    assert_eq!(
+        json["account"]["legacy_identity_path"],
+        "state/identity.json"
+    );
     assert_eq!(json["signer"]["backend"], "myc");
     assert_eq!(json["myc"]["executable"], "bin/myc");
 }

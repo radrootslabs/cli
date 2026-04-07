@@ -1,10 +1,10 @@
 use crate::domain::runtime::{
     CommandDisposition, CommandOutput, CommandView, DoctorCheckView, DoctorView,
 };
+use crate::runtime::RuntimeError;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::logging::LoggingState;
 use crate::runtime::signer::resolve_signer_status;
-use radroots_identity::IdentityError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum DoctorSeverity {
@@ -39,10 +39,13 @@ struct EvaluatedCheck {
     action: Option<&'static str>,
 }
 
-pub fn report(config: &RuntimeConfig, logging: &LoggingState) -> CommandOutput {
+pub fn report(
+    config: &RuntimeConfig,
+    logging: &LoggingState,
+) -> Result<CommandOutput, RuntimeError> {
     let mut checks = Vec::new();
     checks.push(config_check(config));
-    checks.push(account_check(config));
+    checks.push(account_check(config)?);
 
     let signer = resolve_signer_status(config);
     checks.push(signer_check(&signer));
@@ -72,7 +75,7 @@ pub fn report(config: &RuntimeConfig, logging: &LoggingState) -> CommandOutput {
         actions,
     };
 
-    match severity.command_disposition() {
+    Ok(match severity.command_disposition() {
         CommandDisposition::Success => CommandOutput::success(CommandView::Doctor(view)),
         CommandDisposition::Unconfigured => CommandOutput::unconfigured(CommandView::Doctor(view)),
         CommandDisposition::ExternalUnavailable => {
@@ -81,7 +84,7 @@ pub fn report(config: &RuntimeConfig, logging: &LoggingState) -> CommandOutput {
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::Doctor(view))
         }
-    }
+    })
 }
 
 fn config_check(config: &RuntimeConfig) -> EvaluatedCheck {
@@ -106,37 +109,52 @@ fn config_check(config: &RuntimeConfig) -> EvaluatedCheck {
     }
 }
 
-fn account_check(config: &RuntimeConfig) -> EvaluatedCheck {
-    match crate::runtime::identity::load_identity(&config.identity) {
-        Ok(identity) => EvaluatedCheck {
-            severity: DoctorSeverity::Ok,
+fn account_check(config: &RuntimeConfig) -> Result<EvaluatedCheck, RuntimeError> {
+    let snapshot = crate::runtime::accounts::snapshot(config)?;
+    if snapshot.accounts.is_empty() {
+        return Ok(EvaluatedCheck {
+            severity: DoctorSeverity::Warn,
             view: DoctorCheckView {
                 name: "account".to_owned(),
-                status: "ok".to_owned(),
-                detail: format!("{} loaded", identity.public_identity.id),
+                status: "warn".to_owned(),
+                detail: format!(
+                    "no local accounts found in {}",
+                    config.account.store_path.display()
+                ),
             },
-            action: None,
-        },
-        Err(crate::runtime::RuntimeError::Identity(IdentityError::NotFound(path))) => {
-            EvaluatedCheck {
-                severity: DoctorSeverity::Warn,
+            action: Some("radroots account new"),
+        });
+    }
+
+    match crate::runtime::accounts::resolve_account(config)? {
+        Some(account) => {
+            let detail = if account.selected {
+                format!("{} selected", account.record.account_id)
+            } else {
+                format!("{} resolved by selector", account.record.account_id)
+            };
+            Ok(EvaluatedCheck {
+                severity: DoctorSeverity::Ok,
                 view: DoctorCheckView {
                     name: "account".to_owned(),
-                    status: "warn".to_owned(),
-                    detail: format!("no local account at {}", path.display()),
+                    status: "ok".to_owned(),
+                    detail,
                 },
-                action: Some("radroots account new"),
-            }
+                action: None,
+            })
         }
-        Err(error) => EvaluatedCheck {
-            severity: DoctorSeverity::InternalFail,
+        None => Ok(EvaluatedCheck {
+            severity: DoctorSeverity::Warn,
             view: DoctorCheckView {
                 name: "account".to_owned(),
-                status: "fail".to_owned(),
-                detail: error.to_string(),
+                status: "warn".to_owned(),
+                detail: format!(
+                    "accounts exist but no local account is selected in {}",
+                    config.account.store_path.display()
+                ),
             },
-            action: Some("radroots account whoami --json"),
-        },
+            action: Some("radroots account ls"),
+        }),
     }
 }
 

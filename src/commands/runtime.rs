@@ -38,7 +38,10 @@ pub fn show(config: &RuntimeConfig, logging: &LoggingState) -> ConfigShowView {
                 .map(|path| path.display().to_string()),
         },
         account: AccountRuntimeView {
-            identity_path: config.identity.path.display().to_string(),
+            selector: config.account.selector.clone(),
+            store_path: config.account.store_path.display().to_string(),
+            secrets_dir: config.account.secrets_dir.display().to_string(),
+            legacy_identity_path: config.identity.path.display().to_string(),
         },
         signer: SignerRuntimeView {
             backend: config.signer.backend.as_str().to_owned(),

@@ -1,5 +1,5 @@
+pub mod accounts;
 pub mod config;
-pub mod identity;
 pub mod logging;
 pub mod myc;
 pub mod signer;
@@ -12,8 +12,8 @@ pub enum RuntimeError {
     Config(String),
     #[error("failed to initialize logging: {0}")]
     Logging(#[from] radroots_log::Error),
-    #[error("identity error: {0}")]
-    Identity(#[from] radroots_identity::IdentityError),
+    #[error("accounts error: {0}")]
+    Accounts(#[from] radroots_nostr_accounts::prelude::RadrootsNostrAccountsError),
     #[error("failed to serialize json output: {0}")]
     Json(#[from] serde_json::Error),
     #[error("failed to write output: {0}")]
@@ -24,7 +24,7 @@ impl RuntimeError {
     pub fn exit_code(&self) -> ExitCode {
         match self {
             Self::Config(_) => ExitCode::from(2),
-            Self::Logging(_) | Self::Identity(_) | Self::Json(_) | Self::Io(_) => ExitCode::from(1),
+            Self::Logging(_) | Self::Accounts(_) | Self::Json(_) | Self::Io(_) => ExitCode::from(1),
         }
     }
 }

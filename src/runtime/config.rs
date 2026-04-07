@@ -19,6 +19,7 @@ const ENV_CLI_LOG_STDOUT: &str = "RADROOTS_CLI_LOGGING_STDOUT";
 const ENV_LOG_FILTER: &str = "RADROOTS_LOG_FILTER";
 const ENV_LOG_DIR: &str = "RADROOTS_LOG_DIR";
 const ENV_LOG_STDOUT: &str = "RADROOTS_LOG_STDOUT";
+const ENV_ACCOUNT: &str = "RADROOTS_ACCOUNT";
 const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
 const ENV_SIGNER_BACKEND: &str = "RADROOTS_SIGNER_BACKEND";
 const ENV_MYC_EXECUTABLE: &str = "RADROOTS_MYC_EXECUTABLE";
@@ -30,6 +31,7 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_LOG_FILTER,
     ENV_LOG_DIR,
     ENV_LOG_STDOUT,
+    ENV_ACCOUNT,
     ENV_IDENTITY_PATH,
     ENV_SIGNER_BACKEND,
     ENV_MYC_EXECUTABLE,
@@ -91,6 +93,13 @@ pub struct IdentityConfig {
     pub path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountConfig {
+    pub selector: Option<String>,
+    pub store_path: PathBuf,
+    pub secrets_dir: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignerBackend {
     Local,
@@ -121,6 +130,7 @@ pub struct RuntimeConfig {
     pub output: OutputConfig,
     pub paths: PathsConfig,
     pub logging: LoggingConfig,
+    pub account: AccountConfig,
     pub identity: IdentityConfig,
     pub signer: SignerConfig,
     pub myc: MycConfig,
@@ -173,6 +183,7 @@ impl RuntimeConfig {
         env: &dyn Environment,
         env_file: &EnvFileValues,
     ) -> Result<Self, RuntimeError> {
+        let paths = resolve_paths(env)?;
         Ok(Self {
             output: OutputConfig {
                 format: resolve_output_format(args, env, env_file)?,
@@ -180,7 +191,7 @@ impl RuntimeConfig {
                 color: !args.no_color,
                 dry_run: args.dry_run,
             },
-            paths: resolve_paths(env)?,
+            paths: paths.clone(),
             logging: LoggingConfig {
                 filter: args
                     .log_filter
@@ -200,6 +211,14 @@ impl RuntimeConfig {
                     "--log-stdout",
                     "--no-log-stdout",
                 )?,
+            },
+            account: AccountConfig {
+                selector: args
+                    .account
+                    .clone()
+                    .or_else(|| env_value(env, env_file, &[ENV_ACCOUNT])),
+                store_path: paths.user_state_root.join("accounts/store.json"),
+                secrets_dir: paths.user_state_root.join("accounts/secrets"),
             },
             identity: IdentityConfig {
                 path: args
@@ -432,8 +451,8 @@ fn parse_bool_env(key: &str, value: &str) -> Result<bool, RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EnvFileValues, Environment, OutputConfig, OutputFormat, PathsConfig, RuntimeConfig,
-        SignerBackend, Verbosity, parse_env_file_values,
+        AccountConfig, EnvFileValues, Environment, OutputConfig, OutputFormat, PathsConfig,
+        RuntimeConfig, SignerBackend, Verbosity, parse_env_file_values,
     };
     use crate::cli::CliArgs;
     use clap::Parser;
@@ -529,6 +548,14 @@ mod tests {
             resolved.identity.path,
             PathBuf::from("custom-identity.json")
         );
+        assert_eq!(
+            resolved.account,
+            AccountConfig {
+                selector: None,
+                store_path: PathBuf::from("/home/tester/.local/share/radroots/accounts/store.json"),
+                secrets_dir: PathBuf::from("/home/tester/.local/share/radroots/accounts/secrets"),
+            }
+        );
         assert_eq!(resolved.signer.backend, SignerBackend::Local);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc-cli"));
     }
@@ -544,6 +571,7 @@ mod tests {
             ),
             ("RADROOTS_LOG_DIR".to_owned(), "logs/runtime".to_owned()),
             ("RADROOTS_LOG_STDOUT".to_owned(), "true".to_owned()),
+            ("RADROOTS_ACCOUNT".to_owned(), "acct_demo".to_owned()),
             (
                 "RADROOTS_IDENTITY_PATH".to_owned(),
                 "state/identity.json".to_owned(),
@@ -569,6 +597,7 @@ mod tests {
             Some(PathBuf::from("logs/runtime"))
         );
         assert!(resolved.logging.stdout);
+        assert_eq!(resolved.account.selector.as_deref(), Some("acct_demo"));
         assert_eq!(resolved.identity.path, PathBuf::from("state/identity.json"));
         assert_eq!(resolved.signer.backend, SignerBackend::Myc);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
@@ -640,6 +669,7 @@ RADROOTS_OUTPUT=json
 RADROOTS_CLI_LOGGING_FILTER="debug,radroots_cli=trace"
 RADROOTS_CLI_LOGGING_OUTPUT_DIR=/tmp/radroots-cli-logs
 RADROOTS_CLI_LOGGING_STDOUT=false
+RADROOTS_ACCOUNT=acct_env_file
 RADROOTS_IDENTITY_PATH=state/identity.json
 RADROOTS_SIGNER_BACKEND=myc
 RADROOTS_MYC_EXECUTABLE=bin/myc
@@ -657,6 +687,7 @@ RADROOTS_MYC_EXECUTABLE=bin/myc
             Some(PathBuf::from("/tmp/radroots-cli-logs"))
         );
         assert!(!resolved.logging.stdout);
+        assert_eq!(resolved.account.selector.as_deref(), Some("acct_env_file"));
         assert_eq!(resolved.identity.path, PathBuf::from("state/identity.json"));
         assert_eq!(resolved.signer.backend, SignerBackend::Myc);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));

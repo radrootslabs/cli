@@ -19,6 +19,7 @@ fn doctor_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_FILTER",
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",
+        "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER_BACKEND",
         "RADROOTS_MYC_EXECUTABLE",
@@ -54,26 +55,14 @@ fn doctor_reports_unconfigured_local_bootstrap_state() {
 #[test]
 fn doctor_reports_ready_local_bootstrap_state() {
     let dir = tempdir().expect("tempdir");
-    let identity_path = dir.path().join("identity.json");
     let init = doctor_command_in(dir.path())
-        .args([
-            "--json",
-            "--identity-path",
-            identity_path.to_str().expect("identity path"),
-            "account",
-            "new",
-        ])
+        .args(["--json", "account", "new"])
         .output()
         .expect("run account new");
     assert!(init.status.success());
 
     let output = doctor_command_in(dir.path())
-        .args([
-            "--json",
-            "--identity-path",
-            identity_path.to_str().expect("identity path"),
-            "doctor",
-        ])
+        .args(["--json", "doctor"])
         .output()
         .expect("run doctor");
 

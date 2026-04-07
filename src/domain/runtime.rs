@@ -1,5 +1,6 @@
 use std::process::ExitCode;
 
+use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
 use serde::Serialize;
 
 #[derive(Debug, Clone)]
@@ -67,7 +68,9 @@ impl CommandDisposition {
 
 #[derive(Debug, Clone)]
 pub enum CommandView {
+    AccountList(AccountListView),
     AccountNew(AccountNewView),
+    AccountUse(AccountUseView),
     AccountWhoami(AccountWhoamiView),
     ConfigShow(ConfigShowView),
     Doctor(DoctorView),
@@ -119,7 +122,11 @@ pub struct PathsRuntimeView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountRuntimeView {
-    pub identity_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    pub store_path: String,
+    pub secrets_dir: String,
+    pub legacy_identity_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -167,11 +174,37 @@ impl IdentityPublicView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AccountSummaryView {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub signer: String,
+    pub is_default: bool,
+}
+
+impl AccountSummaryView {
+    pub fn from_account_record(
+        record: &RadrootsNostrAccountRecord,
+        signer: &str,
+        is_default: bool,
+    ) -> Self {
+        Self {
+            id: record.account_id.to_string(),
+            display_name: record.label.clone(),
+            signer: signer.to_owned(),
+            is_default,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AccountWhoamiView {
-    pub path: String,
     pub state: String,
+    pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<AccountSummaryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_identity: Option<IdentityPublicView>,
 }
@@ -187,9 +220,29 @@ impl AccountWhoamiView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountNewView {
-    pub path: String,
-    pub created: bool,
+    pub state: String,
+    pub source: String,
+    pub account: AccountSummaryView,
     pub public_identity: IdentityPublicView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountUseView {
+    pub state: String,
+    pub source: String,
+    pub active_account_id: String,
+    pub account: AccountSummaryView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountListView {
+    pub source: String,
+    pub count: usize,
+    pub accounts: Vec<AccountSummaryView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
