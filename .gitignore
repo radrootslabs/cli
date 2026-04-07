@@ -13,6 +13,7 @@ Thumbs.db
 .vscode/
 .idea/
 logs/
+identity.json
 
 # Local secrets
 *.pem
