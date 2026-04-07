@@ -131,7 +131,7 @@ pub struct AccountRuntimeView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SignerRuntimeView {
-    pub backend: String,
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -247,10 +247,16 @@ pub struct AccountListView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SignerStatusView {
-    pub backend: String,
+    pub mode: String,
     pub state: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub local: Option<LocalSignerStatusView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub myc: Option<MycStatusView>,
 }
 
@@ -278,8 +284,10 @@ pub struct LocalSignerStatusView {
 pub struct MycStatusView {
     pub executable: String,
     pub state: String,
+    pub source: String,
     pub service_status: Option<String>,
     pub ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasons: Vec<String>,

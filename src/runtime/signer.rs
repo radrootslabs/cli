@@ -28,8 +28,10 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 .expect("local signer capability")
                 .clone();
             SignerStatusView {
-                backend: config.signer.backend.as_str().to_owned(),
+                mode: config.signer.backend.as_str().to_owned(),
                 state: "ready".to_owned(),
+                source: "local account store · local first".to_owned(),
+                account_id: Some(local.account_id.to_string()),
                 reason: None,
                 local: Some(LocalSignerStatusView {
                     account_id: local.account_id.to_string(),
@@ -43,8 +45,10 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
             }
         }
         Ok(RadrootsNostrSelectedAccountStatus::PublicOnly { account }) => SignerStatusView {
-            backend: config.signer.backend.as_str().to_owned(),
+            mode: config.signer.backend.as_str().to_owned(),
             state: "unconfigured".to_owned(),
+            source: "local account store · local first".to_owned(),
+            account_id: Some(account.account_id.to_string()),
             reason: Some(format!(
                 "local account {} is present but not secret-backed",
                 account.account_id
@@ -59,8 +63,10 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
             myc: None,
         },
         Ok(RadrootsNostrSelectedAccountStatus::NotConfigured) => SignerStatusView {
-            backend: config.signer.backend.as_str().to_owned(),
+            mode: config.signer.backend.as_str().to_owned(),
             state: "unconfigured".to_owned(),
+            source: "local account store · local first".to_owned(),
+            account_id: None,
             reason: Some(format!(
                 "no local account is selected in {}",
                 config.account.store_path.display()
@@ -69,8 +75,10 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
             myc: None,
         },
         Err(error) => SignerStatusView {
-            backend: config.signer.backend.as_str().to_owned(),
+            mode: config.signer.backend.as_str().to_owned(),
             state: "error".to_owned(),
+            source: "local account store · local first".to_owned(),
+            account_id: None,
             reason: Some(error.to_string()),
             local: None,
             myc: None,
@@ -81,8 +89,13 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
 fn resolve_myc_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     let myc = crate::runtime::myc::resolve_status(&config.myc);
     SignerStatusView {
-        backend: config.signer.backend.as_str().to_owned(),
+        mode: config.signer.backend.as_str().to_owned(),
         state: myc.state.clone(),
+        source: "myc status command · local first".to_owned(),
+        account_id: myc
+            .local_signer
+            .as_ref()
+            .map(|local| local.account_id.clone()),
         reason: myc.reason.clone(),
         local: None,
         myc: Some(myc),

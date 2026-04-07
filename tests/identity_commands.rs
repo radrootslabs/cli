@@ -20,7 +20,7 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_STDOUT",
         "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
-        "RADROOTS_SIGNER_BACKEND",
+        "RADROOTS_SIGNER",
         "RADROOTS_MYC_EXECUTABLE",
     ] {
         command.env_remove(key);

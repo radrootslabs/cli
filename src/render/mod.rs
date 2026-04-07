@@ -69,7 +69,7 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
             writeln!(stdout, "source: {}", view.source)?;
         }
         CommandView::MycStatus(view) => {
-            render_myc_status(stdout, view)?;
+            render_myc_status(stdout, view, true)?;
         }
         CommandView::ConfigShow(view) => {
             render_config_show(stdout, view)?;
@@ -78,17 +78,35 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
             render_doctor(stdout, view)?;
         }
         CommandView::SignerStatus(view) => {
-            writeln!(stdout, "signer")?;
-            writeln!(stdout, "  backend: {}", view.backend)?;
-            writeln!(stdout, "  state: {}", view.state)?;
-            if let Some(reason) = &view.reason {
-                writeln!(stdout, "  reason: {reason}")?;
+            write_context(
+                stdout,
+                match view.state.as_str() {
+                    "ready" => "signer · active",
+                    "unconfigured" => "signer · unconfigured",
+                    "degraded" => "signer · degraded",
+                    "unavailable" => "signer · unavailable",
+                    _ => "signer · error",
+                },
+            )?;
+            let mut signer_rows = vec![
+                ("mode", view.mode.as_str()),
+                ("status", view.state.as_str()),
+            ];
+            if let Some(account_id) = &view.account_id {
+                signer_rows.push(("account id", account_id.as_str()));
             }
+            render_pairs(stdout, "signer", signer_rows.as_slice())?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout, "reason: {reason}")?;
+            }
+            writeln!(stdout, "source: {}", view.source)?;
             if let Some(local) = &view.local {
-                render_local_signer(stdout, "local signer", local)?;
+                writeln!(stdout)?;
+                render_local_signer(stdout, "local account", local)?;
             }
             if let Some(myc) = &view.myc {
-                render_myc_status(stdout, myc)?;
+                writeln!(stdout)?;
+                render_myc_status(stdout, myc, false)?;
             }
         }
     }
@@ -255,11 +273,7 @@ fn render_config_show(
         account_rows.insert(0, ("selector", selector.as_str()));
     }
     render_pairs(stdout, "account", account_rows.as_slice())?;
-    render_pairs(
-        stdout,
-        "signer",
-        &[("backend", view.signer.backend.as_str())],
-    )?;
+    render_pairs(stdout, "signer", &[("mode", view.signer.mode.as_str())])?;
     render_pairs(
         stdout,
         "myc",
@@ -388,24 +402,33 @@ fn render_local_signer(
 fn render_myc_status(
     stdout: &mut dyn Write,
     view: &crate::domain::runtime::MycStatusView,
+    standalone: bool,
 ) -> Result<(), RuntimeError> {
-    writeln!(stdout, "myc")?;
-    writeln!(stdout, "  executable: {}", view.executable)?;
-    writeln!(stdout, "  state: {}", view.state)?;
-    writeln!(stdout, "  ready: {}", yes_no(view.ready))?;
-    if let Some(service_status) = &view.service_status {
-        writeln!(stdout, "  service status: {service_status}")?;
+    if standalone {
+        write_context(stdout, format!("myc · {}", view.state).as_str())?;
     }
+    let mut rows = vec![
+        ("executable", view.executable.as_str()),
+        ("status", view.state.as_str()),
+        ("ready", yes_no(view.ready)),
+    ];
+    if let Some(service_status) = &view.service_status {
+        rows.push(("service status", service_status.as_str()));
+    }
+    render_pairs(stdout, "myc", rows.as_slice())?;
     if let Some(reason) = &view.reason {
-        writeln!(stdout, "  reason: {reason}")?;
+        writeln!(stdout, "reason: {reason}")?;
     }
     if !view.reasons.is_empty() {
-        writeln!(stdout, "  reasons: {}", view.reasons.join(" | "))?;
+        writeln!(stdout, "reasons: {}", view.reasons.join(" | "))?;
     }
+    writeln!(stdout, "source: {}", view.source)?;
     if let Some(local_signer) = &view.local_signer {
+        writeln!(stdout)?;
         render_local_signer(stdout, "myc local signer", local_signer)?;
     }
     if let Some(custody) = &view.custody {
+        writeln!(stdout)?;
         render_myc_custody_identity(stdout, "myc custody signer", &custody.signer)?;
         render_myc_custody_identity(stdout, "myc custody user", &custody.user)?;
         if let Some(discovery_app) = &custody.discovery_app {
@@ -560,6 +583,7 @@ mod tests {
         let output = CommandOutput::success(CommandView::MycStatus(MycStatusView {
             executable: "myc".to_owned(),
             state: "unavailable".to_owned(),
+            source: "myc status command · local first".to_owned(),
             service_status: None,
             ready: false,
             reason: None,

@@ -24,7 +24,7 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_STDOUT",
         "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
-        "RADROOTS_SIGNER_BACKEND",
+        "RADROOTS_SIGNER",
         "RADROOTS_MYC_EXECUTABLE",
     ] {
         command.env_remove(key);
@@ -56,6 +56,7 @@ fn myc_status_reports_ready_for_valid_full_status_payload() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
     assert_eq!(json["state"], "ready");
+    assert_eq!(json["source"], "myc status command · local first");
     assert_eq!(json["ready"], true);
     assert_eq!(json["service_status"], "healthy");
     assert_eq!(json["local_signer"]["availability"], "secret_backed");
@@ -140,7 +141,7 @@ fn signer_status_reports_degraded_myc_backend_as_external_unavailable() {
     let output = cli_command_in(dir.path())
         .args([
             "--json",
-            "--signer-backend",
+            "--signer",
             "myc",
             "--myc-executable",
             executable.to_str().expect("executable path"),
@@ -153,8 +154,13 @@ fn signer_status_reports_degraded_myc_backend_as_external_unavailable() {
     assert_eq!(output.status.code(), Some(4));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
-    assert_eq!(json["backend"], "myc");
+    assert_eq!(json["mode"], "myc");
     assert_eq!(json["state"], "degraded");
+    assert_eq!(json["source"], "myc status command · local first");
+    assert_eq!(
+        json["account_id"],
+        json["myc"]["local_signer"]["account_id"]
+    );
     assert_eq!(json["myc"]["state"], "degraded");
     assert_eq!(json["myc"]["service_status"], "degraded");
     assert!(

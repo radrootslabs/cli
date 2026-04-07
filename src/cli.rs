@@ -36,7 +36,7 @@ pub struct CliArgs {
     #[arg(long, global = true)]
     pub identity_path: Option<PathBuf>,
     #[arg(long, global = true)]
-    pub signer_backend: Option<String>,
+    pub signer: Option<String>,
     #[arg(long, global = true)]
     pub myc_executable: Option<PathBuf>,
     #[command(subcommand)]
@@ -381,7 +381,7 @@ mod tests {
             "--log-stdout",
             "--identity-path",
             "identity.local.json",
-            "--signer-backend",
+            "--signer",
             "myc",
             "--myc-executable",
             "bin/myc",
@@ -413,7 +413,7 @@ mod tests {
                 .and_then(|path| path.to_str()),
             Some("identity.local.json")
         );
-        assert_eq!(parsed.signer_backend.as_deref(), Some("myc"));
+        assert_eq!(parsed.signer.as_deref(), Some("myc"));
         assert_eq!(
             parsed
                 .myc_executable

@@ -21,7 +21,7 @@ const ENV_LOG_DIR: &str = "RADROOTS_LOG_DIR";
 const ENV_LOG_STDOUT: &str = "RADROOTS_LOG_STDOUT";
 const ENV_ACCOUNT: &str = "RADROOTS_ACCOUNT";
 const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
-const ENV_SIGNER_BACKEND: &str = "RADROOTS_SIGNER_BACKEND";
+const ENV_SIGNER: &str = "RADROOTS_SIGNER";
 const ENV_MYC_EXECUTABLE: &str = "RADROOTS_MYC_EXECUTABLE";
 const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_OUTPUT,
@@ -33,7 +33,7 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_LOG_STDOUT,
     ENV_ACCOUNT,
     ENV_IDENTITY_PATH,
-    ENV_SIGNER_BACKEND,
+    ENV_SIGNER,
     ENV_MYC_EXECUTABLE,
 ];
 
@@ -229,10 +229,10 @@ impl RuntimeConfig {
             },
             signer: SignerConfig {
                 backend: args
-                    .signer_backend
+                    .signer
                     .clone()
-                    .or_else(|| env_value(env, env_file, &[ENV_SIGNER_BACKEND]))
-                    .map(parse_signer_backend)
+                    .or_else(|| env_value(env, env_file, &[ENV_SIGNER]))
+                    .map(parse_signer_mode)
                     .transpose()?
                     .unwrap_or(SignerBackend::Local),
             },
@@ -428,12 +428,12 @@ fn parse_output_format(value: &str) -> Result<OutputFormat, RuntimeError> {
     }
 }
 
-fn parse_signer_backend(value: String) -> Result<SignerBackend, RuntimeError> {
+fn parse_signer_mode(value: String) -> Result<SignerBackend, RuntimeError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "local" => Ok(SignerBackend::Local),
         "myc" => Ok(SignerBackend::Myc),
         other => Err(RuntimeError::Config(format!(
-            "{ENV_SIGNER_BACKEND} or --signer-backend must be `local` or `myc`, got `{other}`"
+            "{ENV_SIGNER} or --signer must be `local` or `myc`, got `{other}`"
         ))),
     }
 }
@@ -502,7 +502,7 @@ mod tests {
             "--log-stdout",
             "--identity-path",
             "custom-identity.json",
-            "--signer-backend",
+            "--signer",
             "local",
             "--myc-executable",
             "bin/myc-cli",
@@ -517,7 +517,7 @@ mod tests {
                 "RADROOTS_IDENTITY_PATH".to_owned(),
                 "env-identity.json".to_owned(),
             ),
-            ("RADROOTS_SIGNER_BACKEND".to_owned(), "myc".to_owned()),
+            ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "env-myc".to_owned()),
         ]));
 
@@ -576,7 +576,7 @@ mod tests {
                 "RADROOTS_IDENTITY_PATH".to_owned(),
                 "state/identity.json".to_owned(),
             ),
-            ("RADROOTS_SIGNER_BACKEND".to_owned(), "myc".to_owned()),
+            ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "bin/myc".to_owned()),
         ]));
 
@@ -671,7 +671,7 @@ RADROOTS_CLI_LOGGING_OUTPUT_DIR=/tmp/radroots-cli-logs
 RADROOTS_CLI_LOGGING_STDOUT=false
 RADROOTS_ACCOUNT=acct_env_file
 RADROOTS_IDENTITY_PATH=state/identity.json
-RADROOTS_SIGNER_BACKEND=myc
+RADROOTS_SIGNER=myc
 RADROOTS_MYC_EXECUTABLE=bin/myc
 "#,
             Path::new(".env.test"),

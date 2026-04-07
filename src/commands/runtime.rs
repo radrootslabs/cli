@@ -44,7 +44,7 @@ pub fn show(config: &RuntimeConfig, logging: &LoggingState) -> ConfigShowView {
             legacy_identity_path: config.identity.path.display().to_string(),
         },
         signer: SignerRuntimeView {
-            backend: config.signer.backend.as_str().to_owned(),
+            mode: config.signer.backend.as_str().to_owned(),
         },
         myc: MycRuntimeView {
             executable: config.myc.executable.display().to_string(),

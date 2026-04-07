@@ -21,7 +21,7 @@ fn doctor_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_STDOUT",
         "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
-        "RADROOTS_SIGNER_BACKEND",
+        "RADROOTS_SIGNER",
         "RADROOTS_MYC_EXECUTABLE",
     ] {
         command.env_remove(key);
@@ -81,7 +81,7 @@ fn doctor_reports_ready_local_bootstrap_state() {
 #[test]
 fn doctor_reports_external_failure_for_missing_myc() {
     let dir = tempdir().expect("tempdir");
-    fs::write(dir.path().join(".env"), "RADROOTS_SIGNER_BACKEND=myc\n").expect("write env file");
+    fs::write(dir.path().join(".env"), "RADROOTS_SIGNER=myc\n").expect("write env file");
 
     let output = doctor_command_in(dir.path())
         .args(["--json", "--myc-executable", "missing-myc", "doctor"])

@@ -21,7 +21,7 @@ fn runtime_show_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_STDOUT",
         "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
-        "RADROOTS_SIGNER_BACKEND",
+        "RADROOTS_SIGNER",
         "RADROOTS_MYC_EXECUTABLE",
     ] {
         command.env_remove(key);
@@ -92,7 +92,7 @@ fn config_show_json_reports_default_bootstrap_state() {
             .to_string()
     );
     assert_eq!(json["account"]["legacy_identity_path"], "identity.json");
-    assert_eq!(json["signer"]["backend"], "local");
+    assert_eq!(json["signer"]["mode"], "local");
     assert_eq!(json["myc"]["executable"], "myc");
 }
 
@@ -106,7 +106,7 @@ fn config_show_json_reflects_environment_configuration() {
         .env("RADROOTS_LOG_STDOUT", "false")
         .env("RADROOTS_ACCOUNT", "acct_demo")
         .env("RADROOTS_IDENTITY_PATH", "state/identity.json")
-        .env("RADROOTS_SIGNER_BACKEND", "myc")
+        .env("RADROOTS_SIGNER", "myc")
         .env("RADROOTS_MYC_EXECUTABLE", "bin/myc")
         .args(["config", "show"])
         .output()
@@ -123,7 +123,7 @@ fn config_show_json_reflects_environment_configuration() {
         json["account"]["legacy_identity_path"],
         "state/identity.json"
     );
-    assert_eq!(json["signer"]["backend"], "myc");
+    assert_eq!(json["signer"]["mode"], "myc");
     assert_eq!(json["myc"]["executable"], "bin/myc");
 }
 

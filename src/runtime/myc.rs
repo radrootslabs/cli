@@ -126,6 +126,7 @@ pub fn resolve_status(config: &MycConfig) -> MycStatusView {
     MycStatusView {
         executable,
         state: state.to_owned(),
+        source: "myc status command · local first".to_owned(),
         service_status: Some(payload.status),
         ready: payload.ready,
         reason,
@@ -220,6 +221,7 @@ fn unavailable_status(executable: String, state: &str, reason: String) -> MycSta
     MycStatusView {
         executable,
         state: state.to_owned(),
+        source: "myc status command · local first".to_owned(),
         service_status: None,
         ready: false,
         reason: Some(reason),

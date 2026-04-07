@@ -160,17 +160,13 @@ fn account_check(config: &RuntimeConfig) -> Result<EvaluatedCheck, RuntimeError>
 
 fn signer_check(signer: &crate::domain::runtime::SignerStatusView) -> EvaluatedCheck {
     let (severity, detail, action) = match signer.state.as_str() {
-        "ready" => (
-            DoctorSeverity::Ok,
-            format!("{} ready", signer.backend),
-            None,
-        ),
+        "ready" => (DoctorSeverity::Ok, format!("{} ready", signer.mode), None),
         "unconfigured" => (
             DoctorSeverity::Warn,
             signer
                 .reason
                 .clone()
-                .unwrap_or_else(|| format!("{} signer is not configured", signer.backend)),
+                .unwrap_or_else(|| format!("{} signer is not configured", signer.mode)),
             Some("radroots signer status"),
         ),
         "degraded" | "unavailable" => (
@@ -178,8 +174,8 @@ fn signer_check(signer: &crate::domain::runtime::SignerStatusView) -> EvaluatedC
             signer
                 .reason
                 .clone()
-                .unwrap_or_else(|| format!("{} signer is unavailable", signer.backend)),
-            Some(if signer.backend == "myc" {
+                .unwrap_or_else(|| format!("{} signer is unavailable", signer.mode)),
+            Some(if signer.mode == "myc" {
                 "radroots myc status"
             } else {
                 "radroots signer status"
@@ -190,7 +186,7 @@ fn signer_check(signer: &crate::domain::runtime::SignerStatusView) -> EvaluatedC
             signer
                 .reason
                 .clone()
-                .unwrap_or_else(|| format!("{} signer reported an internal error", signer.backend)),
+                .unwrap_or_else(|| format!("{} signer reported an internal error", signer.mode)),
             Some("radroots signer status --json"),
         ),
     };
