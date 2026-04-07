@@ -7,6 +7,7 @@ use crate::cli::CliArgs;
 use crate::runtime::RuntimeError;
 
 const DEFAULT_LOG_FILTER: &str = "info";
+const DEFAULT_ENV_PATH: &str = ".env";
 const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
 const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
 const ENV_CLI_LOG_FILTER: &str = "RADROOTS_CLI_LOGGING_FILTER";
@@ -161,6 +162,10 @@ fn resolve_env_file_path(args: &CliArgs, env: &dyn Environment) -> Option<PathBu
     args.env_file
         .clone()
         .or_else(|| env.var(ENV_FILE_PATH).map(PathBuf::from))
+        .or_else(|| {
+            let default_path = PathBuf::from(DEFAULT_ENV_PATH);
+            default_path.exists().then_some(default_path)
+        })
 }
 
 fn resolve_output_format(

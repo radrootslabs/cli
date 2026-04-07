@@ -1,5 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -7,6 +8,27 @@ use assert_cmd::prelude::*;
 use radroots_identity::RadrootsIdentity;
 use serde_json::{Value, json};
 use tempfile::tempdir;
+
+fn cli_command_in(workdir: &Path) -> Command {
+    let mut command = Command::cargo_bin("radroots").expect("binary");
+    command.current_dir(workdir);
+    for key in [
+        "RADROOTS_ENV_FILE",
+        "RADROOTS_OUTPUT",
+        "RADROOTS_CLI_LOGGING_FILTER",
+        "RADROOTS_CLI_LOGGING_OUTPUT_DIR",
+        "RADROOTS_CLI_LOGGING_STDOUT",
+        "RADROOTS_LOG_FILTER",
+        "RADROOTS_LOG_DIR",
+        "RADROOTS_LOG_STDOUT",
+        "RADROOTS_IDENTITY_PATH",
+        "RADROOTS_SIGNER_BACKEND",
+        "RADROOTS_MYC_EXECUTABLE",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
 
 #[test]
 fn myc_status_reports_ready_for_valid_full_status_payload() {
@@ -17,8 +39,7 @@ fn myc_status_reports_ready_for_valid_full_status_payload() {
         successful_status_script(sample_status_payload(true).to_string()).as_str(),
     );
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--myc-executable",
@@ -49,8 +70,7 @@ fn myc_status_reports_unavailable_for_invalid_status_payload() {
     let dir = tempdir().expect("tempdir");
     let executable = write_fake_myc(dir.path(), "#!/bin/sh\nprintf '%s\\n' 'this is not json'\n");
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--myc-executable",
@@ -82,8 +102,7 @@ fn myc_status_reports_degraded_service_as_external_unavailable() {
         successful_status_script(sample_status_payload(false).to_string()).as_str(),
     );
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--myc-executable",
@@ -116,8 +135,7 @@ fn signer_status_reports_degraded_myc_backend_as_external_unavailable() {
         successful_status_script(sample_status_payload(false).to_string()).as_str(),
     );
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--signer-backend",
@@ -150,8 +168,7 @@ fn myc_status_reports_unavailable_when_executable_is_missing() {
     let dir = tempdir().expect("tempdir");
     let missing = dir.path().join("missing-myc");
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--myc-executable",
@@ -182,8 +199,7 @@ fn myc_status_reports_unavailable_for_non_zero_exit() {
         "#!/bin/sh\nprintf '%s\\n' 'transport unavailable' >&2\nexit 42\n",
     );
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--myc-executable",
@@ -211,8 +227,7 @@ fn myc_status_reports_unavailable_for_timeout() {
         "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"full\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\nexec sleep 5\n",
     );
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--myc-executable",

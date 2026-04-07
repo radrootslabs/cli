@@ -1,12 +1,14 @@
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
-fn runtime_show_command() -> Command {
+fn runtime_show_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
+    command.current_dir(workdir);
     for key in [
         "RADROOTS_ENV_FILE",
         "RADROOTS_OUTPUT",
@@ -27,7 +29,8 @@ fn runtime_show_command() -> Command {
 
 #[test]
 fn runtime_show_json_reports_default_bootstrap_state() {
-    let output = runtime_show_command()
+    let dir = tempdir().expect("tempdir");
+    let output = runtime_show_command_in(dir.path())
         .args(["--json", "runtime", "show"])
         .output()
         .expect("run runtime show");
@@ -46,7 +49,8 @@ fn runtime_show_json_reports_default_bootstrap_state() {
 
 #[test]
 fn runtime_show_json_reflects_environment_configuration() {
-    let output = runtime_show_command()
+    let dir = tempdir().expect("tempdir");
+    let output = runtime_show_command_in(dir.path())
         .env("RADROOTS_OUTPUT", "json")
         .env("RADROOTS_LOG_FILTER", "debug")
         .env("RADROOTS_LOG_DIR", "logs/runtime")
@@ -69,9 +73,9 @@ fn runtime_show_json_reflects_environment_configuration() {
 }
 
 #[test]
-fn runtime_show_json_reads_logging_from_env_file() {
+fn runtime_show_json_reads_logging_from_default_env_file() {
     let temp = tempdir().expect("tempdir");
-    let env_path = temp.path().join("radroots-cli.env");
+    let env_path = temp.path().join(".env");
     let logs_dir = temp.path().join("logs").join("radroots-cli");
     fs::write(
         &env_path,
@@ -82,14 +86,8 @@ fn runtime_show_json_reads_logging_from_env_file() {
     )
     .expect("write env file");
 
-    let output = runtime_show_command()
-        .args([
-            "--json",
-            "--env-file",
-            env_path.to_str().expect("env path"),
-            "runtime",
-            "show",
-        ])
+    let output = runtime_show_command_in(temp.path())
+        .args(["--json", "runtime", "show"])
         .output()
         .expect("run runtime show");
 

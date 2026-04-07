@@ -1,16 +1,37 @@
+use std::path::Path;
 use std::process::Command;
 
 use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
+fn cli_command_in(workdir: &Path) -> Command {
+    let mut command = Command::cargo_bin("radroots").expect("binary");
+    command.current_dir(workdir);
+    for key in [
+        "RADROOTS_ENV_FILE",
+        "RADROOTS_OUTPUT",
+        "RADROOTS_CLI_LOGGING_FILTER",
+        "RADROOTS_CLI_LOGGING_OUTPUT_DIR",
+        "RADROOTS_CLI_LOGGING_STDOUT",
+        "RADROOTS_LOG_FILTER",
+        "RADROOTS_LOG_DIR",
+        "RADROOTS_LOG_STDOUT",
+        "RADROOTS_IDENTITY_PATH",
+        "RADROOTS_SIGNER_BACKEND",
+        "RADROOTS_MYC_EXECUTABLE",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
 #[test]
 fn identity_init_json_creates_identity_file() {
     let dir = tempdir().expect("tempdir");
     let identity_path = dir.path().join("identity.json");
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--identity-path",
@@ -39,8 +60,7 @@ fn identity_show_json_reads_existing_public_identity() {
     let dir = tempdir().expect("tempdir");
     let identity_path = dir.path().join("identity.json");
 
-    let init = Command::cargo_bin("radroots")
-        .expect("binary")
+    let init = cli_command_in(dir.path())
         .args([
             "--json",
             "--identity-path",
@@ -52,8 +72,7 @@ fn identity_show_json_reads_existing_public_identity() {
         .expect("run identity init");
     assert!(init.status.success());
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--identity-path",
@@ -80,8 +99,7 @@ fn identity_show_json_reports_unconfigured_without_creating_identity() {
     let dir = tempdir().expect("tempdir");
     let identity_path = dir.path().join("missing-identity.json");
 
-    let output = Command::cargo_bin("radroots")
-        .expect("binary")
+    let output = cli_command_in(dir.path())
         .args([
             "--json",
             "--identity-path",
