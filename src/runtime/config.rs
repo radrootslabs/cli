@@ -19,6 +19,18 @@ const ENV_LOG_STDOUT: &str = "RADROOTS_LOG_STDOUT";
 const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
 const ENV_SIGNER_BACKEND: &str = "RADROOTS_SIGNER_BACKEND";
 const ENV_MYC_EXECUTABLE: &str = "RADROOTS_MYC_EXECUTABLE";
+const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
+    ENV_OUTPUT,
+    ENV_CLI_LOG_FILTER,
+    ENV_CLI_LOG_DIR,
+    ENV_CLI_LOG_STDOUT,
+    ENV_LOG_FILTER,
+    ENV_LOG_DIR,
+    ENV_LOG_STDOUT,
+    ENV_IDENTITY_PATH,
+    ENV_SIGNER_BACKEND,
+    ENV_MYC_EXECUTABLE,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -260,6 +272,13 @@ fn parse_env_file_values(raw: &str, path: &Path) -> Result<EnvFileValues, Runtim
                 index + 1
             )));
         }
+        if !SUPPORTED_ENV_FILE_KEYS.contains(&key) {
+            return Err(RuntimeError::Config(format!(
+                "invalid env file {} line {}: unknown environment variable `{key}`",
+                path.display(),
+                index + 1
+            )));
+        }
         values.insert(key.to_owned(), normalize_env_value(value.trim()));
     }
 
@@ -480,5 +499,19 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             RuntimeConfig::resolve_with_env_file(&args, &env, &env_file).expect("resolve config");
         assert_eq!(resolved.logging.filter, "info");
         assert!(resolved.logging.stdout);
+    }
+
+    #[test]
+    fn unknown_env_file_variable_fails() {
+        let error = parse_env_file_values(
+            "RADROOTS_CLI_LOGGING_FILTRE=debug\n",
+            Path::new(".env.test"),
+        )
+        .expect_err("unknown env variable");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown environment variable `RADROOTS_CLI_LOGGING_FILTRE`")
+        );
     }
 }
