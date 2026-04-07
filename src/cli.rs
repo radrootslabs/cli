@@ -1,14 +1,28 @@
 use clap::{ArgAction, Args, Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::runtime::config::OutputFormat;
+
 #[derive(Debug, Parser, Clone)]
 #[command(name = "radroots")]
 #[command(version)]
 pub struct CliArgs {
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub json: bool,
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub ndjson: bool,
     #[arg(long = "env-file", global = true)]
     pub env_file: Option<PathBuf>,
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub quiet: bool,
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub verbose: bool,
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub trace: bool,
+    #[arg(long = "dry-run", global = true, action = ArgAction::SetTrue)]
+    pub dry_run: bool,
+    #[arg(long = "no-color", global = true, action = ArgAction::SetTrue)]
+    pub no_color: bool,
     #[arg(long, global = true)]
     pub log_filter: Option<String>,
     #[arg(long, global = true)]
@@ -43,6 +57,116 @@ pub enum Command {
     Rpc(RpcArgs),
     Signer(SignerArgs),
     Sync(SyncArgs),
+}
+
+impl Command {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Account(account) => match account.command {
+                AccountCommand::New => "account new",
+                AccountCommand::Whoami => "account whoami",
+                AccountCommand::Ls => "account ls",
+                AccountCommand::Use(_) => "account use",
+            },
+            Self::Config(config) => match config.command {
+                ConfigCommand::Show => "config show",
+            },
+            Self::Doctor => "doctor",
+            Self::Find(_) => "find",
+            Self::Job(job) => match job.command {
+                JobCommand::Ls => "job ls",
+                JobCommand::Get(_) => "job get",
+                JobCommand::Watch(_) => "job watch",
+            },
+            Self::Listing(listing) => match listing.command {
+                ListingCommand::New => "listing new",
+                ListingCommand::Validate => "listing validate",
+                ListingCommand::Get(_) => "listing get",
+                ListingCommand::Publish => "listing publish",
+                ListingCommand::Update(_) => "listing update",
+                ListingCommand::Archive(_) => "listing archive",
+            },
+            Self::Local(local) => match local.command {
+                LocalCommand::Init => "local init",
+                LocalCommand::Status => "local status",
+                LocalCommand::Export => "local export",
+                LocalCommand::Backup => "local backup",
+            },
+            Self::Myc(myc) => match myc.command {
+                MycCommand::Status => "myc status",
+            },
+            Self::Net(net) => match net.command {
+                NetCommand::Status => "net status",
+            },
+            Self::Order(order) => match order.command {
+                OrderCommand::New => "order new",
+                OrderCommand::Get(_) => "order get",
+                OrderCommand::Ls => "order ls",
+                OrderCommand::Submit => "order submit",
+                OrderCommand::Watch(_) => "order watch",
+                OrderCommand::Cancel(_) => "order cancel",
+                OrderCommand::History => "order history",
+            },
+            Self::Relay(relay) => match relay.command {
+                RelayCommand::Ls => "relay ls",
+            },
+            Self::Rpc(rpc) => match rpc.command {
+                RpcCommand::Status => "rpc status",
+                RpcCommand::Sessions => "rpc sessions",
+            },
+            Self::Signer(signer) => match signer.command {
+                SignerCommand::Status => "signer status",
+            },
+            Self::Sync(sync) => match sync.command {
+                SyncCommand::Status => "sync status",
+                SyncCommand::Pull => "sync pull",
+                SyncCommand::Push => "sync push",
+                SyncCommand::Watch => "sync watch",
+            },
+        }
+    }
+
+    pub fn supports_output_format(&self, format: OutputFormat) -> bool {
+        match format {
+            OutputFormat::Human | OutputFormat::Json => true,
+            OutputFormat::Ndjson => matches!(
+                self,
+                Self::Account(AccountArgs {
+                    command: AccountCommand::Ls,
+                }) | Self::Relay(RelayArgs {
+                    command: RelayCommand::Ls,
+                }) | Self::Job(JobArgs {
+                    command: JobCommand::Ls,
+                }) | Self::Rpc(RpcArgs {
+                    command: RpcCommand::Sessions,
+                }) | Self::Order(OrderArgs {
+                    command: OrderCommand::Ls | OrderCommand::History,
+                }) | Self::Sync(SyncArgs {
+                    command: SyncCommand::Watch,
+                }) | Self::Find(_)
+            ),
+        }
+    }
+
+    pub fn supports_dry_run(&self) -> bool {
+        !matches!(
+            self,
+            Self::Account(AccountArgs {
+                command: AccountCommand::New | AccountCommand::Use(_),
+            }) | Self::Local(LocalArgs {
+                command: LocalCommand::Init | LocalCommand::Export | LocalCommand::Backup,
+            }) | Self::Sync(SyncArgs {
+                command: SyncCommand::Pull | SyncCommand::Push,
+            }) | Self::Listing(ListingArgs {
+                command: ListingCommand::New
+                    | ListingCommand::Publish
+                    | ListingCommand::Update(_)
+                    | ListingCommand::Archive(_),
+            }) | Self::Order(OrderArgs {
+                command: OrderCommand::New | OrderCommand::Submit | OrderCommand::Cancel(_),
+            })
+        )
+    }
 }
 
 #[derive(Debug, Clone, Args)]
@@ -222,6 +346,7 @@ mod tests {
         AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, ListingCommand, LocalCommand,
         MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand, SignerCommand, SyncCommand,
     };
+    use crate::runtime::config::OutputFormat;
     use clap::Parser;
 
     #[test]
@@ -240,6 +365,9 @@ mod tests {
         let parsed = CliArgs::parse_from([
             "radroots",
             "--json",
+            "--verbose",
+            "--dry-run",
+            "--no-color",
             "--env-file",
             ".env.local",
             "--log-filter",
@@ -257,6 +385,9 @@ mod tests {
             "show",
         ]);
         assert!(parsed.json);
+        assert!(parsed.verbose);
+        assert!(parsed.dry_run);
+        assert!(parsed.no_color);
         assert_eq!(
             parsed.env_file.as_deref().and_then(|path| path.to_str()),
             Some(".env.local")
@@ -428,5 +559,33 @@ mod tests {
             },
             _ => panic!("unexpected command variant"),
         }
+    }
+
+    #[test]
+    fn command_contract_helpers_report_supported_modes() {
+        let config_show = CliArgs::parse_from(["radroots", "config", "show"]);
+        assert!(
+            config_show
+                .command
+                .supports_output_format(OutputFormat::Human)
+        );
+        assert!(
+            config_show
+                .command
+                .supports_output_format(OutputFormat::Json)
+        );
+        assert!(
+            !config_show
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
+        assert!(config_show.command.supports_dry_run());
+
+        let account_new = CliArgs::parse_from(["radroots", "account", "new"]);
+        assert_eq!(account_new.command.display_name(), "account new");
+        assert!(!account_new.command.supports_dry_run());
+
+        let find = CliArgs::parse_from(["radroots", "find", "eggs"]);
+        assert!(find.command.supports_output_format(OutputFormat::Ndjson));
     }
 }

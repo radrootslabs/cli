@@ -76,12 +76,20 @@ pub enum CommandView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ConfigShowView {
-    pub output_format: String,
+    pub output: OutputRuntimeView,
     pub paths: PathsRuntimeView,
     pub logging: LoggingRuntimeView,
     pub account: AccountRuntimeView,
     pub signer: SignerRuntimeView,
     pub myc: MycRuntimeView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OutputRuntimeView {
+    pub format: String,
+    pub verbosity: String,
+    pub color: bool,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

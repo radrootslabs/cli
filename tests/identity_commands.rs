@@ -56,6 +56,29 @@ fn account_new_json_creates_identity_file() {
 }
 
 #[test]
+fn account_new_rejects_dry_run_without_creating_identity() {
+    let dir = tempdir().expect("tempdir");
+    let identity_path = dir.path().join("identity.json");
+
+    let output = cli_command_in(dir.path())
+        .args([
+            "--dry-run",
+            "--identity-path",
+            identity_path.to_str().expect("identity path"),
+            "account",
+            "new",
+        ])
+        .output()
+        .expect("run account new");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!identity_path.exists());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("`account new` does not support --dry-run yet"));
+}
+
+#[test]
 fn account_whoami_json_reads_existing_public_identity() {
     let dir = tempdir().expect("tempdir");
     let identity_path = dir.path().join("identity.json");

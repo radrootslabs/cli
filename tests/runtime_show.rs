@@ -40,7 +40,10 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
-    assert_eq!(json["output_format"], "json");
+    assert_eq!(json["output"]["format"], "json");
+    assert_eq!(json["output"]["verbosity"], "normal");
+    assert_eq!(json["output"]["color"], true);
+    assert_eq!(json["output"]["dry_run"], false);
     assert_eq!(
         json["paths"]["user_config_path"],
         dir.path()
@@ -90,11 +93,36 @@ fn config_show_json_reflects_environment_configuration() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["output"]["format"], "json");
     assert_eq!(json["logging"]["filter"], "debug");
     assert_eq!(json["logging"]["directory"], "logs/runtime");
     assert_eq!(json["account"]["identity_path"], "state/identity.json");
     assert_eq!(json["signer"]["backend"], "myc");
     assert_eq!(json["myc"]["executable"], "bin/myc");
+}
+
+#[test]
+fn config_show_json_reflects_global_output_flags() {
+    let dir = tempdir().expect("tempdir");
+    let output = runtime_show_command_in(dir.path())
+        .args([
+            "--json",
+            "--trace",
+            "--dry-run",
+            "--no-color",
+            "config",
+            "show",
+        ])
+        .output()
+        .expect("run config show");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["output"]["format"], "json");
+    assert_eq!(json["output"]["verbosity"], "trace");
+    assert_eq!(json["output"]["color"], false);
+    assert_eq!(json["output"]["dry_run"], true);
 }
 
 #[test]
@@ -126,4 +154,18 @@ fn config_show_json_reads_logging_from_default_env_file() {
         .expect("current log file");
     assert!(current_file.starts_with(logs_dir.display().to_string().as_str()));
     assert!(std::path::Path::new(current_file).exists());
+}
+
+#[test]
+fn config_show_rejects_ndjson_for_singular_output() {
+    let dir = tempdir().expect("tempdir");
+    let output = runtime_show_command_in(dir.path())
+        .args(["--ndjson", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("`config show` does not support --ndjson"));
 }

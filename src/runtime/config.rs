@@ -39,6 +39,7 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
 pub enum OutputFormat {
     Human,
     Json,
+    Ndjson,
 }
 
 impl OutputFormat {
@@ -46,8 +47,36 @@ impl OutputFormat {
         match self {
             Self::Human => "human",
             Self::Json => "json",
+            Self::Ndjson => "ndjson",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verbosity {
+    Quiet,
+    Normal,
+    Verbose,
+    Trace,
+}
+
+impl Verbosity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Quiet => "quiet",
+            Self::Normal => "normal",
+            Self::Verbose => "verbose",
+            Self::Trace => "trace",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputConfig {
+    pub format: OutputFormat,
+    pub verbosity: Verbosity,
+    pub color: bool,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +118,7 @@ pub struct MycConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeConfig {
-    pub output_format: OutputFormat,
+    pub output: OutputConfig,
     pub paths: PathsConfig,
     pub logging: LoggingConfig,
     pub identity: IdentityConfig,
@@ -145,7 +174,12 @@ impl RuntimeConfig {
         env_file: &EnvFileValues,
     ) -> Result<Self, RuntimeError> {
         Ok(Self {
-            output_format: resolve_output_format(args, env, env_file)?,
+            output: OutputConfig {
+                format: resolve_output_format(args, env, env_file)?,
+                verbosity: resolve_verbosity(args)?,
+                color: !args.no_color,
+                dry_run: args.dry_run,
+            },
             paths: resolve_paths(env)?,
             logging: LoggingConfig {
                 filter: args
@@ -224,12 +258,41 @@ fn resolve_output_format(
     env: &dyn Environment,
     env_file: &EnvFileValues,
 ) -> Result<OutputFormat, RuntimeError> {
-    if args.json {
-        return Ok(OutputFormat::Json);
+    match (args.json, args.ndjson) {
+        (true, true) => {
+            return Err(RuntimeError::Config(
+                "flags --json and --ndjson cannot be used together".to_owned(),
+            ));
+        }
+        (true, false) => return Ok(OutputFormat::Json),
+        (false, true) => return Ok(OutputFormat::Ndjson),
+        (false, false) => {}
     }
     match env_value(env, env_file, &[ENV_OUTPUT]) {
         Some(value) => parse_output_format(value.as_str()),
         None => Ok(OutputFormat::Human),
+    }
+}
+
+fn resolve_verbosity(args: &CliArgs) -> Result<Verbosity, RuntimeError> {
+    let selected = [args.quiet, args.verbose, args.trace]
+        .into_iter()
+        .filter(|selected| *selected)
+        .count();
+    if selected > 1 {
+        return Err(RuntimeError::Config(
+            "flags --quiet, --verbose, and --trace are mutually exclusive".to_owned(),
+        ));
+    }
+
+    if args.quiet {
+        Ok(Verbosity::Quiet)
+    } else if args.trace {
+        Ok(Verbosity::Trace)
+    } else if args.verbose {
+        Ok(Verbosity::Verbose)
+    } else {
+        Ok(Verbosity::Normal)
     }
 }
 
@@ -339,8 +402,9 @@ fn parse_output_format(value: &str) -> Result<OutputFormat, RuntimeError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "human" => Ok(OutputFormat::Human),
         "json" => Ok(OutputFormat::Json),
+        "ndjson" => Ok(OutputFormat::Ndjson),
         other => Err(RuntimeError::Config(format!(
-            "{ENV_OUTPUT} must be `human` or `json`, got `{other}`"
+            "{ENV_OUTPUT} must be `human`, `json`, or `ndjson`, got `{other}`"
         ))),
     }
 }
@@ -368,8 +432,8 @@ fn parse_bool_env(key: &str, value: &str) -> Result<bool, RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EnvFileValues, Environment, OutputFormat, PathsConfig, RuntimeConfig, SignerBackend,
-        parse_env_file_values,
+        EnvFileValues, Environment, OutputConfig, OutputFormat, PathsConfig, RuntimeConfig,
+        SignerBackend, Verbosity, parse_env_file_values,
     };
     use crate::cli::CliArgs;
     use clap::Parser;
@@ -411,6 +475,9 @@ mod tests {
         let args = CliArgs::parse_from([
             "radroots",
             "--json",
+            "--verbose",
+            "--dry-run",
+            "--no-color",
             "--log-filter",
             "debug",
             "--log-stdout",
@@ -437,7 +504,15 @@ mod tests {
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve runtime config");
-        assert_eq!(resolved.output_format, OutputFormat::Json);
+        assert_eq!(
+            resolved.output,
+            OutputConfig {
+                format: OutputFormat::Json,
+                verbosity: Verbosity::Verbose,
+                color: false,
+                dry_run: true,
+            }
+        );
         assert_eq!(
             resolved.paths,
             PathsConfig {
@@ -479,7 +554,15 @@ mod tests {
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve runtime config");
-        assert_eq!(resolved.output_format, OutputFormat::Json);
+        assert_eq!(
+            resolved.output,
+            OutputConfig {
+                format: OutputFormat::Json,
+                verbosity: Verbosity::Normal,
+                color: true,
+                dry_run: false,
+            }
+        );
         assert_eq!(resolved.logging.filter, "debug,cli=trace");
         assert_eq!(
             resolved.logging.directory,
@@ -504,6 +587,35 @@ mod tests {
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("conflicting flags");
         assert!(error.to_string().contains("cannot be used together"));
+    }
+
+    #[test]
+    fn conflicting_output_and_verbosity_flags_fail() {
+        let env = MapEnvironment::new(BTreeMap::new());
+
+        let conflicting_output =
+            CliArgs::parse_from(["radroots", "--json", "--ndjson", "config", "show"]);
+        let error = RuntimeConfig::resolve_with_env_file(
+            &conflicting_output,
+            &env,
+            &EnvFileValues::default(),
+        )
+        .expect_err("conflicting output flags");
+        assert!(error.to_string().contains("--json and --ndjson"));
+
+        let conflicting_verbosity =
+            CliArgs::parse_from(["radroots", "--quiet", "--trace", "config", "show"]);
+        let error = RuntimeConfig::resolve_with_env_file(
+            &conflicting_verbosity,
+            &env,
+            &EnvFileValues::default(),
+        )
+        .expect_err("conflicting verbosity flags");
+        assert!(
+            error
+                .to_string()
+                .contains("--quiet, --verbose, and --trace")
+        );
     }
 
     #[test]
@@ -538,7 +650,7 @@ RADROOTS_MYC_EXECUTABLE=bin/myc
 
         let resolved =
             RuntimeConfig::resolve_with_env_file(&args, &env, &env_file).expect("resolve config");
-        assert_eq!(resolved.output_format, OutputFormat::Json);
+        assert_eq!(resolved.output.format, OutputFormat::Json);
         assert_eq!(resolved.logging.filter, "debug,radroots_cli=trace");
         assert_eq!(
             resolved.logging.directory,
@@ -568,6 +680,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
 
         let resolved =
             RuntimeConfig::resolve_with_env_file(&args, &env, &env_file).expect("resolve config");
+        assert_eq!(resolved.output.format, OutputFormat::Human);
         assert_eq!(resolved.logging.filter, "info");
         assert!(resolved.logging.stdout);
     }
@@ -605,5 +718,18 @@ RADROOTS_CLI_LOGGING_STDOUT=false
                 .to_string()
                 .contains("unknown environment variable `RADROOTS_CLI_LOGGING_FILTRE`")
         );
+    }
+
+    #[test]
+    fn env_output_accepts_ndjson() {
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::from([(
+            "RADROOTS_OUTPUT".to_owned(),
+            "ndjson".to_owned(),
+        )]));
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve runtime config");
+        assert_eq!(resolved.output.format, OutputFormat::Ndjson);
     }
 }
