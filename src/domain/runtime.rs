@@ -88,6 +88,9 @@ pub enum CommandView {
     LocalStatus(LocalStatusView),
     MycStatus(MycStatusView),
     NetStatus(NetStatusView),
+    OrderGet(OrderGetView),
+    OrderList(OrderListView),
+    OrderNew(OrderNewView),
     RpcSessions(RpcSessionsView),
     RpcStatus(RpcStatusView),
     RelayList(RelayListView),
@@ -456,6 +459,149 @@ pub struct JobWatchFrameView {
     pub state: String,
     pub terminal: bool,
     pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderNewView {
+    pub state: String,
+    pub source: String,
+    pub order_id: String,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_lookup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    pub ready_for_submit: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<OrderDraftItemView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderNewView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderGetView {
+    pub state: String,
+    pub source: String,
+    pub lookup: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_lookup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    pub ready_for_submit: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<OrderDraftItemView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at_unix: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<OrderJobView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderGetView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderListView {
+    pub state: String,
+    pub source: String,
+    pub count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orders: Vec<OrderSummaryView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderListView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderSummaryView {
+    pub id: String,
+    pub state: String,
+    pub ready_for_submit: bool,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_lookup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_account_id: Option<String>,
+    pub item_count: usize,
+    pub updated_at_unix: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<OrderJobView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderDraftItemView {
+    pub bin_id: String,
+    pub bin_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderIssueView {
+    pub field: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderJobView {
+    pub job_id: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

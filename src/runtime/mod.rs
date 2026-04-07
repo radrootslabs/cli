@@ -8,6 +8,7 @@ pub mod local;
 pub mod logging;
 pub mod myc;
 pub mod network;
+pub mod order;
 pub mod signer;
 pub mod sync;
 

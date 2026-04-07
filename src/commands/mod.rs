@@ -6,6 +6,7 @@ pub mod listing;
 pub mod local;
 pub mod myc;
 pub mod net;
+pub mod order;
 pub mod relay;
 pub mod rpc;
 pub mod runtime;
@@ -73,9 +74,9 @@ pub fn dispatch(
             NetCommand::Status => net::status(config),
         },
         Command::Order(order) => match &order.command {
-            OrderCommand::New => unimplemented_command("order new"),
-            OrderCommand::Get(_) => unimplemented_command("order get"),
-            OrderCommand::Ls => unimplemented_command("order ls"),
+            OrderCommand::New(args) => order::new(config, args),
+            OrderCommand::Get(args) => order::get(config, args),
+            OrderCommand::Ls => order::list(config),
             OrderCommand::Submit => unimplemented_command("order submit"),
             OrderCommand::Watch(_) => unimplemented_command("order watch"),
             OrderCommand::Cancel(_) => unimplemented_command("order cancel"),

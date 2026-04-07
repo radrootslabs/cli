@@ -103,7 +103,7 @@ impl Command {
                 NetCommand::Status => "net status",
             },
             Self::Order(order) => match order.command {
-                OrderCommand::New => "order new",
+                OrderCommand::New(_) => "order new",
                 OrderCommand::Get(_) => "order get",
                 OrderCommand::Ls => "order ls",
                 OrderCommand::Submit => "order submit",
@@ -166,7 +166,7 @@ impl Command {
             }) | Self::Listing(ListingArgs {
                 command: ListingCommand::New(_),
             }) | Self::Order(OrderArgs {
-                command: OrderCommand::New | OrderCommand::Submit | OrderCommand::Cancel(_),
+                command: OrderCommand::New(_) | OrderCommand::Submit | OrderCommand::Cancel(_),
             })
         )
     }
@@ -397,13 +397,25 @@ pub struct OrderArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum OrderCommand {
-    New,
+    New(OrderNewArgs),
     Get(RecordKeyArgs),
     Ls,
     Submit,
     Watch(RecordKeyArgs),
     Cancel(RecordKeyArgs),
     History,
+}
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct OrderNewArgs {
+    #[arg(long)]
+    pub listing: Option<String>,
+    #[arg(long = "listing-addr")]
+    pub listing_addr: Option<String>,
+    #[arg(long = "bin")]
+    pub bin_id: Option<String>,
+    #[arg(long = "qty")]
+    pub bin_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -761,10 +773,48 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
-        let order = CliArgs::parse_from(["radroots", "order", "history"]);
-        match order.command {
+        let order_new = CliArgs::parse_from([
+            "radroots",
+            "order",
+            "new",
+            "--listing",
+            "pasture-eggs",
+            "--listing-addr",
+            "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+            "--bin",
+            "bin-1",
+            "--qty",
+            "2",
+        ]);
+        match order_new.command {
             Command::Order(args) => match args.command {
-                OrderCommand::History => {}
+                OrderCommand::New(new) => {
+                    assert_eq!(new.listing.as_deref(), Some("pasture-eggs"));
+                    assert_eq!(
+                        new.listing_addr.as_deref(),
+                        Some("30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg")
+                    );
+                    assert_eq!(new.bin_id.as_deref(), Some("bin-1"));
+                    assert_eq!(new.bin_count, Some(2));
+                }
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let order_get = CliArgs::parse_from(["radroots", "order", "get", "ord_demo"]);
+        match order_get.command {
+            Command::Order(args) => match args.command {
+                OrderCommand::Get(key) => assert_eq!(key.key, "ord_demo"),
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let order_ls = CliArgs::parse_from(["radroots", "order", "ls"]);
+        match order_ls.command {
+            Command::Order(args) => match args.command {
+                OrderCommand::Ls => {}
                 _ => panic!("unexpected order subcommand"),
             },
             _ => panic!("unexpected command variant"),
