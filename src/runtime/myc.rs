@@ -203,6 +203,8 @@ fn local_signer_status_view(
             }
         },
         secret_backed: capability.is_secret_backed(),
+        backend: "myc".to_owned(),
+        used_fallback: false,
     }
 }
 

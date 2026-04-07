@@ -20,6 +20,9 @@ fn runtime_show_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",
         "RADROOTS_ACCOUNT",
+        "RADROOTS_ACCOUNT_SECRET_BACKEND",
+        "RADROOTS_ACCOUNT_SECRET_FALLBACK",
+        "RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
@@ -29,6 +32,7 @@ fn runtime_show_command_in(workdir: &Path) -> Command {
     ] {
         command.env_remove(key);
     }
+    command.env("RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE", "false");
     command
 }
 
@@ -95,6 +99,20 @@ fn config_show_json_reports_default_bootstrap_state() {
             .to_string()
     );
     assert_eq!(json["account"]["legacy_identity_path"], "identity.json");
+    assert_eq!(
+        json["account"]["secret_backend"]["configured_primary"],
+        "host_vault"
+    );
+    assert_eq!(
+        json["account"]["secret_backend"]["configured_fallback"],
+        "encrypted_file"
+    );
+    assert_eq!(json["account"]["secret_backend"]["state"], "ready");
+    assert_eq!(
+        json["account"]["secret_backend"]["active_backend"],
+        "encrypted_file"
+    );
+    assert_eq!(json["account"]["secret_backend"]["used_fallback"], true);
     assert_eq!(json["signer"]["mode"], "local");
     assert_eq!(json["relay"]["count"], 0);
     assert_eq!(json["relay"]["publish_policy"], "any");
@@ -149,6 +167,10 @@ fn config_show_json_reflects_environment_configuration() {
     assert_eq!(
         json["account"]["legacy_identity_path"],
         "state/identity.json"
+    );
+    assert_eq!(
+        json["account"]["secret_backend"]["active_backend"],
+        "encrypted_file"
     );
     assert_eq!(json["signer"]["mode"], "myc");
     assert_eq!(json["relay"]["count"], 2);

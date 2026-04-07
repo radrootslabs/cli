@@ -522,14 +522,32 @@ fn render_config_show(
         ("store path", view.account.store_path.as_str()),
         ("secrets dir", view.account.secrets_dir.as_str()),
         (
+            "secret backend",
+            view.account.secret_backend.configured_primary.as_str(),
+        ),
+        (
             "legacy import path",
             view.account.legacy_identity_path.as_str(),
         ),
     ];
+    if let Some(fallback) = &view.account.secret_backend.configured_fallback {
+        account_rows.push(("secret fallback", fallback.as_str()));
+    }
+    account_rows.push(("secret status", view.account.secret_backend.state.as_str()));
+    if let Some(active_backend) = &view.account.secret_backend.active_backend {
+        account_rows.push(("active secret backend", active_backend.as_str()));
+    }
+    account_rows.push((
+        "used secret fallback",
+        yes_no(view.account.secret_backend.used_fallback),
+    ));
     if let Some(selector) = &view.account.selector {
         account_rows.insert(0, ("selector", selector.as_str()));
     }
     render_pairs(stdout, "account", account_rows.as_slice())?;
+    if let Some(reason) = &view.account.secret_backend.reason {
+        writeln!(stdout, "account secret backend reason: {reason}")?;
+    }
     render_pairs(stdout, "signer", &[("mode", view.signer.mode.as_str())])?;
     let relay_count = view.relay.count.to_string();
     render_pairs(
@@ -1843,6 +1861,8 @@ fn render_local_signer(
     )?;
     writeln!(stdout, "  availability: {}", local.availability)?;
     writeln!(stdout, "  secret backed: {}", yes_no(local.secret_backed))?;
+    writeln!(stdout, "  backend: {}", local.backend)?;
+    writeln!(stdout, "  used fallback: {}", yes_no(local.used_fallback))?;
     Ok(())
 }
 
@@ -2033,6 +2053,7 @@ mod tests {
         RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
+    use radroots_secret_vault::RadrootsSecretBackend;
 
     #[test]
     fn human_render_contains_config_sections() {
@@ -2058,6 +2079,8 @@ mod tests {
                     selector: Some("acct_demo".into()),
                     store_path: "/home/tester/.local/share/radroots/accounts/store.json".into(),
                     secrets_dir: "/home/tester/.local/share/radroots/accounts/secrets".into(),
+                    secret_backend: RadrootsSecretBackend::EncryptedFile,
+                    secret_fallback: None,
                 },
                 identity: IdentityConfig {
                     path: "identity.json".into(),
@@ -2089,7 +2112,8 @@ mod tests {
                 initialized: true,
                 current_file: None,
             },
-        );
+        )
+        .expect("runtime show");
         assert_eq!(view.output.format, "human");
         assert_eq!(
             view.paths.workspace_config_path,
@@ -2133,60 +2157,65 @@ mod tests {
 
     #[test]
     fn ndjson_rejects_singular_views() {
-        let output = CommandOutput::success(CommandView::ConfigShow(runtime::show(
-            &RuntimeConfig {
-                output: OutputConfig {
-                    format: OutputFormat::Ndjson,
-                    verbosity: Verbosity::Trace,
-                    color: false,
-                    dry_run: true,
+        let output = CommandOutput::success(CommandView::ConfigShow(
+            runtime::show(
+                &RuntimeConfig {
+                    output: OutputConfig {
+                        format: OutputFormat::Ndjson,
+                        verbosity: Verbosity::Trace,
+                        color: false,
+                        dry_run: true,
+                    },
+                    paths: PathsConfig {
+                        user_config_path: "/home/tester/.config/radroots/config.toml".into(),
+                        workspace_config_path: "/workspace/.radroots/config.toml".into(),
+                        user_state_root: "/home/tester/.local/share/radroots".into(),
+                    },
+                    logging: LoggingConfig {
+                        filter: "info".to_owned(),
+                        directory: None,
+                        stdout: false,
+                    },
+                    account: AccountConfig {
+                        selector: None,
+                        store_path: "/home/tester/.local/share/radroots/accounts/store.json".into(),
+                        secrets_dir: "/home/tester/.local/share/radroots/accounts/secrets".into(),
+                        secret_backend: RadrootsSecretBackend::EncryptedFile,
+                        secret_fallback: None,
+                    },
+                    identity: IdentityConfig {
+                        path: "identity.json".into(),
+                    },
+                    signer: SignerConfig {
+                        backend: SignerBackend::Local,
+                    },
+                    relay: RelayConfig {
+                        urls: Vec::new(),
+                        publish_policy: RelayPublishPolicy::Any,
+                        source: RelayConfigSource::Defaults,
+                    },
+                    local: LocalConfig {
+                        root: "/home/tester/.local/share/radroots/replica".into(),
+                        replica_db_path:
+                            "/home/tester/.local/share/radroots/replica/replica.sqlite".into(),
+                        backups_dir: "/home/tester/.local/share/radroots/replica/backups".into(),
+                        exports_dir: "/home/tester/.local/share/radroots/replica/exports".into(),
+                    },
+                    myc: MycConfig {
+                        executable: "myc".into(),
+                    },
+                    rpc: RpcConfig {
+                        url: "http://127.0.0.1:7070".to_owned(),
+                        bridge_bearer_token: None,
+                    },
                 },
-                paths: PathsConfig {
-                    user_config_path: "/home/tester/.config/radroots/config.toml".into(),
-                    workspace_config_path: "/workspace/.radroots/config.toml".into(),
-                    user_state_root: "/home/tester/.local/share/radroots".into(),
+                &LoggingState {
+                    initialized: true,
+                    current_file: None,
                 },
-                logging: LoggingConfig {
-                    filter: "info".to_owned(),
-                    directory: None,
-                    stdout: false,
-                },
-                account: AccountConfig {
-                    selector: None,
-                    store_path: "/home/tester/.local/share/radroots/accounts/store.json".into(),
-                    secrets_dir: "/home/tester/.local/share/radroots/accounts/secrets".into(),
-                },
-                identity: IdentityConfig {
-                    path: "identity.json".into(),
-                },
-                signer: SignerConfig {
-                    backend: SignerBackend::Local,
-                },
-                relay: RelayConfig {
-                    urls: Vec::new(),
-                    publish_policy: RelayPublishPolicy::Any,
-                    source: RelayConfigSource::Defaults,
-                },
-                local: LocalConfig {
-                    root: "/home/tester/.local/share/radroots/replica".into(),
-                    replica_db_path: "/home/tester/.local/share/radroots/replica/replica.sqlite"
-                        .into(),
-                    backups_dir: "/home/tester/.local/share/radroots/replica/backups".into(),
-                    exports_dir: "/home/tester/.local/share/radroots/replica/exports".into(),
-                },
-                myc: MycConfig {
-                    executable: "myc".into(),
-                },
-                rpc: RpcConfig {
-                    url: "http://127.0.0.1:7070".to_owned(),
-                    bridge_bearer_token: None,
-                },
-            },
-            &LoggingState {
-                initialized: true,
-                current_file: None,
-            },
-        )));
+            )
+            .expect("runtime show"),
+        ));
         let mut buffer = Vec::new();
         let error = render_ndjson_to(&mut buffer, &output).expect_err("unsupported ndjson");
         assert!(

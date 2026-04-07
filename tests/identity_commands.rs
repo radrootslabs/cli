@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -19,6 +20,9 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",
         "RADROOTS_ACCOUNT",
+        "RADROOTS_ACCOUNT_SECRET_BACKEND",
+        "RADROOTS_ACCOUNT_SECRET_FALLBACK",
+        "RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
@@ -28,6 +32,7 @@ fn cli_command_in(workdir: &Path) -> Command {
     ] {
         command.env_remove(key);
     }
+    command.env("RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE", "false");
     command
 }
 
@@ -59,6 +64,38 @@ fn account_new_json_creates_local_account_store_entry() {
 }
 
 #[test]
+fn account_new_encrypts_file_backed_secret_fallback_by_default() {
+    let dir = tempdir().expect("tempdir");
+
+    let output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+    let account_id = json["account"]["id"].as_str().expect("account id");
+    let secrets_dir = dir
+        .path()
+        .join("home/.local/share/radroots/accounts/secrets");
+    let envelope_path = secrets_dir.join(format!("{account_id}.secret.json"));
+
+    assert!(secrets_dir.join(".vault.key").exists());
+    assert!(envelope_path.exists());
+    assert!(!secrets_dir.join(format!("{account_id}.secret")).exists());
+
+    let envelope: Value = serde_json::from_slice(
+        fs::read(envelope_path)
+            .expect("read encrypted envelope")
+            .as_slice(),
+    )
+    .expect("envelope json");
+    assert_eq!(envelope["header"]["cipher"], "x_cha_cha20_poly1305");
+    assert_eq!(envelope["header"]["key_source"], "secret_vault_wrapped");
+    assert!(envelope["ciphertext"].is_array());
+}
+
+#[test]
 fn account_new_rejects_dry_run_without_creating_store_state() {
     let dir = tempdir().expect("tempdir");
     let store_path = dir
@@ -75,6 +112,22 @@ fn account_new_rejects_dry_run_without_creating_store_state() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
     assert!(stderr.contains("`account new` does not support --dry-run yet"));
+}
+
+#[test]
+fn account_new_rejects_plaintext_fallback_downgrade() {
+    let dir = tempdir().expect("tempdir");
+
+    let output = cli_command_in(dir.path())
+        .env("RADROOTS_ACCOUNT_SECRET_BACKEND", "host_vault")
+        .env("RADROOTS_ACCOUNT_SECRET_FALLBACK", "plaintext_file")
+        .args(["account", "new"])
+        .output()
+        .expect("run account new");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("may not silently downgrade to plaintext_file"));
 }
 
 #[test]

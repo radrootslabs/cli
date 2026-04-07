@@ -157,6 +157,20 @@ pub struct AccountRuntimeView {
     pub store_path: String,
     pub secrets_dir: String,
     pub legacy_identity_path: String,
+    pub secret_backend: AccountSecretRuntimeView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSecretRuntimeView {
+    pub configured_primary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configured_fallback: Option<String>,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_backend: Option<String>,
+    pub used_fallback: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1251,6 +1265,8 @@ pub struct LocalSignerStatusView {
     pub public_identity: IdentityPublicView,
     pub availability: String,
     pub secret_backed: bool,
+    pub backend: String,
+    pub used_fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

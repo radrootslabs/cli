@@ -20,6 +20,9 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",
         "RADROOTS_ACCOUNT",
+        "RADROOTS_ACCOUNT_SECRET_BACKEND",
+        "RADROOTS_ACCOUNT_SECRET_FALLBACK",
+        "RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
@@ -29,6 +32,7 @@ fn cli_command_in(workdir: &Path) -> Command {
     ] {
         command.env_remove(key);
     }
+    command.env("RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE", "false");
     command
 }
 

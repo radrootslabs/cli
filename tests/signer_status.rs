@@ -20,6 +20,9 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",
         "RADROOTS_ACCOUNT",
+        "RADROOTS_ACCOUNT_SECRET_BACKEND",
+        "RADROOTS_ACCOUNT_SECRET_FALLBACK",
+        "RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
@@ -29,6 +32,7 @@ fn cli_command_in(workdir: &Path) -> Command {
     ] {
         command.env_remove(key);
     }
+    command.env("RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE", "false");
     command
 }
 
@@ -57,6 +61,8 @@ fn signer_status_reports_local_ready_when_account_exists() {
     assert_eq!(json["reason"], Value::Null);
     assert_eq!(json["local"]["availability"], "secret_backed");
     assert_eq!(json["local"]["secret_backed"], true);
+    assert_eq!(json["local"]["backend"], "encrypted_file");
+    assert_eq!(json["local"]["used_fallback"], true);
 }
 
 #[test]
@@ -142,4 +148,32 @@ fn signer_status_honors_explicit_account_selector_over_default_account() {
     assert_eq!(json["state"], "ready");
     assert_eq!(json["account_id"], first_id);
     assert_eq!(json["local"]["account_id"], first_id);
+    assert_eq!(json["local"]["backend"], "encrypted_file");
+    assert_eq!(json["local"]["used_fallback"], true);
+}
+
+#[test]
+fn signer_status_reports_explicit_host_vault_fallback_selection_truthfully() {
+    let dir = tempdir().expect("tempdir");
+
+    let init = cli_command_in(dir.path())
+        .env("RADROOTS_ACCOUNT_SECRET_BACKEND", "host_vault")
+        .env("RADROOTS_ACCOUNT_SECRET_FALLBACK", "encrypted_file")
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(init.status.success());
+
+    let output = cli_command_in(dir.path())
+        .env("RADROOTS_ACCOUNT_SECRET_BACKEND", "host_vault")
+        .env("RADROOTS_ACCOUNT_SECRET_FALLBACK", "encrypted_file")
+        .args(["--json", "--signer", "local", "signer", "status"])
+        .output()
+        .expect("run signer status");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("signer json");
+    assert_eq!(json["state"], "ready");
+    assert_eq!(json["local"]["backend"], "encrypted_file");
+    assert_eq!(json["local"]["used_fallback"], true);
 }

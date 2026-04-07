@@ -17,8 +17,10 @@ path = "src/main.rs"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
 
 [dependencies]
+chacha20poly1305 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.5", features = ["derive"] }
+getrandom = "0.2"
 radroots-core = { path = "../lib/crates/core", features = ["std", "serde"] }
 radroots-events = { path = "../lib/crates/events" }
 radroots-events-codec = { path = "../lib/crates/events-codec", features = ["serde_json"] }
@@ -26,8 +28,10 @@ radroots-identity = { path = "../lib/crates/identity" }
 radroots-log = { path = "../lib/crates/log" }
 radroots-nostr-accounts = { path = "../lib/crates/nostr-accounts" }
 radroots-nostr-signer = { path = "../lib/crates/nostr-signer" }
+radroots-protected-store = { path = "../lib/crates/protected-store", features = ["std"] }
 radroots-replica-db = { path = "../lib/crates/replica-db" }
 radroots-replica-sync = { path = "../lib/crates/replica-sync" }
+radroots-secret-vault = { path = "../lib/crates/secret-vault", features = ["std", "os-keyring"] }
 radroots-sql-core = { path = "../lib/crates/sql-core", features = ["native"] }
 radroots-trade = { path = "../lib/crates/trade" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
@@ -36,6 +40,7 @@ serde_json = "1.0"
 thiserror = "2.0"
 toml = "0.8"
 url = "2.5"
+zeroize = "1.8"
 
 [dev-dependencies]
 assert_cmd = "2.0"

@@ -1,13 +1,18 @@
 use crate::domain::runtime::{
-    AccountRuntimeView, ConfigFilesRuntimeView, ConfigShowView, LocalRuntimeView,
-    LoggingRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
-    RpcRuntimeView, SignerRuntimeView,
+    AccountRuntimeView, AccountSecretRuntimeView, ConfigFilesRuntimeView, ConfigShowView,
+    LocalRuntimeView, LoggingRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView,
+    RelayRuntimeView, RpcRuntimeView, SignerRuntimeView,
 };
+use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
 
-pub fn show(config: &RuntimeConfig, logging: &LoggingState) -> ConfigShowView {
-    ConfigShowView {
+pub fn show(
+    config: &RuntimeConfig,
+    logging: &LoggingState,
+) -> Result<ConfigShowView, RuntimeError> {
+    let secret_backend = crate::runtime::accounts::secret_backend_status(config);
+    Ok(ConfigShowView {
         source: "local runtime state".to_owned(),
         output: OutputRuntimeView {
             format: config.output.format.as_str().to_owned(),
@@ -43,6 +48,14 @@ pub fn show(config: &RuntimeConfig, logging: &LoggingState) -> ConfigShowView {
             store_path: config.account.store_path.display().to_string(),
             secrets_dir: config.account.secrets_dir.display().to_string(),
             legacy_identity_path: config.identity.path.display().to_string(),
+            secret_backend: AccountSecretRuntimeView {
+                configured_primary: secret_backend.configured_primary,
+                configured_fallback: secret_backend.configured_fallback,
+                state: secret_backend.state,
+                active_backend: secret_backend.active_backend,
+                used_fallback: secret_backend.used_fallback,
+                reason: secret_backend.reason,
+            },
         },
         signer: SignerRuntimeView {
             mode: config.signer.backend.as_str().to_owned(),
@@ -66,5 +79,5 @@ pub fn show(config: &RuntimeConfig, logging: &LoggingState) -> ConfigShowView {
             url: config.rpc.url.clone(),
             bridge_auth_configured: config.rpc.bridge_bearer_token.is_some(),
         },
-    }
+    })
 }

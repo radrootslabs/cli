@@ -14,6 +14,36 @@ pub fn resolve_signer_status(config: &RuntimeConfig) -> SignerStatusView {
 }
 
 fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
+    let secret_backend = crate::runtime::accounts::secret_backend_status(config);
+    if secret_backend.state == "unavailable" {
+        return SignerStatusView {
+            mode: config.signer.backend.as_str().to_owned(),
+            state: "unavailable".to_owned(),
+            source: "local account store · local first".to_owned(),
+            account_id: None,
+            reason: secret_backend.reason,
+            local: None,
+            myc: None,
+        };
+    }
+
+    if secret_backend.state == "error" {
+        return SignerStatusView {
+            mode: config.signer.backend.as_str().to_owned(),
+            state: "error".to_owned(),
+            source: "local account store · local first".to_owned(),
+            account_id: None,
+            reason: secret_backend.reason,
+            local: None,
+            myc: None,
+        };
+    }
+
+    let backend = secret_backend
+        .active_backend
+        .unwrap_or_else(|| "unknown".to_owned());
+    let used_fallback = secret_backend.used_fallback;
+
     match crate::runtime::accounts::selected_account_status(config) {
         Ok(RadrootsNostrSelectedAccountStatus::Ready { account }) => {
             let capability = RadrootsNostrSignerCapability::LocalAccount(
@@ -40,6 +70,8 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                     ),
                     availability: local_availability(local.availability).to_owned(),
                     secret_backed: local.is_secret_backed(),
+                    backend: backend.clone(),
+                    used_fallback,
                 }),
                 myc: None,
             }
@@ -59,6 +91,8 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 availability: local_availability(RadrootsNostrLocalSignerAvailability::PublicOnly)
                     .to_owned(),
                 secret_backed: false,
+                backend: backend.clone(),
+                used_fallback,
             }),
             myc: None,
         },

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
 use serde::Deserialize;
 use url::Url;
 
@@ -28,6 +29,8 @@ const ENV_LOG_FILTER: &str = "RADROOTS_LOG_FILTER";
 const ENV_LOG_DIR: &str = "RADROOTS_LOG_DIR";
 const ENV_LOG_STDOUT: &str = "RADROOTS_LOG_STDOUT";
 const ENV_ACCOUNT: &str = "RADROOTS_ACCOUNT";
+const ENV_ACCOUNT_SECRET_BACKEND: &str = "RADROOTS_ACCOUNT_SECRET_BACKEND";
+const ENV_ACCOUNT_SECRET_FALLBACK: &str = "RADROOTS_ACCOUNT_SECRET_FALLBACK";
 const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
 const ENV_SIGNER: &str = "RADROOTS_SIGNER";
 const ENV_RELAYS: &str = "RADROOTS_RELAYS";
@@ -43,6 +46,8 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_LOG_DIR,
     ENV_LOG_STDOUT,
     ENV_ACCOUNT,
+    ENV_ACCOUNT_SECRET_BACKEND,
+    ENV_ACCOUNT_SECRET_FALLBACK,
     ENV_IDENTITY_PATH,
     ENV_SIGNER,
     ENV_RELAYS,
@@ -112,6 +117,8 @@ pub struct AccountConfig {
     pub selector: Option<String>,
     pub store_path: PathBuf,
     pub secrets_dir: PathBuf,
+    pub secret_backend: RadrootsSecretBackend,
+    pub secret_fallback: Option<RadrootsSecretBackend>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +282,15 @@ impl RuntimeConfig {
         let paths = resolve_paths(env)?;
         let workspace_config = load_cli_config_file(paths.workspace_config_path.as_path())?;
         let user_config = load_cli_config_file(paths.user_config_path.as_path())?;
+        let account_secret_backend = resolve_account_secret_backend(args, env, env_file)?
+            .unwrap_or(RadrootsSecretBackend::HostVault(
+                RadrootsHostVaultPolicy::desktop(),
+            ));
+        let account_secret_fallback = resolve_account_secret_fallback(args, env, env_file)?
+            .unwrap_or(match account_secret_backend {
+                RadrootsSecretBackend::HostVault(_) => Some(RadrootsSecretBackend::EncryptedFile),
+                _ => None,
+            });
         Ok(Self {
             output: OutputConfig {
                 format: resolve_output_format(args, env, env_file)?,
@@ -310,6 +326,8 @@ impl RuntimeConfig {
                     .or_else(|| env_value(env, env_file, &[ENV_ACCOUNT])),
                 store_path: paths.user_state_root.join("accounts/store.json"),
                 secrets_dir: paths.user_state_root.join("accounts/secrets"),
+                secret_backend: account_secret_backend,
+                secret_fallback: account_secret_fallback,
             },
             identity: IdentityConfig {
                 path: args
@@ -757,6 +775,54 @@ fn parse_signer_mode(value: String) -> Result<SignerBackend, RuntimeError> {
     }
 }
 
+fn resolve_account_secret_backend(
+    _args: &CliArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+) -> Result<Option<RadrootsSecretBackend>, RuntimeError> {
+    env_value_entry(env, env_file, &[ENV_ACCOUNT_SECRET_BACKEND])
+        .map(|(key, value)| parse_account_secret_backend(key.as_str(), value.as_str()))
+        .transpose()
+}
+
+fn resolve_account_secret_fallback(
+    _args: &CliArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+) -> Result<Option<Option<RadrootsSecretBackend>>, RuntimeError> {
+    env_value_entry(env, env_file, &[ENV_ACCOUNT_SECRET_FALLBACK])
+        .map(|(key, value)| parse_account_secret_fallback(key.as_str(), value.as_str()))
+        .transpose()
+}
+
+fn parse_account_secret_fallback(
+    key: &str,
+    value: &str,
+) -> Result<Option<RadrootsSecretBackend>, RuntimeError> {
+    if value.trim().eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+
+    parse_account_secret_backend(key, value).map(Some)
+}
+
+fn parse_account_secret_backend(
+    key: &str,
+    value: &str,
+) -> Result<RadrootsSecretBackend, RuntimeError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "host_vault" => Ok(RadrootsSecretBackend::HostVault(
+            RadrootsHostVaultPolicy::desktop(),
+        )),
+        "encrypted_file" => Ok(RadrootsSecretBackend::EncryptedFile),
+        "memory" => Ok(RadrootsSecretBackend::Memory),
+        "plaintext_file" => Ok(RadrootsSecretBackend::PlaintextFile),
+        other => Err(RuntimeError::Config(format!(
+            "{key} must be `host_vault`, `encrypted_file`, `memory`, `plaintext_file`, or `none` for fallback, got `{other}`"
+        ))),
+    }
+}
+
 fn parse_bool_env(key: &str, value: &str) -> Result<bool, RuntimeError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
@@ -776,6 +842,7 @@ mod tests {
     };
     use crate::cli::CliArgs;
     use clap::Parser;
+    use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -881,6 +948,10 @@ mod tests {
                 selector: None,
                 store_path: PathBuf::from("/home/tester/.local/share/radroots/accounts/store.json"),
                 secrets_dir: PathBuf::from("/home/tester/.local/share/radroots/accounts/secrets"),
+                secret_backend: RadrootsSecretBackend::HostVault(
+                    RadrootsHostVaultPolicy::desktop(),
+                ),
+                secret_fallback: Some(RadrootsSecretBackend::EncryptedFile),
             }
         );
         assert_eq!(resolved.signer.backend, SignerBackend::Local);
@@ -935,6 +1006,14 @@ mod tests {
         );
         assert!(resolved.logging.stdout);
         assert_eq!(resolved.account.selector.as_deref(), Some("acct_demo"));
+        assert_eq!(
+            resolved.account.secret_backend,
+            RadrootsSecretBackend::HostVault(RadrootsHostVaultPolicy::desktop())
+        );
+        assert_eq!(
+            resolved.account.secret_fallback,
+            Some(RadrootsSecretBackend::EncryptedFile)
+        );
         assert_eq!(resolved.identity.path, PathBuf::from("state/identity.json"));
         assert_eq!(resolved.signer.backend, SignerBackend::Myc);
         assert_eq!(

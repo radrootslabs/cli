@@ -43,7 +43,7 @@ pub fn dispatch(
         },
         Command::Config(config_command) => match &config_command.command {
             ConfigCommand::Show => Ok(CommandOutput::success(CommandView::ConfigShow(
-                runtime::show(config, logging),
+                runtime::show(config, logging)?,
             ))),
         },
         Command::Signer(signer) => match &signer.command {
