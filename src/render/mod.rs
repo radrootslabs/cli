@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
     LocalBackupView, LocalExportView, LocalInitView, LocalStatusView, NetStatusView, RelayListView,
+    SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -128,6 +129,18 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
                 render_myc_status(stdout, myc, false)?;
             }
         }
+        CommandView::SyncPull(view) => {
+            render_sync_action(stdout, view)?;
+        }
+        CommandView::SyncPush(view) => {
+            render_sync_action(stdout, view)?;
+        }
+        CommandView::SyncStatus(view) => {
+            render_sync_status(stdout, view)?;
+        }
+        CommandView::SyncWatch(view) => {
+            render_sync_watch(stdout, view)?;
+        }
     }
     Ok(())
 }
@@ -195,6 +208,22 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
+        CommandView::SyncPull(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::SyncPush(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::SyncStatus(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::SyncWatch(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
     }
     Ok(())
 }
@@ -216,6 +245,13 @@ fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<()
         CommandView::RelayList(view) => {
             for relay in &view.relays {
                 serde_json::to_writer(&mut *stdout, relay)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
+        CommandView::SyncWatch(view) => {
+            for frame in &view.frames {
+                serde_json::to_writer(&mut *stdout, frame)?;
                 writeln!(stdout)?;
             }
             Ok(())
@@ -429,6 +465,104 @@ fn render_net_status(stdout: &mut dyn Write, view: &NetStatusView) -> Result<(),
         rows.push(("active account id", account_id.as_str()));
     }
     render_pairs(stdout, "network", rows.as_slice())?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_sync_status(stdout: &mut dyn Write, view: &SyncStatusView) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        match view.state.as_str() {
+            "ready" => "activity · sync status",
+            _ => "activity · sync unconfigured",
+        },
+    )?;
+    let relay_count = view.relay_count.to_string();
+    let expected = view.queue.expected_count.to_string();
+    let pending = view.queue.pending_count.to_string();
+    render_pairs(
+        stdout,
+        "sync",
+        &[
+            ("status", view.state.as_str()),
+            ("freshness", view.freshness.display.as_str()),
+            ("pending", pending.as_str()),
+            ("expected", expected.as_str()),
+            ("relays", relay_count.as_str()),
+            ("publish policy", view.publish_policy.as_str()),
+            ("replica db", view.replica_db.as_str()),
+            ("local root", view.local_root.as_str()),
+        ],
+    )?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_sync_action(stdout: &mut dyn Write, view: &SyncActionView) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        format!("activity · sync {} {}", view.direction, view.state).as_str(),
+    )?;
+    let relay_count = view.relay_count.to_string();
+    let expected = view.queue.expected_count.to_string();
+    let pending = view.queue.pending_count.to_string();
+    render_pairs(
+        stdout,
+        "sync",
+        &[
+            ("direction", view.direction.as_str()),
+            ("status", view.state.as_str()),
+            ("freshness", view.freshness.display.as_str()),
+            ("pending", pending.as_str()),
+            ("expected", expected.as_str()),
+            ("relays", relay_count.as_str()),
+            ("publish policy", view.publish_policy.as_str()),
+            ("replica db", view.replica_db.as_str()),
+            ("local root", view.local_root.as_str()),
+        ],
+    )?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_sync_watch(stdout: &mut dyn Write, view: &SyncWatchView) -> Result<(), RuntimeError> {
+    write_context(stdout, "activity · sync watch")?;
+    if view.frames.is_empty() {
+        writeln!(stdout, "no sync frames collected")?;
+        writeln!(stdout)?;
+    } else {
+        let table = Table {
+            headers: &["frame", "status", "freshness", "pending", "relays"],
+            rows: view
+                .frames
+                .iter()
+                .map(|frame| {
+                    vec![
+                        frame.sequence.to_string(),
+                        frame.state.clone(),
+                        frame.freshness.display.clone(),
+                        frame.queue.pending_count.to_string(),
+                        frame.relay_count.to_string(),
+                    ]
+                })
+                .collect(),
+        };
+        render_table(stdout, &table)?;
+        writeln!(stdout)?;
+    }
+    writeln!(stdout, "interval ms: {}", view.interval_ms)?;
     if let Some(reason) = &view.reason {
         writeln!(stdout, "reason: {reason}")?;
     }
@@ -761,6 +895,10 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::NetStatus(_) => "net status",
         CommandView::RelayList(_) => "relay ls",
         CommandView::SignerStatus(_) => "signer status",
+        CommandView::SyncPull(_) => "sync pull",
+        CommandView::SyncPush(_) => "sync push",
+        CommandView::SyncStatus(_) => "sync status",
+        CommandView::SyncWatch(_) => "sync watch",
     }
 }
 

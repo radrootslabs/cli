@@ -6,6 +6,7 @@ pub mod net;
 pub mod relay;
 pub mod runtime;
 pub mod signer;
+pub mod sync;
 
 use crate::cli::{
     AccountCommand, Command, ConfigCommand, JobCommand, ListingCommand, LocalCommand, MycCommand,
@@ -84,10 +85,10 @@ pub fn dispatch(
             RpcCommand::Sessions => unimplemented_command("rpc sessions"),
         },
         Command::Sync(sync) => match &sync.command {
-            SyncCommand::Status => unimplemented_command("sync status"),
-            SyncCommand::Pull => unimplemented_command("sync pull"),
-            SyncCommand::Push => unimplemented_command("sync push"),
-            SyncCommand::Watch => unimplemented_command("sync watch"),
+            SyncCommand::Status => sync::status(config),
+            SyncCommand::Pull => sync::pull(config),
+            SyncCommand::Push => sync::push(config),
+            SyncCommand::Watch(args) => sync::watch(config, args),
         },
     }
 }

@@ -125,7 +125,7 @@ impl Command {
                 SyncCommand::Status => "sync status",
                 SyncCommand::Pull => "sync pull",
                 SyncCommand::Push => "sync push",
-                SyncCommand::Watch => "sync watch",
+                SyncCommand::Watch(_) => "sync watch",
             },
         }
     }
@@ -146,7 +146,7 @@ impl Command {
                 }) | Self::Order(OrderArgs {
                     command: OrderCommand::Ls | OrderCommand::History,
                 }) | Self::Sync(SyncArgs {
-                    command: SyncCommand::Watch,
+                    command: SyncCommand::Watch(_),
                 }) | Self::Find(_)
             ),
         }
@@ -301,7 +301,15 @@ pub enum SyncCommand {
     Status,
     Pull,
     Push,
-    Watch,
+    Watch(SyncWatchArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SyncWatchArgs {
+    #[arg(long)]
+    pub frames: usize,
+    #[arg(long, default_value_t = 1_000)]
+    pub interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -378,7 +386,7 @@ mod tests {
     use super::{
         AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, ListingCommand, LocalCommand,
         LocalExportFormatArg, MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand,
-        SignerCommand, SyncCommand,
+        SignerCommand, SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     use clap::Parser;
@@ -589,6 +597,29 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
+        let sync_watch = CliArgs::parse_from([
+            "radroots",
+            "sync",
+            "watch",
+            "--frames",
+            "2",
+            "--interval-ms",
+            "25",
+        ]);
+        match sync_watch.command {
+            Command::Sync(args) => match args.command {
+                SyncCommand::Watch(SyncWatchArgs {
+                    frames,
+                    interval_ms,
+                }) => {
+                    assert_eq!(frames, 2);
+                    assert_eq!(interval_ms, 25);
+                }
+                _ => panic!("unexpected sync subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
         let listing = CliArgs::parse_from(["radroots", "listing", "get", "lst_123"]);
         match listing.command {
             Command::Listing(args) => match args.command {
@@ -652,5 +683,12 @@ mod tests {
 
         let find = CliArgs::parse_from(["radroots", "find", "eggs"]);
         assert!(find.command.supports_output_format(OutputFormat::Ndjson));
+
+        let sync_watch = CliArgs::parse_from(["radroots", "sync", "watch", "--frames", "1"]);
+        assert!(
+            sync_watch
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
     }
 }

@@ -5,6 +5,7 @@ pub mod logging;
 pub mod myc;
 pub mod network;
 pub mod signer;
+pub mod sync;
 
 use std::process::ExitCode;
 

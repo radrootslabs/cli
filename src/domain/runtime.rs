@@ -82,6 +82,10 @@ pub enum CommandView {
     NetStatus(NetStatusView),
     RelayList(RelayListView),
     SignerStatus(SignerStatusView),
+    SyncPull(SyncActionView),
+    SyncPush(SyncActionView),
+    SyncStatus(SyncStatusView),
+    SyncWatch(SyncWatchView),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,6 +327,22 @@ pub struct LocalReplicaSyncView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SyncFreshnessView {
+    pub state: String,
+    pub display: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncQueueView {
+    pub expected_count: usize,
+    pub pending_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LocalBackupView {
     pub state: String,
     pub source: String,
@@ -421,6 +441,94 @@ impl NetStatusView {
             _ => CommandDisposition::Success,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncStatusView {
+    pub state: String,
+    pub source: String,
+    pub local_root: String,
+    pub replica_db: String,
+    pub relay_count: usize,
+    pub publish_policy: String,
+    pub freshness: SyncFreshnessView,
+    pub queue: SyncQueueView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl SyncStatusView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncActionView {
+    pub direction: String,
+    pub state: String,
+    pub source: String,
+    pub local_root: String,
+    pub replica_db: String,
+    pub relay_count: usize,
+    pub publish_policy: String,
+    pub freshness: SyncFreshnessView,
+    pub queue: SyncQueueView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl SyncActionView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncWatchView {
+    pub state: String,
+    pub source: String,
+    pub interval_ms: u64,
+    pub frames: Vec<SyncWatchFrameView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl SyncWatchView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncWatchFrameView {
+    pub sequence: usize,
+    pub observed_at: u64,
+    pub state: String,
+    pub relay_count: usize,
+    pub freshness: SyncFreshnessView,
+    pub queue: SyncQueueView,
 }
 
 #[derive(Debug, Clone, Serialize)]
