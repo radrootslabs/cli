@@ -74,7 +74,41 @@ fn myc_status_reports_unavailable_for_invalid_status_payload() {
 }
 
 #[test]
-fn signer_status_reports_myc_backend_details_when_configured() {
+fn myc_status_reports_degraded_service_as_external_unavailable() {
+    let _guard = myc_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let executable = write_fake_myc(
+        dir.path(),
+        successful_status_script(sample_status_payload(false).to_string()).as_str(),
+    );
+
+    let output = Command::cargo_bin("radroots")
+        .expect("binary")
+        .args([
+            "--json",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "myc",
+            "status",
+        ])
+        .output()
+        .expect("run myc status");
+
+    assert_eq!(output.status.code(), Some(4));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["state"], "degraded");
+    assert_eq!(json["service_status"], "degraded");
+    assert_eq!(json["ready"], false);
+    assert!(
+        json["reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("transport quorum is below target"))
+    );
+}
+
+#[test]
+fn signer_status_reports_degraded_myc_backend_as_external_unavailable() {
     let _guard = myc_test_guard();
     let dir = tempdir().expect("tempdir");
     let executable = write_fake_myc(
@@ -96,7 +130,7 @@ fn signer_status_reports_myc_backend_details_when_configured() {
         .output()
         .expect("run signer status");
 
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(4));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
     assert_eq!(json["backend"], "myc");

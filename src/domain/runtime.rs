@@ -30,6 +30,13 @@ impl CommandOutput {
         }
     }
 
+    pub fn internal_error(view: CommandView) -> Self {
+        Self {
+            disposition: CommandDisposition::InternalError,
+            view,
+        }
+    }
+
     pub fn exit_code(&self) -> ExitCode {
         self.disposition.exit_code()
     }
@@ -44,6 +51,7 @@ pub enum CommandDisposition {
     Success,
     Unconfigured,
     ExternalUnavailable,
+    InternalError,
 }
 
 impl CommandDisposition {
@@ -52,6 +60,7 @@ impl CommandDisposition {
             Self::Success => ExitCode::SUCCESS,
             Self::Unconfigured => ExitCode::from(3),
             Self::ExternalUnavailable => ExitCode::from(4),
+            Self::InternalError => ExitCode::from(1),
         }
     }
 }
@@ -154,7 +163,9 @@ impl SignerStatusView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "unconfigured" => CommandDisposition::Unconfigured,
+            "degraded" => CommandDisposition::ExternalUnavailable,
             "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
             _ => CommandDisposition::Success,
         }
     }
@@ -187,6 +198,7 @@ impl MycStatusView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "unconfigured" => CommandDisposition::Unconfigured,
+            "degraded" => CommandDisposition::ExternalUnavailable,
             "unavailable" => CommandDisposition::ExternalUnavailable,
             _ => CommandDisposition::Success,
         }

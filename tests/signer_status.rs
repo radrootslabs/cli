@@ -1,3 +1,4 @@
+use std::fs;
 use std::process::Command;
 
 use assert_cmd::prelude::*;
@@ -74,6 +75,39 @@ fn signer_status_reports_local_unconfigured_when_identity_is_missing() {
         json["reason"]
             .as_str()
             .is_some_and(|value| value.contains("local identity file was not found"))
+    );
+    assert_eq!(json["local"], Value::Null);
+}
+
+#[test]
+fn signer_status_reports_internal_error_for_invalid_identity_file() {
+    let dir = tempdir().expect("tempdir");
+    let identity_path = dir.path().join("invalid-identity.json");
+    fs::write(&identity_path, "{ not valid json").expect("write invalid identity");
+
+    let output = Command::cargo_bin("radroots")
+        .expect("binary")
+        .args([
+            "--json",
+            "--identity-path",
+            identity_path.to_str().expect("identity path"),
+            "--signer-backend",
+            "local",
+            "signer",
+            "status",
+        ])
+        .output()
+        .expect("run signer status");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["backend"], "local");
+    assert_eq!(json["state"], "error");
+    assert!(
+        json["reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("invalid identity JSON"))
     );
     assert_eq!(json["local"], Value::Null);
 }

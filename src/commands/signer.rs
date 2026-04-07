@@ -12,5 +12,8 @@ pub fn status(config: &RuntimeConfig) -> CommandOutput {
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::SignerStatus(view))
         }
+        CommandDisposition::InternalError => {
+            CommandOutput::internal_error(CommandView::SignerStatus(view))
+        }
     }
 }

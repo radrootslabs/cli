@@ -46,5 +46,8 @@ pub fn show(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::IdentityShow(view))
         }
+        CommandDisposition::InternalError => {
+            CommandOutput::internal_error(CommandView::IdentityShow(view))
+        }
     })
 }
