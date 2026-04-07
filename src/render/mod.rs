@@ -1,8 +1,10 @@
 use std::io::{self, Write};
 
-use crate::domain::runtime::{CommandOutput, CommandView};
+use crate::domain::runtime::{CommandOutput, CommandView, DoctorCheckView, DoctorView};
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
+
+const THIN_RULE: &str = "────────────────────────────────────────────────────";
 
 pub fn render_output(output: &CommandOutput, config: &OutputConfig) -> Result<(), RuntimeError> {
     match config.format {
@@ -60,40 +62,10 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
             render_myc_status(stdout, view)?;
         }
         CommandView::ConfigShow(view) => {
-            writeln!(stdout, "config")?;
-            writeln!(stdout, "output")?;
-            writeln!(stdout, "  format: {}", view.output.format)?;
-            writeln!(stdout, "  verbosity: {}", view.output.verbosity)?;
-            writeln!(stdout, "  color: {}", yes_no(view.output.color))?;
-            writeln!(stdout, "  dry run: {}", yes_no(view.output.dry_run))?;
-            writeln!(stdout, "paths")?;
-            writeln!(stdout, "  user config: {}", view.paths.user_config_path)?;
-            writeln!(
-                stdout,
-                "  workspace config: {}",
-                view.paths.workspace_config_path
-            )?;
-            writeln!(stdout, "  user state root: {}", view.paths.user_state_root)?;
-            writeln!(stdout, "logging")?;
-            writeln!(
-                stdout,
-                "  initialized: {}",
-                yes_no(view.logging.initialized)
-            )?;
-            writeln!(stdout, "  filter: {}", view.logging.filter)?;
-            writeln!(stdout, "  stdout: {}", yes_no(view.logging.stdout))?;
-            if let Some(directory) = &view.logging.directory {
-                writeln!(stdout, "  directory: {directory}")?;
-            }
-            if let Some(current_file) = &view.logging.current_file {
-                writeln!(stdout, "  current file: {current_file}")?;
-            }
-            writeln!(stdout, "account")?;
-            writeln!(stdout, "  identity path: {}", view.account.identity_path)?;
-            writeln!(stdout, "signer")?;
-            writeln!(stdout, "  backend: {}", view.signer.backend)?;
-            writeln!(stdout, "myc")?;
-            writeln!(stdout, "  executable: {}", view.myc.executable)?;
+            render_config_show(stdout, view)?;
+        }
+        CommandView::Doctor(view) => {
+            render_doctor(stdout, view)?;
         }
         CommandView::SignerStatus(view) => {
             writeln!(stdout, "signer")?;
@@ -136,6 +108,10 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
+        CommandView::Doctor(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandView::SignerStatus(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
@@ -158,6 +134,126 @@ fn render_ndjson_to(_stdout: &mut dyn Write, output: &CommandOutput) -> Result<(
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+fn present_absent(value: bool) -> &'static str {
+    if value { "present" } else { "absent" }
+}
+
+fn render_config_show(
+    stdout: &mut dyn Write,
+    view: &crate::domain::runtime::ConfigShowView,
+) -> Result<(), RuntimeError> {
+    write_context(stdout, "config · effective")?;
+    render_pairs(
+        stdout,
+        "output",
+        &[
+            ("format", view.output.format.as_str()),
+            ("verbosity", view.output.verbosity.as_str()),
+            ("color", yes_no(view.output.color)),
+            ("dry run", yes_no(view.output.dry_run)),
+        ],
+    )?;
+    let user_config = format!(
+        "{} · {}",
+        present_absent(view.config_files.user_present),
+        view.paths.user_config_path
+    );
+    let workspace_config = format!(
+        "{} · {}",
+        present_absent(view.config_files.workspace_present),
+        view.paths.workspace_config_path
+    );
+    render_pairs(
+        stdout,
+        "config roots",
+        &[
+            ("user config", user_config.as_str()),
+            ("workspace config", workspace_config.as_str()),
+            ("user state root", view.paths.user_state_root.as_str()),
+        ],
+    )?;
+
+    let mut logging_rows = vec![
+        ("filter", view.logging.filter.as_str()),
+        ("stdout", yes_no(view.logging.stdout)),
+    ];
+    if let Some(directory) = &view.logging.directory {
+        logging_rows.push(("directory", directory.as_str()));
+    }
+    if let Some(current_file) = &view.logging.current_file {
+        logging_rows.push(("file", current_file.as_str()));
+    }
+    render_pairs(stdout, "logging", logging_rows.as_slice())?;
+    render_pairs(
+        stdout,
+        "account",
+        &[("identity path", view.account.identity_path.as_str())],
+    )?;
+    render_pairs(
+        stdout,
+        "signer",
+        &[("backend", view.signer.backend.as_str())],
+    )?;
+    render_pairs(
+        stdout,
+        "myc",
+        &[("executable", view.myc.executable.as_str())],
+    )?;
+    writeln!(stdout, "source: {}", view.source)?;
+    Ok(())
+}
+
+fn render_doctor(stdout: &mut dyn Write, view: &DoctorView) -> Result<(), RuntimeError> {
+    write_context(stdout, "system · checks")?;
+    let table = Table {
+        headers: &["check", "status", "detail"],
+        rows: view.checks.iter().map(doctor_row).collect(),
+    };
+    render_table(stdout, &table)?;
+    if !view.actions.is_empty() {
+        writeln!(stdout)?;
+        writeln!(stdout, "actions")?;
+        for action in &view.actions {
+            writeln!(stdout, "  › {action}")?;
+        }
+    }
+    writeln!(stdout)?;
+    writeln!(stdout, "source: {}", view.source)?;
+    Ok(())
+}
+
+fn doctor_row(check: &DoctorCheckView) -> Vec<String> {
+    vec![
+        check.name.clone(),
+        check.status.clone(),
+        check.detail.clone(),
+    ]
+}
+
+fn write_context(stdout: &mut dyn Write, line: &str) -> Result<(), RuntimeError> {
+    writeln!(stdout, "{line}")?;
+    writeln!(stdout, "{THIN_RULE}")?;
+    Ok(())
+}
+
+fn render_pairs(
+    stdout: &mut dyn Write,
+    heading: &str,
+    rows: &[(&str, &str)],
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "{heading}")?;
+    let label_width = rows
+        .iter()
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or_default();
+    for (label, value) in rows {
+        writeln!(stdout, "  {label:label_width$}  {value}")?;
+    }
+    writeln!(stdout)?;
+    Ok(())
 }
 
 fn render_local_signer(
@@ -280,6 +376,7 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::AccountNew(_) => "account new",
         CommandView::AccountWhoami(_) => "account whoami",
         CommandView::ConfigShow(_) => "config show",
+        CommandView::Doctor(_) => "doctor",
         CommandView::MycStatus(_) => "myc status",
         CommandView::SignerStatus(_) => "signer status",
     }
@@ -289,7 +386,9 @@ fn human_command_name(view: &CommandView) -> &'static str {
 mod tests {
     use super::{Table, render_human_to, render_ndjson_to, render_table};
     use crate::commands::runtime;
-    use crate::domain::runtime::{CommandOutput, CommandView, MycStatusView};
+    use crate::domain::runtime::{
+        CommandOutput, CommandView, DoctorCheckView, DoctorView, MycStatusView,
+    };
     use crate::runtime::config::{
         IdentityConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
         RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
@@ -401,6 +500,37 @@ mod tests {
                 .to_string()
                 .contains("`config show` does not support --ndjson")
         );
+    }
+
+    #[test]
+    fn human_render_doctor_uses_check_table_and_actions() {
+        let output = CommandOutput::unconfigured(CommandView::Doctor(DoctorView {
+            ok: false,
+            state: "warn".to_owned(),
+            checks: vec![
+                DoctorCheckView {
+                    name: "config".to_owned(),
+                    status: "ok".to_owned(),
+                    detail: "defaults active".to_owned(),
+                },
+                DoctorCheckView {
+                    name: "account".to_owned(),
+                    status: "warn".to_owned(),
+                    detail: "no local account at identity.json".to_owned(),
+                },
+            ],
+            source: "local diagnostics".to_owned(),
+            actions: vec!["radroots account new".to_owned()],
+        }));
+        let mut buffer = Vec::new();
+        render_human_to(&mut buffer, &output).expect("render human");
+        let rendered = String::from_utf8(buffer).expect("utf8");
+        assert!(rendered.contains("system · checks"));
+        assert!(rendered.contains("check"));
+        assert!(rendered.contains("account  warn"));
+        assert!(rendered.contains("actions"));
+        assert!(rendered.contains("› radroots account new"));
+        assert!(rendered.contains("source: local diagnostics"));
     }
 
     #[test]

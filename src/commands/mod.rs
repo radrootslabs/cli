@@ -1,3 +1,4 @@
+pub mod doctor;
 pub mod identity;
 pub mod myc;
 pub mod runtime;
@@ -37,7 +38,7 @@ pub fn dispatch(
         Command::Signer(signer) => match &signer.command {
             SignerCommand::Status => Ok(signer::status(config)),
         },
-        Command::Doctor => unimplemented_command("doctor"),
+        Command::Doctor => Ok(doctor::report(config, logging)),
         Command::Find(_) => unimplemented_command("find"),
         Command::Job(job) => match &job.command {
             JobCommand::Ls => unimplemented_command("job ls"),

@@ -70,13 +70,16 @@ pub enum CommandView {
     AccountNew(AccountNewView),
     AccountWhoami(AccountWhoamiView),
     ConfigShow(ConfigShowView),
+    Doctor(DoctorView),
     MycStatus(MycStatusView),
     SignerStatus(SignerStatusView),
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ConfigShowView {
+    pub source: String,
     pub output: OutputRuntimeView,
+    pub config_files: ConfigFilesRuntimeView,
     pub paths: PathsRuntimeView,
     pub logging: LoggingRuntimeView,
     pub account: AccountRuntimeView,
@@ -90,6 +93,12 @@ pub struct OutputRuntimeView {
     pub verbosity: String,
     pub color: bool,
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigFilesRuntimeView {
+    pub user_present: bool,
+    pub workspace_present: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +130,23 @@ pub struct SignerRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct MycRuntimeView {
     pub executable: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorView {
+    pub ok: bool,
+    pub state: String,
+    pub checks: Vec<DoctorCheckView>,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorCheckView {
+    pub name: String,
+    pub status: String,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

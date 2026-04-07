@@ -40,6 +40,7 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["source"], "local runtime state");
     assert_eq!(json["output"]["format"], "json");
     assert_eq!(json["output"]["verbosity"], "normal");
     assert_eq!(json["output"]["color"], true);
@@ -70,6 +71,8 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["logging"]["initialized"], true);
     assert_eq!(json["logging"]["stdout"], false);
     assert_eq!(json["logging"]["directory"], Value::Null);
+    assert_eq!(json["config_files"]["user_present"], false);
+    assert_eq!(json["config_files"]["workspace_present"], false);
     assert_eq!(json["account"]["identity_path"], "identity.json");
     assert_eq!(json["signer"]["backend"], "local");
     assert_eq!(json["myc"]["executable"], "myc");

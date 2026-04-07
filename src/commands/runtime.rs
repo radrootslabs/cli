@@ -1,17 +1,22 @@
 use crate::domain::runtime::{
-    AccountRuntimeView, ConfigShowView, LoggingRuntimeView, MycRuntimeView, OutputRuntimeView,
-    PathsRuntimeView, SignerRuntimeView,
+    AccountRuntimeView, ConfigFilesRuntimeView, ConfigShowView, LoggingRuntimeView, MycRuntimeView,
+    OutputRuntimeView, PathsRuntimeView, SignerRuntimeView,
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
 
 pub fn show(config: &RuntimeConfig, logging: &LoggingState) -> ConfigShowView {
     ConfigShowView {
+        source: "local runtime state".to_owned(),
         output: OutputRuntimeView {
             format: config.output.format.as_str().to_owned(),
             verbosity: config.output.verbosity.as_str().to_owned(),
             color: config.output.color,
             dry_run: config.output.dry_run,
+        },
+        config_files: ConfigFilesRuntimeView {
+            user_present: config.paths.user_config_path.exists(),
+            workspace_present: config.paths.workspace_config_path.exists(),
         },
         paths: PathsRuntimeView {
             user_config_path: config.paths.user_config_path.display().to_string(),
