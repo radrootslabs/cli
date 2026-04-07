@@ -97,6 +97,22 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["relay"]["count"], 0);
     assert_eq!(json["relay"]["publish_policy"], "any");
     assert_eq!(json["relay"]["source"], "defaults · local first");
+    assert_eq!(
+        json["local"]["root"],
+        dir.path()
+            .join("home")
+            .join(".local/share/radroots/replica")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        json["local"]["replica_db_path"],
+        dir.path()
+            .join("home")
+            .join(".local/share/radroots/replica/replica.sqlite")
+            .display()
+            .to_string()
+    );
     assert_eq!(json["myc"]["executable"], "myc");
 }
 

@@ -74,6 +74,10 @@ pub enum CommandView {
     AccountWhoami(AccountWhoamiView),
     ConfigShow(ConfigShowView),
     Doctor(DoctorView),
+    LocalBackup(LocalBackupView),
+    LocalExport(LocalExportView),
+    LocalInit(LocalInitView),
+    LocalStatus(LocalStatusView),
     MycStatus(MycStatusView),
     NetStatus(NetStatusView),
     RelayList(RelayListView),
@@ -90,6 +94,7 @@ pub struct ConfigShowView {
     pub account: AccountRuntimeView,
     pub signer: SignerRuntimeView,
     pub relay: RelayRuntimeView,
+    pub local: LocalRuntimeView,
     pub myc: MycRuntimeView,
 }
 
@@ -143,6 +148,14 @@ pub struct RelayRuntimeView {
     pub urls: Vec<String>,
     pub publish_policy: String,
     pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalRuntimeView {
+    pub root: String,
+    pub replica_db_path: String,
+    pub backups_dir: String,
+    pub exports_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -254,6 +267,106 @@ pub struct AccountListView {
     pub accounts: Vec<AccountSummaryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalInitView {
+    pub state: String,
+    pub source: String,
+    pub local_root: String,
+    pub replica_db: String,
+    pub path: String,
+    pub replica_db_version: String,
+    pub backup_format_version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalStatusView {
+    pub state: String,
+    pub source: String,
+    pub local_root: String,
+    pub replica_db: String,
+    pub path: String,
+    pub replica_db_version: String,
+    pub backup_format_version: String,
+    pub schema_hash: String,
+    pub counts: LocalReplicaCountsView,
+    pub sync: LocalReplicaSyncView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl LocalStatusView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalReplicaCountsView {
+    pub farms: u64,
+    pub listings: u64,
+    pub profiles: u64,
+    pub relays: u64,
+    pub event_states: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalReplicaSyncView {
+    pub expected_count: usize,
+    pub pending_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBackupView {
+    pub state: String,
+    pub source: String,
+    pub file: String,
+    pub size_bytes: u64,
+    pub backup_format_version: String,
+    pub replica_db_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl LocalBackupView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalExportView {
+    pub state: String,
+    pub source: String,
+    pub format: String,
+    pub file: String,
+    pub records: usize,
+    pub export_version: String,
+    pub schema_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl LocalExportView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

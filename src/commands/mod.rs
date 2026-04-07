@@ -1,5 +1,6 @@
 pub mod doctor;
 pub mod identity;
+pub mod local;
 pub mod myc;
 pub mod net;
 pub mod relay;
@@ -58,10 +59,10 @@ pub fn dispatch(
             ListingCommand::Archive(_) => unimplemented_command("listing archive"),
         },
         Command::Local(local) => match &local.command {
-            LocalCommand::Init => unimplemented_command("local init"),
-            LocalCommand::Status => unimplemented_command("local status"),
-            LocalCommand::Export => unimplemented_command("local export"),
-            LocalCommand::Backup => unimplemented_command("local backup"),
+            LocalCommand::Init => local::init(config),
+            LocalCommand::Status => local::status(config),
+            LocalCommand::Export(args) => local::export(config, args),
+            LocalCommand::Backup(args) => local::backup(config, args),
         },
         Command::Net(net) => match &net.command {
             NetCommand::Status => net::status(config),

@@ -14,6 +14,10 @@ const DEFAULT_ENV_PATH: &str = ".env";
 const DEFAULT_WORKSPACE_CONFIG_PATH: &str = ".radroots/config.toml";
 const DEFAULT_USER_CONFIG_PATH: &str = ".config/radroots/config.toml";
 const DEFAULT_USER_STATE_ROOT: &str = ".local/share/radroots";
+const DEFAULT_LOCAL_STATE_DIR: &str = "replica";
+const DEFAULT_LOCAL_DB_FILE: &str = "replica.sqlite";
+const DEFAULT_LOCAL_BACKUPS_DIR: &str = "backups";
+const DEFAULT_LOCAL_EXPORTS_DIR: &str = "exports";
 const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
 const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
 const ENV_CLI_LOG_FILTER: &str = "RADROOTS_CLI_LOGGING_FILTER";
@@ -167,6 +171,14 @@ pub struct RelayConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalConfig {
+    pub root: PathBuf,
+    pub replica_db_path: PathBuf,
+    pub backups_dir: PathBuf,
+    pub exports_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MycConfig {
     pub executable: PathBuf,
 }
@@ -180,6 +192,7 @@ pub struct RuntimeConfig {
     pub identity: IdentityConfig,
     pub signer: SignerConfig,
     pub relay: RelayConfig,
+    pub local: LocalConfig,
     pub myc: MycConfig,
 }
 
@@ -303,6 +316,21 @@ impl RuntimeConfig {
                 user_config.as_ref(),
                 workspace_config.as_ref(),
             )?,
+            local: LocalConfig {
+                root: paths.user_state_root.join(DEFAULT_LOCAL_STATE_DIR),
+                replica_db_path: paths
+                    .user_state_root
+                    .join(DEFAULT_LOCAL_STATE_DIR)
+                    .join(DEFAULT_LOCAL_DB_FILE),
+                backups_dir: paths
+                    .user_state_root
+                    .join(DEFAULT_LOCAL_STATE_DIR)
+                    .join(DEFAULT_LOCAL_BACKUPS_DIR),
+                exports_dir: paths
+                    .user_state_root
+                    .join(DEFAULT_LOCAL_STATE_DIR)
+                    .join(DEFAULT_LOCAL_EXPORTS_DIR),
+            },
             myc: MycConfig {
                 executable: args
                     .myc_executable

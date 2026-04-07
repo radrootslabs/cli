@@ -1,6 +1,7 @@
 use crate::domain::runtime::{
-    AccountRuntimeView, ConfigFilesRuntimeView, ConfigShowView, LoggingRuntimeView, MycRuntimeView,
-    OutputRuntimeView, PathsRuntimeView, RelayRuntimeView, SignerRuntimeView,
+    AccountRuntimeView, ConfigFilesRuntimeView, ConfigShowView, LocalRuntimeView,
+    LoggingRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
+    SignerRuntimeView,
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
@@ -51,6 +52,12 @@ pub fn show(config: &RuntimeConfig, logging: &LoggingState) -> ConfigShowView {
             urls: config.relay.urls.clone(),
             publish_policy: config.relay.publish_policy.as_str().to_owned(),
             source: config.relay.source.as_str().to_owned(),
+        },
+        local: LocalRuntimeView {
+            root: config.local.root.display().to_string(),
+            replica_db_path: config.local.replica_db_path.display().to_string(),
+            backups_dir: config.local.backups_dir.display().to_string(),
+            exports_dir: config.local.exports_dir.display().to_string(),
         },
         myc: MycRuntimeView {
             executable: config.myc.executable.display().to_string(),

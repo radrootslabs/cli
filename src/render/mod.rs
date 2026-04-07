@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
-    NetStatusView, RelayListView,
+    LocalBackupView, LocalExportView, LocalInitView, LocalStatusView, NetStatusView, RelayListView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -81,6 +81,18 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         CommandView::Doctor(view) => {
             render_doctor(stdout, view)?;
         }
+        CommandView::LocalBackup(view) => {
+            render_local_backup(stdout, view)?;
+        }
+        CommandView::LocalExport(view) => {
+            render_local_export(stdout, view)?;
+        }
+        CommandView::LocalInit(view) => {
+            render_local_init(stdout, view)?;
+        }
+        CommandView::LocalStatus(view) => {
+            render_local_status(stdout, view)?;
+        }
         CommandView::RelayList(view) => {
             render_relay_list(stdout, view)?;
         }
@@ -156,6 +168,22 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::Doctor(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::LocalBackup(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::LocalExport(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::LocalInit(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::LocalStatus(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -308,6 +336,16 @@ fn render_config_show(
     )?;
     render_pairs(
         stdout,
+        "local",
+        &[
+            ("root", view.local.root.as_str()),
+            ("replica db", view.local.replica_db_path.as_str()),
+            ("backups dir", view.local.backups_dir.as_str()),
+            ("exports dir", view.local.exports_dir.as_str()),
+        ],
+    )?;
+    render_pairs(
+        stdout,
         "myc",
         &[("executable", view.myc.executable.as_str())],
     )?;
@@ -391,6 +429,117 @@ fn render_net_status(stdout: &mut dyn Write, view: &NetStatusView) -> Result<(),
         rows.push(("active account id", account_id.as_str()));
     }
     render_pairs(stdout, "network", rows.as_slice())?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_local_init(stdout: &mut dyn Write, view: &LocalInitView) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("local · {}", view.state).as_str())?;
+    render_pairs(
+        stdout,
+        "local",
+        &[
+            ("replica db", view.replica_db.as_str()),
+            ("path", view.path.as_str()),
+            ("local root", view.local_root.as_str()),
+            ("replica db version", view.replica_db_version.as_str()),
+            ("backup format version", view.backup_format_version.as_str()),
+        ],
+    )?;
+    writeln!(stdout, "source: {}", view.source)?;
+    Ok(())
+}
+
+fn render_local_status(stdout: &mut dyn Write, view: &LocalStatusView) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        match view.state.as_str() {
+            "ready" => "local · status",
+            _ => "local · unconfigured",
+        },
+    )?;
+    let mut rows = vec![
+        ("replica db", view.replica_db.as_str()),
+        ("path", view.path.as_str()),
+        ("local root", view.local_root.as_str()),
+    ];
+    if view.state == "ready" {
+        rows.push(("replica db version", view.replica_db_version.as_str()));
+        rows.push(("backup format version", view.backup_format_version.as_str()));
+        rows.push(("schema hash", view.schema_hash.as_str()));
+    }
+    render_pairs(stdout, "local", rows.as_slice())?;
+    if view.state == "ready" {
+        let sync_expected = view.sync.expected_count.to_string();
+        let sync_pending = view.sync.pending_count.to_string();
+        render_pairs(
+            stdout,
+            "sync",
+            &[
+                ("expected", sync_expected.as_str()),
+                ("pending", sync_pending.as_str()),
+            ],
+        )?;
+        let farms = view.counts.farms.to_string();
+        let listings = view.counts.listings.to_string();
+        let profiles = view.counts.profiles.to_string();
+        let relays = view.counts.relays.to_string();
+        let event_states = view.counts.event_states.to_string();
+        render_pairs(
+            stdout,
+            "counts",
+            &[
+                ("farms", farms.as_str()),
+                ("listings", listings.as_str()),
+                ("profiles", profiles.as_str()),
+                ("relays", relays.as_str()),
+                ("event states", event_states.as_str()),
+            ],
+        )?;
+    }
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_local_backup(stdout: &mut dyn Write, view: &LocalBackupView) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("local · {}", view.state).as_str())?;
+    let size_bytes = view.size_bytes.to_string();
+    let mut rows = vec![("file", view.file.as_str())];
+    if view.state != "unconfigured" {
+        rows.push(("size bytes", size_bytes.as_str()));
+        rows.push(("backup format version", view.backup_format_version.as_str()));
+        rows.push(("replica db version", view.replica_db_version.as_str()));
+    }
+    render_pairs(stdout, "backup", rows.as_slice())?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_local_export(stdout: &mut dyn Write, view: &LocalExportView) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("local · {}", view.state).as_str())?;
+    let records = view.records.to_string();
+    let mut rows = vec![
+        ("format", view.format.as_str()),
+        ("file", view.file.as_str()),
+    ];
+    if view.state != "unconfigured" {
+        rows.push(("records", records.as_str()));
+        rows.push(("export version", view.export_version.as_str()));
+        rows.push(("schema hash", view.schema_hash.as_str()));
+    }
+    render_pairs(stdout, "export", rows.as_slice())?;
     if let Some(reason) = &view.reason {
         writeln!(stdout, "reason: {reason}")?;
     }
@@ -604,6 +753,10 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::AccountWhoami(_) => "account whoami",
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
+        CommandView::LocalBackup(_) => "local backup",
+        CommandView::LocalExport(_) => "local export",
+        CommandView::LocalInit(_) => "local init",
+        CommandView::LocalStatus(_) => "local status",
         CommandView::MycStatus(_) => "myc status",
         CommandView::NetStatus(_) => "net status",
         CommandView::RelayList(_) => "relay ls",
@@ -620,9 +773,9 @@ mod tests {
         RelayEntryView, RelayListView,
     };
     use crate::runtime::config::{
-        AccountConfig, IdentityConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RuntimeConfig,
-        SignerBackend, SignerConfig, Verbosity,
+        AccountConfig, IdentityConfig, LocalConfig, LoggingConfig, MycConfig, OutputConfig,
+        OutputFormat, PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy,
+        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
 
@@ -662,6 +815,13 @@ mod tests {
                     publish_policy: RelayPublishPolicy::Any,
                     source: RelayConfigSource::WorkspaceConfig,
                 },
+                local: LocalConfig {
+                    root: "/home/tester/.local/share/radroots/replica".into(),
+                    replica_db_path: "/home/tester/.local/share/radroots/replica/replica.sqlite"
+                        .into(),
+                    backups_dir: "/home/tester/.local/share/radroots/replica/backups".into(),
+                    exports_dir: "/home/tester/.local/share/radroots/replica/exports".into(),
+                },
                 myc: MycConfig {
                     executable: "myc".into(),
                 },
@@ -684,6 +844,11 @@ mod tests {
         );
         assert_eq!(view.relay.count, 2);
         assert_eq!(view.relay.publish_policy, "any");
+        assert!(
+            view.local
+                .replica_db_path
+                .ends_with(".local/share/radroots/replica/replica.sqlite")
+        );
     }
 
     #[test]
@@ -742,6 +907,13 @@ mod tests {
                     urls: Vec::new(),
                     publish_policy: RelayPublishPolicy::Any,
                     source: RelayConfigSource::Defaults,
+                },
+                local: LocalConfig {
+                    root: "/home/tester/.local/share/radroots/replica".into(),
+                    replica_db_path: "/home/tester/.local/share/radroots/replica/replica.sqlite"
+                        .into(),
+                    backups_dir: "/home/tester/.local/share/radroots/replica/backups".into(),
+                    exports_dir: "/home/tester/.local/share/radroots/replica/exports".into(),
                 },
                 myc: MycConfig {
                     executable: "myc".into(),

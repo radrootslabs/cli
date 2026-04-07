@@ -93,8 +93,8 @@ impl Command {
             Self::Local(local) => match local.command {
                 LocalCommand::Init => "local init",
                 LocalCommand::Status => "local status",
-                LocalCommand::Export => "local export",
-                LocalCommand::Backup => "local backup",
+                LocalCommand::Export(_) => "local export",
+                LocalCommand::Backup(_) => "local backup",
             },
             Self::Myc(myc) => match myc.command {
                 MycCommand::Status => "myc status",
@@ -158,7 +158,7 @@ impl Command {
             Self::Account(AccountArgs {
                 command: AccountCommand::New | AccountCommand::Use(_),
             }) | Self::Local(LocalArgs {
-                command: LocalCommand::Init | LocalCommand::Export | LocalCommand::Backup,
+                command: LocalCommand::Init | LocalCommand::Export(_) | LocalCommand::Backup(_),
             }) | Self::Sync(SyncArgs {
                 command: SyncCommand::Pull | SyncCommand::Push,
             }) | Self::Listing(ListingArgs {
@@ -257,8 +257,37 @@ pub struct LocalArgs {
 pub enum LocalCommand {
     Init,
     Status,
-    Export,
-    Backup,
+    Export(LocalExportArgs),
+    Backup(LocalBackupArgs),
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum LocalExportFormatArg {
+    Json,
+    Ndjson,
+}
+
+impl LocalExportFormatArg {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Ndjson => "ndjson",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct LocalExportArgs {
+    #[arg(long)]
+    pub format: LocalExportFormatArg,
+    #[arg(long)]
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct LocalBackupArgs {
+    #[arg(long)]
+    pub output: PathBuf,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -348,7 +377,8 @@ pub struct RecordKeyArgs {
 mod tests {
     use super::{
         AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, ListingCommand, LocalCommand,
-        MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand, SignerCommand, SyncCommand,
+        LocalExportFormatArg, MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand,
+        SignerCommand, SyncCommand,
     };
     use crate::runtime::config::OutputFormat;
     use clap::Parser;
@@ -525,6 +555,26 @@ mod tests {
         match local.command {
             Command::Local(args) => match args.command {
                 LocalCommand::Init => {}
+                _ => panic!("unexpected local subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let local_export = CliArgs::parse_from([
+            "radroots",
+            "local",
+            "export",
+            "--format",
+            "ndjson",
+            "--output",
+            "replica.ndjson",
+        ]);
+        match local_export.command {
+            Command::Local(args) => match args.command {
+                LocalCommand::Export(export) => {
+                    assert!(matches!(export.format, LocalExportFormatArg::Ndjson));
+                    assert_eq!(export.output.to_str(), Some("replica.ndjson"));
+                }
                 _ => panic!("unexpected local subcommand"),
             },
             _ => panic!("unexpected command variant"),
