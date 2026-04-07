@@ -75,6 +75,8 @@ pub enum CommandView {
     ConfigShow(ConfigShowView),
     Doctor(DoctorView),
     MycStatus(MycStatusView),
+    NetStatus(NetStatusView),
+    RelayList(RelayListView),
     SignerStatus(SignerStatusView),
 }
 
@@ -87,6 +89,7 @@ pub struct ConfigShowView {
     pub logging: LoggingRuntimeView,
     pub account: AccountRuntimeView,
     pub signer: SignerRuntimeView,
+    pub relay: RelayRuntimeView,
     pub myc: MycRuntimeView,
 }
 
@@ -132,6 +135,14 @@ pub struct AccountRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct SignerRuntimeView {
     pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RelayRuntimeView {
+    pub count: usize,
+    pub urls: Vec<String>,
+    pub publish_policy: String,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -243,6 +254,60 @@ pub struct AccountListView {
     pub accounts: Vec<AccountSummaryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RelayListView {
+    pub state: String,
+    pub source: String,
+    pub publish_policy: String,
+    pub count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub relays: Vec<RelayEntryView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl RelayListView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RelayEntryView {
+    pub url: String,
+    pub read: bool,
+    pub write: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NetStatusView {
+    pub state: String,
+    pub source: String,
+    pub session: String,
+    pub relay_count: usize,
+    pub publish_policy: String,
+    pub signer_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl NetStatusView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

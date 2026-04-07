@@ -2,6 +2,7 @@ use std::io::{self, Write};
 
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
+    NetStatusView, RelayListView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -71,11 +72,17 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         CommandView::MycStatus(view) => {
             render_myc_status(stdout, view, true)?;
         }
+        CommandView::NetStatus(view) => {
+            render_net_status(stdout, view)?;
+        }
         CommandView::ConfigShow(view) => {
             render_config_show(stdout, view)?;
         }
         CommandView::Doctor(view) => {
             render_doctor(stdout, view)?;
+        }
+        CommandView::RelayList(view) => {
+            render_relay_list(stdout, view)?;
         }
         CommandView::SignerStatus(view) => {
             write_context(
@@ -140,11 +147,19 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
+        CommandView::NetStatus(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandView::ConfigShow(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
         CommandView::Doctor(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::RelayList(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -166,6 +181,13 @@ fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<()
         CommandView::AccountList(view) => {
             for account in &view.accounts {
                 serde_json::to_writer(&mut *stdout, account)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
+        CommandView::RelayList(view) => {
+            for relay in &view.relays {
+                serde_json::to_writer(&mut *stdout, relay)?;
                 writeln!(stdout)?;
             }
             Ok(())
@@ -274,6 +296,16 @@ fn render_config_show(
     }
     render_pairs(stdout, "account", account_rows.as_slice())?;
     render_pairs(stdout, "signer", &[("mode", view.signer.mode.as_str())])?;
+    let relay_count = view.relay.count.to_string();
+    render_pairs(
+        stdout,
+        "relay",
+        &[
+            ("count", relay_count.as_str()),
+            ("publish policy", view.relay.publish_policy.as_str()),
+            ("source", view.relay.source.as_str()),
+        ],
+    )?;
     render_pairs(
         stdout,
         "myc",
@@ -299,6 +331,71 @@ fn render_doctor(stdout: &mut dyn Write, view: &DoctorView) -> Result<(), Runtim
     }
     writeln!(stdout)?;
     writeln!(stdout, "source: {}", view.source)?;
+    Ok(())
+}
+
+fn render_relay_list(stdout: &mut dyn Write, view: &RelayListView) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        match view.state.as_str() {
+            "configured" => "relays · configured",
+            _ => "relays · unconfigured",
+        },
+    )?;
+    if view.relays.is_empty() {
+        if let Some(reason) = &view.reason {
+            writeln!(stdout, "{reason}")?;
+            writeln!(stdout)?;
+        }
+    } else {
+        let table = Table {
+            headers: &["relay", "read", "write"],
+            rows: view
+                .relays
+                .iter()
+                .map(|relay| {
+                    vec![
+                        relay.url.clone(),
+                        yes_no(relay.read).to_owned(),
+                        yes_no(relay.write).to_owned(),
+                    ]
+                })
+                .collect(),
+        };
+        render_table(stdout, &table)?;
+        writeln!(stdout)?;
+    }
+    writeln!(stdout, "publish policy: {}", view.publish_policy)?;
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_net_status(stdout: &mut dyn Write, view: &NetStatusView) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        match view.state.as_str() {
+            "configured" => "network · configured",
+            _ => "network · unconfigured",
+        },
+    )?;
+    let relay_count = view.relay_count.to_string();
+    let mut rows = vec![
+        ("status", view.state.as_str()),
+        ("session", view.session.as_str()),
+        ("relays configured", relay_count.as_str()),
+        ("publish policy", view.publish_policy.as_str()),
+        ("signer mode", view.signer_mode.as_str()),
+    ];
+    if let Some(account_id) = &view.active_account_id {
+        rows.push(("active account id", account_id.as_str()));
+    }
+    render_pairs(stdout, "network", rows.as_slice())?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
     Ok(())
 }
 
@@ -508,6 +605,8 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
         CommandView::MycStatus(_) => "myc status",
+        CommandView::NetStatus(_) => "net status",
+        CommandView::RelayList(_) => "relay ls",
         CommandView::SignerStatus(_) => "signer status",
     }
 }
@@ -518,10 +617,12 @@ mod tests {
     use crate::commands::runtime;
     use crate::domain::runtime::{
         AccountListView, CommandOutput, CommandView, DoctorCheckView, DoctorView, MycStatusView,
+        RelayEntryView, RelayListView,
     };
     use crate::runtime::config::{
         AccountConfig, IdentityConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RuntimeConfig,
+        SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
 
@@ -556,6 +657,11 @@ mod tests {
                 signer: SignerConfig {
                     backend: SignerBackend::Local,
                 },
+                relay: RelayConfig {
+                    urls: vec!["wss://relay.one".into(), "wss://relay.two".into()],
+                    publish_policy: RelayPublishPolicy::Any,
+                    source: RelayConfigSource::WorkspaceConfig,
+                },
                 myc: MycConfig {
                     executable: "myc".into(),
                 },
@@ -576,6 +682,8 @@ mod tests {
                 .store_path
                 .ends_with(".local/share/radroots/accounts/store.json")
         );
+        assert_eq!(view.relay.count, 2);
+        assert_eq!(view.relay.publish_policy, "any");
     }
 
     #[test]
@@ -630,6 +738,11 @@ mod tests {
                 signer: SignerConfig {
                     backend: SignerBackend::Local,
                 },
+                relay: RelayConfig {
+                    urls: Vec::new(),
+                    publish_policy: RelayPublishPolicy::Any,
+                    source: RelayConfigSource::Defaults,
+                },
                 myc: MycConfig {
                     executable: "myc".into(),
                 },
@@ -676,6 +789,37 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("\"id\":\"acct_a\""));
         assert!(lines[1].contains("\"id\":\"acct_b\""));
+    }
+
+    #[test]
+    fn relay_list_ndjson_emits_one_json_object_per_relay() {
+        let output = CommandOutput::success(CommandView::RelayList(RelayListView {
+            state: "configured".to_owned(),
+            source: "workspace config · local first".to_owned(),
+            publish_policy: "any".to_owned(),
+            count: 2,
+            reason: None,
+            relays: vec![
+                RelayEntryView {
+                    url: "wss://relay.one".to_owned(),
+                    read: true,
+                    write: true,
+                },
+                RelayEntryView {
+                    url: "wss://relay.two".to_owned(),
+                    read: true,
+                    write: true,
+                },
+            ],
+            actions: Vec::new(),
+        }));
+        let mut buffer = Vec::new();
+        render_ndjson_to(&mut buffer, &output).expect("render relay ndjson");
+        let rendered = String::from_utf8(buffer).expect("utf8");
+        let lines = rendered.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("\"url\":\"wss://relay.one\""));
+        assert!(lines[1].contains("\"url\":\"wss://relay.two\""));
     }
 
     #[test]

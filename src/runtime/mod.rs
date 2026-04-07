@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod config;
 pub mod logging;
 pub mod myc;
+pub mod network;
 pub mod signer;
 
 use std::process::ExitCode;

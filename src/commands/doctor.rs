@@ -46,6 +46,7 @@ pub fn report(
     let mut checks = Vec::new();
     checks.push(config_check(config));
     checks.push(account_check(config)?);
+    checks.push(relay_check(config));
 
     let signer = resolve_signer_status(config);
     checks.push(signer_check(&signer));
@@ -199,6 +200,34 @@ fn signer_check(signer: &crate::domain::runtime::SignerStatusView) -> EvaluatedC
             detail,
         },
         action,
+    }
+}
+
+fn relay_check(config: &RuntimeConfig) -> EvaluatedCheck {
+    if config.relay.urls.is_empty() {
+        return EvaluatedCheck {
+            severity: DoctorSeverity::Warn,
+            view: DoctorCheckView {
+                name: "relays".to_owned(),
+                status: "warn".to_owned(),
+                detail: "no relays configured".to_owned(),
+            },
+            action: Some("radroots relay ls"),
+        };
+    }
+
+    EvaluatedCheck {
+        severity: DoctorSeverity::Ok,
+        view: DoctorCheckView {
+            name: "relays".to_owned(),
+            status: "ok".to_owned(),
+            detail: format!(
+                "{} configured · policy {}",
+                config.relay.urls.len(),
+                config.relay.publish_policy.as_str()
+            ),
+        },
+        action: None,
     }
 }
 

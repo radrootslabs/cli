@@ -1,6 +1,8 @@
 pub mod doctor;
 pub mod identity;
 pub mod myc;
+pub mod net;
+pub mod relay;
 pub mod runtime;
 pub mod signer;
 
@@ -62,7 +64,7 @@ pub fn dispatch(
             LocalCommand::Backup => unimplemented_command("local backup"),
         },
         Command::Net(net) => match &net.command {
-            NetCommand::Status => unimplemented_command("net status"),
+            NetCommand::Status => net::status(config),
         },
         Command::Order(order) => match &order.command {
             OrderCommand::New => unimplemented_command("order new"),
@@ -74,7 +76,7 @@ pub fn dispatch(
             OrderCommand::History => unimplemented_command("order history"),
         },
         Command::Relay(relay) => match &relay.command {
-            RelayCommand::Ls => unimplemented_command("relay ls"),
+            RelayCommand::Ls => Ok(relay::list(config)),
         },
         Command::Rpc(rpc) => match &rpc.command {
             RpcCommand::Status => unimplemented_command("rpc status"),

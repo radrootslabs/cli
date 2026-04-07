@@ -38,6 +38,8 @@ pub struct CliArgs {
     #[arg(long, global = true)]
     pub signer: Option<String>,
     #[arg(long, global = true)]
+    pub relay: Vec<String>,
+    #[arg(long, global = true)]
     pub myc_executable: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,
@@ -383,6 +385,10 @@ mod tests {
             "identity.local.json",
             "--signer",
             "myc",
+            "--relay",
+            "wss://relay.one",
+            "--relay",
+            "wss://relay.two",
             "--myc-executable",
             "bin/myc",
             "config",
@@ -414,6 +420,10 @@ mod tests {
             Some("identity.local.json")
         );
         assert_eq!(parsed.signer.as_deref(), Some("myc"));
+        assert_eq!(
+            parsed.relay,
+            vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
+        );
         assert_eq!(
             parsed
                 .myc_executable

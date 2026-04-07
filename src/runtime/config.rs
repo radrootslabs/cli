@@ -3,6 +3,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use serde::Deserialize;
+use url::Url;
+
 use crate::cli::CliArgs;
 use crate::runtime::RuntimeError;
 
@@ -22,6 +25,7 @@ const ENV_LOG_STDOUT: &str = "RADROOTS_LOG_STDOUT";
 const ENV_ACCOUNT: &str = "RADROOTS_ACCOUNT";
 const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
 const ENV_SIGNER: &str = "RADROOTS_SIGNER";
+const ENV_RELAYS: &str = "RADROOTS_RELAYS";
 const ENV_MYC_EXECUTABLE: &str = "RADROOTS_MYC_EXECUTABLE";
 const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_OUTPUT,
@@ -34,6 +38,7 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_ACCOUNT,
     ENV_IDENTITY_PATH,
     ENV_SIGNER,
+    ENV_RELAYS,
     ENV_MYC_EXECUTABLE,
 ];
 
@@ -120,6 +125,47 @@ pub struct SignerConfig {
     pub backend: SignerBackend,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayPublishPolicy {
+    Any,
+}
+
+impl RelayPublishPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayConfigSource {
+    Flags,
+    Environment,
+    UserConfig,
+    WorkspaceConfig,
+    Defaults,
+}
+
+impl RelayConfigSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Flags => "cli flags · local first",
+            Self::Environment => "environment · local first",
+            Self::UserConfig => "user config · local first",
+            Self::WorkspaceConfig => "workspace config · local first",
+            Self::Defaults => "defaults · local first",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayConfig {
+    pub urls: Vec<String>,
+    pub publish_policy: RelayPublishPolicy,
+    pub source: RelayConfigSource,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MycConfig {
     pub executable: PathBuf,
@@ -133,6 +179,7 @@ pub struct RuntimeConfig {
     pub account: AccountConfig,
     pub identity: IdentityConfig,
     pub signer: SignerConfig,
+    pub relay: RelayConfig,
     pub myc: MycConfig,
 }
 
@@ -145,6 +192,17 @@ pub struct PathsConfig {
 
 #[derive(Debug, Default)]
 struct EnvFileValues(BTreeMap<String, String>);
+
+#[derive(Debug, Default, Deserialize)]
+struct CliConfigFile {
+    relay: Option<RelayFileConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RelayFileConfig {
+    urls: Option<Vec<String>>,
+    publish_policy: Option<String>,
+}
 
 pub trait Environment {
     fn var(&self, key: &str) -> Option<String>;
@@ -184,6 +242,8 @@ impl RuntimeConfig {
         env_file: &EnvFileValues,
     ) -> Result<Self, RuntimeError> {
         let paths = resolve_paths(env)?;
+        let workspace_config = load_cli_config_file(paths.workspace_config_path.as_path())?;
+        let user_config = load_cli_config_file(paths.user_config_path.as_path())?;
         Ok(Self {
             output: OutputConfig {
                 format: resolve_output_format(args, env, env_file)?,
@@ -236,6 +296,13 @@ impl RuntimeConfig {
                     .transpose()?
                     .unwrap_or(SignerBackend::Local),
             },
+            relay: resolve_relay_config(
+                args,
+                env,
+                env_file,
+                user_config.as_ref(),
+                workspace_config.as_ref(),
+            )?,
             myc: MycConfig {
                 executable: args
                     .myc_executable
@@ -260,6 +327,166 @@ fn resolve_paths(env: &dyn Environment) -> Result<PathsConfig, RuntimeError> {
         workspace_config_path: current_dir.join(DEFAULT_WORKSPACE_CONFIG_PATH),
         user_state_root: home_dir.join(DEFAULT_USER_STATE_ROOT),
     })
+}
+
+fn load_cli_config_file(path: &Path) -> Result<Option<CliConfigFile>, RuntimeError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path).map_err(|err| {
+        RuntimeError::Config(format!(
+            "failed to read config file {}: {err}",
+            path.display()
+        ))
+    })?;
+
+    if raw.trim().is_empty() {
+        return Ok(Some(CliConfigFile::default()));
+    }
+
+    toml::from_str::<CliConfigFile>(&raw)
+        .map(Some)
+        .map_err(|err| {
+            RuntimeError::Config(format!(
+                "failed to parse config file {}: {err}",
+                path.display()
+            ))
+        })
+}
+
+fn resolve_relay_config(
+    args: &CliArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<RelayConfig, RuntimeError> {
+    let publish_policy = resolve_relay_publish_policy(user_config, workspace_config)?
+        .unwrap_or(RelayPublishPolicy::Any);
+
+    if !args.relay.is_empty() {
+        return Ok(RelayConfig {
+            urls: normalize_relay_urls(args.relay.clone(), "--relay")?,
+            publish_policy,
+            source: RelayConfigSource::Flags,
+        });
+    }
+
+    if let Some(value) = env_value(env, env_file, &[ENV_RELAYS]) {
+        return Ok(RelayConfig {
+            urls: parse_relay_env_value(value.as_str(), ENV_RELAYS)?,
+            publish_policy,
+            source: RelayConfigSource::Environment,
+        });
+    }
+
+    if let Some(relay) = user_config.and_then(|config| config.relay.as_ref()) {
+        if let Some(urls) = relay.urls.clone() {
+            return Ok(RelayConfig {
+                urls: normalize_relay_urls(urls, "user config [relay].urls")?,
+                publish_policy,
+                source: RelayConfigSource::UserConfig,
+            });
+        }
+    }
+
+    if let Some(relay) = workspace_config.and_then(|config| config.relay.as_ref()) {
+        if let Some(urls) = relay.urls.clone() {
+            return Ok(RelayConfig {
+                urls: normalize_relay_urls(urls, "workspace config [relay].urls")?,
+                publish_policy,
+                source: RelayConfigSource::WorkspaceConfig,
+            });
+        }
+    }
+
+    Ok(RelayConfig {
+        urls: Vec::new(),
+        publish_policy,
+        source: RelayConfigSource::Defaults,
+    })
+}
+
+fn resolve_relay_publish_policy(
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<Option<RelayPublishPolicy>, RuntimeError> {
+    if let Some(value) = user_config
+        .and_then(|config| config.relay.as_ref())
+        .and_then(|relay| relay.publish_policy.as_deref())
+    {
+        return parse_relay_publish_policy(value).map(Some);
+    }
+
+    if let Some(value) = workspace_config
+        .and_then(|config| config.relay.as_ref())
+        .and_then(|relay| relay.publish_policy.as_deref())
+    {
+        return parse_relay_publish_policy(value).map(Some);
+    }
+
+    Ok(None)
+}
+
+fn parse_relay_publish_policy(value: &str) -> Result<RelayPublishPolicy, RuntimeError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "any" => Ok(RelayPublishPolicy::Any),
+        other => Err(RuntimeError::Config(format!(
+            "[relay].publish_policy must be `any`, got `{other}`"
+        ))),
+    }
+}
+
+fn parse_relay_env_value(value: &str, key: &str) -> Result<Vec<String>, RuntimeError> {
+    let entries = value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+
+    if entries.is_empty() {
+        return Err(RuntimeError::Config(format!(
+            "{key} must contain at least one websocket relay url"
+        )));
+    }
+
+    normalize_relay_urls(entries, key)
+}
+
+fn normalize_relay_urls(values: Vec<String>, source: &str) -> Result<Vec<String>, RuntimeError> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let relay = validate_relay_url(value.as_str(), source)?;
+        if !normalized.iter().any(|existing| existing == &relay) {
+            normalized.push(relay);
+        }
+    }
+    Ok(normalized)
+}
+
+fn validate_relay_url(value: &str, source: &str) -> Result<String, RuntimeError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(RuntimeError::Config(format!(
+            "{source} contains an empty relay url"
+        )));
+    }
+
+    let parsed = Url::parse(trimmed).map_err(|err| {
+        RuntimeError::Config(format!(
+            "{source} contains invalid relay url `{trimmed}`: {err}"
+        ))
+    })?;
+
+    if !matches!(parsed.scheme(), "ws" | "wss") || parsed.host_str().is_none() {
+        return Err(RuntimeError::Config(format!(
+            "{source} must use websocket relay urls, got `{trimmed}`"
+        )));
+    }
+
+    Ok(trimmed.to_owned())
 }
 
 fn resolve_env_file_path(args: &CliArgs, env: &dyn Environment) -> Option<PathBuf> {
@@ -452,12 +679,15 @@ fn parse_bool_env(key: &str, value: &str) -> Result<bool, RuntimeError> {
 mod tests {
     use super::{
         AccountConfig, EnvFileValues, Environment, OutputConfig, OutputFormat, PathsConfig,
-        RuntimeConfig, SignerBackend, Verbosity, parse_env_file_values,
+        RelayConfigSource, RelayPublishPolicy, RuntimeConfig, SignerBackend, Verbosity,
+        parse_env_file_values,
     };
     use crate::cli::CliArgs;
     use clap::Parser;
     use std::collections::BTreeMap;
+    use std::fs;
     use std::path::{Path, PathBuf};
+    use tempfile::tempdir;
 
     struct MapEnvironment {
         values: BTreeMap<String, String>,
@@ -504,6 +734,10 @@ mod tests {
             "custom-identity.json",
             "--signer",
             "local",
+            "--relay",
+            "wss://relay.one",
+            "--relay",
+            "wss://relay.two",
             "--myc-executable",
             "bin/myc-cli",
             "config",
@@ -518,6 +752,7 @@ mod tests {
                 "env-identity.json".to_owned(),
             ),
             ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
+            ("RADROOTS_RELAYS".to_owned(), "wss://relay.env".to_owned()),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "env-myc".to_owned()),
         ]));
 
@@ -557,6 +792,12 @@ mod tests {
             }
         );
         assert_eq!(resolved.signer.backend, SignerBackend::Local);
+        assert_eq!(
+            resolved.relay.urls,
+            vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
+        );
+        assert_eq!(resolved.relay.source, RelayConfigSource::Flags);
+        assert_eq!(resolved.relay.publish_policy, RelayPublishPolicy::Any);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc-cli"));
     }
 
@@ -577,6 +818,10 @@ mod tests {
                 "state/identity.json".to_owned(),
             ),
             ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
+            (
+                "RADROOTS_RELAYS".to_owned(),
+                "wss://relay.one,wss://relay.two".to_owned(),
+            ),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "bin/myc".to_owned()),
         ]));
 
@@ -600,6 +845,11 @@ mod tests {
         assert_eq!(resolved.account.selector.as_deref(), Some("acct_demo"));
         assert_eq!(resolved.identity.path, PathBuf::from("state/identity.json"));
         assert_eq!(resolved.signer.backend, SignerBackend::Myc);
+        assert_eq!(
+            resolved.relay.urls,
+            vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
+        );
+        assert_eq!(resolved.relay.source, RelayConfigSource::Environment);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
     }
 
@@ -672,6 +922,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
 RADROOTS_ACCOUNT=acct_env_file
 RADROOTS_IDENTITY_PATH=state/identity.json
 RADROOTS_SIGNER=myc
+RADROOTS_RELAYS=wss://relay.env-file
 RADROOTS_MYC_EXECUTABLE=bin/myc
 "#,
             Path::new(".env.test"),
@@ -690,6 +941,8 @@ RADROOTS_MYC_EXECUTABLE=bin/myc
         assert_eq!(resolved.account.selector.as_deref(), Some("acct_env_file"));
         assert_eq!(resolved.identity.path, PathBuf::from("state/identity.json"));
         assert_eq!(resolved.signer.backend, SignerBackend::Myc);
+        assert_eq!(resolved.relay.urls, vec!["wss://relay.env-file".to_owned()]);
+        assert_eq!(resolved.relay.source, RelayConfigSource::Environment);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
     }
 
@@ -714,6 +967,59 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         assert_eq!(resolved.output.format, OutputFormat::Human);
         assert_eq!(resolved.logging.filter, "info");
         assert!(resolved.logging.stdout);
+    }
+
+    #[test]
+    fn user_relay_config_overrides_workspace_relay_config() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(workspace_root.join(".radroots")).expect("workspace config dir");
+        fs::create_dir_all(user_home.join(".config/radroots")).expect("user config dir");
+        fs::write(
+            workspace_root.join(".radroots/config.toml"),
+            "[relay]\nurls = [\"wss://relay.workspace\"]\npublish_policy = \"any\"\n",
+        )
+        .expect("write workspace config");
+        fs::write(
+            user_home.join(".config/radroots/config.toml"),
+            "[relay]\nurls = [\"wss://relay.user\", \"wss://relay.workspace\"]\n",
+        )
+        .expect("write user config");
+
+        let env = MapEnvironment {
+            values: BTreeMap::new(),
+            current_dir: workspace_root,
+            home_dir: user_home,
+        };
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve config");
+        assert_eq!(
+            resolved.relay.urls,
+            vec![
+                "wss://relay.user".to_owned(),
+                "wss://relay.workspace".to_owned()
+            ]
+        );
+        assert_eq!(resolved.relay.source, RelayConfigSource::UserConfig);
+        assert_eq!(resolved.relay.publish_policy, RelayPublishPolicy::Any);
+    }
+
+    #[test]
+    fn invalid_relay_url_fails() {
+        let args = CliArgs::parse_from([
+            "radroots",
+            "--relay",
+            "https://not-a-websocket.example.com",
+            "relay",
+            "ls",
+        ]);
+        let env = MapEnvironment::new(BTreeMap::new());
+        let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect_err("invalid relay url");
+        assert!(error.to_string().contains("websocket relay urls"));
     }
 
     #[test]

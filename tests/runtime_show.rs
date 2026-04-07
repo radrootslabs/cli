@@ -22,6 +22,7 @@ fn runtime_show_command_in(workdir: &Path) -> Command {
         "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER",
+        "RADROOTS_RELAYS",
         "RADROOTS_MYC_EXECUTABLE",
     ] {
         command.env_remove(key);
@@ -93,6 +94,9 @@ fn config_show_json_reports_default_bootstrap_state() {
     );
     assert_eq!(json["account"]["legacy_identity_path"], "identity.json");
     assert_eq!(json["signer"]["mode"], "local");
+    assert_eq!(json["relay"]["count"], 0);
+    assert_eq!(json["relay"]["publish_policy"], "any");
+    assert_eq!(json["relay"]["source"], "defaults · local first");
     assert_eq!(json["myc"]["executable"], "myc");
 }
 
@@ -107,6 +111,7 @@ fn config_show_json_reflects_environment_configuration() {
         .env("RADROOTS_ACCOUNT", "acct_demo")
         .env("RADROOTS_IDENTITY_PATH", "state/identity.json")
         .env("RADROOTS_SIGNER", "myc")
+        .env("RADROOTS_RELAYS", "wss://relay.one,wss://relay.two")
         .env("RADROOTS_MYC_EXECUTABLE", "bin/myc")
         .args(["config", "show"])
         .output()
@@ -124,6 +129,9 @@ fn config_show_json_reflects_environment_configuration() {
         "state/identity.json"
     );
     assert_eq!(json["signer"]["mode"], "myc");
+    assert_eq!(json["relay"]["count"], 2);
+    assert_eq!(json["relay"]["urls"][0], "wss://relay.one");
+    assert_eq!(json["relay"]["source"], "environment · local first");
     assert_eq!(json["myc"]["executable"], "bin/myc");
 }
 
@@ -180,6 +188,31 @@ fn config_show_json_reads_logging_from_default_env_file() {
         .expect("current log file");
     assert!(current_file.starts_with(logs_dir.display().to_string().as_str()));
     assert!(std::path::Path::new(current_file).exists());
+}
+
+#[test]
+fn config_show_json_reads_workspace_relay_config() {
+    let dir = tempdir().expect("tempdir");
+    let config_dir = dir.path().join(".radroots");
+    fs::create_dir_all(&config_dir).expect("workspace config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        "[relay]\nurls = [\"wss://relay.workspace\", \"wss://relay.backup\"]\npublish_policy = \"any\"\n",
+    )
+    .expect("write workspace config");
+
+    let output = runtime_show_command_in(dir.path())
+        .args(["--json", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+    assert_eq!(json["config_files"]["workspace_present"], true);
+    assert_eq!(json["relay"]["count"], 2);
+    assert_eq!(json["relay"]["urls"][0], "wss://relay.workspace");
+    assert_eq!(json["relay"]["urls"][1], "wss://relay.backup");
+    assert_eq!(json["relay"]["source"], "workspace config · local first");
 }
 
 #[test]

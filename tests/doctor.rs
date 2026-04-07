@@ -22,6 +22,7 @@ fn doctor_command_in(workdir: &Path) -> Command {
         "RADROOTS_ACCOUNT",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER",
+        "RADROOTS_RELAYS",
         "RADROOTS_MYC_EXECUTABLE",
     ] {
         command.env_remove(key);
@@ -46,10 +47,13 @@ fn doctor_reports_unconfigured_local_bootstrap_state() {
     assert_eq!(json["checks"][0]["status"], "ok");
     assert_eq!(json["checks"][1]["name"], "account");
     assert_eq!(json["checks"][1]["status"], "warn");
-    assert_eq!(json["checks"][2]["name"], "signer");
+    assert_eq!(json["checks"][2]["name"], "relays");
     assert_eq!(json["checks"][2]["status"], "warn");
+    assert_eq!(json["checks"][3]["name"], "signer");
+    assert_eq!(json["checks"][3]["status"], "warn");
     assert_eq!(json["source"], "local diagnostics");
     assert_eq!(json["actions"][0], "radroots account new");
+    assert_eq!(json["actions"][1], "radroots relay ls");
 }
 
 #[test]
@@ -62,7 +66,7 @@ fn doctor_reports_ready_local_bootstrap_state() {
     assert!(init.status.success());
 
     let output = doctor_command_in(dir.path())
-        .args(["--json", "doctor"])
+        .args(["--json", "--relay", "wss://relay.one", "doctor"])
         .output()
         .expect("run doctor");
 
@@ -73,15 +77,21 @@ fn doctor_reports_ready_local_bootstrap_state() {
     assert_eq!(json["state"], "ok");
     assert_eq!(json["checks"][1]["name"], "account");
     assert_eq!(json["checks"][1]["status"], "ok");
-    assert_eq!(json["checks"][2]["name"], "signer");
+    assert_eq!(json["checks"][2]["name"], "relays");
     assert_eq!(json["checks"][2]["status"], "ok");
+    assert_eq!(json["checks"][3]["name"], "signer");
+    assert_eq!(json["checks"][3]["status"], "ok");
     assert_eq!(json["actions"], Value::Null);
 }
 
 #[test]
 fn doctor_reports_external_failure_for_missing_myc() {
     let dir = tempdir().expect("tempdir");
-    fs::write(dir.path().join(".env"), "RADROOTS_SIGNER=myc\n").expect("write env file");
+    fs::write(
+        dir.path().join(".env"),
+        "RADROOTS_SIGNER=myc\nRADROOTS_RELAYS=wss://relay.one\n",
+    )
+    .expect("write env file");
 
     let output = doctor_command_in(dir.path())
         .args(["--json", "--myc-executable", "missing-myc", "doctor"])
@@ -92,9 +102,11 @@ fn doctor_reports_external_failure_for_missing_myc() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
     assert_eq!(json["state"], "fail");
-    assert_eq!(json["checks"][2]["name"], "signer");
-    assert_eq!(json["checks"][2]["status"], "fail");
-    assert_eq!(json["checks"][3]["name"], "myc");
+    assert_eq!(json["checks"][2]["name"], "relays");
+    assert_eq!(json["checks"][2]["status"], "ok");
+    assert_eq!(json["checks"][3]["name"], "signer");
     assert_eq!(json["checks"][3]["status"], "fail");
+    assert_eq!(json["checks"][4]["name"], "myc");
+    assert_eq!(json["checks"][4]["status"], "fail");
     assert_eq!(json["source"], "local diagnostics + myc status command");
 }
