@@ -3,7 +3,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -35,6 +35,13 @@ fn job_rpc_command_in(workdir: &Path) -> Command {
         command.env_remove(key);
     }
     command
+}
+
+fn job_rpc_test_guard() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("job rpc test lock")
 }
 
 #[derive(Debug, Clone)]
@@ -298,6 +305,7 @@ fn sample_job(job_id: &str, state: &str, terminal: bool, completed_at_unix: Opti
 
 #[test]
 fn rpc_status_reports_bridge_ready_via_daemon_rpc() {
+    let _guard = job_rpc_test_guard();
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
     let server = MockRpcServer::start(move |method, auth_header| {
@@ -338,6 +346,7 @@ fn rpc_status_reports_bridge_ready_via_daemon_rpc() {
 
 #[test]
 fn rpc_sessions_ndjson_emits_public_session_entries() {
+    let _guard = job_rpc_test_guard();
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
     let server = MockRpcServer::start(move |method, auth_header| {
@@ -401,6 +410,7 @@ fn rpc_sessions_ndjson_emits_public_session_entries() {
 
 #[test]
 fn job_commands_require_bridge_bearer_token() {
+    let _guard = job_rpc_test_guard();
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
     let server = MockRpcServer::start(move |method, auth_header| {
@@ -435,6 +445,7 @@ fn job_commands_require_bridge_bearer_token() {
 
 #[test]
 fn job_ls_and_get_report_retained_bridge_jobs() {
+    let _guard = job_rpc_test_guard();
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
     let server = MockRpcServer::start(move |method, auth_header| {
@@ -499,6 +510,7 @@ fn job_ls_and_get_report_retained_bridge_jobs() {
 
 #[test]
 fn job_watch_ndjson_emits_one_frame_per_poll_until_terminal() {
+    let _guard = job_rpc_test_guard();
     let sequence = Arc::new(Mutex::new(0_usize));
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let observed = Arc::clone(&requests);
@@ -542,7 +554,7 @@ fn job_watch_ndjson_emits_one_frame_per_poll_until_terminal() {
             "--frames",
             "3",
             "--interval-ms",
-            "1",
+            "5",
         ])
         .output()
         .expect("run job watch");

@@ -1,4 +1,4 @@
-use crate::cli::{ListingFileArgs, ListingNewArgs, RecordKeyArgs};
+use crate::cli::{ListingFileArgs, ListingMutationArgs, ListingNewArgs, RecordKeyArgs};
 use crate::domain::runtime::{CommandOutput, CommandView};
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -33,4 +33,67 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<CommandOutput
         }
     };
     Ok(output)
+}
+
+pub fn publish(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let view = crate::runtime::listing::publish(config, args)?;
+    Ok(match view.disposition() {
+        crate::domain::runtime::CommandDisposition::Success => {
+            CommandOutput::success(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::Unconfigured => {
+            CommandOutput::unconfigured(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::ExternalUnavailable => {
+            CommandOutput::external_unavailable(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::InternalError => {
+            CommandOutput::internal_error(CommandView::ListingMutation(view))
+        }
+    })
+}
+
+pub fn update(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let view = crate::runtime::listing::update(config, args)?;
+    Ok(match view.disposition() {
+        crate::domain::runtime::CommandDisposition::Success => {
+            CommandOutput::success(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::Unconfigured => {
+            CommandOutput::unconfigured(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::ExternalUnavailable => {
+            CommandOutput::external_unavailable(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::InternalError => {
+            CommandOutput::internal_error(CommandView::ListingMutation(view))
+        }
+    })
+}
+
+pub fn archive(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let view = crate::runtime::listing::archive(config, args)?;
+    Ok(match view.disposition() {
+        crate::domain::runtime::CommandDisposition::Success => {
+            CommandOutput::success(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::Unconfigured => {
+            CommandOutput::unconfigured(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::ExternalUnavailable => {
+            CommandOutput::external_unavailable(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::InternalError => {
+            CommandOutput::internal_error(CommandView::ListingMutation(view))
+        }
+    })
 }

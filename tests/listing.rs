@@ -1,6 +1,12 @@
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use assert_cmd::prelude::*;
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
@@ -33,8 +39,16 @@ fn cli_command_in(workdir: &Path) -> Command {
     command
 }
 
+fn listing_test_guard() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("listing test lock")
+}
+
 #[test]
 fn listing_new_scaffolds_a_toml_draft_with_account_and_farm_defaults() {
+    let _guard = listing_test_guard();
     let dir = tempdir().expect("tempdir");
     let init = cli_command_in(dir.path())
         .args(["local", "init"])
@@ -75,6 +89,7 @@ fn listing_new_scaffolds_a_toml_draft_with_account_and_farm_defaults() {
 
 #[test]
 fn listing_validate_resolves_selected_account_and_matching_farm() {
+    let _guard = listing_test_guard();
     let dir = tempdir().expect("tempdir");
     let init = cli_command_in(dir.path())
         .args(["local", "init"])
@@ -138,6 +153,7 @@ fn listing_validate_resolves_selected_account_and_matching_farm() {
 
 #[test]
 fn listing_validate_reports_invalid_drafts_with_field_lines() {
+    let _guard = listing_test_guard();
     let dir = tempdir().expect("tempdir");
     let draft_path = dir.path().join("invalid.toml");
     fs::write(
@@ -182,6 +198,7 @@ fn listing_validate_reports_invalid_drafts_with_field_lines() {
 
 #[test]
 fn listing_get_reads_real_local_rows_and_reports_missing() {
+    let _guard = listing_test_guard();
     let dir = tempdir().expect("tempdir");
     let init = cli_command_in(dir.path())
         .args(["local", "init"])
@@ -233,6 +250,219 @@ fn listing_get_reads_real_local_rows_and_reports_missing() {
     assert_eq!(missing_json["state"], "missing");
 }
 
+#[test]
+fn listing_publish_and_update_use_durable_bridge_publish() {
+    let _guard = listing_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    let account_output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let seller_pubkey = account_json["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey");
+    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
+    seed_farm(dir.path(), seller_pubkey, farm_d_tag, "La Huerta");
+
+    let draft_path = dir.path().join("eggs.toml");
+    fs::write(
+        &draft_path,
+        valid_listing_draft(
+            "AAAAAAAAAAAAAAAAAAAAAg",
+            "",
+            "",
+            "eggs",
+            "Pasture eggs",
+            "Protein",
+            "Fresh pasture-raised eggs collected daily.",
+            "12",
+            "each",
+            "4.50",
+            "USD",
+            "1",
+            "each",
+            "18",
+            "pickup",
+            "La Huerta del Sur",
+        ),
+    )
+    .expect("write listing draft");
+
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, auth_header| {
+        recorded.lock().expect("recorded").push(body.clone());
+        assert_eq!(auth_header.as_deref(), Some("Bearer bridge-secret"));
+        match body["method"].as_str().unwrap_or_default() {
+            "bridge.listing.publish" => MockRpcResponse::success(json!({
+                "deduplicated": false,
+                "job": sample_listing_job("job_listing_01", "published", "event_listing_01", "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg")
+            })),
+            other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
+        }
+    });
+
+    let publish_output = cli_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
+        .args([
+            "--json",
+            "listing",
+            "publish",
+            "--idempotency-key",
+            "publish-key",
+            "--print-job",
+            "--print-event",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing publish");
+    assert!(publish_output.status.success());
+    let publish_json: Value =
+        serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
+    assert_eq!(publish_json["operation"], "publish");
+    assert_eq!(publish_json["job_id"], "job_listing_01");
+    assert_eq!(publish_json["job_status"], "published");
+    assert_eq!(publish_json["event_id"], "event_listing_01");
+    assert_eq!(publish_json["event"]["kind"], 30402);
+    assert_eq!(publish_json["job"]["rpc_method"], "bridge.listing.publish");
+
+    let update_output = cli_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
+        .args([
+            "--json",
+            "listing",
+            "update",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing update");
+    assert!(update_output.status.success());
+    let update_json: Value =
+        serde_json::from_slice(update_output.stdout.as_slice()).expect("update json");
+    assert_eq!(update_json["operation"], "update");
+
+    let recorded = requests.lock().expect("requests");
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded[0]["params"]["kind"], 30402);
+    assert_eq!(recorded[0]["params"]["idempotency_key"], "publish-key");
+    assert_eq!(recorded[1]["params"]["kind"], 30402);
+}
+
+#[test]
+fn listing_archive_and_dry_run_are_truthful() {
+    let _guard = listing_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    let account_output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let seller_pubkey = account_json["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey");
+    seed_farm(
+        dir.path(),
+        seller_pubkey,
+        "AAAAAAAAAAAAAAAAAAAAAw",
+        "La Huerta",
+    );
+
+    let draft_path = dir.path().join("archive.toml");
+    fs::write(
+        &draft_path,
+        valid_listing_draft(
+            "AAAAAAAAAAAAAAAAAAAAAg",
+            "",
+            "",
+            "eggs",
+            "Pasture eggs",
+            "Protein",
+            "Fresh pasture-raised eggs collected daily.",
+            "12",
+            "each",
+            "4.50",
+            "USD",
+            "1",
+            "each",
+            "18",
+            "pickup",
+            "La Huerta del Sur",
+        ),
+    )
+    .expect("write listing draft");
+
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        recorded.lock().expect("recorded").push(body.to_string());
+        MockRpcResponse::success(json!({
+            "deduplicated": false,
+            "job": sample_listing_job("job_listing_archive", "published", "event_listing_archive", "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg")
+        }))
+    });
+
+    let archive_output = cli_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
+        .args([
+            "--json",
+            "listing",
+            "archive",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing archive");
+    assert!(archive_output.status.success());
+    let archive_json: Value =
+        serde_json::from_slice(archive_output.stdout.as_slice()).expect("archive json");
+    assert_eq!(archive_json["operation"], "archive");
+    assert_eq!(archive_json["job_status"], "published");
+
+    let dry_run_output = cli_command_in(dir.path())
+        .args([
+            "--json",
+            "--dry-run",
+            "listing",
+            "publish",
+            "--print-event",
+            "--print-job",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing publish dry run");
+    assert!(dry_run_output.status.success());
+    let dry_run_json: Value =
+        serde_json::from_slice(dry_run_output.stdout.as_slice()).expect("dry run json");
+    assert_eq!(dry_run_json["state"], "dry_run");
+    assert_eq!(dry_run_json["dry_run"], true);
+    assert_eq!(dry_run_json["job"]["state"], "not_submitted");
+    assert_eq!(dry_run_json["event"]["kind"], 30402);
+    assert!(dry_run_json["event"]["event_id"].is_null());
+
+    let recorded = requests.lock().expect("requests");
+    assert_eq!(recorded.len(), 1);
+    assert!(recorded[0].contains("archived"));
+}
+
 fn seed_farm(workdir: &Path, pubkey: &str, d_tag: &str, name: &str) {
     let replica_db = workdir
         .join("home")
@@ -262,6 +492,221 @@ fn seed_farm(workdir: &Path, pubkey: &str, d_tag: &str, name: &str) {
             .as_str(),
         )
         .expect("insert farm");
+}
+
+#[derive(Debug, Clone)]
+struct MockRpcRequest {
+    body: Value,
+    auth_header: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MockRpcResponse {
+    body: Value,
+}
+
+impl MockRpcResponse {
+    fn success(result: Value) -> Self {
+        Self {
+            body: json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": result,
+            }),
+        }
+    }
+
+    fn rpc_error(code: i64, message: &str) -> Self {
+        Self {
+            body: json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": code,
+                    "message": message,
+                }
+            }),
+        }
+    }
+}
+
+struct MockRpcServer {
+    address: String,
+    shutdown: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl MockRpcServer {
+    fn start<F>(handler: F) -> Self
+    where
+        F: Fn(Value, Option<String>) -> MockRpcResponse + Send + Sync + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock rpc listener");
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let address = listener.local_addr().expect("local addr").to_string();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_flag = Arc::clone(&shutdown);
+        let handler: Arc<dyn Fn(Value, Option<String>) -> MockRpcResponse + Send + Sync> =
+            Arc::new(handler);
+        let handle = thread::spawn(move || {
+            while !shutdown_flag.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        if let Ok(request) = read_request(&mut stream) {
+                            let response =
+                                handler(request.body.clone(), request.auth_header.clone());
+                            let _ = write_response(&mut stream, &response);
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            address,
+            shutdown,
+            handle: Some(handle),
+        }
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}", self.address)
+    }
+}
+
+impl Drop for MockRpcServer {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(&self.address);
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("join mock rpc server");
+        }
+    }
+}
+
+fn read_request(stream: &mut TcpStream) -> Result<MockRpcRequest, String> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| format!("set mock rpc read timeout: {error}"))?;
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let mut header_end = None;
+    let mut content_length = 0usize;
+
+    loop {
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|error| format!("read mock rpc request: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if header_end.is_none() {
+            header_end = find_subslice(&buffer, b"\r\n\r\n").map(|index| index + 4);
+            if let Some(end) = header_end {
+                content_length = parse_content_length(&buffer[..end])?;
+                if buffer.len() >= end + content_length {
+                    break;
+                }
+            }
+        } else if let Some(end) = header_end {
+            if buffer.len() >= end + content_length {
+                break;
+            }
+        }
+    }
+
+    let end = header_end.ok_or_else(|| "mock rpc request missing headers".to_owned())?;
+    let headers = std::str::from_utf8(&buffer[..end])
+        .map_err(|error| format!("mock rpc headers not utf-8: {error}"))?;
+    let auth_header = parse_header(headers, "authorization");
+    let body = std::str::from_utf8(&buffer[end..end + content_length])
+        .map_err(|error| format!("mock rpc body not utf-8: {error}"))?;
+    let json: Value =
+        serde_json::from_str(body).map_err(|error| format!("parse mock rpc body: {error}"))?;
+
+    Ok(MockRpcRequest {
+        body: json,
+        auth_header,
+    })
+}
+
+fn parse_content_length(headers: &[u8]) -> Result<usize, String> {
+    let text = std::str::from_utf8(headers)
+        .map_err(|error| format!("header utf-8 parse failed: {error}"))?;
+    for line in text.lines() {
+        if let Some((name, value)) = line.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                return value
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|error| format!("content-length parse failed: {error}"));
+            }
+        }
+    }
+    Ok(0)
+}
+
+fn parse_header(headers: &str, wanted: &str) -> Option<String> {
+    headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case(wanted) {
+            Some(value.trim().to_owned())
+        } else {
+            None
+        }
+    })
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn write_response(stream: &mut TcpStream, response: &MockRpcResponse) -> Result<(), String> {
+    let body = response.body.to_string();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .map_err(|error| format!("write mock rpc response: {error}"))?;
+    stream
+        .flush()
+        .map_err(|error| format!("flush mock rpc response: {error}"))
+}
+
+fn sample_listing_job(job_id: &str, status: &str, event_id: &str, event_addr: &str) -> Value {
+    json!({
+        "job_id": job_id,
+        "command": "bridge.listing.publish",
+        "idempotency_key": "publish-key",
+        "status": status,
+        "terminal": status != "accepted",
+        "recovered_after_restart": false,
+        "requested_at_unix": 1_712_720_000,
+        "completed_at_unix": 1_712_720_010,
+        "signer_mode": "local",
+        "event_kind": 30402,
+        "event_id": event_id,
+        "event_addr": event_addr,
+        "delivery_policy": "best_effort",
+        "delivery_quorum": 2,
+        "relay_count": 2,
+        "acknowledged_relay_count": 2,
+        "required_acknowledged_relay_count": 2,
+        "attempt_count": 1,
+        "attempt_summaries": ["attempt 1: relay.one accepted"],
+        "relay_results": [],
+        "relay_outcome_summary": "published to 2 relays"
+    })
 }
 
 fn seed_trade_product(

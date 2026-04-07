@@ -79,6 +79,7 @@ pub enum CommandView {
     JobList(JobListView),
     JobWatch(JobWatchView),
     ListingGet(ListingGetView),
+    ListingMutation(ListingMutationView),
     ListingNew(ListingNewView),
     ListingValidate(ListingValidateView),
     LocalBackup(LocalBackupView),
@@ -534,6 +535,76 @@ impl ListingGetView {
             _ => CommandDisposition::Success,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListingMutationView {
+    pub state: String,
+    pub operation: String,
+    pub source: String,
+    pub file: String,
+    pub listing_id: String,
+    pub listing_addr: String,
+    pub seller_pubkey: String,
+    pub event_kind: u32,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub deduplicated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<ListingMutationJobView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event: Option<ListingMutationEventView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl ListingMutationView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListingMutationJobView {
+    pub rpc_method: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListingMutationEventView {
+    pub kind: u32,
+    pub author: String,
+    pub content: String,
+    pub tags: Vec<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    pub event_addr: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

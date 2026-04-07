@@ -2,10 +2,10 @@ use std::io::{self, Write};
 
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
-    FindView, JobGetView, JobListView, JobWatchView, ListingGetView, ListingNewView,
-    ListingValidateView, LocalBackupView, LocalExportView, LocalInitView, LocalStatusView,
-    NetStatusView, RelayListView, RpcSessionsView, RpcStatusView, SyncActionView, SyncStatusView,
-    SyncWatchView,
+    FindView, JobGetView, JobListView, JobWatchView, ListingGetView, ListingMutationView,
+    ListingNewView, ListingValidateView, LocalBackupView, LocalExportView, LocalInitView,
+    LocalStatusView, NetStatusView, RelayListView, RpcSessionsView, RpcStatusView, SyncActionView,
+    SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -104,6 +104,9 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::ListingGet(view) => {
             render_listing_get(stdout, view)?;
+        }
+        CommandView::ListingMutation(view) => {
+            render_listing_mutation(stdout, view)?;
         }
         CommandView::ListingNew(view) => {
             render_listing_new(stdout, view)?;
@@ -238,6 +241,10 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::ListingGet(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::ListingMutation(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -861,6 +868,64 @@ fn render_listing_get(stdout: &mut dyn Write, view: &ListingGetView) -> Result<(
     Ok(())
 }
 
+fn render_listing_mutation(
+    stdout: &mut dyn Write,
+    view: &ListingMutationView,
+) -> Result<(), RuntimeError> {
+    let context = match view.state.as_str() {
+        "dry_run" => format!("listing · {} dry run", view.operation),
+        "deduplicated" => format!("listing · {} deduplicated", view.operation),
+        "published" => format!("listing · {} completed", view.operation),
+        "failed" | "unavailable" => format!("listing · {} unavailable", view.operation),
+        "unconfigured" => format!("listing · {} unconfigured", view.operation),
+        "error" => format!("listing · {} error", view.operation),
+        other => format!("listing · {} {other}", view.operation),
+    };
+    write_context(stdout, context.as_str())?;
+
+    let mut rows = vec![
+        ("file", view.file.as_str()),
+        ("listing id", view.listing_id.as_str()),
+        ("event addr", view.listing_addr.as_str()),
+    ];
+    if let Some(job_id) = &view.job_id {
+        rows.push(("job id", job_id.as_str()));
+    }
+    if let Some(job_status) = &view.job_status {
+        rows.push(("status", job_status.as_str()));
+    }
+    if let Some(event_id) = &view.event_id {
+        rows.push(("event id", event_id.as_str()));
+    }
+    if let Some(signer_mode) = &view.signer_mode {
+        rows.push(("signer", signer_mode.as_str()));
+    }
+    render_pairs(stdout, "listing", rows.as_slice())?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+
+    if let Some(job) = &view.job {
+        writeln!(stdout)?;
+        writeln!(stdout, "job preview")?;
+        let job_json = serde_json::to_string_pretty(job)?;
+        for line in job_json.lines() {
+            writeln!(stdout, "  {line}")?;
+        }
+    }
+    if let Some(event) = &view.event {
+        writeln!(stdout)?;
+        writeln!(stdout, "event preview")?;
+        let event_json = serde_json::to_string_pretty(event)?;
+        for line in event_json.lines() {
+            writeln!(stdout, "  {line}")?;
+        }
+    }
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
 fn render_relay_list(stdout: &mut dyn Write, view: &RelayListView) -> Result<(), RuntimeError> {
     write_context(
         stdout,
@@ -1462,6 +1527,12 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::JobList(_) => "job ls",
         CommandView::JobWatch(_) => "job watch",
         CommandView::ListingGet(_) => "listing get",
+        CommandView::ListingMutation(view) => match view.operation.as_str() {
+            "publish" => "listing publish",
+            "update" => "listing update",
+            "archive" => "listing archive",
+            _ => "listing publish",
+        },
         CommandView::ListingNew(_) => "listing new",
         CommandView::ListingValidate(_) => "listing validate",
         CommandView::LocalBackup(_) => "local backup",

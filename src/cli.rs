@@ -164,10 +164,7 @@ impl Command {
             }) | Self::Sync(SyncArgs {
                 command: SyncCommand::Pull | SyncCommand::Push,
             }) | Self::Listing(ListingArgs {
-                command: ListingCommand::New(_)
-                    | ListingCommand::Publish(_)
-                    | ListingCommand::Update(_)
-                    | ListingCommand::Archive(_),
+                command: ListingCommand::New(_),
             }) | Self::Order(OrderArgs {
                 command: OrderCommand::New | OrderCommand::Submit | OrderCommand::Cancel(_),
             })
@@ -331,9 +328,9 @@ pub enum ListingCommand {
     New(ListingNewArgs),
     Validate(ListingFileArgs),
     Get(RecordKeyArgs),
-    Publish(ListingFileArgs),
-    Update(RecordKeyArgs),
-    Archive(RecordKeyArgs),
+    Publish(ListingMutationArgs),
+    Update(ListingMutationArgs),
+    Archive(ListingMutationArgs),
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -345,6 +342,17 @@ pub struct ListingNewArgs {
 #[derive(Debug, Clone, Args)]
 pub struct ListingFileArgs {
     pub file: PathBuf,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListingMutationArgs {
+    pub file: PathBuf,
+    #[arg(long)]
+    pub idempotency_key: Option<String>,
+    #[arg(long = "print-job", action = ArgAction::SetTrue)]
+    pub print_job: bool,
+    #[arg(long = "print-event", action = ArgAction::SetTrue)]
+    pub print_event: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -668,6 +676,32 @@ mod tests {
             Command::Listing(args) => match args.command {
                 ListingCommand::Publish(file) => {
                     assert_eq!(file.file.to_str(), Some("draft.toml"));
+                    assert!(file.idempotency_key.is_none());
+                    assert!(!file.print_job);
+                    assert!(!file.print_event);
+                }
+                _ => panic!("unexpected listing subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let listing_archive = CliArgs::parse_from([
+            "radroots",
+            "listing",
+            "archive",
+            "--idempotency-key",
+            "archive-key",
+            "--print-job",
+            "--print-event",
+            "draft.toml",
+        ]);
+        match listing_archive.command {
+            Command::Listing(args) => match args.command {
+                ListingCommand::Archive(file) => {
+                    assert_eq!(file.file.to_str(), Some("draft.toml"));
+                    assert_eq!(file.idempotency_key.as_deref(), Some("archive-key"));
+                    assert!(file.print_job);
+                    assert!(file.print_event);
                 }
                 _ => panic!("unexpected listing subcommand"),
             },

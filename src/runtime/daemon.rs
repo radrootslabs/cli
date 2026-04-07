@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use radroots_events::listing::RadrootsListing;
 use reqwest::blocking::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -78,12 +79,16 @@ struct BridgeStatusRemote {
 struct BridgeJobRemote {
     job_id: String,
     command: String,
+    #[serde(default)]
+    idempotency_key: Option<String>,
     status: String,
     terminal: bool,
     recovered_after_restart: bool,
     requested_at_unix: u64,
     completed_at_unix: Option<u64>,
     signer_mode: String,
+    #[serde(default)]
+    event_kind: Option<u32>,
     event_id: Option<String>,
     event_addr: Option<String>,
     delivery_policy: String,
@@ -111,6 +116,24 @@ struct Nip46SessionRemote {
     auth_required: bool,
     authorized: bool,
     expires_in_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BridgePublishResponseRemote {
+    deduplicated: bool,
+    job: BridgeJobRemote,
+}
+
+#[derive(Debug, Clone)]
+pub struct BridgeListingPublishResult {
+    pub deduplicated: bool,
+    pub job_id: String,
+    pub idempotency_key: Option<String>,
+    pub status: String,
+    pub signer_mode: String,
+    pub event_kind: Option<u32>,
+    pub event_id: Option<String>,
+    pub event_addr: Option<String>,
 }
 
 pub fn status(config: &RuntimeConfig) -> CommandOutput {
@@ -332,6 +355,34 @@ pub fn bridge_job(
         Err(DaemonRpcError::UnknownJob(_)) => Ok(None),
         Err(error) => Err(error),
     }
+}
+
+pub fn bridge_listing_publish(
+    config: &RuntimeConfig,
+    listing: &RadrootsListing,
+    kind: u32,
+    idempotency_key: Option<&str>,
+) -> Result<BridgeListingPublishResult, DaemonRpcError> {
+    let response: BridgePublishResponseRemote = call(
+        config,
+        "bridge.listing.publish",
+        Some(serde_json::json!({
+            "listing": listing,
+            "kind": kind,
+            "idempotency_key": idempotency_key,
+        })),
+        RpcAuthMode::BridgeBearer,
+    )?;
+    Ok(BridgeListingPublishResult {
+        deduplicated: response.deduplicated,
+        job_id: response.job.job_id,
+        idempotency_key: response.job.idempotency_key,
+        status: response.job.status,
+        signer_mode: response.job.signer_mode,
+        event_kind: response.job.event_kind,
+        event_id: response.job.event_id,
+        event_addr: response.job.event_addr,
+    })
 }
 
 fn bridge_status(config: &RuntimeConfig) -> Result<BridgeStatusRemote, DaemonRpcError> {

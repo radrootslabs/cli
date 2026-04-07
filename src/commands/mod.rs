@@ -59,9 +59,9 @@ pub fn dispatch(
             ListingCommand::New(args) => listing::new(config, args),
             ListingCommand::Validate(args) => listing::validate(config, args),
             ListingCommand::Get(args) => listing::get(config, args),
-            ListingCommand::Publish(_) => unimplemented_command("listing publish"),
-            ListingCommand::Update(_) => unimplemented_command("listing update"),
-            ListingCommand::Archive(_) => unimplemented_command("listing archive"),
+            ListingCommand::Publish(args) => listing::publish(config, args),
+            ListingCommand::Update(args) => listing::update(config, args),
+            ListingCommand::Archive(args) => listing::archive(config, args),
         },
         Command::Local(local) => match &local.command {
             LocalCommand::Init => local::init(config),

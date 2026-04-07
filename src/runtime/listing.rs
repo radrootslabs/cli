@@ -8,7 +8,7 @@ use radroots_core::{
     RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
 use radroots_events::RadrootsNostrEvent;
-use radroots_events::kinds::KIND_LISTING_DRAFT;
+use radroots_events::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
 use radroots_events::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingBin,
     RadrootsListingDeliveryMethod, RadrootsListingFarmRef, RadrootsListingLocation,
@@ -22,19 +22,23 @@ use radroots_trade::listing::validation::validate_listing_event;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cli::{ListingFileArgs, ListingNewArgs, RecordKeyArgs};
+use crate::cli::{ListingFileArgs, ListingMutationArgs, ListingNewArgs, RecordKeyArgs};
 use crate::domain::runtime::{
-    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingNewView,
+    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView,
+    ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
     ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime::daemon;
+use crate::runtime::daemon::DaemonRpcError;
 use crate::runtime::sync::freshness_from_executor;
 
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
+const LISTING_WRITE_SOURCE: &str = "daemon bridge · durable write plane";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -156,6 +160,23 @@ struct ListingRow {
 #[derive(Debug, Clone, Deserialize)]
 struct FarmRow {
     d_tag: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ListingMutationOperation {
+    Publish,
+    Update,
+    Archive,
+}
+
+impl ListingMutationOperation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Publish => "publish",
+            Self::Update => "update",
+            Self::Archive => "archive",
+        }
+    }
 }
 
 pub fn scaffold(
@@ -428,6 +449,169 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<ListingGetVie
         reason: None,
         actions: Vec::new(),
     })
+}
+
+pub fn publish(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+) -> Result<ListingMutationView, RuntimeError> {
+    mutate(config, args, ListingMutationOperation::Publish)
+}
+
+pub fn update(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+) -> Result<ListingMutationView, RuntimeError> {
+    mutate(config, args, ListingMutationOperation::Update)
+}
+
+pub fn archive(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+) -> Result<ListingMutationView, RuntimeError> {
+    mutate(config, args, ListingMutationOperation::Archive)
+}
+
+fn mutate(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+) -> Result<ListingMutationView, RuntimeError> {
+    let contents = fs::read_to_string(&args.file)?;
+    let parsed = toml::from_str::<ListingDraftDocument>(&contents).map_err(|error| {
+        RuntimeError::Config(format!(
+            "invalid listing draft {}: {error}",
+            args.file.display()
+        ))
+    })?;
+    let context = validation_context(config)?;
+    let mut canonical = canonicalize_draft(&parsed, &contents, &context).map_err(|issue| {
+        RuntimeError::Config(format!(
+            "invalid listing draft {}: {} ({})",
+            args.file.display(),
+            issue.message,
+            issue.field
+        ))
+    })?;
+
+    if matches!(operation, ListingMutationOperation::Archive) {
+        canonical.listing.availability = Some(RadrootsListingAvailability::Status {
+            status: RadrootsListingStatus::Other {
+                value: "archived".to_owned(),
+            },
+        });
+    }
+
+    let (event_preview, listing_addr) = build_listing_event_preview(&canonical)?;
+
+    if config.output.dry_run {
+        return Ok(ListingMutationView {
+            state: "dry_run".to_owned(),
+            operation: operation.as_str().to_owned(),
+            source: LISTING_WRITE_SOURCE.to_owned(),
+            file: args.file.display().to_string(),
+            listing_id: canonical.listing_id.clone(),
+            listing_addr: listing_addr.clone(),
+            seller_pubkey: canonical.seller_pubkey.clone(),
+            event_kind: KIND_LISTING,
+            dry_run: true,
+            deduplicated: false,
+            job_id: None,
+            job_status: None,
+            signer_mode: None,
+            event_id: None,
+            event_addr: Some(listing_addr.clone()),
+            idempotency_key: args.idempotency_key.clone(),
+            reason: Some("dry run requested; daemon publish skipped".to_owned()),
+            job: args.print_job.then(|| ListingMutationJobView {
+                rpc_method: "bridge.listing.publish".to_owned(),
+                state: "not_submitted".to_owned(),
+                job_id: None,
+                idempotency_key: args.idempotency_key.clone(),
+                signer_mode: Some(config.signer.backend.as_str().to_owned()),
+            }),
+            event: args.print_event.then_some(event_preview),
+            actions: vec![format!(
+                "radroots listing {} {}",
+                operation.as_str(),
+                args.file.display()
+            )],
+        });
+    }
+
+    match daemon::bridge_listing_publish(
+        config,
+        &canonical.listing,
+        KIND_LISTING,
+        args.idempotency_key.as_deref(),
+    ) {
+        Ok(result) => {
+            let failed = result.status == "failed";
+            let mut actions = Vec::new();
+            if failed {
+                if let Some(job_id) = &Some(result.job_id.clone()) {
+                    actions.push(format!("radroots job get {job_id}"));
+                }
+                actions.push("radroots rpc status".to_owned());
+            } else {
+                actions.push(format!("radroots job get {}", result.job_id));
+                actions.push(format!("radroots job watch {}", result.job_id));
+            }
+
+            Ok(ListingMutationView {
+                state: if failed {
+                    "unavailable".to_owned()
+                } else if result.deduplicated {
+                    "deduplicated".to_owned()
+                } else {
+                    result.status.clone()
+                },
+                operation: operation.as_str().to_owned(),
+                source: LISTING_WRITE_SOURCE.to_owned(),
+                file: args.file.display().to_string(),
+                listing_id: canonical.listing_id,
+                listing_addr: listing_addr.clone(),
+                seller_pubkey: canonical.seller_pubkey.clone(),
+                event_kind: result.event_kind.unwrap_or(KIND_LISTING),
+                dry_run: false,
+                deduplicated: result.deduplicated,
+                job_id: Some(result.job_id.clone()),
+                job_status: Some(result.status.clone()),
+                signer_mode: Some(result.signer_mode.clone()),
+                event_id: result.event_id.clone(),
+                event_addr: result
+                    .event_addr
+                    .clone()
+                    .or_else(|| Some(listing_addr.clone())),
+                idempotency_key: result.idempotency_key.clone(),
+                reason: failed.then(|| {
+                    "daemon publish job failed before relay delivery completed".to_owned()
+                }),
+                job: args.print_job.then(|| ListingMutationJobView {
+                    rpc_method: "bridge.listing.publish".to_owned(),
+                    state: result.status,
+                    job_id: Some(result.job_id),
+                    idempotency_key: result.idempotency_key,
+                    signer_mode: Some(result.signer_mode),
+                }),
+                event: args.print_event.then(|| ListingMutationEventView {
+                    event_id: result.event_id,
+                    event_addr: result.event_addr.unwrap_or(listing_addr),
+                    ..event_preview
+                }),
+                actions,
+            })
+        }
+        Err(error) => Ok(daemon_error_view(
+            config,
+            args,
+            operation,
+            &canonical,
+            listing_addr,
+            event_preview,
+            error,
+        )),
+    }
 }
 
 fn scaffold_contents(draft: &ListingDraftDocument) -> Result<String, RuntimeError> {
@@ -729,6 +913,139 @@ fn invalid_validation_view(
         farm_d_tag: context.selected_farm_d_tag.clone(),
         issues: vec![issue],
         actions,
+    }
+}
+
+fn build_listing_event_preview(
+    canonical: &CanonicalListingDraft,
+) -> Result<(ListingMutationEventView, String), RuntimeError> {
+    let parts = to_wire_parts_with_kind(&canonical.listing, KIND_LISTING)
+        .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
+    let event = RadrootsNostrEvent {
+        id: String::new(),
+        author: canonical.seller_pubkey.clone(),
+        created_at: 0,
+        kind: KIND_LISTING,
+        tags: parts.tags.clone(),
+        content: parts.content.clone(),
+        sig: String::new(),
+    };
+    let validated = validate_listing_event(&event)
+        .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
+    Ok((
+        ListingMutationEventView {
+            kind: KIND_LISTING,
+            author: canonical.seller_pubkey.clone(),
+            content: parts.content,
+            tags: parts.tags,
+            event_id: None,
+            event_addr: validated.listing_addr.clone(),
+        },
+        validated.listing_addr,
+    ))
+}
+
+fn daemon_error_view(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+    canonical: &CanonicalListingDraft,
+    listing_addr: String,
+    event_preview: ListingMutationEventView,
+    error: DaemonRpcError,
+) -> ListingMutationView {
+    match error {
+        DaemonRpcError::Unconfigured(reason)
+        | DaemonRpcError::Unauthorized(reason)
+        | DaemonRpcError::MethodUnavailable(reason) => ListingMutationView {
+            state: "unconfigured".to_owned(),
+            operation: operation.as_str().to_owned(),
+            source: LISTING_WRITE_SOURCE.to_owned(),
+            file: args.file.display().to_string(),
+            listing_id: canonical.listing_id.clone(),
+            listing_addr,
+            seller_pubkey: canonical.seller_pubkey.clone(),
+            event_kind: KIND_LISTING,
+            dry_run: false,
+            deduplicated: false,
+            job_id: None,
+            job_status: None,
+            signer_mode: None,
+            event_id: None,
+            event_addr: None,
+            idempotency_key: args.idempotency_key.clone(),
+            reason: Some(reason),
+            job: args.print_job.then(|| ListingMutationJobView {
+                rpc_method: "bridge.listing.publish".to_owned(),
+                state: "unconfigured".to_owned(),
+                job_id: None,
+                idempotency_key: args.idempotency_key.clone(),
+                signer_mode: Some(config.signer.backend.as_str().to_owned()),
+            }),
+            event: args.print_event.then_some(event_preview),
+            actions: vec![
+                "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell".to_owned(),
+                "start radrootsd with bridge ingress enabled".to_owned(),
+            ],
+        },
+        DaemonRpcError::External(reason) => ListingMutationView {
+            state: "unavailable".to_owned(),
+            operation: operation.as_str().to_owned(),
+            source: LISTING_WRITE_SOURCE.to_owned(),
+            file: args.file.display().to_string(),
+            listing_id: canonical.listing_id.clone(),
+            listing_addr,
+            seller_pubkey: canonical.seller_pubkey.clone(),
+            event_kind: KIND_LISTING,
+            dry_run: false,
+            deduplicated: false,
+            job_id: None,
+            job_status: None,
+            signer_mode: None,
+            event_id: None,
+            event_addr: None,
+            idempotency_key: args.idempotency_key.clone(),
+            reason: Some(reason),
+            job: args.print_job.then(|| ListingMutationJobView {
+                rpc_method: "bridge.listing.publish".to_owned(),
+                state: "unavailable".to_owned(),
+                job_id: None,
+                idempotency_key: args.idempotency_key.clone(),
+                signer_mode: Some(config.signer.backend.as_str().to_owned()),
+            }),
+            event: args.print_event.then_some(event_preview),
+            actions: vec!["start radrootsd and verify the rpc url".to_owned()],
+        },
+        DaemonRpcError::InvalidResponse(reason)
+        | DaemonRpcError::Remote(reason)
+        | DaemonRpcError::UnknownJob(reason) => ListingMutationView {
+            state: "error".to_owned(),
+            operation: operation.as_str().to_owned(),
+            source: LISTING_WRITE_SOURCE.to_owned(),
+            file: args.file.display().to_string(),
+            listing_id: canonical.listing_id.clone(),
+            listing_addr,
+            seller_pubkey: canonical.seller_pubkey.clone(),
+            event_kind: KIND_LISTING,
+            dry_run: false,
+            deduplicated: false,
+            job_id: None,
+            job_status: None,
+            signer_mode: None,
+            event_id: None,
+            event_addr: None,
+            idempotency_key: args.idempotency_key.clone(),
+            reason: Some(reason),
+            job: args.print_job.then(|| ListingMutationJobView {
+                rpc_method: "bridge.listing.publish".to_owned(),
+                state: "error".to_owned(),
+                job_id: None,
+                idempotency_key: args.idempotency_key.clone(),
+                signer_mode: Some(config.signer.backend.as_str().to_owned()),
+            }),
+            event: args.print_event.then_some(event_preview),
+            actions: vec!["inspect the daemon rpc response contract".to_owned()],
+        },
     }
 }
 
