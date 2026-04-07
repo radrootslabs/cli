@@ -83,10 +83,10 @@ impl Command {
                 JobCommand::Watch(_) => "job watch",
             },
             Self::Listing(listing) => match listing.command {
-                ListingCommand::New => "listing new",
-                ListingCommand::Validate => "listing validate",
+                ListingCommand::New(_) => "listing new",
+                ListingCommand::Validate(_) => "listing validate",
                 ListingCommand::Get(_) => "listing get",
-                ListingCommand::Publish => "listing publish",
+                ListingCommand::Publish(_) => "listing publish",
                 ListingCommand::Update(_) => "listing update",
                 ListingCommand::Archive(_) => "listing archive",
             },
@@ -162,8 +162,8 @@ impl Command {
             }) | Self::Sync(SyncArgs {
                 command: SyncCommand::Pull | SyncCommand::Push,
             }) | Self::Listing(ListingArgs {
-                command: ListingCommand::New
-                    | ListingCommand::Publish
+                command: ListingCommand::New(_)
+                    | ListingCommand::Publish(_)
                     | ListingCommand::Update(_)
                     | ListingCommand::Archive(_),
             }) | Self::Order(OrderArgs {
@@ -326,12 +326,23 @@ pub struct ListingArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ListingCommand {
-    New,
-    Validate,
+    New(ListingNewArgs),
+    Validate(ListingFileArgs),
     Get(RecordKeyArgs),
-    Publish,
+    Publish(ListingFileArgs),
     Update(RecordKeyArgs),
     Archive(RecordKeyArgs),
+}
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct ListingNewArgs {
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListingFileArgs {
+    pub file: PathBuf,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -620,8 +631,41 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
-        let listing = CliArgs::parse_from(["radroots", "listing", "get", "lst_123"]);
-        match listing.command {
+        let listing_new = CliArgs::parse_from(["radroots", "listing", "new"]);
+        match listing_new.command {
+            Command::Listing(args) => match args.command {
+                ListingCommand::New(new) => assert!(new.output.is_none()),
+                _ => panic!("unexpected listing subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let listing_validate =
+            CliArgs::parse_from(["radroots", "listing", "validate", "draft.toml"]);
+        match listing_validate.command {
+            Command::Listing(args) => match args.command {
+                ListingCommand::Validate(file) => {
+                    assert_eq!(file.file.to_str(), Some("draft.toml"));
+                }
+                _ => panic!("unexpected listing subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let listing_publish =
+            CliArgs::parse_from(["radroots", "listing", "publish", "draft.toml"]);
+        match listing_publish.command {
+            Command::Listing(args) => match args.command {
+                ListingCommand::Publish(file) => {
+                    assert_eq!(file.file.to_str(), Some("draft.toml"));
+                }
+                _ => panic!("unexpected listing subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let listing_get = CliArgs::parse_from(["radroots", "listing", "get", "lst_123"]);
+        match listing_get.command {
             Command::Listing(args) => match args.command {
                 ListingCommand::Get(key) => assert_eq!(key.key, "lst_123"),
                 _ => panic!("unexpected listing subcommand"),

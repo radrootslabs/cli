@@ -75,6 +75,9 @@ pub enum CommandView {
     ConfigShow(ConfigShowView),
     Doctor(DoctorView),
     Find(FindView),
+    ListingGet(ListingGetView),
+    ListingNew(ListingNewView),
+    ListingValidate(ListingValidateView),
     LocalBackup(LocalBackupView),
     LocalExport(LocalExportView),
     LocalInit(LocalInitView),
@@ -344,6 +347,85 @@ pub struct FindView {
 }
 
 impl FindView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListingNewView {
+    pub state: String,
+    pub source: String,
+    pub file: String,
+    pub listing_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub farm_d_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListingValidateView {
+    pub state: String,
+    pub source: String,
+    pub file: String,
+    pub valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub farm_d_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<ListingValidationIssueView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListingValidationIssueView {
+    pub field: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListingGetView {
+    pub state: String,
+    pub source: String,
+    pub lookup: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_primary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available: Option<FindQuantityView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<FindPriceView>,
+    pub provenance: FindResultProvenanceView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl ListingGetView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "unconfigured" => CommandDisposition::Unconfigured,

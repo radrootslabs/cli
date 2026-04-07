@@ -1,6 +1,7 @@
 pub mod doctor;
 pub mod find;
 pub mod identity;
+pub mod listing;
 pub mod local;
 pub mod myc;
 pub mod net;
@@ -53,10 +54,10 @@ pub fn dispatch(
             JobCommand::Watch(_) => unimplemented_command("job watch"),
         },
         Command::Listing(listing) => match &listing.command {
-            ListingCommand::New => unimplemented_command("listing new"),
-            ListingCommand::Validate => unimplemented_command("listing validate"),
-            ListingCommand::Get(_) => unimplemented_command("listing get"),
-            ListingCommand::Publish => unimplemented_command("listing publish"),
+            ListingCommand::New(args) => listing::new(config, args),
+            ListingCommand::Validate(args) => listing::validate(config, args),
+            ListingCommand::Get(args) => listing::get(config, args),
+            ListingCommand::Publish(_) => unimplemented_command("listing publish"),
             ListingCommand::Update(_) => unimplemented_command("listing update"),
             ListingCommand::Archive(_) => unimplemented_command("listing archive"),
         },

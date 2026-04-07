@@ -2,8 +2,9 @@ use std::io::{self, Write};
 
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
-    FindView, LocalBackupView, LocalExportView, LocalInitView, LocalStatusView, NetStatusView,
-    RelayListView, SyncActionView, SyncStatusView, SyncWatchView,
+    FindView, ListingGetView, ListingNewView, ListingValidateView, LocalBackupView,
+    LocalExportView, LocalInitView, LocalStatusView, NetStatusView, RelayListView, SyncActionView,
+    SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -84,6 +85,15 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::Find(view) => {
             render_find(stdout, view)?;
+        }
+        CommandView::ListingGet(view) => {
+            render_listing_get(stdout, view)?;
+        }
+        CommandView::ListingNew(view) => {
+            render_listing_new(stdout, view)?;
+        }
+        CommandView::ListingValidate(view) => {
+            render_listing_validate(stdout, view)?;
         }
         CommandView::LocalBackup(view) => {
             render_local_backup(stdout, view)?;
@@ -188,6 +198,18 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::Find(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::ListingGet(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::ListingNew(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::ListingValidate(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -488,6 +510,162 @@ fn render_find(stdout: &mut dyn Write, view: &FindView) -> Result<(), RuntimeErr
         view.freshness.display,
         relay_count_text(view.relay_count)
     )?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_listing_new(
+    stdout: &mut dyn Write,
+    view: &ListingNewView,
+) -> Result<(), RuntimeError> {
+    write_context(stdout, "listing · draft created")?;
+    let mut rows = vec![
+        ("file", view.file.as_str()),
+        ("listing id", view.listing_id.as_str()),
+    ];
+    if let Some(account_id) = &view.selected_account_id {
+        rows.push(("account id", account_id.as_str()));
+    }
+    if let Some(seller_pubkey) = &view.seller_pubkey {
+        rows.push(("seller", seller_pubkey.as_str()));
+    }
+    if let Some(farm_d_tag) = &view.farm_d_tag {
+        rows.push(("farm d_tag", farm_d_tag.as_str()));
+    }
+    render_pairs(stdout, "draft", rows.as_slice())?;
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_listing_validate(
+    stdout: &mut dyn Write,
+    view: &ListingValidateView,
+) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        match view.state.as_str() {
+            "valid" => "listing · valid",
+            _ => "listing · invalid",
+        },
+    )?;
+    let status = if view.valid {
+        "ready to publish"
+    } else {
+        "needs edits"
+    };
+    let mut rows = vec![("file", view.file.as_str()), ("status", status)];
+    if let Some(listing_id) = &view.listing_id {
+        rows.push(("listing id", listing_id.as_str()));
+    }
+    if let Some(seller_pubkey) = &view.seller_pubkey {
+        rows.push(("seller", seller_pubkey.as_str()));
+    }
+    if let Some(farm_d_tag) = &view.farm_d_tag {
+        rows.push(("farm d_tag", farm_d_tag.as_str()));
+    }
+    render_pairs(stdout, "validation", rows.as_slice())?;
+    if !view.issues.is_empty() {
+        writeln!(stdout, "issues")?;
+        for issue in &view.issues {
+            match issue.line {
+                Some(line) => writeln!(
+                    stdout,
+                    "  {field}  {message} (line {line})",
+                    field = issue.field,
+                    message = issue.message
+                )?,
+                None => writeln!(
+                    stdout,
+                    "  {field}  {message}",
+                    field = issue.field,
+                    message = issue.message
+                )?,
+            }
+        }
+        writeln!(stdout)?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_listing_get(
+    stdout: &mut dyn Write,
+    view: &ListingGetView,
+) -> Result<(), RuntimeError> {
+    let context = view
+        .listing_id
+        .clone()
+        .unwrap_or_else(|| view.lookup.clone());
+    write_context(stdout, format!("listing · {context}").as_str())?;
+
+    match view.state.as_str() {
+        "unconfigured" | "missing" => {
+            if let Some(reason) = &view.reason {
+                writeln!(stdout, "{reason}")?;
+            }
+        }
+        _ => {
+            if let Some(title) = &view.title {
+                writeln!(stdout, "{title}")?;
+                writeln!(stdout)?;
+            }
+            let mut rows = Vec::<(&str, String)>::new();
+            if let Some(product_key) = &view.product_key {
+                rows.push(("key", product_key.clone()));
+            }
+            if let Some(category) = &view.category {
+                rows.push(("category", category.clone()));
+            }
+            if let Some(price) = &view.price {
+                rows.push((
+                    "price",
+                    format_price(
+                        price.amount,
+                        &price.currency,
+                        price.per_amount,
+                        &price.per_unit,
+                    ),
+                ));
+            }
+            if let Some(available) = &view.available {
+                rows.push((
+                    "available",
+                    format_available(
+                        available.available_amount.unwrap_or(available.total_amount),
+                        available
+                            .label
+                            .as_deref()
+                            .unwrap_or(available.total_unit.as_str()),
+                    ),
+                ));
+            }
+            if let Some(location_primary) = &view.location_primary {
+                rows.push(("location", location_primary.clone()));
+            }
+            if let Some(listing_id) = &view.listing_id {
+                rows.push(("listing id", listing_id.clone()));
+            }
+            render_owned_pairs(stdout, "listing", rows.as_slice())?;
+            if let Some(description) = &view.description {
+                writeln!(stdout, "{description}")?;
+                writeln!(stdout)?;
+            }
+            writeln!(
+                stdout,
+                "provenance: local replica · {} · {}",
+                view.provenance.freshness,
+                relay_count_text(view.provenance.relay_count)
+            )?;
+            writeln!(stdout, "source: {}", view.source)?;
+        }
+    }
+
+    if view.state != "ready" {
+        writeln!(stdout)?;
+        writeln!(stdout, "source: {}", view.source)?;
+    }
     render_actions(stdout, &view.actions)?;
     Ok(())
 }
@@ -1000,6 +1178,9 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
         CommandView::Find(_) => "find",
+        CommandView::ListingGet(_) => "listing get",
+        CommandView::ListingNew(_) => "listing new",
+        CommandView::ListingValidate(_) => "listing validate",
         CommandView::LocalBackup(_) => "local backup",
         CommandView::LocalExport(_) => "local export",
         CommandView::LocalInit(_) => "local init",
