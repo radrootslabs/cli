@@ -12,10 +12,20 @@ use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
+fn data_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        workdir.join("local").join("Radroots").join("data")
+    } else {
+        workdir.join("home").join(".radroots").join("data")
+    }
+}
+
 fn order_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
     command.current_dir(workdir);
     command.env("HOME", workdir.join("home"));
+    command.env("APPDATA", workdir.join("roaming"));
+    command.env("LOCALAPPDATA", workdir.join("local"));
     for key in [
         "RADROOTS_ENV_FILE",
         "RADROOTS_OUTPUT",
@@ -310,7 +320,7 @@ fn order_new_creates_a_local_draft_with_selected_account_defaults() {
     assert_eq!(json["items"][0]["bin_count"], 2);
 
     let file = json["file"].as_str().expect("draft file");
-    assert!(file.contains(".local/share/radroots/orders/drafts/ord_"));
+    assert!(file.contains("/data/apps/cli/orders/drafts/ord_"));
     let contents = fs::read_to_string(file).expect("read order draft");
     assert!(contents.contains("kind = \"order_draft_v1\""));
     assert!(contents.contains("listing_lookup = \"pasture-eggs\""));
@@ -398,7 +408,7 @@ fn order_get_and_ls_read_local_drafts_and_report_missing() {
 fn order_get_surfaces_recorded_job_metadata_from_the_local_draft_store() {
     let _guard = order_test_guard();
     let dir = tempdir().expect("tempdir");
-    let drafts_dir = dir.path().join("home/.local/share/radroots/orders/drafts");
+    let drafts_dir = data_root(dir.path()).join("apps/cli/orders/drafts");
     fs::create_dir_all(&drafts_dir).expect("create drafts dir");
     let draft_path = drafts_dir.join("ord_AAAAAAAAAAAAAAAAAAAAAg.toml");
     fs::write(
@@ -544,7 +554,7 @@ fn order_watch_reports_job_frames_for_submitted_order() {
         other => panic!("unexpected mock rpc method {other}"),
     });
 
-    let drafts_dir = dir.path().join("home/.local/share/radroots/orders/drafts");
+    let drafts_dir = data_root(dir.path()).join("apps/cli/orders/drafts");
     fs::create_dir_all(&drafts_dir).expect("create drafts dir");
     fs::write(
         drafts_dir.join("ord_AAAAAAAAAAAAAAAAAAAAAg.toml"),
@@ -596,7 +606,7 @@ job_id = "job_watch_01"
 fn order_history_lists_submitted_order_drafts() {
     let _guard = order_test_guard();
     let dir = tempdir().expect("tempdir");
-    let drafts_dir = dir.path().join("home/.local/share/radroots/orders/drafts");
+    let drafts_dir = data_root(dir.path()).join("apps/cli/orders/drafts");
     fs::create_dir_all(&drafts_dir).expect("create drafts dir");
     fs::write(
         drafts_dir.join("ord_AAAAAAAAAAAAAAAAAAAAAg.toml"),
@@ -649,7 +659,7 @@ submitted_at_unix = 1712720000
 fn order_cancel_is_truthfully_narrowed_when_trade_chain_state_is_unavailable() {
     let _guard = order_test_guard();
     let dir = tempdir().expect("tempdir");
-    let drafts_dir = dir.path().join("home/.local/share/radroots/orders/drafts");
+    let drafts_dir = data_root(dir.path()).join("apps/cli/orders/drafts");
     fs::create_dir_all(&drafts_dir).expect("create drafts dir");
     fs::write(
         drafts_dir.join("ord_AAAAAAAAAAAAAAAAAAAAAg.toml"),

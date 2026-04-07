@@ -6,10 +6,20 @@ use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+fn data_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        workdir.join("local").join("Radroots").join("data")
+    } else {
+        workdir.join("home").join(".radroots").join("data")
+    }
+}
+
 fn cli_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
     command.current_dir(workdir);
     command.env("HOME", workdir.join("home"));
+    command.env("APPDATA", workdir.join("roaming"));
+    command.env("LOCALAPPDATA", workdir.join("local"));
     for key in [
         "RADROOTS_ENV_FILE",
         "RADROOTS_OUTPUT",
@@ -178,9 +188,7 @@ fn seed_trade_product(
     qty_avail: i64,
     location_label: Option<&str>,
 ) {
-    let replica_db = workdir
-        .join("home")
-        .join(".local/share/radroots/replica/replica.sqlite");
+    let replica_db = data_root(workdir).join("apps/cli/replica/replica.sqlite");
     let executor = SqliteExecutor::open(&replica_db).expect("open replica db");
     let now = "2026-04-07T00:00:00.000Z";
     executor

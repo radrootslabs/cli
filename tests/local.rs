@@ -6,10 +6,20 @@ use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
+fn data_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        workdir.join("local").join("Radroots").join("data")
+    } else {
+        workdir.join("home").join(".radroots").join("data")
+    }
+}
+
 fn local_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
     command.current_dir(workdir);
     command.env("HOME", workdir.join("home"));
+    command.env("APPDATA", workdir.join("roaming"));
+    command.env("LOCALAPPDATA", workdir.join("local"));
     for key in [
         "RADROOTS_ENV_FILE",
         "RADROOTS_OUTPUT",
@@ -49,21 +59,16 @@ fn local_init_json_creates_replica_db_and_roots() {
     assert_eq!(json["state"], "initialized");
     assert_eq!(json["replica_db"], "ready");
 
-    let replica_db = dir
-        .path()
-        .join("home")
-        .join(".local/share/radroots/replica/replica.sqlite");
+    let replica_db = data_root(dir.path()).join("apps/cli/replica/replica.sqlite");
     assert!(replica_db.exists());
     assert!(
-        dir.path()
-            .join("home")
-            .join(".local/share/radroots/replica/backups")
+        data_root(dir.path())
+            .join("apps/cli/replica/backups")
             .exists()
     );
     assert!(
-        dir.path()
-            .join("home")
-            .join(".local/share/radroots/replica/exports")
+        data_root(dir.path())
+            .join("apps/cli/replica/exports")
             .exists()
     );
 }

@@ -489,7 +489,7 @@ fn render_config_show(
     let user_config = format!(
         "{} · {}",
         present_absent(view.config_files.user_present),
-        view.paths.user_config_path
+        view.paths.app_config_path
     );
     let workspace_config = format!(
         "{} · {}",
@@ -500,9 +500,23 @@ fn render_config_show(
         stdout,
         "config roots",
         &[
-            ("user config", user_config.as_str()),
+            ("profile", view.paths.profile.as_str()),
+            ("app config", user_config.as_str()),
             ("workspace config", workspace_config.as_str()),
-            ("user state root", view.paths.user_state_root.as_str()),
+            ("app data root", view.paths.app_data_root.as_str()),
+            ("app logs root", view.paths.app_logs_root.as_str()),
+            (
+                "shared accounts data",
+                view.paths.shared_accounts_data_root.as_str(),
+            ),
+            (
+                "shared accounts secrets",
+                view.paths.shared_accounts_secrets_root.as_str(),
+            ),
+            (
+                "default identity path",
+                view.paths.default_identity_path.as_str(),
+            ),
         ],
     )?;
 
@@ -525,10 +539,7 @@ fn render_config_show(
             "secret backend",
             view.account.secret_backend.configured_primary.as_str(),
         ),
-        (
-            "legacy import path",
-            view.account.legacy_identity_path.as_str(),
-        ),
+        ("identity path", view.account.identity_path.as_str()),
     ];
     if let Some(fallback) = &view.account.secret_backend.configured_fallback {
         account_rows.push(("secret fallback", fallback.as_str()));
@@ -2066,9 +2077,16 @@ mod tests {
                     dry_run: false,
                 },
                 paths: PathsConfig {
-                    user_config_path: "/home/tester/.config/radroots/config.toml".into(),
+                    profile: "interactive_user".into(),
+                    app_config_path: "/home/tester/.radroots/config/apps/cli/config.toml".into(),
                     workspace_config_path: "/workspace/.radroots/config.toml".into(),
-                    user_state_root: "/home/tester/.local/share/radroots".into(),
+                    app_data_root: "/home/tester/.radroots/data/apps/cli".into(),
+                    app_logs_root: "/home/tester/.radroots/logs/apps/cli".into(),
+                    shared_accounts_data_root: "/home/tester/.radroots/data/shared/accounts".into(),
+                    shared_accounts_secrets_root: "/home/tester/.radroots/secrets/shared/accounts"
+                        .into(),
+                    default_identity_path:
+                        "/home/tester/.radroots/secrets/shared/identities/default.json".into(),
                 },
                 logging: LoggingConfig {
                     filter: "info".to_owned(),
@@ -2077,13 +2095,13 @@ mod tests {
                 },
                 account: AccountConfig {
                     selector: Some("acct_demo".into()),
-                    store_path: "/home/tester/.local/share/radroots/accounts/store.json".into(),
-                    secrets_dir: "/home/tester/.local/share/radroots/accounts/secrets".into(),
+                    store_path: "/home/tester/.radroots/data/shared/accounts/store.json".into(),
+                    secrets_dir: "/home/tester/.radroots/secrets/shared/accounts".into(),
                     secret_backend: RadrootsSecretBackend::EncryptedFile,
                     secret_fallback: None,
                 },
                 identity: IdentityConfig {
-                    path: "identity.json".into(),
+                    path: "/home/tester/.radroots/secrets/shared/identities/default.json".into(),
                 },
                 signer: SignerConfig {
                     backend: SignerBackend::Local,
@@ -2094,11 +2112,11 @@ mod tests {
                     source: RelayConfigSource::WorkspaceConfig,
                 },
                 local: LocalConfig {
-                    root: "/home/tester/.local/share/radroots/replica".into(),
-                    replica_db_path: "/home/tester/.local/share/radroots/replica/replica.sqlite"
+                    root: "/home/tester/.radroots/data/apps/cli/replica".into(),
+                    replica_db_path: "/home/tester/.radroots/data/apps/cli/replica/replica.sqlite"
                         .into(),
-                    backups_dir: "/home/tester/.local/share/radroots/replica/backups".into(),
-                    exports_dir: "/home/tester/.local/share/radroots/replica/exports".into(),
+                    backups_dir: "/home/tester/.radroots/data/apps/cli/replica/backups".into(),
+                    exports_dir: "/home/tester/.radroots/data/apps/cli/replica/exports".into(),
                 },
                 myc: MycConfig {
                     executable: "myc".into(),
@@ -2115,6 +2133,7 @@ mod tests {
         )
         .expect("runtime show");
         assert_eq!(view.output.format, "human");
+        assert_eq!(view.paths.profile, "interactive_user");
         assert_eq!(
             view.paths.workspace_config_path,
             "/workspace/.radroots/config.toml"
@@ -2123,14 +2142,14 @@ mod tests {
         assert!(
             view.account
                 .store_path
-                .ends_with(".local/share/radroots/accounts/store.json")
+                .ends_with(".radroots/data/shared/accounts/store.json")
         );
         assert_eq!(view.relay.count, 2);
         assert_eq!(view.relay.publish_policy, "any");
         assert!(
             view.local
                 .replica_db_path
-                .ends_with(".local/share/radroots/replica/replica.sqlite")
+                .ends_with(".radroots/data/apps/cli/replica/replica.sqlite")
         );
     }
 
@@ -2167,9 +2186,18 @@ mod tests {
                         dry_run: true,
                     },
                     paths: PathsConfig {
-                        user_config_path: "/home/tester/.config/radroots/config.toml".into(),
+                        profile: "interactive_user".into(),
+                        app_config_path: "/home/tester/.radroots/config/apps/cli/config.toml"
+                            .into(),
                         workspace_config_path: "/workspace/.radroots/config.toml".into(),
-                        user_state_root: "/home/tester/.local/share/radroots".into(),
+                        app_data_root: "/home/tester/.radroots/data/apps/cli".into(),
+                        app_logs_root: "/home/tester/.radroots/logs/apps/cli".into(),
+                        shared_accounts_data_root: "/home/tester/.radroots/data/shared/accounts"
+                            .into(),
+                        shared_accounts_secrets_root:
+                            "/home/tester/.radroots/secrets/shared/accounts".into(),
+                        default_identity_path:
+                            "/home/tester/.radroots/secrets/shared/identities/default.json".into(),
                     },
                     logging: LoggingConfig {
                         filter: "info".to_owned(),
@@ -2178,13 +2206,14 @@ mod tests {
                     },
                     account: AccountConfig {
                         selector: None,
-                        store_path: "/home/tester/.local/share/radroots/accounts/store.json".into(),
-                        secrets_dir: "/home/tester/.local/share/radroots/accounts/secrets".into(),
+                        store_path: "/home/tester/.radroots/data/shared/accounts/store.json".into(),
+                        secrets_dir: "/home/tester/.radroots/secrets/shared/accounts".into(),
                         secret_backend: RadrootsSecretBackend::EncryptedFile,
                         secret_fallback: None,
                     },
                     identity: IdentityConfig {
-                        path: "identity.json".into(),
+                        path: "/home/tester/.radroots/secrets/shared/identities/default.json"
+                            .into(),
                     },
                     signer: SignerConfig {
                         backend: SignerBackend::Local,
@@ -2195,11 +2224,11 @@ mod tests {
                         source: RelayConfigSource::Defaults,
                     },
                     local: LocalConfig {
-                        root: "/home/tester/.local/share/radroots/replica".into(),
+                        root: "/home/tester/.radroots/data/apps/cli/replica".into(),
                         replica_db_path:
-                            "/home/tester/.local/share/radroots/replica/replica.sqlite".into(),
-                        backups_dir: "/home/tester/.local/share/radroots/replica/backups".into(),
-                        exports_dir: "/home/tester/.local/share/radroots/replica/exports".into(),
+                            "/home/tester/.radroots/data/apps/cli/replica/replica.sqlite".into(),
+                        backups_dir: "/home/tester/.radroots/data/apps/cli/replica/backups".into(),
+                        exports_dir: "/home/tester/.radroots/data/apps/cli/replica/exports".into(),
                     },
                     myc: MycConfig {
                         executable: "myc".into(),

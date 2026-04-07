@@ -6,10 +6,60 @@ use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
+fn appdata_root(workdir: &Path) -> std::path::PathBuf {
+    workdir.join("roaming").join("Radroots")
+}
+
+fn localappdata_root(workdir: &Path) -> std::path::PathBuf {
+    workdir.join("local").join("Radroots")
+}
+
+fn interactive_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        localappdata_root(workdir)
+    } else {
+        workdir.join("home").join(".radroots")
+    }
+}
+
+fn config_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        appdata_root(workdir).join("config")
+    } else {
+        interactive_root(workdir).join("config")
+    }
+}
+
+fn data_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        localappdata_root(workdir).join("data")
+    } else {
+        interactive_root(workdir).join("data")
+    }
+}
+
+fn logs_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        localappdata_root(workdir).join("logs")
+    } else {
+        interactive_root(workdir).join("logs")
+    }
+}
+
+fn secrets_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        appdata_root(workdir).join("secrets")
+    } else {
+        interactive_root(workdir).join("secrets")
+    }
+}
+
 fn runtime_show_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
     command.current_dir(workdir);
     command.env("HOME", workdir.join("home"));
+    command.env("APPDATA", workdir.join("roaming"));
+    command.env("LOCALAPPDATA", workdir.join("local"));
     for key in [
         "RADROOTS_ENV_FILE",
         "RADROOTS_OUTPUT",
@@ -53,11 +103,11 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["output"]["verbosity"], "normal");
     assert_eq!(json["output"]["color"], true);
     assert_eq!(json["output"]["dry_run"], false);
+    assert_eq!(json["paths"]["profile"], "interactive_user");
     assert_eq!(
-        json["paths"]["user_config_path"],
-        dir.path()
-            .join("home")
-            .join(".config/radroots/config.toml")
+        json["paths"]["app_config_path"],
+        config_root(dir.path())
+            .join("apps/cli/config.toml")
             .display()
             .to_string()
     );
@@ -69,36 +119,64 @@ fn config_show_json_reports_default_bootstrap_state() {
             .to_string()
     );
     assert_eq!(
-        json["paths"]["user_state_root"],
-        dir.path()
-            .join("home")
-            .join(".local/share/radroots")
+        json["paths"]["app_data_root"],
+        data_root(dir.path()).join("apps/cli").display().to_string()
+    );
+    assert_eq!(
+        json["paths"]["app_logs_root"],
+        logs_root(dir.path()).join("apps/cli").display().to_string()
+    );
+    assert_eq!(
+        json["paths"]["shared_accounts_data_root"],
+        data_root(dir.path())
+            .join("shared/accounts")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        json["paths"]["shared_accounts_secrets_root"],
+        secrets_root(dir.path())
+            .join("shared/accounts")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        json["paths"]["default_identity_path"],
+        secrets_root(dir.path())
+            .join("shared/identities/default.json")
             .display()
             .to_string()
     );
     assert_eq!(json["logging"]["initialized"], true);
     assert_eq!(json["logging"]["stdout"], false);
-    assert_eq!(json["logging"]["directory"], Value::Null);
+    assert_eq!(
+        json["logging"]["directory"],
+        logs_root(dir.path()).join("apps/cli").display().to_string()
+    );
     assert_eq!(json["config_files"]["user_present"], false);
     assert_eq!(json["config_files"]["workspace_present"], false);
     assert_eq!(json["account"]["selector"], Value::Null);
     assert_eq!(
         json["account"]["store_path"],
-        dir.path()
-            .join("home")
-            .join(".local/share/radroots/accounts/store.json")
+        data_root(dir.path())
+            .join("shared/accounts/store.json")
             .display()
             .to_string()
     );
     assert_eq!(
         json["account"]["secrets_dir"],
-        dir.path()
-            .join("home")
-            .join(".local/share/radroots/accounts/secrets")
+        secrets_root(dir.path())
+            .join("shared/accounts")
             .display()
             .to_string()
     );
-    assert_eq!(json["account"]["legacy_identity_path"], "identity.json");
+    assert_eq!(
+        json["account"]["identity_path"],
+        secrets_root(dir.path())
+            .join("shared/identities/default.json")
+            .display()
+            .to_string()
+    );
     assert_eq!(
         json["account"]["secret_backend"]["configured_primary"],
         "host_vault"
@@ -119,17 +197,15 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["relay"]["source"], "defaults · local first");
     assert_eq!(
         json["local"]["root"],
-        dir.path()
-            .join("home")
-            .join(".local/share/radroots/replica")
+        data_root(dir.path())
+            .join("apps/cli/replica")
             .display()
             .to_string()
     );
     assert_eq!(
         json["local"]["replica_db_path"],
-        dir.path()
-            .join("home")
-            .join(".local/share/radroots/replica/replica.sqlite")
+        data_root(dir.path())
+            .join("apps/cli/replica/replica.sqlite")
             .display()
             .to_string()
     );
@@ -164,10 +240,7 @@ fn config_show_json_reflects_environment_configuration() {
     assert_eq!(json["logging"]["filter"], "debug");
     assert_eq!(json["logging"]["directory"], "logs/runtime");
     assert_eq!(json["account"]["selector"], "acct_demo");
-    assert_eq!(
-        json["account"]["legacy_identity_path"],
-        "state/identity.json"
-    );
+    assert_eq!(json["account"]["identity_path"], "state/identity.json");
     assert_eq!(
         json["account"]["secret_backend"]["active_backend"],
         "encrypted_file"

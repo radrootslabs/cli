@@ -145,9 +145,14 @@ pub struct LoggingRuntimeView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PathsRuntimeView {
-    pub user_config_path: String,
+    pub profile: String,
+    pub app_config_path: String,
     pub workspace_config_path: String,
-    pub user_state_root: String,
+    pub app_data_root: String,
+    pub app_logs_root: String,
+    pub shared_accounts_data_root: String,
+    pub shared_accounts_secrets_root: String,
+    pub default_identity_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,7 +161,7 @@ pub struct AccountRuntimeView {
     pub selector: Option<String>,
     pub store_path: String,
     pub secrets_dir: String,
-    pub legacy_identity_path: String,
+    pub identity_path: String,
     pub secret_backend: AccountSecretRuntimeView,
 }
 

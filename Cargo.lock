@@ -1658,6 +1658,7 @@ dependencies = [
  "radroots-protected-store",
  "radroots-replica-db",
  "radroots-replica-sync",
+ "radroots-runtime-paths",
  "radroots-secret-vault",
  "radroots-sql-core",
  "radroots-trade",
@@ -1708,6 +1709,7 @@ dependencies = [
  "nostr",
  "radroots-events",
  "radroots-runtime",
+ "radroots-runtime-paths",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -1829,6 +1831,7 @@ dependencies = [
  "getrandom 0.2.17",
  "radroots-log",
  "radroots-protected-store",
+ "radroots-runtime-paths",
  "radroots-secret-vault",
  "serde",
  "serde_json",
@@ -1838,6 +1841,13 @@ dependencies = [
  "toml",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "radroots-runtime-paths"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]

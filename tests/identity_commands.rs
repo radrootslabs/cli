@@ -6,10 +6,28 @@ use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
+fn data_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        workdir.join("local").join("Radroots").join("data")
+    } else {
+        workdir.join("home").join(".radroots").join("data")
+    }
+}
+
+fn secrets_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        workdir.join("roaming").join("Radroots").join("secrets")
+    } else {
+        workdir.join("home").join(".radroots").join("secrets")
+    }
+}
+
 fn cli_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
     command.current_dir(workdir);
     command.env("HOME", workdir.join("home"));
+    command.env("APPDATA", workdir.join("roaming"));
+    command.env("LOCALAPPDATA", workdir.join("local"));
     for key in [
         "RADROOTS_ENV_FILE",
         "RADROOTS_OUTPUT",
@@ -39,9 +57,7 @@ fn cli_command_in(workdir: &Path) -> Command {
 #[test]
 fn account_new_json_creates_local_account_store_entry() {
     let dir = tempdir().expect("tempdir");
-    let store_path = dir
-        .path()
-        .join("home/.local/share/radroots/accounts/store.json");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
 
     let output = cli_command_in(dir.path())
         .args(["--json", "account", "new"])
@@ -75,9 +91,7 @@ fn account_new_encrypts_file_backed_secret_fallback_by_default() {
     assert!(output.status.success());
     let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
     let account_id = json["account"]["id"].as_str().expect("account id");
-    let secrets_dir = dir
-        .path()
-        .join("home/.local/share/radroots/accounts/secrets");
+    let secrets_dir = secrets_root(dir.path()).join("shared/accounts");
     let envelope_path = secrets_dir.join(format!("{account_id}.secret.json"));
 
     assert!(secrets_dir.join(".vault.key").exists());
@@ -98,9 +112,7 @@ fn account_new_encrypts_file_backed_secret_fallback_by_default() {
 #[test]
 fn account_new_rejects_dry_run_without_creating_store_state() {
     let dir = tempdir().expect("tempdir");
-    let store_path = dir
-        .path()
-        .join("home/.local/share/radroots/accounts/store.json");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
 
     let output = cli_command_in(dir.path())
         .args(["--dry-run", "account", "new"])

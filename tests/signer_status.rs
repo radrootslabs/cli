@@ -6,10 +6,20 @@ use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
+fn data_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        workdir.join("local").join("Radroots").join("data")
+    } else {
+        workdir.join("home").join(".radroots").join("data")
+    }
+}
+
 fn cli_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
     command.current_dir(workdir);
     command.env("HOME", workdir.join("home"));
+    command.env("APPDATA", workdir.join("roaming"));
+    command.env("LOCALAPPDATA", workdir.join("local"));
     for key in [
         "RADROOTS_ENV_FILE",
         "RADROOTS_OUTPUT",
@@ -90,7 +100,7 @@ fn signer_status_reports_local_unconfigured_when_no_account_is_selected() {
 #[test]
 fn signer_status_reports_internal_error_for_invalid_account_store_file() {
     let dir = tempdir().expect("tempdir");
-    let accounts_dir = dir.path().join("home/.local/share/radroots/accounts");
+    let accounts_dir = data_root(dir.path()).join("shared/accounts");
     fs::create_dir_all(&accounts_dir).expect("create accounts dir");
     fs::write(accounts_dir.join("store.json"), "{ not valid json").expect("write invalid store");
 

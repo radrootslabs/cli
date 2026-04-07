@@ -1210,7 +1210,7 @@ fn scaffold_contents(draft: &OrderDraftDocument) -> Result<String, RuntimeError>
 }
 
 fn drafts_dir(config: &RuntimeConfig) -> PathBuf {
-    config.paths.user_state_root.join(ORDERS_DIR)
+    config.paths.app_data_root.join(ORDERS_DIR)
 }
 
 fn draft_lookup_path(config: &RuntimeConfig, lookup: &str) -> PathBuf {

@@ -3,6 +3,11 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use radroots_identity::DEFAULT_IDENTITY_PATH;
+use radroots_runtime_paths::{
+    DEFAULT_CONFIG_FILE_NAME, RadrootsPathOverrides, RadrootsPathProfile, RadrootsPathResolver,
+    RadrootsRuntimeNamespace,
+};
 use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
 use serde::Deserialize;
 use url::Url;
@@ -13,12 +18,11 @@ use crate::runtime::RuntimeError;
 const DEFAULT_LOG_FILTER: &str = "info";
 const DEFAULT_ENV_PATH: &str = ".env";
 const DEFAULT_WORKSPACE_CONFIG_PATH: &str = ".radroots/config.toml";
-const DEFAULT_USER_CONFIG_PATH: &str = ".config/radroots/config.toml";
-const DEFAULT_USER_STATE_ROOT: &str = ".local/share/radroots";
 const DEFAULT_LOCAL_STATE_DIR: &str = "replica";
 const DEFAULT_LOCAL_DB_FILE: &str = "replica.sqlite";
 const DEFAULT_LOCAL_BACKUPS_DIR: &str = "backups";
 const DEFAULT_LOCAL_EXPORTS_DIR: &str = "exports";
+const DEFAULT_SHARED_ACCOUNTS_STORE_FILE: &str = "store.json";
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:7070";
 const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
 const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
@@ -217,9 +221,14 @@ pub struct RuntimeConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathsConfig {
-    pub user_config_path: PathBuf,
+    pub profile: String,
+    pub app_config_path: PathBuf,
     pub workspace_config_path: PathBuf,
-    pub user_state_root: PathBuf,
+    pub app_data_root: PathBuf,
+    pub app_logs_root: PathBuf,
+    pub shared_accounts_data_root: PathBuf,
+    pub shared_accounts_secrets_root: PathBuf,
+    pub default_identity_path: PathBuf,
 }
 
 #[derive(Debug, Default)]
@@ -245,7 +254,7 @@ struct RpcFileConfig {
 pub trait Environment {
     fn var(&self, key: &str) -> Option<String>;
     fn current_dir(&self) -> Result<PathBuf, RuntimeError>;
-    fn home_dir(&self) -> Option<PathBuf>;
+    fn path_resolver(&self) -> RadrootsPathResolver;
 }
 
 pub struct SystemEnvironment;
@@ -261,8 +270,8 @@ impl Environment for SystemEnvironment {
         })
     }
 
-    fn home_dir(&self) -> Option<PathBuf> {
-        std::env::var_os("HOME").map(PathBuf::from)
+    fn path_resolver(&self) -> RadrootsPathResolver {
+        RadrootsPathResolver::current()
     }
 }
 
@@ -281,7 +290,7 @@ impl RuntimeConfig {
     ) -> Result<Self, RuntimeError> {
         let paths = resolve_paths(env)?;
         let workspace_config = load_cli_config_file(paths.workspace_config_path.as_path())?;
-        let user_config = load_cli_config_file(paths.user_config_path.as_path())?;
+        let app_config = load_cli_config_file(paths.app_config_path.as_path())?;
         let account_secret_backend = resolve_account_secret_backend(args, env, env_file)?
             .unwrap_or(RadrootsSecretBackend::HostVault(
                 RadrootsHostVaultPolicy::desktop(),
@@ -306,7 +315,9 @@ impl RuntimeConfig {
                     .or_else(|| env_value(env, env_file, &[ENV_CLI_LOG_FILTER, ENV_LOG_FILTER]))
                     .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_owned()),
                 directory: args.log_dir.clone().or_else(|| {
-                    env_value(env, env_file, &[ENV_CLI_LOG_DIR, ENV_LOG_DIR]).map(PathBuf::from)
+                    env_value(env, env_file, &[ENV_CLI_LOG_DIR, ENV_LOG_DIR])
+                        .map(PathBuf::from)
+                        .or_else(|| Some(paths.app_logs_root.clone()))
                 }),
                 stdout: resolve_bool_pair(
                     args.log_stdout,
@@ -324,8 +335,10 @@ impl RuntimeConfig {
                     .account
                     .clone()
                     .or_else(|| env_value(env, env_file, &[ENV_ACCOUNT])),
-                store_path: paths.user_state_root.join("accounts/store.json"),
-                secrets_dir: paths.user_state_root.join("accounts/secrets"),
+                store_path: paths
+                    .shared_accounts_data_root
+                    .join(DEFAULT_SHARED_ACCOUNTS_STORE_FILE),
+                secrets_dir: paths.shared_accounts_secrets_root.clone(),
                 secret_backend: account_secret_backend,
                 secret_fallback: account_secret_fallback,
             },
@@ -334,7 +347,7 @@ impl RuntimeConfig {
                     .identity_path
                     .clone()
                     .or_else(|| env_value(env, env_file, &[ENV_IDENTITY_PATH]).map(PathBuf::from))
-                    .unwrap_or_else(|| PathBuf::from("identity.json")),
+                    .unwrap_or_else(|| paths.default_identity_path.clone()),
             },
             signer: SignerConfig {
                 backend: args
@@ -349,21 +362,21 @@ impl RuntimeConfig {
                 args,
                 env,
                 env_file,
-                user_config.as_ref(),
+                app_config.as_ref(),
                 workspace_config.as_ref(),
             )?,
             local: LocalConfig {
-                root: paths.user_state_root.join(DEFAULT_LOCAL_STATE_DIR),
+                root: paths.app_data_root.join(DEFAULT_LOCAL_STATE_DIR),
                 replica_db_path: paths
-                    .user_state_root
+                    .app_data_root
                     .join(DEFAULT_LOCAL_STATE_DIR)
                     .join(DEFAULT_LOCAL_DB_FILE),
                 backups_dir: paths
-                    .user_state_root
+                    .app_data_root
                     .join(DEFAULT_LOCAL_STATE_DIR)
                     .join(DEFAULT_LOCAL_BACKUPS_DIR),
                 exports_dir: paths
-                    .user_state_root
+                    .app_data_root
                     .join(DEFAULT_LOCAL_STATE_DIR)
                     .join(DEFAULT_LOCAL_EXPORTS_DIR),
             },
@@ -377,7 +390,7 @@ impl RuntimeConfig {
             rpc: resolve_rpc_config(
                 env,
                 env_file,
-                user_config.as_ref(),
+                app_config.as_ref(),
                 workspace_config.as_ref(),
             )?,
         })
@@ -386,16 +399,34 @@ impl RuntimeConfig {
 
 fn resolve_paths(env: &dyn Environment) -> Result<PathsConfig, RuntimeError> {
     let current_dir = env.current_dir()?;
-    let home_dir = env.home_dir().ok_or_else(|| {
-        RuntimeError::Config(
-            "failed to resolve home directory for Radroots config roots".to_owned(),
+    let resolver = env.path_resolver();
+    let resolved = resolver
+        .resolve(
+            RadrootsPathProfile::InteractiveUser,
+            &RadrootsPathOverrides::default(),
         )
-    })?;
+        .map_err(|err| RuntimeError::Config(format!("resolve Radroots path roots: {err}")))?;
+    let app_namespace = RadrootsRuntimeNamespace::app("cli")
+        .map_err(|err| RuntimeError::Config(format!("resolve cli namespace: {err}")))?;
+    let shared_accounts_namespace = RadrootsRuntimeNamespace::shared("accounts")
+        .map_err(|err| RuntimeError::Config(format!("resolve shared accounts namespace: {err}")))?;
+    let app_paths = resolved.namespaced(&app_namespace);
+    let shared_accounts_paths = resolved.namespaced(&shared_accounts_namespace);
+    let default_identity_path = resolved
+        .secrets
+        .join("shared")
+        .join("identities")
+        .join(DEFAULT_IDENTITY_PATH);
 
     Ok(PathsConfig {
-        user_config_path: home_dir.join(DEFAULT_USER_CONFIG_PATH),
+        profile: RadrootsPathProfile::InteractiveUser.to_string(),
+        app_config_path: app_paths.config.join(DEFAULT_CONFIG_FILE_NAME),
         workspace_config_path: current_dir.join(DEFAULT_WORKSPACE_CONFIG_PATH),
-        user_state_root: home_dir.join(DEFAULT_USER_STATE_ROOT),
+        app_data_root: app_paths.data,
+        app_logs_root: app_paths.logs,
+        shared_accounts_data_root: shared_accounts_paths.data,
+        shared_accounts_secrets_root: shared_accounts_paths.secrets,
+        default_identity_path,
     })
 }
 
@@ -842,6 +873,7 @@ mod tests {
     };
     use crate::cli::CliArgs;
     use clap::Parser;
+    use radroots_runtime_paths::{RadrootsHostEnvironment, RadrootsPathResolver, RadrootsPlatform};
     use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
     use std::collections::BTreeMap;
     use std::fs;
@@ -851,7 +883,7 @@ mod tests {
     struct MapEnvironment {
         values: BTreeMap<String, String>,
         current_dir: PathBuf,
-        home_dir: PathBuf,
+        path_resolver: RadrootsPathResolver,
     }
 
     impl MapEnvironment {
@@ -859,7 +891,13 @@ mod tests {
             Self {
                 values,
                 current_dir: PathBuf::from("/workspaces/radroots-cli"),
-                home_dir: PathBuf::from("/home/tester"),
+                path_resolver: RadrootsPathResolver::new(
+                    RadrootsPlatform::Linux,
+                    RadrootsHostEnvironment {
+                        home_dir: Some(PathBuf::from("/home/tester")),
+                        ..RadrootsHostEnvironment::default()
+                    },
+                ),
             }
         }
     }
@@ -873,8 +911,8 @@ mod tests {
             Ok(self.current_dir.clone())
         }
 
-        fn home_dir(&self) -> Option<PathBuf> {
-            Some(self.home_dir.clone())
+        fn path_resolver(&self) -> RadrootsPathResolver {
+            self.path_resolver.clone()
         }
     }
 
@@ -929,11 +967,24 @@ mod tests {
         assert_eq!(
             resolved.paths,
             PathsConfig {
-                user_config_path: PathBuf::from("/home/tester/.config/radroots/config.toml"),
+                profile: "interactive_user".to_owned(),
+                app_config_path: PathBuf::from(
+                    "/home/tester/.radroots/config/apps/cli/config.toml"
+                ),
                 workspace_config_path: PathBuf::from(
                     "/workspaces/radroots-cli/.radroots/config.toml"
                 ),
-                user_state_root: PathBuf::from("/home/tester/.local/share/radroots"),
+                app_data_root: PathBuf::from("/home/tester/.radroots/data/apps/cli"),
+                app_logs_root: PathBuf::from("/home/tester/.radroots/logs/apps/cli"),
+                shared_accounts_data_root: PathBuf::from(
+                    "/home/tester/.radroots/data/shared/accounts"
+                ),
+                shared_accounts_secrets_root: PathBuf::from(
+                    "/home/tester/.radroots/secrets/shared/accounts"
+                ),
+                default_identity_path: PathBuf::from(
+                    "/home/tester/.radroots/secrets/shared/identities/default.json"
+                ),
             }
         );
         assert_eq!(resolved.logging.filter, "debug");
@@ -946,8 +997,8 @@ mod tests {
             resolved.account,
             AccountConfig {
                 selector: None,
-                store_path: PathBuf::from("/home/tester/.local/share/radroots/accounts/store.json"),
-                secrets_dir: PathBuf::from("/home/tester/.local/share/radroots/accounts/secrets"),
+                store_path: PathBuf::from("/home/tester/.radroots/data/shared/accounts/store.json"),
+                secrets_dir: PathBuf::from("/home/tester/.radroots/secrets/shared/accounts"),
                 secret_backend: RadrootsSecretBackend::HostVault(
                     RadrootsHostVaultPolicy::desktop(),
                 ),
@@ -1146,14 +1197,14 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         let workspace_root = temp.path().join("workspace");
         let user_home = temp.path().join("home");
         fs::create_dir_all(workspace_root.join(".radroots")).expect("workspace config dir");
-        fs::create_dir_all(user_home.join(".config/radroots")).expect("user config dir");
+        fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
         fs::write(
             workspace_root.join(".radroots/config.toml"),
             "[relay]\nurls = [\"wss://relay.workspace\"]\npublish_policy = \"any\"\n",
         )
         .expect("write workspace config");
         fs::write(
-            user_home.join(".config/radroots/config.toml"),
+            user_home.join(".radroots/config/apps/cli/config.toml"),
             "[relay]\nurls = [\"wss://relay.user\", \"wss://relay.workspace\"]\n",
         )
         .expect("write user config");
@@ -1161,7 +1212,13 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         let env = MapEnvironment {
             values: BTreeMap::new(),
             current_dir: workspace_root,
-            home_dir: user_home,
+            path_resolver: RadrootsPathResolver::new(
+                RadrootsPlatform::Linux,
+                RadrootsHostEnvironment {
+                    home_dir: Some(user_home),
+                    ..RadrootsHostEnvironment::default()
+                },
+            ),
         };
         let args = CliArgs::parse_from(["radroots", "config", "show"]);
 
@@ -1201,16 +1258,71 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             .expect("resolve runtime config");
 
         assert_eq!(
-            resolved.paths.user_config_path,
-            PathBuf::from("/home/tester/.config/radroots/config.toml")
+            resolved.paths.app_config_path,
+            PathBuf::from("/home/tester/.radroots/config/apps/cli/config.toml")
         );
         assert_eq!(
             resolved.paths.workspace_config_path,
             PathBuf::from("/workspaces/radroots-cli/.radroots/config.toml")
         );
         assert_eq!(
-            resolved.paths.user_state_root,
-            PathBuf::from("/home/tester/.local/share/radroots")
+            resolved.paths.app_data_root,
+            PathBuf::from("/home/tester/.radroots/data/apps/cli")
+        );
+    }
+
+    #[test]
+    fn windows_roots_use_native_user_directories() {
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment {
+            values: BTreeMap::new(),
+            current_dir: PathBuf::from(r"C:\workspaces\radroots-cli"),
+            path_resolver: RadrootsPathResolver::new(
+                RadrootsPlatform::Windows,
+                RadrootsHostEnvironment {
+                    appdata_dir: Some(PathBuf::from(r"C:\Users\tester\AppData\Roaming")),
+                    localappdata_dir: Some(PathBuf::from(r"C:\Users\tester\AppData\Local")),
+                    ..RadrootsHostEnvironment::default()
+                },
+            ),
+        };
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve runtime config");
+
+        assert_eq!(
+            resolved.paths.app_config_path,
+            PathBuf::from(r"C:\Users\tester\AppData\Roaming")
+                .join("Radroots")
+                .join("config")
+                .join("apps")
+                .join("cli")
+                .join("config.toml")
+        );
+        assert_eq!(
+            resolved.paths.app_data_root,
+            PathBuf::from(r"C:\Users\tester\AppData\Local")
+                .join("Radroots")
+                .join("data")
+                .join("apps")
+                .join("cli")
+        );
+        assert_eq!(
+            resolved.paths.shared_accounts_data_root,
+            PathBuf::from(r"C:\Users\tester\AppData\Local")
+                .join("Radroots")
+                .join("data")
+                .join("shared")
+                .join("accounts")
+        );
+        assert_eq!(
+            resolved.paths.default_identity_path,
+            PathBuf::from(r"C:\Users\tester\AppData\Roaming")
+                .join("Radroots")
+                .join("secrets")
+                .join("shared")
+                .join("identities")
+                .join("default.json")
         );
     }
 

@@ -21,13 +21,22 @@ pub fn show(
             dry_run: config.output.dry_run,
         },
         config_files: ConfigFilesRuntimeView {
-            user_present: config.paths.user_config_path.exists(),
+            user_present: config.paths.app_config_path.exists(),
             workspace_present: config.paths.workspace_config_path.exists(),
         },
         paths: PathsRuntimeView {
-            user_config_path: config.paths.user_config_path.display().to_string(),
+            profile: config.paths.profile.clone(),
+            app_config_path: config.paths.app_config_path.display().to_string(),
             workspace_config_path: config.paths.workspace_config_path.display().to_string(),
-            user_state_root: config.paths.user_state_root.display().to_string(),
+            app_data_root: config.paths.app_data_root.display().to_string(),
+            app_logs_root: config.paths.app_logs_root.display().to_string(),
+            shared_accounts_data_root: config.paths.shared_accounts_data_root.display().to_string(),
+            shared_accounts_secrets_root: config
+                .paths
+                .shared_accounts_secrets_root
+                .display()
+                .to_string(),
+            default_identity_path: config.paths.default_identity_path.display().to_string(),
         },
         logging: LoggingRuntimeView {
             initialized: logging.initialized,
@@ -47,7 +56,7 @@ pub fn show(
             selector: config.account.selector.clone(),
             store_path: config.account.store_path.display().to_string(),
             secrets_dir: config.account.secrets_dir.display().to_string(),
-            legacy_identity_path: config.identity.path.display().to_string(),
+            identity_path: config.identity.path.display().to_string(),
             secret_backend: AccountSecretRuntimeView {
                 configured_primary: secret_backend.configured_primary,
                 configured_fallback: secret_backend.configured_fallback,

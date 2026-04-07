@@ -90,13 +90,13 @@ pub fn report(
 
 fn config_check(config: &RuntimeConfig) -> EvaluatedCheck {
     let detail = match (
-        config.paths.user_config_path.exists(),
+        config.paths.app_config_path.exists(),
         config.paths.workspace_config_path.exists(),
     ) {
         (false, false) => "defaults active".to_owned(),
-        (true, false) => "user config root present".to_owned(),
+        (true, false) => "app config root present".to_owned(),
         (false, true) => "workspace config root present".to_owned(),
-        (true, true) => "user and workspace config roots present".to_owned(),
+        (true, true) => "app and workspace config roots present".to_owned(),
     };
 
     EvaluatedCheck {
