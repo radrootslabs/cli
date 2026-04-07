@@ -8,6 +8,9 @@ use crate::runtime::RuntimeError;
 
 const DEFAULT_LOG_FILTER: &str = "info";
 const DEFAULT_ENV_PATH: &str = ".env";
+const DEFAULT_WORKSPACE_CONFIG_PATH: &str = ".radroots/config.toml";
+const DEFAULT_USER_CONFIG_PATH: &str = ".config/radroots/config.toml";
+const DEFAULT_USER_STATE_ROOT: &str = ".local/share/radroots";
 const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
 const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
 const ENV_CLI_LOG_FILTER: &str = "RADROOTS_CLI_LOGGING_FILTER";
@@ -87,10 +90,18 @@ pub struct MycConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeConfig {
     pub output_format: OutputFormat,
+    pub paths: PathsConfig,
     pub logging: LoggingConfig,
     pub identity: IdentityConfig,
     pub signer: SignerConfig,
     pub myc: MycConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathsConfig {
+    pub user_config_path: PathBuf,
+    pub workspace_config_path: PathBuf,
+    pub user_state_root: PathBuf,
 }
 
 #[derive(Debug, Default)]
@@ -98,6 +109,8 @@ struct EnvFileValues(BTreeMap<String, String>);
 
 pub trait Environment {
     fn var(&self, key: &str) -> Option<String>;
+    fn current_dir(&self) -> Result<PathBuf, RuntimeError>;
+    fn home_dir(&self) -> Option<PathBuf>;
 }
 
 pub struct SystemEnvironment;
@@ -105,6 +118,16 @@ pub struct SystemEnvironment;
 impl Environment for SystemEnvironment {
     fn var(&self, key: &str) -> Option<String> {
         std::env::var(key).ok()
+    }
+
+    fn current_dir(&self) -> Result<PathBuf, RuntimeError> {
+        std::env::current_dir().map_err(|err| {
+            RuntimeError::Config(format!("failed to resolve current directory: {err}"))
+        })
+    }
+
+    fn home_dir(&self) -> Option<PathBuf> {
+        std::env::var_os("HOME").map(PathBuf::from)
     }
 }
 
@@ -123,6 +146,7 @@ impl RuntimeConfig {
     ) -> Result<Self, RuntimeError> {
         Ok(Self {
             output_format: resolve_output_format(args, env, env_file)?,
+            paths: resolve_paths(env)?,
             logging: LoggingConfig {
                 filter: args
                     .log_filter
@@ -168,6 +192,21 @@ impl RuntimeConfig {
             },
         })
     }
+}
+
+fn resolve_paths(env: &dyn Environment) -> Result<PathsConfig, RuntimeError> {
+    let current_dir = env.current_dir()?;
+    let home_dir = env.home_dir().ok_or_else(|| {
+        RuntimeError::Config(
+            "failed to resolve home directory for Radroots config roots".to_owned(),
+        )
+    })?;
+
+    Ok(PathsConfig {
+        user_config_path: home_dir.join(DEFAULT_USER_CONFIG_PATH),
+        workspace_config_path: current_dir.join(DEFAULT_WORKSPACE_CONFIG_PATH),
+        user_state_root: home_dir.join(DEFAULT_USER_STATE_ROOT),
+    })
 }
 
 fn resolve_env_file_path(args: &CliArgs, env: &dyn Environment) -> Option<PathBuf> {
@@ -329,7 +368,7 @@ fn parse_bool_env(key: &str, value: &str) -> Result<bool, RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        EnvFileValues, Environment, OutputFormat, RuntimeConfig, SignerBackend,
+        EnvFileValues, Environment, OutputFormat, PathsConfig, RuntimeConfig, SignerBackend,
         parse_env_file_values,
     };
     use crate::cli::CliArgs;
@@ -337,11 +376,33 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    struct MapEnvironment(BTreeMap<String, String>);
+    struct MapEnvironment {
+        values: BTreeMap<String, String>,
+        current_dir: PathBuf,
+        home_dir: PathBuf,
+    }
+
+    impl MapEnvironment {
+        fn new(values: BTreeMap<String, String>) -> Self {
+            Self {
+                values,
+                current_dir: PathBuf::from("/workspaces/radroots-cli"),
+                home_dir: PathBuf::from("/home/tester"),
+            }
+        }
+    }
 
     impl Environment for MapEnvironment {
         fn var(&self, key: &str) -> Option<String> {
-            self.0.get(key).cloned()
+            self.values.get(key).cloned()
+        }
+
+        fn current_dir(&self) -> Result<PathBuf, crate::runtime::RuntimeError> {
+            Ok(self.current_dir.clone())
+        }
+
+        fn home_dir(&self) -> Option<PathBuf> {
+            Some(self.home_dir.clone())
         }
     }
 
@@ -359,10 +420,10 @@ mod tests {
             "local",
             "--myc-executable",
             "bin/myc-cli",
-            "runtime",
+            "config",
             "show",
         ]);
-        let env = MapEnvironment(BTreeMap::from([
+        let env = MapEnvironment::new(BTreeMap::from([
             ("RADROOTS_OUTPUT".to_owned(), "human".to_owned()),
             ("RADROOTS_LOG_FILTER".to_owned(), "trace".to_owned()),
             ("RADROOTS_LOG_STDOUT".to_owned(), "false".to_owned()),
@@ -377,6 +438,16 @@ mod tests {
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve runtime config");
         assert_eq!(resolved.output_format, OutputFormat::Json);
+        assert_eq!(
+            resolved.paths,
+            PathsConfig {
+                user_config_path: PathBuf::from("/home/tester/.config/radroots/config.toml"),
+                workspace_config_path: PathBuf::from(
+                    "/workspaces/radroots-cli/.radroots/config.toml"
+                ),
+                user_state_root: PathBuf::from("/home/tester/.local/share/radroots"),
+            }
+        );
         assert_eq!(resolved.logging.filter, "debug");
         assert!(resolved.logging.stdout);
         assert_eq!(
@@ -389,8 +460,8 @@ mod tests {
 
     #[test]
     fn environment_values_fill_missing_flags() {
-        let args = CliArgs::parse_from(["radroots", "runtime", "show"]);
-        let env = MapEnvironment(BTreeMap::from([
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::from([
             ("RADROOTS_OUTPUT".to_owned(), "json".to_owned()),
             (
                 "RADROOTS_LOG_FILTER".to_owned(),
@@ -426,10 +497,10 @@ mod tests {
             "radroots",
             "--log-stdout",
             "--no-log-stdout",
-            "runtime",
+            "config",
             "show",
         ]);
-        let env = MapEnvironment(BTreeMap::new());
+        let env = MapEnvironment::new(BTreeMap::new());
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("conflicting flags");
         assert!(error.to_string().contains("cannot be used together"));
@@ -437,8 +508,8 @@ mod tests {
 
     #[test]
     fn invalid_environment_value_fails() {
-        let args = CliArgs::parse_from(["radroots", "runtime", "show"]);
-        let env = MapEnvironment(BTreeMap::from([(
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::from([(
             "RADROOTS_LOG_STDOUT".to_owned(),
             "maybe".to_owned(),
         )]));
@@ -449,8 +520,8 @@ mod tests {
 
     #[test]
     fn env_file_values_fill_missing_flags() {
-        let args = CliArgs::parse_from(["radroots", "runtime", "show"]);
-        let env = MapEnvironment(BTreeMap::new());
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::new());
         let env_file = parse_env_file_values(
             r#"
 RADROOTS_OUTPUT=json
@@ -481,8 +552,8 @@ RADROOTS_MYC_EXECUTABLE=bin/myc
 
     #[test]
     fn process_environment_overrides_env_file_values() {
-        let args = CliArgs::parse_from(["radroots", "runtime", "show"]);
-        let env = MapEnvironment(BTreeMap::from([
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::from([
             ("RADROOTS_LOG_FILTER".to_owned(), "info".to_owned()),
             ("RADROOTS_LOG_STDOUT".to_owned(), "true".to_owned()),
         ]));
@@ -499,6 +570,27 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             RuntimeConfig::resolve_with_env_file(&args, &env, &env_file).expect("resolve config");
         assert_eq!(resolved.logging.filter, "info");
         assert!(resolved.logging.stdout);
+    }
+
+    #[test]
+    fn state_roots_are_resolved_from_home_and_workspace() {
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::new());
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve runtime config");
+
+        assert_eq!(
+            resolved.paths.user_config_path,
+            PathBuf::from("/home/tester/.config/radroots/config.toml")
+        );
+        assert_eq!(
+            resolved.paths.workspace_config_path,
+            PathBuf::from("/workspaces/radroots-cli/.radroots/config.toml")
+        );
+        assert_eq!(
+            resolved.paths.user_state_root,
+            PathBuf::from("/home/tester/.local/share/radroots")
+        );
     }
 
     #[test]

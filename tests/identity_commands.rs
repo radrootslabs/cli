@@ -27,7 +27,7 @@ fn cli_command_in(workdir: &Path) -> Command {
 }
 
 #[test]
-fn identity_init_json_creates_identity_file() {
+fn account_new_json_creates_identity_file() {
     let dir = tempdir().expect("tempdir");
     let identity_path = dir.path().join("identity.json");
 
@@ -36,11 +36,11 @@ fn identity_init_json_creates_identity_file() {
             "--json",
             "--identity-path",
             identity_path.to_str().expect("identity path"),
-            "identity",
-            "init",
+            "account",
+            "new",
         ])
         .output()
-        .expect("run identity init");
+        .expect("run account new");
 
     assert!(output.status.success());
     assert!(identity_path.exists());
@@ -56,7 +56,7 @@ fn identity_init_json_creates_identity_file() {
 }
 
 #[test]
-fn identity_show_json_reads_existing_public_identity() {
+fn account_whoami_json_reads_existing_public_identity() {
     let dir = tempdir().expect("tempdir");
     let identity_path = dir.path().join("identity.json");
 
@@ -65,11 +65,11 @@ fn identity_show_json_reads_existing_public_identity() {
             "--json",
             "--identity-path",
             identity_path.to_str().expect("identity path"),
-            "identity",
-            "init",
+            "account",
+            "new",
         ])
         .output()
-        .expect("run identity init");
+        .expect("run account new");
     assert!(init.status.success());
 
     let output = cli_command_in(dir.path())
@@ -77,11 +77,11 @@ fn identity_show_json_reads_existing_public_identity() {
             "--json",
             "--identity-path",
             identity_path.to_str().expect("identity path"),
-            "identity",
-            "show",
+            "account",
+            "whoami",
         ])
         .output()
-        .expect("run identity show");
+        .expect("run account whoami");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
@@ -95,7 +95,7 @@ fn identity_show_json_reads_existing_public_identity() {
 }
 
 #[test]
-fn identity_show_json_reports_unconfigured_without_creating_identity() {
+fn account_whoami_json_reports_unconfigured_without_creating_identity() {
     let dir = tempdir().expect("tempdir");
     let identity_path = dir.path().join("missing-identity.json");
 
@@ -104,11 +104,11 @@ fn identity_show_json_reports_unconfigured_without_creating_identity() {
             "--json",
             "--identity-path",
             identity_path.to_str().expect("identity path"),
-            "identity",
-            "show",
+            "account",
+            "whoami",
         ])
         .output()
-        .expect("run identity show");
+        .expect("run account whoami");
 
     assert_eq!(output.status.code(), Some(3));
     assert!(!identity_path.exists());

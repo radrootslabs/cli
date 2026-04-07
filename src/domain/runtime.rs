@@ -67,18 +67,19 @@ impl CommandDisposition {
 
 #[derive(Debug, Clone)]
 pub enum CommandView {
-    IdentityInit(IdentityInitView),
-    IdentityShow(IdentityShowView),
+    AccountNew(AccountNewView),
+    AccountWhoami(AccountWhoamiView),
+    ConfigShow(ConfigShowView),
     MycStatus(MycStatusView),
-    RuntimeShow(RuntimeShowView),
     SignerStatus(SignerStatusView),
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RuntimeShowView {
+pub struct ConfigShowView {
     pub output_format: String,
+    pub paths: PathsRuntimeView,
     pub logging: LoggingRuntimeView,
-    pub identity: IdentityRuntimeView,
+    pub account: AccountRuntimeView,
     pub signer: SignerRuntimeView,
     pub myc: MycRuntimeView,
 }
@@ -93,8 +94,15 @@ pub struct LoggingRuntimeView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct IdentityRuntimeView {
-    pub path: String,
+pub struct PathsRuntimeView {
+    pub user_config_path: String,
+    pub workspace_config_path: String,
+    pub user_state_root: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountRuntimeView {
+    pub identity_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -125,7 +133,7 @@ impl IdentityPublicView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct IdentityShowView {
+pub struct AccountWhoamiView {
     pub path: String,
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,7 +142,7 @@ pub struct IdentityShowView {
     pub public_identity: Option<IdentityPublicView>,
 }
 
-impl IdentityShowView {
+impl AccountWhoamiView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "unconfigured" => CommandDisposition::Unconfigured,
@@ -144,7 +152,7 @@ impl IdentityShowView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct IdentityInitView {
+pub struct AccountNewView {
     pub path: String,
     pub created: bool,
     pub public_identity: IdentityPublicView,

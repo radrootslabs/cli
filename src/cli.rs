@@ -29,33 +29,50 @@ pub struct CliArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
-    Identity(IdentityArgs),
+    Account(AccountArgs),
+    Config(ConfigArgs),
+    Doctor,
+    Find(FindArgs),
+    Job(JobArgs),
+    Listing(ListingArgs),
+    Local(LocalArgs),
     Myc(MycArgs),
-    Runtime(RuntimeArgs),
+    Net(NetArgs),
+    Order(OrderArgs),
+    Relay(RelayArgs),
+    Rpc(RpcArgs),
     Signer(SignerArgs),
+    Sync(SyncArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct RuntimeArgs {
+pub struct ConfigArgs {
     #[command(subcommand)]
-    pub command: RuntimeCommand,
+    pub command: ConfigCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum RuntimeCommand {
+pub enum ConfigCommand {
     Show,
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct IdentityArgs {
+pub struct AccountArgs {
     #[command(subcommand)]
-    pub command: IdentityCommand,
+    pub command: AccountCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum IdentityCommand {
-    Init,
-    Show,
+pub enum AccountCommand {
+    New,
+    Whoami,
+    Ls,
+    Use(AccountUseArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountUseArgs {
+    pub selector: String,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -80,21 +97,141 @@ pub enum SignerCommand {
     Status,
 }
 
+#[derive(Debug, Clone, Args)]
+pub struct RelayArgs {
+    #[command(subcommand)]
+    pub command: RelayCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum RelayCommand {
+    Ls,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct NetArgs {
+    #[command(subcommand)]
+    pub command: NetCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum NetCommand {
+    Status,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct LocalArgs {
+    #[command(subcommand)]
+    pub command: LocalCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum LocalCommand {
+    Init,
+    Status,
+    Export,
+    Backup,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SyncArgs {
+    #[command(subcommand)]
+    pub command: SyncCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SyncCommand {
+    Status,
+    Pull,
+    Push,
+    Watch,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FindArgs {
+    #[arg(value_name = "query", num_args = 1..)]
+    pub query: Vec<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListingArgs {
+    #[command(subcommand)]
+    pub command: ListingCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ListingCommand {
+    New,
+    Validate,
+    Get(RecordKeyArgs),
+    Publish,
+    Update(RecordKeyArgs),
+    Archive(RecordKeyArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct JobArgs {
+    #[command(subcommand)]
+    pub command: JobCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum JobCommand {
+    Ls,
+    Get(RecordKeyArgs),
+    Watch(RecordKeyArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RpcArgs {
+    #[command(subcommand)]
+    pub command: RpcCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum RpcCommand {
+    Status,
+    Sessions,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderArgs {
+    #[command(subcommand)]
+    pub command: OrderCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrderCommand {
+    New,
+    Get(RecordKeyArgs),
+    Ls,
+    Submit,
+    Watch(RecordKeyArgs),
+    Cancel(RecordKeyArgs),
+    History,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RecordKeyArgs {
+    pub key: String,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CliArgs, Command, IdentityCommand, MycCommand, RuntimeCommand, SignerCommand};
+    use super::{
+        AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, ListingCommand, LocalCommand,
+        MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand, SignerCommand, SyncCommand,
+    };
     use clap::Parser;
 
     #[test]
-    fn parses_runtime_show_command() {
-        let parsed = CliArgs::parse_from(["radroots", "runtime", "show"]);
+    fn parses_config_show_command() {
+        let parsed = CliArgs::parse_from(["radroots", "config", "show"]);
         match parsed.command {
-            Command::Identity(_) | Command::Myc(_) | Command::Signer(_) => {
-                panic!("unexpected command variant")
-            }
-            Command::Runtime(runtime) => match runtime.command {
-                RuntimeCommand::Show => {}
+            Command::Config(config) => match config.command {
+                ConfigCommand::Show => {}
             },
+            _ => panic!("unexpected command variant"),
         }
     }
 
@@ -116,7 +253,7 @@ mod tests {
             "myc",
             "--myc-executable",
             "bin/myc",
-            "runtime",
+            "config",
             "show",
         ]);
         assert!(parsed.json);
@@ -151,27 +288,41 @@ mod tests {
     }
 
     #[test]
-    fn parses_identity_commands() {
-        let init = CliArgs::parse_from(["radroots", "identity", "init"]);
-        match init.command {
-            Command::Identity(identity) => match identity.command {
-                IdentityCommand::Init => {}
-                IdentityCommand::Show => panic!("unexpected identity subcommand"),
+    fn parses_account_commands() {
+        let new = CliArgs::parse_from(["radroots", "account", "new"]);
+        match new.command {
+            Command::Account(account) => match account.command {
+                AccountCommand::New => {}
+                _ => panic!("unexpected account subcommand"),
             },
-            Command::Myc(_) | Command::Runtime(_) | Command::Signer(_) => {
-                panic!("unexpected command variant")
-            }
+            _ => panic!("unexpected command variant"),
         }
 
-        let show = CliArgs::parse_from(["radroots", "identity", "show"]);
-        match show.command {
-            Command::Identity(identity) => match identity.command {
-                IdentityCommand::Show => {}
-                IdentityCommand::Init => panic!("unexpected identity subcommand"),
+        let whoami = CliArgs::parse_from(["radroots", "account", "whoami"]);
+        match whoami.command {
+            Command::Account(account) => match account.command {
+                AccountCommand::Whoami => {}
+                _ => panic!("unexpected account subcommand"),
             },
-            Command::Myc(_) | Command::Runtime(_) | Command::Signer(_) => {
-                panic!("unexpected command variant")
-            }
+            _ => panic!("unexpected command variant"),
+        }
+
+        let ls = CliArgs::parse_from(["radroots", "account", "ls"]);
+        match ls.command {
+            Command::Account(account) => match account.command {
+                AccountCommand::Ls => {}
+                _ => panic!("unexpected account subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let use_account = CliArgs::parse_from(["radroots", "account", "use", "market-main"]);
+        match use_account.command {
+            Command::Account(account) => match account.command {
+                AccountCommand::Use(args) => assert_eq!(args.selector, "market-main"),
+                _ => panic!("unexpected account subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
         }
     }
 
@@ -182,9 +333,7 @@ mod tests {
             Command::Signer(signer) => match signer.command {
                 SignerCommand::Status => {}
             },
-            Command::Identity(_) | Command::Myc(_) | Command::Runtime(_) => {
-                panic!("unexpected command variant")
-            }
+            _ => panic!("unexpected command variant"),
         }
     }
 
@@ -195,9 +344,89 @@ mod tests {
             Command::Myc(myc) => match myc.command {
                 MycCommand::Status => {}
             },
-            Command::Identity(_) | Command::Runtime(_) | Command::Signer(_) => {
-                panic!("unexpected command variant")
-            }
+            _ => panic!("unexpected command variant"),
+        }
+    }
+
+    #[test]
+    fn parses_v1_command_skeleton() {
+        let doctor = CliArgs::parse_from(["radroots", "doctor"]);
+        assert!(matches!(doctor.command, Command::Doctor));
+
+        let find = CliArgs::parse_from(["radroots", "find", "tomatoes"]);
+        match find.command {
+            Command::Find(args) => assert_eq!(args.query, vec!["tomatoes"]),
+            _ => panic!("unexpected command variant"),
+        }
+
+        let relay = CliArgs::parse_from(["radroots", "relay", "ls"]);
+        match relay.command {
+            Command::Relay(args) => match args.command {
+                RelayCommand::Ls => {}
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let net = CliArgs::parse_from(["radroots", "net", "status"]);
+        match net.command {
+            Command::Net(args) => match args.command {
+                NetCommand::Status => {}
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let local = CliArgs::parse_from(["radroots", "local", "init"]);
+        match local.command {
+            Command::Local(args) => match args.command {
+                LocalCommand::Init => {}
+                _ => panic!("unexpected local subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let sync = CliArgs::parse_from(["radroots", "sync", "status"]);
+        match sync.command {
+            Command::Sync(args) => match args.command {
+                SyncCommand::Status => {}
+                _ => panic!("unexpected sync subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let listing = CliArgs::parse_from(["radroots", "listing", "get", "lst_123"]);
+        match listing.command {
+            Command::Listing(args) => match args.command {
+                ListingCommand::Get(key) => assert_eq!(key.key, "lst_123"),
+                _ => panic!("unexpected listing subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let job = CliArgs::parse_from(["radroots", "job", "get", "job_123"]);
+        match job.command {
+            Command::Job(args) => match args.command {
+                JobCommand::Get(key) => assert_eq!(key.key, "job_123"),
+                _ => panic!("unexpected job subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let rpc = CliArgs::parse_from(["radroots", "rpc", "status"]);
+        match rpc.command {
+            Command::Rpc(args) => match args.command {
+                RpcCommand::Status => {}
+                _ => panic!("unexpected rpc subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let order = CliArgs::parse_from(["radroots", "order", "history"]);
+        match order.command {
+            Command::Order(args) => match args.command {
+                OrderCommand::History => {}
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
         }
     }
 }

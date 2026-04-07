@@ -1,15 +1,15 @@
 use crate::domain::runtime::{
-    CommandDisposition, CommandOutput, CommandView, IdentityInitView, IdentityPublicView,
-    IdentityShowView,
+    AccountNewView, AccountWhoamiView, CommandDisposition, CommandOutput, CommandView,
+    IdentityPublicView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::identity::{initialize_identity, load_identity};
 use radroots_identity::IdentityError;
 
-pub fn init(config: &RuntimeConfig) -> Result<IdentityInitView, RuntimeError> {
+pub fn init(config: &RuntimeConfig) -> Result<AccountNewView, RuntimeError> {
     let identity = initialize_identity(&config.identity)?;
-    Ok(IdentityInitView {
+    Ok(AccountNewView {
         path: identity.path.display().to_string(),
         created: identity.created,
         public_identity: IdentityPublicView::from_public_identity(&identity.public_identity),
@@ -18,7 +18,7 @@ pub fn init(config: &RuntimeConfig) -> Result<IdentityInitView, RuntimeError> {
 
 pub fn show(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
     let view = match load_identity(&config.identity) {
-        Ok(identity) => IdentityShowView {
+        Ok(identity) => AccountWhoamiView {
             path: identity.path.display().to_string(),
             state: "ready".to_owned(),
             reason: None,
@@ -26,7 +26,7 @@ pub fn show(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
                 &identity.public_identity,
             )),
         },
-        Err(RuntimeError::Identity(IdentityError::NotFound(path))) => IdentityShowView {
+        Err(RuntimeError::Identity(IdentityError::NotFound(path))) => AccountWhoamiView {
             path: path.display().to_string(),
             state: "unconfigured".to_owned(),
             reason: Some(format!(
@@ -39,15 +39,15 @@ pub fn show(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
     };
 
     Ok(match view.disposition() {
-        CommandDisposition::Success => CommandOutput::success(CommandView::IdentityShow(view)),
+        CommandDisposition::Success => CommandOutput::success(CommandView::AccountWhoami(view)),
         CommandDisposition::Unconfigured => {
-            CommandOutput::unconfigured(CommandView::IdentityShow(view))
+            CommandOutput::unconfigured(CommandView::AccountWhoami(view))
         }
         CommandDisposition::ExternalUnavailable => {
-            CommandOutput::external_unavailable(CommandView::IdentityShow(view))
+            CommandOutput::external_unavailable(CommandView::AccountWhoami(view))
         }
         CommandDisposition::InternalError => {
-            CommandOutput::internal_error(CommandView::IdentityShow(view))
+            CommandOutput::internal_error(CommandView::AccountWhoami(view))
         }
     })
 }

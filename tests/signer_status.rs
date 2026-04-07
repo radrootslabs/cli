@@ -37,11 +37,11 @@ fn signer_status_reports_local_ready_when_identity_exists() {
             "--json",
             "--identity-path",
             identity_path.to_str().expect("identity path"),
-            "identity",
-            "init",
+            "account",
+            "new",
         ])
         .output()
-        .expect("run identity init");
+        .expect("run account new");
     assert!(init.status.success());
 
     let output = cli_command_in(dir.path())

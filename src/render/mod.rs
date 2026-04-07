@@ -14,8 +14,8 @@ pub fn render_output(output: &CommandOutput, format: OutputFormat) -> Result<(),
 fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
     let mut stdout = io::stdout().lock();
     match output.view() {
-        CommandView::IdentityInit(view) => {
-            writeln!(stdout, "identity init")?;
+        CommandView::AccountNew(view) => {
+            writeln!(stdout, "account new")?;
             writeln!(stdout, "  path: {}", view.path)?;
             writeln!(stdout, "  created: {}", yes_no(view.created))?;
             writeln!(stdout, "  id: {}", view.public_identity.id)?;
@@ -30,15 +30,13 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
                 view.public_identity.public_key_npub
             )?;
         }
-        CommandView::IdentityShow(view) => {
-            writeln!(stdout, "identity")?;
+        CommandView::AccountWhoami(view) => {
+            writeln!(stdout, "account")?;
             writeln!(stdout, "  path: {}", view.path)?;
             writeln!(stdout, "  state: {}", view.state)?;
-            writeln!(
-                stdout,
-                "  reason: {}",
-                view.reason.as_deref().unwrap_or("<none>")
-            )?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout, "  reason: {reason}")?;
+            }
             if let Some(public_identity) = &view.public_identity {
                 writeln!(stdout, "  id: {}", public_identity.id)?;
                 writeln!(
@@ -56,9 +54,17 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
         CommandView::MycStatus(view) => {
             render_myc_status(&mut stdout, view)?;
         }
-        CommandView::RuntimeShow(view) => {
-            writeln!(stdout, "runtime")?;
+        CommandView::ConfigShow(view) => {
+            writeln!(stdout, "config")?;
             writeln!(stdout, "  output format: {}", view.output_format)?;
+            writeln!(stdout, "paths")?;
+            writeln!(stdout, "  user config: {}", view.paths.user_config_path)?;
+            writeln!(
+                stdout,
+                "  workspace config: {}",
+                view.paths.workspace_config_path
+            )?;
+            writeln!(stdout, "  user state root: {}", view.paths.user_state_root)?;
             writeln!(stdout, "logging")?;
             writeln!(
                 stdout,
@@ -67,18 +73,14 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
             )?;
             writeln!(stdout, "  filter: {}", view.logging.filter)?;
             writeln!(stdout, "  stdout: {}", yes_no(view.logging.stdout))?;
-            writeln!(
-                stdout,
-                "  directory: {}",
-                view.logging.directory.as_deref().unwrap_or("<disabled>")
-            )?;
-            writeln!(
-                stdout,
-                "  current file: {}",
-                view.logging.current_file.as_deref().unwrap_or("<disabled>")
-            )?;
-            writeln!(stdout, "identity")?;
-            writeln!(stdout, "  path: {}", view.identity.path)?;
+            if let Some(directory) = &view.logging.directory {
+                writeln!(stdout, "  directory: {directory}")?;
+            }
+            if let Some(current_file) = &view.logging.current_file {
+                writeln!(stdout, "  current file: {current_file}")?;
+            }
+            writeln!(stdout, "account")?;
+            writeln!(stdout, "  identity path: {}", view.account.identity_path)?;
             writeln!(stdout, "signer")?;
             writeln!(stdout, "  backend: {}", view.signer.backend)?;
             writeln!(stdout, "myc")?;
@@ -107,11 +109,11 @@ fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
 fn render_json(output: &CommandOutput) -> Result<(), RuntimeError> {
     let mut stdout = io::stdout().lock();
     match output.view() {
-        CommandView::IdentityInit(view) => {
+        CommandView::AccountNew(view) => {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
-        CommandView::IdentityShow(view) => {
+        CommandView::AccountWhoami(view) => {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
@@ -119,7 +121,7 @@ fn render_json(output: &CommandOutput) -> Result<(), RuntimeError> {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
-        CommandView::RuntimeShow(view) => {
+        CommandView::ConfigShow(view) => {
             serde_json::to_writer_pretty(&mut stdout, view)?;
             writeln!(stdout)?;
         }
@@ -233,16 +235,21 @@ fn render_myc_custody_identity(
 mod tests {
     use crate::commands::runtime;
     use crate::runtime::config::{
-        IdentityConfig, LoggingConfig, MycConfig, OutputFormat, RuntimeConfig, SignerBackend,
-        SignerConfig,
+        IdentityConfig, LoggingConfig, MycConfig, OutputFormat, PathsConfig, RuntimeConfig,
+        SignerBackend, SignerConfig,
     };
     use crate::runtime::logging::LoggingState;
 
     #[test]
-    fn human_render_contains_runtime_sections() {
+    fn human_render_contains_config_sections() {
         let view = runtime::show(
             &RuntimeConfig {
                 output_format: OutputFormat::Human,
+                paths: PathsConfig {
+                    user_config_path: "/home/tester/.config/radroots/config.toml".into(),
+                    workspace_config_path: "/workspace/.radroots/config.toml".into(),
+                    user_state_root: "/home/tester/.local/share/radroots".into(),
+                },
                 logging: LoggingConfig {
                     filter: "info".to_owned(),
                     directory: None,
@@ -263,16 +270,11 @@ mod tests {
                 current_file: None,
             },
         );
-        let rendered = format!(
-            "runtime\n  output format: {}\nlogging\n  initialized: {}\n",
-            view.output_format,
-            if view.logging.initialized {
-                "yes"
-            } else {
-                "no"
-            }
+        assert_eq!(view.output_format, "human");
+        assert_eq!(
+            view.paths.workspace_config_path,
+            "/workspace/.radroots/config.toml"
         );
-        assert!(rendered.contains("runtime"));
-        assert!(rendered.contains("logging"));
+        assert_eq!(view.account.identity_path, "identity.json");
     }
 }
