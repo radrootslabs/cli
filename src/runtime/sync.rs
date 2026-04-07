@@ -212,7 +212,9 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
     })
 }
 
-fn freshness_from_executor(executor: &SqliteExecutor) -> Result<SyncFreshnessView, RuntimeError> {
+pub(crate) fn freshness_from_executor(
+    executor: &SqliteExecutor,
+) -> Result<SyncFreshnessView, RuntimeError> {
     let raw = executor.query_raw(
         "SELECT MAX(last_created_at) AS last_created_at FROM nostr_event_state WHERE last_created_at IS NOT NULL",
         "[]",

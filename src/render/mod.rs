@@ -2,8 +2,8 @@ use std::io::{self, Write};
 
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
-    LocalBackupView, LocalExportView, LocalInitView, LocalStatusView, NetStatusView, RelayListView,
-    SyncActionView, SyncStatusView, SyncWatchView,
+    FindView, LocalBackupView, LocalExportView, LocalInitView, LocalStatusView, NetStatusView,
+    RelayListView, SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -81,6 +81,9 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::Doctor(view) => {
             render_doctor(stdout, view)?;
+        }
+        CommandView::Find(view) => {
+            render_find(stdout, view)?;
         }
         CommandView::LocalBackup(view) => {
             render_local_backup(stdout, view)?;
@@ -184,6 +187,10 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
+        CommandView::Find(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandView::LocalBackup(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
@@ -245,6 +252,13 @@ fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<()
         CommandView::RelayList(view) => {
             for relay in &view.relays {
                 serde_json::to_writer(&mut *stdout, relay)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
+        CommandView::Find(view) => {
+            for result in &view.results {
+                serde_json::to_writer(&mut *stdout, result)?;
                 writeln!(stdout)?;
             }
             Ok(())
@@ -405,6 +419,76 @@ fn render_doctor(stdout: &mut dyn Write, view: &DoctorView) -> Result<(), Runtim
     }
     writeln!(stdout)?;
     writeln!(stdout, "source: {}", view.source)?;
+    Ok(())
+}
+
+fn render_find(stdout: &mut dyn Write, view: &FindView) -> Result<(), RuntimeError> {
+    let context = match view.state.as_str() {
+        "unconfigured" => "market · local first · unconfigured".to_owned(),
+        _ => format!(
+            "market · local first · {} result{}",
+            view.count,
+            if view.count == 1 { "" } else { "s" }
+        ),
+    };
+    write_context(stdout, context.as_str())?;
+    writeln!(stdout, "query: {}", view.query)?;
+
+    match view.state.as_str() {
+        "unconfigured" => {
+            if let Some(reason) = &view.reason {
+                writeln!(stdout, "reason: {reason}")?;
+            }
+        }
+        _ if view.results.is_empty() => {
+            if let Some(reason) = &view.reason {
+                writeln!(stdout, "{reason}")?;
+            }
+        }
+        _ => {
+            let table = Table {
+                headers: &["product", "category", "price", "available", "location"],
+                rows: view
+                    .results
+                    .iter()
+                    .map(|result| {
+                        vec![
+                            result.title.clone(),
+                            result.category.clone(),
+                            format_price(
+                                result.price.amount,
+                                &result.price.currency,
+                                result.price.per_amount,
+                                &result.price.per_unit,
+                            ),
+                            format_available(
+                                result
+                                    .available
+                                    .available_amount
+                                    .unwrap_or(result.available.total_amount),
+                                result
+                                    .available
+                                    .label
+                                    .as_deref()
+                                    .unwrap_or(result.available.total_unit.as_str()),
+                            ),
+                            result.location_primary.clone().unwrap_or_default(),
+                        ]
+                    })
+                    .collect(),
+            };
+            render_table(stdout, &table)?;
+        }
+    }
+
+    writeln!(stdout)?;
+    writeln!(
+        stdout,
+        "provenance: local replica · {} · {}",
+        view.freshness.display,
+        relay_count_text(view.relay_count)
+    )?;
+    render_actions(stdout, &view.actions)?;
     Ok(())
 }
 
@@ -874,6 +958,34 @@ fn render_table(stdout: &mut dyn Write, table: &Table) -> Result<(), RuntimeErro
     Ok(())
 }
 
+fn relay_count_text(count: usize) -> String {
+    if count == 1 {
+        "1 relay configured".to_owned()
+    } else {
+        format!("{count} relays configured")
+    }
+}
+
+fn format_price(amount: f64, currency: &str, per_amount: u32, per_unit: &str) -> String {
+    format!(
+        "{} {currency}/{} {per_unit}",
+        trim_decimal(amount),
+        per_amount
+    )
+}
+
+fn format_available(amount: i64, unit: &str) -> String {
+    format!("{amount} {unit}")
+}
+
+fn trim_decimal(value: f64) -> String {
+    let formatted = format!("{value:.2}");
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
+}
+
 struct Table {
     headers: &'static [&'static str],
     rows: Vec<Vec<String>>,
@@ -887,6 +999,7 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::AccountWhoami(_) => "account whoami",
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
+        CommandView::Find(_) => "find",
         CommandView::LocalBackup(_) => "local backup",
         CommandView::LocalExport(_) => "local export",
         CommandView::LocalInit(_) => "local init",

@@ -74,6 +74,7 @@ pub enum CommandView {
     AccountWhoami(AccountWhoamiView),
     ConfigShow(ConfigShowView),
     Doctor(DoctorView),
+    Find(FindView),
     LocalBackup(LocalBackupView),
     LocalExport(LocalExportView),
     LocalInit(LocalInitView),
@@ -324,6 +325,71 @@ pub struct LocalReplicaCountsView {
 pub struct LocalReplicaSyncView {
     pub expected_count: usize,
     pub pending_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FindView {
+    pub state: String,
+    pub source: String,
+    pub query: String,
+    pub count: usize,
+    pub relay_count: usize,
+    pub replica_db: String,
+    pub freshness: SyncFreshnessView,
+    pub results: Vec<FindResultView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl FindView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FindResultView {
+    pub id: String,
+    pub product_key: String,
+    pub title: String,
+    pub category: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_primary: Option<String>,
+    pub available: FindQuantityView,
+    pub price: FindPriceView,
+    pub provenance: FindResultProvenanceView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FindQuantityView {
+    pub total_amount: i64,
+    pub total_unit: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_amount: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FindPriceView {
+    pub amount: f64,
+    pub currency: String,
+    pub per_amount: u32,
+    pub per_unit: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FindResultProvenanceView {
+    pub origin: String,
+    pub freshness: String,
+    pub relay_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

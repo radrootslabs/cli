@@ -1,4 +1,5 @@
 pub mod doctor;
+pub mod find;
 pub mod identity;
 pub mod local;
 pub mod myc;
@@ -45,7 +46,7 @@ pub fn dispatch(
             SignerCommand::Status => Ok(signer::status(config)),
         },
         Command::Doctor => doctor::report(config, logging),
-        Command::Find(_) => unimplemented_command("find"),
+        Command::Find(find_args) => find::search(config, find_args),
         Command::Job(job) => match &job.command {
             JobCommand::Ls => unimplemented_command("job ls"),
             JobCommand::Get(_) => unimplemented_command("job get"),

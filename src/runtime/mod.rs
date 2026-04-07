@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod config;
+pub mod find;
 pub mod local;
 pub mod logging;
 pub mod myc;
