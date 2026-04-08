@@ -3,10 +3,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use radroots_identity::DEFAULT_IDENTITY_PATH;
 use radroots_runtime_paths::{
     DEFAULT_CONFIG_FILE_NAME, RadrootsPathOverrides, RadrootsPathProfile, RadrootsPathResolver,
-    RadrootsRuntimeNamespace,
+    RadrootsRuntimeNamespace, default_shared_identity_path,
 };
 use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
 use serde::Deserialize;
@@ -24,6 +23,21 @@ const DEFAULT_LOCAL_BACKUPS_DIR: &str = "backups";
 const DEFAULT_LOCAL_EXPORTS_DIR: &str = "exports";
 const DEFAULT_SHARED_ACCOUNTS_STORE_FILE: &str = "store.json";
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:7070";
+const CLI_PROFILE: &str = "interactive_user";
+const CLI_APP_NAMESPACE_VALUE: &str = "cli";
+const SHARED_ACCOUNTS_NAMESPACE_VALUE: &str = "accounts";
+const SHARED_IDENTITIES_NAMESPACE_VALUE: &str = "identities";
+const CLI_HOST_VAULT_POLICY: &str = "desktop";
+const CLI_DEFAULT_SECRET_BACKEND: &str = "host_vault";
+const CLI_DEFAULT_SECRET_FALLBACK: &str = "encrypted_file";
+const CLI_ALLOWED_PROFILES: &[&str] = &[CLI_PROFILE];
+const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] = &[
+    "host_vault",
+    "encrypted_file",
+    "memory",
+    "plaintext_file",
+];
+const CLI_USES_PROTECTED_STORE: bool = true;
 const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
 const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
 const ENV_CLI_LOG_FILTER: &str = "RADROOTS_CLI_LOGGING_FILTER";
@@ -125,6 +139,15 @@ pub struct AccountConfig {
     pub secret_fallback: Option<RadrootsSecretBackend>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountSecretContractConfig {
+    pub default_backend: String,
+    pub default_fallback: Option<String>,
+    pub allowed_backends: Vec<String>,
+    pub host_vault_policy: Option<String>,
+    pub uses_protected_store: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignerBackend {
     Local,
@@ -211,6 +234,7 @@ pub struct RuntimeConfig {
     pub paths: PathsConfig,
     pub logging: LoggingConfig,
     pub account: AccountConfig,
+    pub account_secret_contract: AccountSecretContractConfig,
     pub identity: IdentityConfig,
     pub signer: SignerConfig,
     pub relay: RelayConfig,
@@ -222,6 +246,10 @@ pub struct RuntimeConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathsConfig {
     pub profile: String,
+    pub allowed_profiles: Vec<String>,
+    pub app_namespace: String,
+    pub shared_accounts_namespace: String,
+    pub shared_identities_namespace: String,
     pub app_config_path: PathBuf,
     pub workspace_config_path: PathBuf,
     pub app_data_root: PathBuf,
@@ -342,6 +370,16 @@ impl RuntimeConfig {
                 secret_backend: account_secret_backend,
                 secret_fallback: account_secret_fallback,
             },
+            account_secret_contract: AccountSecretContractConfig {
+                default_backend: CLI_DEFAULT_SECRET_BACKEND.to_owned(),
+                default_fallback: Some(CLI_DEFAULT_SECRET_FALLBACK.to_owned()),
+                allowed_backends: CLI_ALLOWED_SHARED_SECRET_BACKENDS
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect(),
+                host_vault_policy: Some(CLI_HOST_VAULT_POLICY.to_owned()),
+                uses_protected_store: CLI_USES_PROTECTED_STORE,
+            },
             identity: IdentityConfig {
                 path: args
                     .identity_path
@@ -400,26 +438,39 @@ impl RuntimeConfig {
 fn resolve_paths(env: &dyn Environment) -> Result<PathsConfig, RuntimeError> {
     let current_dir = env.current_dir()?;
     let resolver = env.path_resolver();
+    let profile = RadrootsPathProfile::InteractiveUser;
+    let overrides = RadrootsPathOverrides::default();
     let resolved = resolver
-        .resolve(
-            RadrootsPathProfile::InteractiveUser,
-            &RadrootsPathOverrides::default(),
-        )
+        .resolve(profile, &overrides)
         .map_err(|err| RuntimeError::Config(format!("resolve Radroots path roots: {err}")))?;
-    let app_namespace = RadrootsRuntimeNamespace::app("cli")
+    let app_namespace = RadrootsRuntimeNamespace::app(CLI_APP_NAMESPACE_VALUE)
         .map_err(|err| RuntimeError::Config(format!("resolve cli namespace: {err}")))?;
-    let shared_accounts_namespace = RadrootsRuntimeNamespace::shared("accounts")
+    let shared_accounts_namespace = RadrootsRuntimeNamespace::shared(SHARED_ACCOUNTS_NAMESPACE_VALUE)
         .map_err(|err| RuntimeError::Config(format!("resolve shared accounts namespace: {err}")))?;
+    let shared_identity_namespace =
+        RadrootsRuntimeNamespace::shared(SHARED_IDENTITIES_NAMESPACE_VALUE).map_err(|err| {
+            RuntimeError::Config(format!("resolve shared identities namespace: {err}"))
+        })?;
     let app_paths = resolved.namespaced(&app_namespace);
     let shared_accounts_paths = resolved.namespaced(&shared_accounts_namespace);
-    let default_identity_path = resolved
-        .secrets
-        .join("shared")
-        .join("identities")
-        .join(DEFAULT_IDENTITY_PATH);
+    let default_identity_path = default_shared_identity_path(&resolver, profile, &overrides)
+        .map_err(|err| RuntimeError::Config(format!("resolve shared identity path: {err}")))?;
 
     Ok(PathsConfig {
-        profile: RadrootsPathProfile::InteractiveUser.to_string(),
+        profile: CLI_PROFILE.to_owned(),
+        allowed_profiles: CLI_ALLOWED_PROFILES
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
+        app_namespace: app_namespace.relative_path().display().to_string(),
+        shared_accounts_namespace: shared_accounts_namespace
+            .relative_path()
+            .display()
+            .to_string(),
+        shared_identities_namespace: shared_identity_namespace
+            .relative_path()
+            .display()
+            .to_string(),
         app_config_path: app_paths.config.join(DEFAULT_CONFIG_FILE_NAME),
         workspace_config_path: current_dir.join(DEFAULT_WORKSPACE_CONFIG_PATH),
         app_data_root: app_paths.data,
@@ -867,8 +918,9 @@ fn parse_bool_env(key: &str, value: &str) -> Result<bool, RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountConfig, EnvFileValues, Environment, OutputConfig, OutputFormat, PathsConfig,
-        RelayConfigSource, RelayPublishPolicy, RuntimeConfig, SignerBackend, Verbosity,
+        AccountConfig, AccountSecretContractConfig, EnvFileValues, Environment, OutputConfig,
+        OutputFormat, PathsConfig, RelayConfigSource, RelayPublishPolicy, RuntimeConfig,
+        SignerBackend, Verbosity,
         parse_env_file_values,
     };
     use crate::cli::CliArgs;
@@ -968,6 +1020,10 @@ mod tests {
             resolved.paths,
             PathsConfig {
                 profile: "interactive_user".to_owned(),
+                allowed_profiles: vec!["interactive_user".to_owned()],
+                app_namespace: "apps/cli".to_owned(),
+                shared_accounts_namespace: "shared/accounts".to_owned(),
+                shared_identities_namespace: "shared/identities".to_owned(),
                 app_config_path: PathBuf::from(
                     "/home/tester/.radroots/config/apps/cli/config.toml"
                 ),
@@ -1003,6 +1059,21 @@ mod tests {
                     RadrootsHostVaultPolicy::desktop(),
                 ),
                 secret_fallback: Some(RadrootsSecretBackend::EncryptedFile),
+            }
+        );
+        assert_eq!(
+            resolved.account_secret_contract,
+            AccountSecretContractConfig {
+                default_backend: "host_vault".to_owned(),
+                default_fallback: Some("encrypted_file".to_owned()),
+                allowed_backends: vec![
+                    "host_vault".to_owned(),
+                    "encrypted_file".to_owned(),
+                    "memory".to_owned(),
+                    "plaintext_file".to_owned(),
+                ],
+                host_vault_policy: Some("desktop".to_owned()),
+                uses_protected_store: true,
             }
         );
         assert_eq!(resolved.signer.backend, SignerBackend::Local);
@@ -1261,6 +1332,9 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             resolved.paths.app_config_path,
             PathBuf::from("/home/tester/.radroots/config/apps/cli/config.toml")
         );
+        assert_eq!(resolved.paths.app_namespace, "apps/cli");
+        assert_eq!(resolved.paths.shared_accounts_namespace, "shared/accounts");
+        assert_eq!(resolved.paths.shared_identities_namespace, "shared/identities");
         assert_eq!(
             resolved.paths.workspace_config_path,
             PathBuf::from("/workspaces/radroots-cli/.radroots/config.toml")

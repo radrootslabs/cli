@@ -104,6 +104,10 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["output"]["color"], true);
     assert_eq!(json["output"]["dry_run"], false);
     assert_eq!(json["paths"]["profile"], "interactive_user");
+    assert_eq!(json["paths"]["allowed_profiles"][0], "interactive_user");
+    assert_eq!(json["paths"]["app_namespace"], "apps/cli");
+    assert_eq!(json["paths"]["shared_accounts_namespace"], "shared/accounts");
+    assert_eq!(json["paths"]["shared_identities_namespace"], "shared/identities");
     assert_eq!(
         json["paths"]["app_config_path"],
         config_root(dir.path())
@@ -176,6 +180,30 @@ fn config_show_json_reports_default_bootstrap_state() {
             .join("shared/identities/default.json")
             .display()
             .to_string()
+    );
+    assert_eq!(
+        json["account"]["secret_backend"]["contract_default_backend"],
+        "host_vault"
+    );
+    assert_eq!(
+        json["account"]["secret_backend"]["contract_default_fallback"],
+        "encrypted_file"
+    );
+    assert_eq!(
+        json["account"]["secret_backend"]["allowed_backends"][0],
+        "host_vault"
+    );
+    assert_eq!(
+        json["account"]["secret_backend"]["allowed_backends"][1],
+        "encrypted_file"
+    );
+    assert_eq!(
+        json["account"]["secret_backend"]["host_vault_policy"],
+        "desktop"
+    );
+    assert_eq!(
+        json["account"]["secret_backend"]["uses_protected_store"],
+        true
     );
     assert_eq!(
         json["account"]["secret_backend"]["configured_primary"],

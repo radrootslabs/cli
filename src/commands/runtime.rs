@@ -26,6 +26,10 @@ pub fn show(
         },
         paths: PathsRuntimeView {
             profile: config.paths.profile.clone(),
+            allowed_profiles: config.paths.allowed_profiles.clone(),
+            app_namespace: config.paths.app_namespace.clone(),
+            shared_accounts_namespace: config.paths.shared_accounts_namespace.clone(),
+            shared_identities_namespace: config.paths.shared_identities_namespace.clone(),
             app_config_path: config.paths.app_config_path.display().to_string(),
             workspace_config_path: config.paths.workspace_config_path.display().to_string(),
             app_data_root: config.paths.app_data_root.display().to_string(),
@@ -58,6 +62,11 @@ pub fn show(
             secrets_dir: config.account.secrets_dir.display().to_string(),
             identity_path: config.identity.path.display().to_string(),
             secret_backend: AccountSecretRuntimeView {
+                contract_default_backend: config.account_secret_contract.default_backend.clone(),
+                contract_default_fallback: config.account_secret_contract.default_fallback.clone(),
+                allowed_backends: config.account_secret_contract.allowed_backends.clone(),
+                host_vault_policy: config.account_secret_contract.host_vault_policy.clone(),
+                uses_protected_store: config.account_secret_contract.uses_protected_store,
                 configured_primary: secret_backend.configured_primary,
                 configured_fallback: secret_backend.configured_fallback,
                 state: secret_backend.state,

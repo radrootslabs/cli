@@ -4,8 +4,8 @@ use crate::domain::runtime::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{
-    AccountCreateMode, AccountRecordView, create_or_migrate_selected_account, resolve_account,
-    select_account, snapshot,
+    AccountCreateMode, AccountRecordView, SHARED_ACCOUNT_STORE_SOURCE,
+    create_or_migrate_selected_account, resolve_account, select_account, snapshot,
 };
 use crate::runtime::config::RuntimeConfig;
 
@@ -18,8 +18,8 @@ pub fn init(config: &RuntimeConfig) -> Result<AccountNewView, RuntimeError> {
             AccountCreateMode::Migrated => "migrated".to_owned(),
         },
         source: match result.mode {
-            AccountCreateMode::Created => "local account store · local first".to_owned(),
-            AccountCreateMode::Migrated => "legacy identity import · local first".to_owned(),
+            AccountCreateMode::Created => SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
+            AccountCreateMode::Migrated => "legacy shared identity import · local first".to_owned(),
         },
         public_identity: IdentityPublicView::from_public_identity(
             &result.account.record.public_identity,
@@ -36,7 +36,7 @@ pub fn show(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
     let view = match resolve_account(config)? {
         Some(account) => AccountWhoamiView {
             state: "ready".to_owned(),
-            source: "local account store · local first".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             reason: None,
             public_identity: Some(IdentityPublicView::from_public_identity(
                 &account.record.public_identity,
@@ -45,7 +45,7 @@ pub fn show(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
         },
         None => AccountWhoamiView {
             state: "unconfigured".to_owned(),
-            source: "local account store · local first".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             reason: Some(format!(
                 "no local account is selected in {}",
                 config.account.store_path.display()
@@ -83,7 +83,7 @@ pub fn list(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
     };
     Ok(CommandOutput::success(CommandView::AccountList(
         AccountListView {
-            source: "local account store · local first".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             count: accounts.len(),
             accounts,
             actions,
@@ -95,7 +95,7 @@ pub fn use_account(config: &RuntimeConfig, selector: &str) -> Result<AccountUseV
     let account = select_account(config, selector)?;
     Ok(AccountUseView {
         state: "active".to_owned(),
-        source: "local account store · local first".to_owned(),
+        source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
         active_account_id: account.record.account_id.to_string(),
         account: account_summary(&account),
     })

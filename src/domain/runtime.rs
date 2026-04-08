@@ -146,6 +146,10 @@ pub struct LoggingRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct PathsRuntimeView {
     pub profile: String,
+    pub allowed_profiles: Vec<String>,
+    pub app_namespace: String,
+    pub shared_accounts_namespace: String,
+    pub shared_identities_namespace: String,
     pub app_config_path: String,
     pub workspace_config_path: String,
     pub app_data_root: String,
@@ -167,6 +171,13 @@ pub struct AccountRuntimeView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountSecretRuntimeView {
+    pub contract_default_backend: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_default_fallback: Option<String>,
+    pub allowed_backends: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_vault_policy: Option<String>,
+    pub uses_protected_store: bool,
     pub configured_primary: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub configured_fallback: Option<String>,

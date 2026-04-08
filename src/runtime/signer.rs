@@ -1,5 +1,6 @@
 use crate::domain::runtime::{IdentityPublicView, LocalSignerStatusView, SignerStatusView};
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
+use crate::runtime::accounts::SHARED_ACCOUNT_STORE_SOURCE;
 use radroots_nostr_accounts::prelude::RadrootsNostrSelectedAccountStatus;
 use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
@@ -19,7 +20,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         return SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "unavailable".to_owned(),
-            source: "local account store · local first".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             account_id: None,
             reason: secret_backend.reason,
             local: None,
@@ -31,7 +32,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         return SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "error".to_owned(),
-            source: "local account store · local first".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             account_id: None,
             reason: secret_backend.reason,
             local: None,
@@ -60,7 +61,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
             SignerStatusView {
                 mode: config.signer.backend.as_str().to_owned(),
                 state: "ready".to_owned(),
-                source: "local account store · local first".to_owned(),
+                source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
                 account_id: Some(local.account_id.to_string()),
                 reason: None,
                 local: Some(LocalSignerStatusView {
@@ -79,7 +80,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         Ok(RadrootsNostrSelectedAccountStatus::PublicOnly { account }) => SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "unconfigured".to_owned(),
-            source: "local account store · local first".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             account_id: Some(account.account_id.to_string()),
             reason: Some(format!(
                 "local account {} is present but not secret-backed",
@@ -99,7 +100,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         Ok(RadrootsNostrSelectedAccountStatus::NotConfigured) => SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "unconfigured".to_owned(),
-            source: "local account store · local first".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             account_id: None,
             reason: Some(format!(
                 "no local account is selected in {}",
@@ -111,7 +112,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         Err(error) => SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "error".to_owned(),
-            source: "local account store · local first".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             account_id: None,
             reason: Some(error.to_string()),
             local: None,

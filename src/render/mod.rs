@@ -496,11 +496,22 @@ fn render_config_show(
         present_absent(view.config_files.workspace_present),
         view.paths.workspace_config_path
     );
+    let allowed_profiles = view.paths.allowed_profiles.join(", ");
     render_pairs(
         stdout,
-        "config roots",
+        "runtime roots",
         &[
             ("profile", view.paths.profile.as_str()),
+            ("allowed profiles", allowed_profiles.as_str()),
+            ("app namespace", view.paths.app_namespace.as_str()),
+            (
+                "shared accounts namespace",
+                view.paths.shared_accounts_namespace.as_str(),
+            ),
+            (
+                "shared identities namespace",
+                view.paths.shared_identities_namespace.as_str(),
+            ),
             ("app config", user_config.as_str()),
             ("workspace config", workspace_config.as_str()),
             ("app data root", view.paths.app_data_root.as_str()),
@@ -536,14 +547,30 @@ fn render_config_show(
         ("store path", view.account.store_path.as_str()),
         ("secrets dir", view.account.secrets_dir.as_str()),
         (
-            "secret backend",
+            "contract default secret backend",
+            view.account.secret_backend.contract_default_backend.as_str(),
+        ),
+        (
+            "configured secret backend",
             view.account.secret_backend.configured_primary.as_str(),
         ),
         ("identity path", view.account.identity_path.as_str()),
     ];
-    if let Some(fallback) = &view.account.secret_backend.configured_fallback {
-        account_rows.push(("secret fallback", fallback.as_str()));
+    if let Some(fallback) = &view.account.secret_backend.contract_default_fallback {
+        account_rows.push(("contract default fallback", fallback.as_str()));
     }
+    if let Some(fallback) = &view.account.secret_backend.configured_fallback {
+        account_rows.push(("configured secret fallback", fallback.as_str()));
+    }
+    let allowed_backends = view.account.secret_backend.allowed_backends.join(", ");
+    account_rows.push(("allowed secret backends", allowed_backends.as_str()));
+    if let Some(policy) = &view.account.secret_backend.host_vault_policy {
+        account_rows.push(("host vault policy", policy.as_str()));
+    }
+    account_rows.push((
+        "uses protected store",
+        yes_no(view.account.secret_backend.uses_protected_store),
+    ));
     account_rows.push(("secret status", view.account.secret_backend.state.as_str()));
     if let Some(active_backend) = &view.account.secret_backend.active_backend {
         account_rows.push(("active secret backend", active_backend.as_str()));
@@ -2059,9 +2086,9 @@ mod tests {
         RelayEntryView, RelayListView,
     };
     use crate::runtime::config::{
-        AccountConfig, IdentityConfig, LocalConfig, LoggingConfig, MycConfig, OutputConfig,
-        OutputFormat, PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig,
-        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        AccountConfig, AccountSecretContractConfig, IdentityConfig, LocalConfig, LoggingConfig,
+        MycConfig, OutputConfig, OutputFormat, PathsConfig, RelayConfig, RelayConfigSource,
+        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
     use radroots_secret_vault::RadrootsSecretBackend;
@@ -2078,6 +2105,10 @@ mod tests {
                 },
                 paths: PathsConfig {
                     profile: "interactive_user".into(),
+                    allowed_profiles: vec!["interactive_user".into()],
+                    app_namespace: "apps/cli".into(),
+                    shared_accounts_namespace: "shared/accounts".into(),
+                    shared_identities_namespace: "shared/identities".into(),
                     app_config_path: "/home/tester/.radroots/config/apps/cli/config.toml".into(),
                     workspace_config_path: "/workspace/.radroots/config.toml".into(),
                     app_data_root: "/home/tester/.radroots/data/apps/cli".into(),
@@ -2099,6 +2130,18 @@ mod tests {
                     secrets_dir: "/home/tester/.radroots/secrets/shared/accounts".into(),
                     secret_backend: RadrootsSecretBackend::EncryptedFile,
                     secret_fallback: None,
+                },
+                account_secret_contract: AccountSecretContractConfig {
+                    default_backend: "host_vault".into(),
+                    default_fallback: Some("encrypted_file".into()),
+                    allowed_backends: vec![
+                        "host_vault".into(),
+                        "encrypted_file".into(),
+                        "memory".into(),
+                        "plaintext_file".into(),
+                    ],
+                    host_vault_policy: Some("desktop".into()),
+                    uses_protected_store: true,
                 },
                 identity: IdentityConfig {
                     path: "/home/tester/.radroots/secrets/shared/identities/default.json".into(),
@@ -2134,6 +2177,8 @@ mod tests {
         .expect("runtime show");
         assert_eq!(view.output.format, "human");
         assert_eq!(view.paths.profile, "interactive_user");
+        assert_eq!(view.paths.app_namespace, "apps/cli");
+        assert_eq!(view.paths.shared_accounts_namespace, "shared/accounts");
         assert_eq!(
             view.paths.workspace_config_path,
             "/workspace/.radroots/config.toml"
@@ -2146,6 +2191,7 @@ mod tests {
         );
         assert_eq!(view.relay.count, 2);
         assert_eq!(view.relay.publish_policy, "any");
+        assert_eq!(view.account.secret_backend.contract_default_backend, "host_vault");
         assert!(
             view.local
                 .replica_db_path
@@ -2187,6 +2233,10 @@ mod tests {
                     },
                     paths: PathsConfig {
                         profile: "interactive_user".into(),
+                        allowed_profiles: vec!["interactive_user".into()],
+                        app_namespace: "apps/cli".into(),
+                        shared_accounts_namespace: "shared/accounts".into(),
+                        shared_identities_namespace: "shared/identities".into(),
                         app_config_path: "/home/tester/.radroots/config/apps/cli/config.toml"
                             .into(),
                         workspace_config_path: "/workspace/.radroots/config.toml".into(),
@@ -2210,6 +2260,18 @@ mod tests {
                         secrets_dir: "/home/tester/.radroots/secrets/shared/accounts".into(),
                         secret_backend: RadrootsSecretBackend::EncryptedFile,
                         secret_fallback: None,
+                    },
+                    account_secret_contract: AccountSecretContractConfig {
+                        default_backend: "host_vault".into(),
+                        default_fallback: Some("encrypted_file".into()),
+                        allowed_backends: vec![
+                            "host_vault".into(),
+                            "encrypted_file".into(),
+                            "memory".into(),
+                            "plaintext_file".into(),
+                        ],
+                        host_vault_policy: Some("desktop".into()),
+                        uses_protected_store: true,
                     },
                     identity: IdentityConfig {
                         path: "/home/tester/.radroots/secrets/shared/identities/default.json"
@@ -2257,7 +2319,7 @@ mod tests {
     #[test]
     fn account_list_ndjson_emits_one_json_object_per_account() {
         let output = CommandOutput::success(CommandView::AccountList(AccountListView {
-            source: "local account store · local first".to_owned(),
+            source: "shared account store · local first".to_owned(),
             count: 2,
             accounts: vec![
                 crate::domain::runtime::AccountSummaryView {

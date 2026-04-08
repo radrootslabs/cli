@@ -30,6 +30,7 @@ const ENCRYPTED_FILE_MASTER_KEY_FILE: &str = ".vault.key";
 const ENCRYPTED_FILE_SECRET_SUFFIX: &str = ".secret.json";
 const PLAINTEXT_FILE_SECRET_SUFFIX: &str = ".secret";
 const WRAPPED_KEY_VERSION: u8 = 1;
+pub const SHARED_ACCOUNT_STORE_SOURCE: &str = "shared account store · local first";
 
 #[derive(Debug, Clone)]
 pub struct AccountSnapshot {
