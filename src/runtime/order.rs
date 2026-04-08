@@ -16,10 +16,10 @@ use crate::domain::runtime::{
     OrderIssueView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView,
     OrderWatchFrameView, OrderWatchView,
 };
+use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon::{self, DaemonRpcError};
-use crate::runtime::RuntimeError;
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
@@ -1365,8 +1365,8 @@ impl From<OrderGetView> for OrderNewView {
 #[cfg(test)]
 mod tests {
     use super::{
-        next_order_id, OrderDraft, OrderDraftDocument, OrderDraftItem, OrderDraftSubmission,
-        ORDER_DRAFT_KIND,
+        ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, OrderDraftSubmission,
+        next_order_id,
     };
 
     #[test]

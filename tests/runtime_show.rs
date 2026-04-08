@@ -106,8 +106,14 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["paths"]["profile"], "interactive_user");
     assert_eq!(json["paths"]["allowed_profiles"][0], "interactive_user");
     assert_eq!(json["paths"]["app_namespace"], "apps/cli");
-    assert_eq!(json["paths"]["shared_accounts_namespace"], "shared/accounts");
-    assert_eq!(json["paths"]["shared_identities_namespace"], "shared/identities");
+    assert_eq!(
+        json["paths"]["shared_accounts_namespace"],
+        "shared/accounts"
+    );
+    assert_eq!(
+        json["paths"]["shared_identities_namespace"],
+        "shared/identities"
+    );
     assert_eq!(
         json["paths"]["app_config_path"],
         config_root(dir.path())

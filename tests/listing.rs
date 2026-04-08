@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use assert_cmd::prelude::*;
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tempfile::tempdir;
 
 fn data_root(workdir: &Path) -> std::path::PathBuf {

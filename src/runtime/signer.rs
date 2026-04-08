@@ -1,6 +1,6 @@
 use crate::domain::runtime::{IdentityPublicView, LocalSignerStatusView, SignerStatusView};
-use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::accounts::SHARED_ACCOUNT_STORE_SOURCE;
+use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use radroots_nostr_accounts::prelude::RadrootsNostrSelectedAccountStatus;
 use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,

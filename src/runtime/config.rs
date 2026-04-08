@@ -31,12 +31,8 @@ const CLI_HOST_VAULT_POLICY: &str = "desktop";
 const CLI_DEFAULT_SECRET_BACKEND: &str = "host_vault";
 const CLI_DEFAULT_SECRET_FALLBACK: &str = "encrypted_file";
 const CLI_ALLOWED_PROFILES: &[&str] = &[CLI_PROFILE];
-const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] = &[
-    "host_vault",
-    "encrypted_file",
-    "memory",
-    "plaintext_file",
-];
+const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] =
+    &["host_vault", "encrypted_file", "memory", "plaintext_file"];
 const CLI_USES_PROTECTED_STORE: bool = true;
 const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
 const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
@@ -445,8 +441,10 @@ fn resolve_paths(env: &dyn Environment) -> Result<PathsConfig, RuntimeError> {
         .map_err(|err| RuntimeError::Config(format!("resolve Radroots path roots: {err}")))?;
     let app_namespace = RadrootsRuntimeNamespace::app(CLI_APP_NAMESPACE_VALUE)
         .map_err(|err| RuntimeError::Config(format!("resolve cli namespace: {err}")))?;
-    let shared_accounts_namespace = RadrootsRuntimeNamespace::shared(SHARED_ACCOUNTS_NAMESPACE_VALUE)
-        .map_err(|err| RuntimeError::Config(format!("resolve shared accounts namespace: {err}")))?;
+    let shared_accounts_namespace =
+        RadrootsRuntimeNamespace::shared(SHARED_ACCOUNTS_NAMESPACE_VALUE).map_err(|err| {
+            RuntimeError::Config(format!("resolve shared accounts namespace: {err}"))
+        })?;
     let shared_identity_namespace =
         RadrootsRuntimeNamespace::shared(SHARED_IDENTITIES_NAMESPACE_VALUE).map_err(|err| {
             RuntimeError::Config(format!("resolve shared identities namespace: {err}"))
@@ -920,8 +918,7 @@ mod tests {
     use super::{
         AccountConfig, AccountSecretContractConfig, EnvFileValues, Environment, OutputConfig,
         OutputFormat, PathsConfig, RelayConfigSource, RelayPublishPolicy, RuntimeConfig,
-        SignerBackend, Verbosity,
-        parse_env_file_values,
+        SignerBackend, Verbosity, parse_env_file_values,
     };
     use crate::cli::CliArgs;
     use clap::Parser;
@@ -1334,7 +1331,10 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         );
         assert_eq!(resolved.paths.app_namespace, "apps/cli");
         assert_eq!(resolved.paths.shared_accounts_namespace, "shared/accounts");
-        assert_eq!(resolved.paths.shared_identities_namespace, "shared/identities");
+        assert_eq!(
+            resolved.paths.shared_identities_namespace,
+            "shared/identities"
+        );
         assert_eq!(
             resolved.paths.workspace_config_path,
             PathBuf::from("/workspaces/radroots-cli/.radroots/config.toml")

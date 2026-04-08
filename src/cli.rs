@@ -913,15 +913,21 @@ mod tests {
     #[test]
     fn command_contract_helpers_report_supported_modes() {
         let config_show = CliArgs::parse_from(["radroots", "config", "show"]);
-        assert!(config_show
-            .command
-            .supports_output_format(OutputFormat::Human));
-        assert!(config_show
-            .command
-            .supports_output_format(OutputFormat::Json));
-        assert!(!config_show
-            .command
-            .supports_output_format(OutputFormat::Ndjson));
+        assert!(
+            config_show
+                .command
+                .supports_output_format(OutputFormat::Human)
+        );
+        assert!(
+            config_show
+                .command
+                .supports_output_format(OutputFormat::Json)
+        );
+        assert!(
+            !config_show
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
         assert!(config_show.command.supports_dry_run());
 
         let account_new = CliArgs::parse_from(["radroots", "account", "new"]);
@@ -932,14 +938,18 @@ mod tests {
         assert!(find.command.supports_output_format(OutputFormat::Ndjson));
 
         let sync_watch = CliArgs::parse_from(["radroots", "sync", "watch", "--frames", "1"]);
-        assert!(sync_watch
-            .command
-            .supports_output_format(OutputFormat::Ndjson));
+        assert!(
+            sync_watch
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
 
         let order_watch = CliArgs::parse_from(["radroots", "order", "watch", "ord_demo"]);
-        assert!(order_watch
-            .command
-            .supports_output_format(OutputFormat::Ndjson));
+        assert!(
+            order_watch
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
 
         let order_submit = CliArgs::parse_from(["radroots", "order", "submit", "ord_demo"]);
         assert_eq!(order_submit.command.display_name(), "order submit");
