@@ -507,6 +507,8 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
             order_id,
             "--idempotency-key",
             "order-submit-1",
+            "--signer-session-id",
+            "sess_order_01",
         ])
         .output()
         .expect("run order submit");
@@ -516,6 +518,11 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
     assert_eq!(submit_json["state"], "accepted");
     assert_eq!(submit_json["job"]["job_id"], "job_order_01");
     assert_eq!(submit_json["job"]["command"], "order.submit");
+    assert_eq!(submit_json["requested_signer_session_id"], "sess_order_01");
+    assert_eq!(
+        submit_json["job"]["requested_signer_session_id"],
+        "sess_order_01"
+    );
 
     let contents = fs::read_to_string(file).expect("read updated order draft");
     assert!(contents.contains("job_id = \"job_order_01\""));
@@ -523,16 +530,12 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
     assert!(contents.contains("command = \"order.submit\""));
 
     let recorded_requests = requests.lock().expect("requests lock");
-    assert!(
-        recorded_requests
-            .iter()
-            .any(|request| request.method == "bridge.order.request")
-    );
-    assert!(
-        recorded_requests
-            .iter()
-            .any(|request| { request.auth_header.as_deref() == Some("Bearer test-token") })
-    );
+    assert!(recorded_requests
+        .iter()
+        .any(|request| request.method == "bridge.order.request"));
+    assert!(recorded_requests
+        .iter()
+        .any(|request| { request.auth_header.as_deref() == Some("Bearer test-token") }));
 }
 
 #[test]
@@ -693,10 +696,8 @@ command = "order.submit"
     assert_eq!(output.status.code(), Some(3));
     let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("cancel json");
     assert_eq!(json["state"], "unconfigured");
-    assert!(
-        json["reason"]
-            .as_str()
-            .expect("cancel reason")
-            .contains("trade-chain")
-    );
+    assert!(json["reason"]
+        .as_str()
+        .expect("cancel reason")
+        .contains("trade-chain"));
 }

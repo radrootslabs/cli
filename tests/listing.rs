@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use assert_cmd::prelude::*;
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tempfile::tempdir;
 
 fn data_root(workdir: &Path) -> std::path::PathBuf {
@@ -334,6 +334,8 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
             "publish",
             "--idempotency-key",
             "publish-key",
+            "--signer-session-id",
+            "sess_publish_01",
             "--print-job",
             "--print-event",
             draft_path.to_str().expect("draft path"),
@@ -349,6 +351,14 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
     assert_eq!(publish_json["event_id"], "event_listing_01");
     assert_eq!(publish_json["event"]["kind"], 30402);
     assert_eq!(publish_json["job"]["rpc_method"], "bridge.listing.publish");
+    assert_eq!(
+        publish_json["requested_signer_session_id"],
+        "sess_publish_01"
+    );
+    assert_eq!(
+        publish_json["job"]["requested_signer_session_id"],
+        "sess_publish_01"
+    );
 
     let update_output = cli_command_in(dir.path())
         .env("RADROOTS_RPC_URL", server.url())
@@ -441,6 +451,8 @@ fn listing_archive_and_dry_run_are_truthful() {
             "--json",
             "listing",
             "archive",
+            "--signer-session-id",
+            "sess_archive_01",
             draft_path.to_str().expect("draft path"),
         ])
         .output()
@@ -450,6 +462,10 @@ fn listing_archive_and_dry_run_are_truthful() {
         serde_json::from_slice(archive_output.stdout.as_slice()).expect("archive json");
     assert_eq!(archive_json["operation"], "archive");
     assert_eq!(archive_json["job_status"], "published");
+    assert_eq!(
+        archive_json["requested_signer_session_id"],
+        "sess_archive_01"
+    );
 
     let dry_run_output = cli_command_in(dir.path())
         .args([
@@ -457,6 +473,8 @@ fn listing_archive_and_dry_run_are_truthful() {
             "--dry-run",
             "listing",
             "publish",
+            "--signer-session-id",
+            "sess_dry_run_01",
             "--print-event",
             "--print-job",
             draft_path.to_str().expect("draft path"),
@@ -471,6 +489,14 @@ fn listing_archive_and_dry_run_are_truthful() {
     assert_eq!(dry_run_json["job"]["state"], "not_submitted");
     assert_eq!(dry_run_json["event"]["kind"], 30402);
     assert!(dry_run_json["event"]["event_id"].is_null());
+    assert_eq!(
+        dry_run_json["requested_signer_session_id"],
+        "sess_dry_run_01"
+    );
+    assert_eq!(
+        dry_run_json["job"]["requested_signer_session_id"],
+        "sess_dry_run_01"
+    );
 
     let recorded = requests.lock().expect("requests");
     assert_eq!(recorded.len(), 1);

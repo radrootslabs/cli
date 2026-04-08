@@ -8,8 +8,8 @@ use crate::domain::runtime::{
     OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderWatchView,
     RelayListView, RpcSessionsView, RpcStatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
+use crate::runtime::RuntimeError;
 
 const THIN_RULE: &str = "────────────────────────────────────────────────────";
 
@@ -435,11 +435,19 @@ fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<()
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value { "yes" } else { "no" }
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
 }
 
 fn present_absent(value: bool) -> &'static str {
-    if value { "present" } else { "absent" }
+    if value {
+        "present"
+    } else {
+        "absent"
+    }
 }
 
 fn render_account_list(stdout: &mut dyn Write, view: &AccountListView) -> Result<(), RuntimeError> {
@@ -548,7 +556,10 @@ fn render_config_show(
         ("secrets dir", view.account.secrets_dir.as_str()),
         (
             "contract default secret backend",
-            view.account.secret_backend.contract_default_backend.as_str(),
+            view.account
+                .secret_backend
+                .contract_default_backend
+                .as_str(),
         ),
         (
             "configured secret backend",
@@ -1032,6 +1043,12 @@ fn render_order_submit(stdout: &mut dyn Write, view: &OrderSubmitView) -> Result
     if let Some(idempotency_key) = &view.idempotency_key {
         rows.push(("idempotency key", idempotency_key.as_str()));
     }
+    if let Some(requested_signer_session_id) = &view.requested_signer_session_id {
+        rows.push((
+            "requested signer session",
+            requested_signer_session_id.as_str(),
+        ));
+    }
     render_pairs(stdout, "order", rows.as_slice())?;
     if let Some(job) = &view.job {
         render_order_job(stdout, job)?;
@@ -1204,6 +1221,12 @@ fn render_order_job(stdout: &mut dyn Write, job: &OrderJobView) -> Result<(), Ru
     ];
     if let Some(command) = &job.command {
         rows.push(("command", command.as_str()));
+    }
+    if let Some(requested_signer_session_id) = &job.requested_signer_session_id {
+        rows.push((
+            "requested signer session",
+            requested_signer_session_id.as_str(),
+        ));
     }
     if let Some(event_id) = &job.event_id {
         rows.push(("event id", event_id.as_str()));
@@ -1415,6 +1438,12 @@ fn render_listing_mutation(
     }
     if let Some(signer_mode) = &view.signer_mode {
         rows.push(("signer", signer_mode.as_str()));
+    }
+    if let Some(requested_signer_session_id) = &view.requested_signer_session_id {
+        rows.push((
+            "requested signer session",
+            requested_signer_session_id.as_str(),
+        ));
     }
     render_pairs(stdout, "listing", rows.as_slice())?;
     if let Some(reason) = &view.reason {
@@ -2079,7 +2108,7 @@ fn human_command_name(view: &CommandView) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Table, render_human_to, render_ndjson_to, render_table};
+    use super::{render_human_to, render_ndjson_to, render_table, Table};
     use crate::commands::runtime;
     use crate::domain::runtime::{
         AccountListView, CommandOutput, CommandView, DoctorCheckView, DoctorView, MycStatusView,
@@ -2184,19 +2213,20 @@ mod tests {
             "/workspace/.radroots/config.toml"
         );
         assert_eq!(view.account.selector.as_deref(), Some("acct_demo"));
-        assert!(
-            view.account
-                .store_path
-                .ends_with(".radroots/data/shared/accounts/store.json")
-        );
+        assert!(view
+            .account
+            .store_path
+            .ends_with(".radroots/data/shared/accounts/store.json"));
         assert_eq!(view.relay.count, 2);
         assert_eq!(view.relay.publish_policy, "any");
-        assert_eq!(view.account.secret_backend.contract_default_backend, "host_vault");
-        assert!(
-            view.local
-                .replica_db_path
-                .ends_with(".radroots/data/apps/cli/replica/replica.sqlite")
+        assert_eq!(
+            view.account.secret_backend.contract_default_backend,
+            "host_vault"
         );
+        assert!(view
+            .local
+            .replica_db_path
+            .ends_with(".radroots/data/apps/cli/replica/replica.sqlite"));
     }
 
     #[test]
@@ -2309,11 +2339,9 @@ mod tests {
         ));
         let mut buffer = Vec::new();
         let error = render_ndjson_to(&mut buffer, &output).expect_err("unsupported ndjson");
-        assert!(
-            error
-                .to_string()
-                .contains("`config show` does not support --ndjson")
-        );
+        assert!(error
+            .to_string()
+            .contains("`config show` does not support --ndjson"));
     }
 
     #[test]

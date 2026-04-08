@@ -615,6 +615,8 @@ pub struct OrderSubmitView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_signer_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<OrderJobView>,
@@ -777,6 +779,8 @@ pub struct OrderJobView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_signer_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_addr: Option<String>,
@@ -890,6 +894,8 @@ pub struct ListingMutationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_signer_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<ListingMutationJobView>,
@@ -918,6 +924,8 @@ pub struct ListingMutationJobView {
     pub job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_signer_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_mode: Option<String>,
 }

@@ -16,10 +16,10 @@ use crate::domain::runtime::{
     OrderIssueView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView,
     OrderWatchFrameView, OrderWatchView,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon::{self, DaemonRpcError};
+use crate::runtime::RuntimeError;
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
@@ -278,6 +278,7 @@ pub fn submit(
             dry_run: false,
             deduplicated: false,
             idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some(format!("order draft `{}` was not found", args.key)),
             job: None,
             issues: Vec::new(),
@@ -304,6 +305,7 @@ pub fn submit(
                 dry_run: false,
                 deduplicated: false,
                 idempotency_key: args.idempotency_key.clone(),
+                requested_signer_session_id: args.signer_session_id.clone(),
                 reason: Some(reason),
                 job: None,
                 issues: Vec::new(),
@@ -331,6 +333,7 @@ pub fn submit(
             dry_run: false,
             deduplicated: false,
             idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some("order draft already has a recorded submission job".to_owned()),
             job: Some(job),
             issues: Vec::new(),
@@ -358,6 +361,7 @@ pub fn submit(
             dry_run: false,
             deduplicated: false,
             idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some("order draft is not ready for durable submit".to_owned()),
             job: None,
             issues,
@@ -379,11 +383,13 @@ pub fn submit(
             dry_run: true,
             deduplicated: false,
             idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some("dry run requested; daemon order submission skipped".to_owned()),
             job: Some(OrderJobView {
                 job_id: "not_submitted".to_owned(),
                 state: "not_submitted".to_owned(),
                 command: Some("order.submit".to_owned()),
+                requested_signer_session_id: args.signer_session_id.clone(),
                 event_id: None,
                 event_addr: None,
                 reason: None,
@@ -442,6 +448,7 @@ pub fn submit(
                 dry_run: false,
                 deduplicated: result.deduplicated,
                 idempotency_key: result.idempotency_key.clone(),
+                requested_signer_session_id: args.signer_session_id.clone(),
                 reason: failed.then(|| {
                     "daemon order request failed before relay delivery completed".to_owned()
                 }),
@@ -449,6 +456,7 @@ pub fn submit(
                     job_id: result.job_id,
                     state: result.status,
                     command: Some("order.submit".to_owned()),
+                    requested_signer_session_id: args.signer_session_id.clone(),
                     event_id: result.event_id,
                     event_addr: result.event_addr,
                     reason: None,
@@ -1005,6 +1013,7 @@ fn submission_job_view(
             job_id,
             state: job.state,
             command: Some(job.command),
+            requested_signer_session_id: None,
             event_id: job.event_id,
             event_addr: job.event_addr,
             reason: None,
@@ -1013,6 +1022,7 @@ fn submission_job_view(
             job_id,
             state: "missing".to_owned(),
             command: submission.command.clone(),
+            requested_signer_session_id: None,
             event_id: submission.event_id.clone(),
             event_addr: submission.event_addr.clone(),
             reason: Some("recorded job id was not found in radrootsd".to_owned()),
@@ -1029,6 +1039,7 @@ fn recorded_job_view(submission: &OrderDraftSubmission, job_id: String) -> Order
             .clone()
             .unwrap_or_else(|| "recorded".to_owned()),
         command: submission.command.clone(),
+        requested_signer_session_id: None,
         event_id: submission.event_id.clone(),
         event_addr: submission.event_addr.clone(),
         reason: None,
@@ -1043,6 +1054,7 @@ fn job_view_from_error(job_id: String, error: DaemonRpcError) -> OrderJobView {
             job_id,
             state: "unconfigured".to_owned(),
             command: None,
+            requested_signer_session_id: None,
             event_id: None,
             event_addr: None,
             reason: Some(reason),
@@ -1051,6 +1063,7 @@ fn job_view_from_error(job_id: String, error: DaemonRpcError) -> OrderJobView {
             job_id,
             state: "unavailable".to_owned(),
             command: None,
+            requested_signer_session_id: None,
             event_id: None,
             event_addr: None,
             reason: Some(reason),
@@ -1061,6 +1074,7 @@ fn job_view_from_error(job_id: String, error: DaemonRpcError) -> OrderJobView {
             job_id,
             state: "error".to_owned(),
             command: None,
+            requested_signer_session_id: None,
             event_id: None,
             event_addr: None,
             reason: Some(reason),
@@ -1111,6 +1125,7 @@ fn order_submit_error_view(
         dry_run: false,
         deduplicated: false,
         idempotency_key: args.idempotency_key.clone(),
+        requested_signer_session_id: args.signer_session_id.clone(),
         reason: Some(reason),
         job: None,
         issues: Vec::new(),
@@ -1350,8 +1365,8 @@ impl From<OrderGetView> for OrderNewView {
 #[cfg(test)]
 mod tests {
     use super::{
-        ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, OrderDraftSubmission,
-        next_order_id,
+        next_order_id, OrderDraft, OrderDraftDocument, OrderDraftItem, OrderDraftSubmission,
+        ORDER_DRAFT_KIND,
     };
 
     #[test]

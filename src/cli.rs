@@ -349,6 +349,8 @@ pub struct ListingMutationArgs {
     pub file: PathBuf,
     #[arg(long)]
     pub idempotency_key: Option<String>,
+    #[arg(long = "signer-session-id")]
+    pub signer_session_id: Option<String>,
     #[arg(long = "print-job", action = ArgAction::SetTrue)]
     pub print_job: bool,
     #[arg(long = "print-event", action = ArgAction::SetTrue)]
@@ -423,6 +425,8 @@ pub struct OrderSubmitArgs {
     pub key: String,
     #[arg(long)]
     pub idempotency_key: Option<String>,
+    #[arg(long = "signer-session-id")]
+    pub signer_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -705,6 +709,7 @@ mod tests {
                 ListingCommand::Publish(file) => {
                     assert_eq!(file.file.to_str(), Some("draft.toml"));
                     assert!(file.idempotency_key.is_none());
+                    assert!(file.signer_session_id.is_none());
                     assert!(!file.print_job);
                     assert!(!file.print_event);
                 }
@@ -728,8 +733,28 @@ mod tests {
                 ListingCommand::Archive(file) => {
                     assert_eq!(file.file.to_str(), Some("draft.toml"));
                     assert_eq!(file.idempotency_key.as_deref(), Some("archive-key"));
+                    assert!(file.signer_session_id.is_none());
                     assert!(file.print_job);
                     assert!(file.print_event);
+                }
+                _ => panic!("unexpected listing subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let listing_update = CliArgs::parse_from([
+            "radroots",
+            "listing",
+            "update",
+            "--signer-session-id",
+            "sess_123",
+            "draft.toml",
+        ]);
+        match listing_update.command {
+            Command::Listing(args) => match args.command {
+                ListingCommand::Update(file) => {
+                    assert_eq!(file.file.to_str(), Some("draft.toml"));
+                    assert_eq!(file.signer_session_id.as_deref(), Some("sess_123"));
                 }
                 _ => panic!("unexpected listing subcommand"),
             },
@@ -843,12 +868,15 @@ mod tests {
             "ord_demo",
             "--idempotency-key",
             "submit-1",
+            "--signer-session-id",
+            "sess_456",
         ]);
         match order_submit.command {
             Command::Order(args) => match args.command {
                 OrderCommand::Submit(submit) => {
                     assert_eq!(submit.key, "ord_demo");
                     assert_eq!(submit.idempotency_key.as_deref(), Some("submit-1"));
+                    assert_eq!(submit.signer_session_id.as_deref(), Some("sess_456"));
                 }
                 _ => panic!("unexpected order subcommand"),
             },
@@ -885,21 +913,15 @@ mod tests {
     #[test]
     fn command_contract_helpers_report_supported_modes() {
         let config_show = CliArgs::parse_from(["radroots", "config", "show"]);
-        assert!(
-            config_show
-                .command
-                .supports_output_format(OutputFormat::Human)
-        );
-        assert!(
-            config_show
-                .command
-                .supports_output_format(OutputFormat::Json)
-        );
-        assert!(
-            !config_show
-                .command
-                .supports_output_format(OutputFormat::Ndjson)
-        );
+        assert!(config_show
+            .command
+            .supports_output_format(OutputFormat::Human));
+        assert!(config_show
+            .command
+            .supports_output_format(OutputFormat::Json));
+        assert!(!config_show
+            .command
+            .supports_output_format(OutputFormat::Ndjson));
         assert!(config_show.command.supports_dry_run());
 
         let account_new = CliArgs::parse_from(["radroots", "account", "new"]);
@@ -910,18 +932,14 @@ mod tests {
         assert!(find.command.supports_output_format(OutputFormat::Ndjson));
 
         let sync_watch = CliArgs::parse_from(["radroots", "sync", "watch", "--frames", "1"]);
-        assert!(
-            sync_watch
-                .command
-                .supports_output_format(OutputFormat::Ndjson)
-        );
+        assert!(sync_watch
+            .command
+            .supports_output_format(OutputFormat::Ndjson));
 
         let order_watch = CliArgs::parse_from(["radroots", "order", "watch", "ord_demo"]);
-        assert!(
-            order_watch
-                .command
-                .supports_output_format(OutputFormat::Ndjson)
-        );
+        assert!(order_watch
+            .command
+            .supports_output_format(OutputFormat::Ndjson));
 
         let order_submit = CliArgs::parse_from(["radroots", "order", "submit", "ord_demo"]);
         assert_eq!(order_submit.command.display_name(), "order submit");

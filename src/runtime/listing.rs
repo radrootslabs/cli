@@ -7,7 +7,6 @@ use radroots_core::{
     RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreMoney, RadrootsCoreQuantity,
     RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
-use radroots_events::RadrootsNostrEvent;
 use radroots_events::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
 use radroots_events::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingBin,
@@ -15,9 +14,10 @@ use radroots_events::listing::{
     RadrootsListingProduct, RadrootsListingStatus,
 };
 use radroots_events::trade::RadrootsTradeListingValidationError;
+use radroots_events::RadrootsNostrEvent;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
-use radroots_sql_core::{SqlExecutor, SqliteExecutor, utils};
+use radroots_sql_core::{utils, SqlExecutor, SqliteExecutor};
 use radroots_trade::listing::validation::validate_listing_event;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,12 +28,12 @@ use crate::domain::runtime::{
     ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
     ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon;
 use crate::runtime::daemon::DaemonRpcError;
 use crate::runtime::sync::freshness_from_executor;
+use crate::runtime::RuntimeError;
 
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
@@ -522,12 +522,14 @@ fn mutate(
             event_id: None,
             event_addr: Some(listing_addr.clone()),
             idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some("dry run requested; daemon publish skipped".to_owned()),
             job: args.print_job.then(|| ListingMutationJobView {
                 rpc_method: "bridge.listing.publish".to_owned(),
                 state: "not_submitted".to_owned(),
                 job_id: None,
                 idempotency_key: args.idempotency_key.clone(),
+                requested_signer_session_id: args.signer_session_id.clone(),
                 signer_mode: Some(config.signer.backend.as_str().to_owned()),
             }),
             event: args.print_event.then_some(event_preview),
@@ -584,6 +586,7 @@ fn mutate(
                     .clone()
                     .or_else(|| Some(listing_addr.clone())),
                 idempotency_key: result.idempotency_key.clone(),
+                requested_signer_session_id: args.signer_session_id.clone(),
                 reason: failed.then(|| {
                     "daemon publish job failed before relay delivery completed".to_owned()
                 }),
@@ -592,6 +595,7 @@ fn mutate(
                     state: result.status,
                     job_id: Some(result.job_id),
                     idempotency_key: result.idempotency_key,
+                    requested_signer_session_id: args.signer_session_id.clone(),
                     signer_mode: Some(result.signer_mode),
                 }),
                 event: args.print_event.then(|| ListingMutationEventView {
@@ -974,12 +978,14 @@ fn daemon_error_view(
             event_id: None,
             event_addr: None,
             idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some(reason),
             job: args.print_job.then(|| ListingMutationJobView {
                 rpc_method: "bridge.listing.publish".to_owned(),
                 state: "unconfigured".to_owned(),
                 job_id: None,
                 idempotency_key: args.idempotency_key.clone(),
+                requested_signer_session_id: args.signer_session_id.clone(),
                 signer_mode: Some(config.signer.backend.as_str().to_owned()),
             }),
             event: args.print_event.then_some(event_preview),
@@ -1005,12 +1011,14 @@ fn daemon_error_view(
             event_id: None,
             event_addr: None,
             idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some(reason),
             job: args.print_job.then(|| ListingMutationJobView {
                 rpc_method: "bridge.listing.publish".to_owned(),
                 state: "unavailable".to_owned(),
                 job_id: None,
                 idempotency_key: args.idempotency_key.clone(),
+                requested_signer_session_id: args.signer_session_id.clone(),
                 signer_mode: Some(config.signer.backend.as_str().to_owned()),
             }),
             event: args.print_event.then_some(event_preview),
@@ -1035,12 +1043,14 @@ fn daemon_error_view(
             event_id: None,
             event_addr: None,
             idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some(reason),
             job: args.print_job.then(|| ListingMutationJobView {
                 rpc_method: "bridge.listing.publish".to_owned(),
                 state: "error".to_owned(),
                 job_id: None,
                 idempotency_key: args.idempotency_key.clone(),
+                requested_signer_session_id: args.signer_session_id.clone(),
                 signer_mode: Some(config.signer.backend.as_str().to_owned()),
             }),
             event: args.print_event.then_some(event_preview),
@@ -1288,7 +1298,7 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DRAFT_KIND, ListingDraftDocument, encode_base64url_no_pad, generate_d_tag};
+    use super::{encode_base64url_no_pad, generate_d_tag, ListingDraftDocument, DRAFT_KIND};
     use radroots_events_codec::d_tag::is_d_tag_base64url;
 
     #[test]
