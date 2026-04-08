@@ -22,6 +22,7 @@ const DEFAULT_LOCAL_DB_FILE: &str = "replica.sqlite";
 const DEFAULT_LOCAL_BACKUPS_DIR: &str = "backups";
 const DEFAULT_LOCAL_EXPORTS_DIR: &str = "exports";
 const DEFAULT_SHARED_ACCOUNTS_STORE_FILE: &str = "store.json";
+const DEFAULT_HYF_EXECUTABLE: &str = "hyfd";
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:7070";
 const CLI_PROFILE: &str = "interactive_user";
 const CLI_APP_NAMESPACE_VALUE: &str = "cli";
@@ -49,6 +50,8 @@ const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
 const ENV_SIGNER: &str = "RADROOTS_SIGNER";
 const ENV_RELAYS: &str = "RADROOTS_RELAYS";
 const ENV_MYC_EXECUTABLE: &str = "RADROOTS_MYC_EXECUTABLE";
+const ENV_HYF_ENABLED: &str = "RADROOTS_HYF_ENABLED";
+const ENV_HYF_EXECUTABLE: &str = "RADROOTS_HYF_EXECUTABLE";
 const ENV_RPC_URL: &str = "RADROOTS_RPC_URL";
 const ENV_RPC_BEARER_TOKEN: &str = "RADROOTS_RPC_BEARER_TOKEN";
 const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
@@ -66,6 +69,8 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_SIGNER,
     ENV_RELAYS,
     ENV_MYC_EXECUTABLE,
+    ENV_HYF_ENABLED,
+    ENV_HYF_EXECUTABLE,
     ENV_RPC_URL,
     ENV_RPC_BEARER_TOKEN,
 ];
@@ -219,6 +224,12 @@ pub struct MycConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HyfConfig {
+    pub enabled: bool,
+    pub executable: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpcConfig {
     pub url: String,
     pub bridge_bearer_token: Option<String>,
@@ -236,6 +247,7 @@ pub struct RuntimeConfig {
     pub relay: RelayConfig,
     pub local: LocalConfig,
     pub myc: MycConfig,
+    pub hyf: HyfConfig,
     pub rpc: RpcConfig,
 }
 
@@ -261,6 +273,7 @@ struct EnvFileValues(BTreeMap<String, String>);
 #[derive(Debug, Default, Deserialize)]
 struct CliConfigFile {
     relay: Option<RelayFileConfig>,
+    hyf: Option<HyfFileConfig>,
     rpc: Option<RpcFileConfig>,
 }
 
@@ -273,6 +286,12 @@ struct RelayFileConfig {
 #[derive(Debug, Default, Deserialize)]
 struct RpcFileConfig {
     url: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct HyfFileConfig {
+    enabled: Option<bool>,
+    executable: Option<PathBuf>,
 }
 
 pub trait Environment {
@@ -420,6 +439,22 @@ impl RuntimeConfig {
                     .clone()
                     .or_else(|| env_value(env, env_file, &[ENV_MYC_EXECUTABLE]).map(PathBuf::from))
                     .unwrap_or_else(|| PathBuf::from("myc")),
+            },
+            hyf: HyfConfig {
+                enabled: resolve_hyf_enabled(
+                    args,
+                    env,
+                    env_file,
+                    app_config.as_ref(),
+                    workspace_config.as_ref(),
+                )?,
+                executable: resolve_hyf_executable(
+                    args,
+                    env,
+                    env_file,
+                    app_config.as_ref(),
+                    workspace_config.as_ref(),
+                ),
             },
             rpc: resolve_rpc_config(
                 env,
@@ -581,6 +616,68 @@ fn resolve_relay_config(
         publish_policy,
         source: RelayConfigSource::Defaults,
     })
+}
+
+fn resolve_hyf_enabled(
+    args: &CliArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<bool, RuntimeError> {
+    match (args.hyf_enabled, args.no_hyf_enabled) {
+        (true, true) => {
+            return Err(RuntimeError::Config(
+                "flags --hyf-enabled and --no-hyf-enabled cannot be used together".to_owned(),
+            ));
+        }
+        (true, false) => return Ok(true),
+        (false, true) => return Ok(false),
+        (false, false) => {}
+    }
+
+    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_HYF_ENABLED]) {
+        return parse_bool_env(key.as_str(), value.as_str());
+    }
+
+    if let Some(enabled) = user_config
+        .and_then(|config| config.hyf.as_ref())
+        .and_then(|hyf| hyf.enabled)
+    {
+        return Ok(enabled);
+    }
+
+    if let Some(enabled) = workspace_config
+        .and_then(|config| config.hyf.as_ref())
+        .and_then(|hyf| hyf.enabled)
+    {
+        return Ok(enabled);
+    }
+
+    Ok(false)
+}
+
+fn resolve_hyf_executable(
+    args: &CliArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> PathBuf {
+    args.hyf_executable
+        .clone()
+        .or_else(|| env_value(env, env_file, &[ENV_HYF_EXECUTABLE]).map(PathBuf::from))
+        .or_else(|| {
+            user_config
+                .and_then(|config| config.hyf.as_ref())
+                .and_then(|hyf| hyf.executable.clone())
+        })
+        .or_else(|| {
+            workspace_config
+                .and_then(|config| config.hyf.as_ref())
+                .and_then(|hyf| hyf.executable.clone())
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_HYF_EXECUTABLE))
 }
 
 fn resolve_relay_publish_policy(
@@ -916,9 +1013,9 @@ fn parse_bool_env(key: &str, value: &str) -> Result<bool, RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountConfig, AccountSecretContractConfig, EnvFileValues, Environment, OutputConfig,
-        OutputFormat, PathsConfig, RelayConfigSource, RelayPublishPolicy, RuntimeConfig,
-        SignerBackend, Verbosity, parse_env_file_values,
+        AccountConfig, AccountSecretContractConfig, EnvFileValues, Environment, HyfConfig,
+        OutputConfig, OutputFormat, PathsConfig, RelayConfigSource, RelayPublishPolicy,
+        RuntimeConfig, SignerBackend, Verbosity, parse_env_file_values,
     };
     use crate::cli::CliArgs;
     use clap::Parser;
@@ -986,6 +1083,9 @@ mod tests {
             "wss://relay.two",
             "--myc-executable",
             "bin/myc-cli",
+            "--hyf-enabled",
+            "--hyf-executable",
+            "bin/hyfd-cli",
             "config",
             "show",
         ]);
@@ -1000,6 +1100,8 @@ mod tests {
             ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
             ("RADROOTS_RELAYS".to_owned(), "wss://relay.env".to_owned()),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "env-myc".to_owned()),
+            ("RADROOTS_HYF_ENABLED".to_owned(), "false".to_owned()),
+            ("RADROOTS_HYF_EXECUTABLE".to_owned(), "env-hyfd".to_owned()),
         ]));
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
@@ -1081,6 +1183,13 @@ mod tests {
         assert_eq!(resolved.relay.source, RelayConfigSource::Flags);
         assert_eq!(resolved.relay.publish_policy, RelayPublishPolicy::Any);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc-cli"));
+        assert_eq!(
+            resolved.hyf,
+            HyfConfig {
+                enabled: true,
+                executable: PathBuf::from("bin/hyfd-cli"),
+            }
+        );
     }
 
     #[test]
@@ -1105,6 +1214,8 @@ mod tests {
                 "wss://relay.one,wss://relay.two".to_owned(),
             ),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "bin/myc".to_owned()),
+            ("RADROOTS_HYF_ENABLED".to_owned(), "true".to_owned()),
+            ("RADROOTS_HYF_EXECUTABLE".to_owned(), "bin/hyfd".to_owned()),
         ]));
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
@@ -1141,6 +1252,13 @@ mod tests {
         );
         assert_eq!(resolved.relay.source, RelayConfigSource::Environment);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
+        assert_eq!(
+            resolved.hyf,
+            HyfConfig {
+                enabled: true,
+                executable: PathBuf::from("bin/hyfd"),
+            }
+        );
     }
 
     #[test]
@@ -1156,6 +1274,18 @@ mod tests {
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("conflicting flags");
         assert!(error.to_string().contains("cannot be used together"));
+
+        let hyf_args = CliArgs::parse_from([
+            "radroots",
+            "--hyf-enabled",
+            "--no-hyf-enabled",
+            "config",
+            "show",
+        ]);
+        let error =
+            RuntimeConfig::resolve_with_env_file(&hyf_args, &env, &EnvFileValues::default())
+                .expect_err("conflicting hyf flags");
+        assert!(error.to_string().contains("--hyf-enabled"));
     }
 
     #[test]
@@ -1214,6 +1344,8 @@ RADROOTS_IDENTITY_PATH=state/identity.json
 RADROOTS_SIGNER=myc
 RADROOTS_RELAYS=wss://relay.env-file
 RADROOTS_MYC_EXECUTABLE=bin/myc
+RADROOTS_HYF_ENABLED=true
+RADROOTS_HYF_EXECUTABLE=bin/hyfd
 "#,
             Path::new(".env.test"),
         )
@@ -1234,6 +1366,13 @@ RADROOTS_MYC_EXECUTABLE=bin/myc
         assert_eq!(resolved.relay.urls, vec!["wss://relay.env-file".to_owned()]);
         assert_eq!(resolved.relay.source, RelayConfigSource::Environment);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
+        assert_eq!(
+            resolved.hyf,
+            HyfConfig {
+                enabled: true,
+                executable: PathBuf::from("bin/hyfd"),
+            }
+        );
     }
 
     #[test]
@@ -1301,6 +1440,48 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         );
         assert_eq!(resolved.relay.source, RelayConfigSource::UserConfig);
         assert_eq!(resolved.relay.publish_policy, RelayPublishPolicy::Any);
+    }
+
+    #[test]
+    fn user_hyf_config_overrides_workspace_hyf_config() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(workspace_root.join(".radroots")).expect("workspace config dir");
+        fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
+        fs::write(
+            workspace_root.join(".radroots/config.toml"),
+            "[hyf]\nenabled = false\nexecutable = \"workspace-hyfd\"\n",
+        )
+        .expect("write workspace config");
+        fs::write(
+            user_home.join(".radroots/config/apps/cli/config.toml"),
+            "[hyf]\nenabled = true\nexecutable = \"user-hyfd\"\n",
+        )
+        .expect("write user config");
+
+        let env = MapEnvironment {
+            values: BTreeMap::new(),
+            current_dir: workspace_root,
+            path_resolver: RadrootsPathResolver::new(
+                RadrootsPlatform::Linux,
+                RadrootsHostEnvironment {
+                    home_dir: Some(user_home),
+                    ..RadrootsHostEnvironment::default()
+                },
+            ),
+        };
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve config");
+        assert_eq!(
+            resolved.hyf,
+            HyfConfig {
+                enabled: true,
+                executable: PathBuf::from("user-hyfd"),
+            }
+        );
     }
 
     #[test]

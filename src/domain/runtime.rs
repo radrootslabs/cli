@@ -117,6 +117,7 @@ pub struct ConfigShowView {
     pub relay: RelayRuntimeView,
     pub local: LocalRuntimeView,
     pub myc: MycRuntimeView,
+    pub hyf: HyfRuntimeView,
     pub rpc: RpcRuntimeView,
 }
 
@@ -212,6 +213,12 @@ pub struct LocalRuntimeView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MycRuntimeView {
+    pub executable: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HyfRuntimeView {
+    pub enabled: bool,
     pub executable: String,
 }
 

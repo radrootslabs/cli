@@ -617,6 +617,14 @@ fn render_config_show(
     )?;
     render_pairs(
         stdout,
+        "hyf",
+        &[
+            ("enabled", yes_no(view.hyf.enabled)),
+            ("executable", view.hyf.executable.as_str()),
+        ],
+    )?;
+    render_pairs(
+        stdout,
         "rpc",
         &[
             ("url", view.rpc.url.as_str()),
@@ -778,7 +786,9 @@ fn render_job_get(stdout: &mut dyn Write, view: &JobGetView) -> Result<(), Runti
                 ("signer mode", job.signer.clone()),
                 (
                     "signer session",
-                    job.signer_session_id.clone().unwrap_or_else(|| "-".to_owned()),
+                    job.signer_session_id
+                        .clone()
+                        .unwrap_or_else(|| "-".to_owned()),
                 ),
                 (
                     "requested",
@@ -828,7 +838,9 @@ fn render_job_watch(stdout: &mut dyn Write, view: &JobWatchView) -> Result<(), R
         }
     } else {
         let table = Table {
-            headers: &["frame", "time", "state", "signer", "session", "terminal", "summary"],
+            headers: &[
+                "frame", "time", "state", "signer", "session", "terminal", "summary",
+            ],
             rows: view
                 .frames
                 .iter()
@@ -1087,7 +1099,9 @@ fn render_order_watch(stdout: &mut dyn Write, view: &OrderWatchView) -> Result<(
     render_owned_pairs(stdout, "watch", rows.as_slice())?;
     if !view.frames.is_empty() {
         let table = Table {
-            headers: &["frame", "time", "state", "signer", "session", "terminal", "summary"],
+            headers: &[
+                "frame", "time", "state", "signer", "session", "terminal", "summary",
+            ],
             rows: view
                 .frames
                 .iter()
@@ -2131,9 +2145,10 @@ mod tests {
         RelayEntryView, RelayListView,
     };
     use crate::runtime::config::{
-        AccountConfig, AccountSecretContractConfig, IdentityConfig, LocalConfig, LoggingConfig,
-        MycConfig, OutputConfig, OutputFormat, PathsConfig, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, LocalConfig,
+        LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
+        SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
     use radroots_secret_vault::RadrootsSecretBackend;
@@ -2209,6 +2224,10 @@ mod tests {
                 myc: MycConfig {
                     executable: "myc".into(),
                 },
+                hyf: HyfConfig {
+                    enabled: false,
+                    executable: "hyfd".into(),
+                },
                 rpc: RpcConfig {
                     url: "http://127.0.0.1:7070".to_owned(),
                     bridge_bearer_token: None,
@@ -2236,6 +2255,8 @@ mod tests {
         );
         assert_eq!(view.relay.count, 2);
         assert_eq!(view.relay.publish_policy, "any");
+        assert!(!view.hyf.enabled);
+        assert_eq!(view.hyf.executable, "hyfd");
         assert_eq!(
             view.account.secret_backend.contract_default_backend,
             "host_vault"
@@ -2342,6 +2363,10 @@ mod tests {
                     },
                     myc: MycConfig {
                         executable: "myc".into(),
+                    },
+                    hyf: HyfConfig {
+                        enabled: false,
+                        executable: "hyfd".into(),
                     },
                     rpc: RpcConfig {
                         url: "http://127.0.0.1:7070".to_owned(),

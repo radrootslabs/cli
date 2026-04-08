@@ -41,6 +41,12 @@ pub struct CliArgs {
     pub relay: Vec<String>,
     #[arg(long, global = true)]
     pub myc_executable: Option<PathBuf>,
+    #[arg(long = "hyf-enabled", global = true, action = ArgAction::SetTrue)]
+    pub hyf_enabled: bool,
+    #[arg(long = "no-hyf-enabled", global = true, action = ArgAction::SetTrue)]
+    pub no_hyf_enabled: bool,
+    #[arg(long = "hyf-executable", global = true)]
+    pub hyf_executable: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -491,6 +497,9 @@ mod tests {
             "wss://relay.two",
             "--myc-executable",
             "bin/myc",
+            "--hyf-enabled",
+            "--hyf-executable",
+            "bin/hyfd",
             "config",
             "show",
         ]);
@@ -530,6 +539,14 @@ mod tests {
                 .as_deref()
                 .and_then(|path| path.to_str()),
             Some("bin/myc")
+        );
+        assert!(parsed.hyf_enabled);
+        assert_eq!(
+            parsed
+                .hyf_executable
+                .as_deref()
+                .and_then(|path| path.to_str()),
+            Some("bin/hyfd")
         );
     }
 

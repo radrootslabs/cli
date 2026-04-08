@@ -3,6 +3,7 @@ use crate::domain::runtime::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
+use crate::runtime::hyf::resolve_status as resolve_hyf_status;
 use crate::runtime::logging::LoggingState;
 use crate::runtime::signer::resolve_signer_status;
 
@@ -57,6 +58,7 @@ pub fn report(
         }
     }
 
+    checks.push(hyf_check(&resolve_hyf_status(&config.hyf)));
     checks.push(logging_check(config, logging));
 
     let severity = checks
@@ -69,10 +71,7 @@ pub fn report(
         ok: severity == DoctorSeverity::Ok,
         state: severity.status().to_owned(),
         checks: checks.into_iter().map(|check| check.view).collect(),
-        source: match config.signer.backend {
-            SignerBackend::Local => "local diagnostics".to_owned(),
-            SignerBackend::Myc => "local diagnostics + myc status command".to_owned(),
-        },
+        source: doctor_source(config),
         actions,
     };
 
@@ -267,6 +266,39 @@ fn myc_check(myc: &crate::domain::runtime::MycStatusView) -> EvaluatedCheck {
     }
 }
 
+fn hyf_check(hyf: &crate::runtime::hyf::HyfStatusView) -> EvaluatedCheck {
+    let (severity, detail) = match hyf.state.as_str() {
+        "disabled" => (
+            DoctorSeverity::Ok,
+            hyf.reason
+                .clone()
+                .unwrap_or_else(|| "disabled by config".to_owned()),
+        ),
+        "ready" => (
+            DoctorSeverity::Ok,
+            hyf.reason
+                .clone()
+                .unwrap_or_else(|| "healthy · protocol 1 · deterministic available".to_owned()),
+        ),
+        _ => (
+            DoctorSeverity::ExternalFail,
+            hyf.reason
+                .clone()
+                .unwrap_or_else(|| "hyf is unavailable".to_owned()),
+        ),
+    };
+
+    EvaluatedCheck {
+        severity,
+        view: DoctorCheckView {
+            name: "hyf".to_owned(),
+            status: severity.status().to_owned(),
+            detail,
+        },
+        action: None,
+    }
+}
+
 fn logging_check(config: &RuntimeConfig, logging: &LoggingState) -> EvaluatedCheck {
     let detail = match (config.logging.stdout, logging.current_file.as_ref()) {
         (true, Some(path)) => format!("stdout + file {}", path.display()),
@@ -294,4 +326,15 @@ fn collect_actions(checks: &[EvaluatedCheck]) -> Vec<String> {
         }
     }
     actions
+}
+
+fn doctor_source(config: &RuntimeConfig) -> String {
+    let mut sources = vec!["local diagnostics"];
+    if matches!(config.signer.backend, SignerBackend::Myc) {
+        sources.push("myc status command");
+    }
+    if config.hyf.enabled {
+        sources.push("hyf status control request");
+    }
+    sources.join(" + ")
 }

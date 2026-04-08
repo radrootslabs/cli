@@ -1,7 +1,7 @@
 use crate::domain::runtime::{
     AccountRuntimeView, AccountSecretRuntimeView, ConfigFilesRuntimeView, ConfigShowView,
-    LocalRuntimeView, LoggingRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView,
-    RelayRuntimeView, RpcRuntimeView, SignerRuntimeView,
+    HyfRuntimeView, LocalRuntimeView, LoggingRuntimeView, MycRuntimeView, OutputRuntimeView,
+    PathsRuntimeView, RelayRuntimeView, RpcRuntimeView, SignerRuntimeView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -92,6 +92,10 @@ pub fn show(
         },
         myc: MycRuntimeView {
             executable: config.myc.executable.display().to_string(),
+        },
+        hyf: HyfRuntimeView {
+            enabled: config.hyf.enabled,
+            executable: config.hyf.executable.display().to_string(),
         },
         rpc: RpcRuntimeView {
             url: config.rpc.url.clone(),
