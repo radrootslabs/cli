@@ -256,7 +256,8 @@ fn sample_bridge_job(job_id: &str, state: &str, terminal: bool) -> Value {
         "recovered_after_restart": false,
         "requested_at_unix": 1_712_720_000,
         "completed_at_unix": terminal.then_some(1_712_720_030),
-        "signer_mode": "embedded_service_identity",
+        "signer_mode": "nip46_session",
+        "signer_session_id": "sess_order_01",
         "event_kind": 30420,
         "event_id": "evt_order_01",
         "event_addr": "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
@@ -529,8 +530,12 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
     let submit_json: Value =
         serde_json::from_slice(submit_output.stdout.as_slice()).expect("submit json");
     assert_eq!(submit_json["state"], "accepted");
+    assert_eq!(submit_json["signer_mode"], "nip46_session");
+    assert_eq!(submit_json["signer_session_id"], "sess_order_01");
     assert_eq!(submit_json["job"]["job_id"], "job_order_01");
     assert_eq!(submit_json["job"]["command"], "order.submit");
+    assert_eq!(submit_json["job"]["signer_mode"], "nip46_session");
+    assert_eq!(submit_json["job"]["signer_session_id"], "sess_order_01");
     assert_eq!(submit_json["requested_signer_session_id"], "sess_order_01");
     assert_eq!(
         submit_json["job"]["requested_signer_session_id"],
@@ -632,6 +637,10 @@ job_id = "job_watch_01"
     assert_eq!(json["frames"].as_array().map(Vec::len), Some(2));
     assert_eq!(json["frames"][0]["state"], "accepted");
     assert_eq!(json["frames"][1]["state"], "completed");
+    assert_eq!(json["frames"][0]["signer_mode"], "nip46_session");
+    assert_eq!(json["frames"][0]["signer_session_id"], "sess_order_01");
+    assert_eq!(json["frames"][1]["signer_mode"], "nip46_session");
+    assert_eq!(json["frames"][1]["signer_session_id"], "sess_order_01");
 }
 
 #[test]

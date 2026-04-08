@@ -453,6 +453,8 @@ pub struct JobSummaryView {
     pub state: String,
     pub terminal: bool,
     pub signer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
     pub requested_at_unix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at_unix: Option<u64>,
@@ -466,6 +468,8 @@ pub struct JobDetailView {
     pub state: String,
     pub terminal: bool,
     pub signer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
     pub requested_at_unix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at_unix: Option<u64>,
@@ -492,6 +496,9 @@ pub struct JobWatchFrameView {
     pub observed_at_unix: u64,
     pub state: String,
     pub terminal: bool,
+    pub signer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
     pub summary: String,
 }
 
@@ -615,6 +622,10 @@ pub struct OrderSubmitView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_signer_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -670,6 +681,9 @@ pub struct OrderWatchFrameView {
     pub observed_at_unix: u64,
     pub state: String,
     pub terminal: bool,
+    pub signer_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
     pub summary: String,
 }
 
@@ -778,6 +792,10 @@ pub struct OrderJobView {
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_signer_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -894,6 +912,8 @@ pub struct ListingMutationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_signer_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -928,6 +948,8 @@ pub struct ListingMutationJobView {
     pub requested_signer_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

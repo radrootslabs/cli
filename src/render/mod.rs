@@ -739,7 +739,7 @@ fn render_job_list(stdout: &mut dyn Write, view: &JobListView) -> Result<(), Run
         }
     } else {
         let table = Table {
-            headers: &["job", "type", "state", "signer", "updated"],
+            headers: &["job", "type", "state", "signer", "session", "updated"],
             rows: view
                 .jobs
                 .iter()
@@ -750,6 +750,7 @@ fn render_job_list(stdout: &mut dyn Write, view: &JobListView) -> Result<(), Run
                         job.command.clone(),
                         job.state.clone(),
                         job.signer.clone(),
+                        job.signer_session_id.clone().unwrap_or_default(),
                         crate::runtime::job::format_timestamp(updated_at),
                     ]
                 })
@@ -774,7 +775,11 @@ fn render_job_get(stdout: &mut dyn Write, view: &JobGetView) -> Result<(), Runti
                 ("id", job.id.clone()),
                 ("type", job.command.clone()),
                 ("state", job.state.clone()),
-                ("signer", job.signer.clone()),
+                ("signer mode", job.signer.clone()),
+                (
+                    "signer session",
+                    job.signer_session_id.clone().unwrap_or_else(|| "-".to_owned()),
+                ),
                 (
                     "requested",
                     crate::runtime::job::format_timestamp(job.requested_at_unix),
@@ -823,7 +828,7 @@ fn render_job_watch(stdout: &mut dyn Write, view: &JobWatchView) -> Result<(), R
         }
     } else {
         let table = Table {
-            headers: &["frame", "time", "state", "terminal", "summary"],
+            headers: &["frame", "time", "state", "signer", "session", "terminal", "summary"],
             rows: view
                 .frames
                 .iter()
@@ -832,6 +837,8 @@ fn render_job_watch(stdout: &mut dyn Write, view: &JobWatchView) -> Result<(), R
                         frame.sequence.to_string(),
                         crate::runtime::job::format_clock(frame.observed_at_unix),
                         frame.state.clone(),
+                        frame.signer.clone(),
+                        frame.signer_session_id.clone().unwrap_or_default(),
                         yes_no(frame.terminal).to_owned(),
                         frame.summary.clone(),
                     ]
@@ -1035,6 +1042,12 @@ fn render_order_submit(stdout: &mut dyn Write, view: &OrderSubmitView) -> Result
     if let Some(idempotency_key) = &view.idempotency_key {
         rows.push(("idempotency key", idempotency_key.as_str()));
     }
+    if let Some(signer_mode) = &view.signer_mode {
+        rows.push(("signer mode", signer_mode.as_str()));
+    }
+    if let Some(signer_session_id) = &view.signer_session_id {
+        rows.push(("signer session", signer_session_id.as_str()));
+    }
     if let Some(requested_signer_session_id) = &view.requested_signer_session_id {
         rows.push((
             "requested signer session",
@@ -1074,7 +1087,7 @@ fn render_order_watch(stdout: &mut dyn Write, view: &OrderWatchView) -> Result<(
     render_owned_pairs(stdout, "watch", rows.as_slice())?;
     if !view.frames.is_empty() {
         let table = Table {
-            headers: &["frame", "time", "state", "terminal", "summary"],
+            headers: &["frame", "time", "state", "signer", "session", "terminal", "summary"],
             rows: view
                 .frames
                 .iter()
@@ -1083,6 +1096,8 @@ fn render_order_watch(stdout: &mut dyn Write, view: &OrderWatchView) -> Result<(
                         frame.sequence.to_string(),
                         crate::runtime::job::format_clock(frame.observed_at_unix),
                         frame.state.clone(),
+                        frame.signer_mode.clone(),
+                        frame.signer_session_id.clone().unwrap_or_default(),
                         yes_no(frame.terminal).to_owned(),
                         frame.summary.clone(),
                     ]
@@ -1213,6 +1228,12 @@ fn render_order_job(stdout: &mut dyn Write, job: &OrderJobView) -> Result<(), Ru
     ];
     if let Some(command) = &job.command {
         rows.push(("command", command.as_str()));
+    }
+    if let Some(signer_mode) = &job.signer_mode {
+        rows.push(("signer mode", signer_mode.as_str()));
+    }
+    if let Some(signer_session_id) = &job.signer_session_id {
+        rows.push(("signer session", signer_session_id.as_str()));
     }
     if let Some(requested_signer_session_id) = &job.requested_signer_session_id {
         rows.push((
@@ -1429,7 +1450,10 @@ fn render_listing_mutation(
         rows.push(("event id", event_id.as_str()));
     }
     if let Some(signer_mode) = &view.signer_mode {
-        rows.push(("signer", signer_mode.as_str()));
+        rows.push(("signer mode", signer_mode.as_str()));
+    }
+    if let Some(signer_session_id) = &view.signer_session_id {
+        rows.push(("signer session", signer_session_id.as_str()));
     }
     if let Some(requested_signer_session_id) = &view.requested_signer_session_id {
         rows.push((

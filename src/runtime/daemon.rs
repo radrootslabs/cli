@@ -89,6 +89,8 @@ struct BridgeJobRemote {
     completed_at_unix: Option<u64>,
     signer_mode: String,
     #[serde(default)]
+    signer_session_id: Option<String>,
+    #[serde(default)]
     event_kind: Option<u32>,
     event_id: Option<String>,
     event_addr: Option<String>,
@@ -132,6 +134,7 @@ pub struct BridgeListingPublishResult {
     pub idempotency_key: Option<String>,
     pub status: String,
     pub signer_mode: String,
+    pub signer_session_id: Option<String>,
     pub event_kind: Option<u32>,
     pub event_id: Option<String>,
     pub event_addr: Option<String>,
@@ -144,6 +147,7 @@ pub struct BridgeOrderRequestResult {
     pub idempotency_key: Option<String>,
     pub status: String,
     pub signer_mode: String,
+    pub signer_session_id: Option<String>,
     pub event_id: Option<String>,
     pub event_addr: Option<String>,
 }
@@ -393,6 +397,7 @@ pub fn bridge_listing_publish(
         idempotency_key: response.job.idempotency_key,
         status: response.job.status,
         signer_mode: response.job.signer_mode,
+        signer_session_id: response.job.signer_session_id,
         event_kind: response.job.event_kind,
         event_id: response.job.event_id,
         event_addr: response.job.event_addr,
@@ -421,6 +426,7 @@ pub fn bridge_order_request(
         idempotency_key: response.job.idempotency_key,
         status: response.job.status,
         signer_mode: response.job.signer_mode,
+        signer_session_id: response.job.signer_session_id,
         event_id: response.job.event_id,
         event_addr: response.job.event_addr,
     })
@@ -624,6 +630,7 @@ fn map_job_summary_view(job: BridgeJobRemote) -> JobSummaryView {
         state: job.status,
         terminal: job.terminal,
         signer: job.signer_mode,
+        signer_session_id: job.signer_session_id,
         requested_at_unix: job.requested_at_unix,
         completed_at_unix: job.completed_at_unix,
         recovered_after_restart: job.recovered_after_restart,
@@ -637,6 +644,7 @@ fn map_job_detail_view(job: BridgeJobRemote) -> JobDetailView {
         state: job.status,
         terminal: job.terminal,
         signer: job.signer_mode,
+        signer_session_id: job.signer_session_id,
         requested_at_unix: job.requested_at_unix,
         completed_at_unix: job.completed_at_unix,
         recovered_after_restart: job.recovered_after_restart,

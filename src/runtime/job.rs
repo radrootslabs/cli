@@ -71,6 +71,8 @@ pub fn watch(config: &RuntimeConfig, args: &JobWatchArgs) -> Result<CommandOutpu
                     observed_at_unix: job.completed_at_unix.unwrap_or(job.requested_at_unix),
                     state: job.state.clone(),
                     terminal: job.terminal,
+                    signer: job.signer.clone(),
+                    signer_session_id: job.signer_session_id.clone(),
                     summary: job.relay_outcome_summary.clone(),
                 });
                 if job.terminal || frames.len() >= max_frames {

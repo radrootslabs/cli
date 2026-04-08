@@ -289,7 +289,8 @@ fn sample_job(job_id: &str, state: &str, terminal: bool, completed_at_unix: Opti
         "recovered_after_restart": false,
         "requested_at_unix": 1_712_720_000,
         "completed_at_unix": completed_at_unix,
-        "signer_mode": "embedded_service_identity",
+        "signer_mode": "nip46_session",
+        "signer_session_id": "session-1",
         "event_id": "event-123",
         "event_addr": "30023:npub1seller:listing-123",
         "delivery_policy": "best_effort",
@@ -487,6 +488,8 @@ fn job_ls_and_get_report_retained_bridge_jobs() {
     assert_eq!(list_json["count"], 1);
     assert_eq!(list_json["jobs"][0]["id"], "job-123");
     assert_eq!(list_json["jobs"][0]["command"], "listing.publish");
+    assert_eq!(list_json["jobs"][0]["signer"], "nip46_session");
+    assert_eq!(list_json["jobs"][0]["signer_session_id"], "session-1");
 
     let get = job_rpc_command_in(dir.path())
         .env("RADROOTS_RPC_URL", server.url())
@@ -498,6 +501,8 @@ fn job_ls_and_get_report_retained_bridge_jobs() {
     let get_json: Value = serde_json::from_slice(get.stdout.as_slice()).expect("get json");
     assert_eq!(get_json["state"], "ready");
     assert_eq!(get_json["job"]["id"], "job-123");
+    assert_eq!(get_json["job"]["signer"], "nip46_session");
+    assert_eq!(get_json["job"]["signer_session_id"], "session-1");
     assert_eq!(
         get_json["job"]["relay_outcome_summary"],
         "published to 2 relays"
@@ -569,6 +574,9 @@ fn job_watch_ndjson_emits_one_frame_per_poll_until_terminal() {
     assert_eq!(lines.len(), 2);
     assert!(lines[0].contains("\"sequence\":1"));
     assert!(lines[0].contains("\"state\":\"publishing\""));
+    assert!(lines[0].contains("\"signer\":\"nip46_session\""));
+    assert!(lines[0].contains("\"signer_session_id\":\"session-1\""));
     assert!(lines[1].contains("\"sequence\":2"));
     assert!(lines[1].contains("\"terminal\":true"));
+    assert!(lines[1].contains("\"signer_session_id\":\"session-1\""));
 }

@@ -522,6 +522,7 @@ fn mutate(
             event_id: None,
             event_addr: Some(listing_addr.clone()),
             idempotency_key: args.idempotency_key.clone(),
+            signer_session_id: None,
             requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some("dry run requested; daemon publish skipped".to_owned()),
             job: args.print_job.then(|| ListingMutationJobView {
@@ -531,6 +532,7 @@ fn mutate(
                 idempotency_key: args.idempotency_key.clone(),
                 requested_signer_session_id: args.signer_session_id.clone(),
                 signer_mode: Some(config.signer.backend.as_str().to_owned()),
+                signer_session_id: None,
             }),
             event: args.print_event.then_some(event_preview),
             actions: vec![format!(
@@ -602,6 +604,7 @@ fn mutate(
                 job_id: Some(result.job_id.clone()),
                 job_status: Some(result.status.clone()),
                 signer_mode: Some(result.signer_mode.clone()),
+                signer_session_id: result.signer_session_id.clone(),
                 event_id: result.event_id.clone(),
                 event_addr: result
                     .event_addr
@@ -619,6 +622,7 @@ fn mutate(
                     idempotency_key: result.idempotency_key,
                     requested_signer_session_id: args.signer_session_id.clone(),
                     signer_mode: Some(result.signer_mode),
+                    signer_session_id: result.signer_session_id,
                 }),
                 event: args.print_event.then(|| ListingMutationEventView {
                     event_id: result.event_id,
@@ -997,6 +1001,7 @@ fn daemon_error_view(
             job_id: None,
             job_status: None,
             signer_mode: None,
+            signer_session_id: None,
             event_id: None,
             event_addr: None,
             idempotency_key: args.idempotency_key.clone(),
@@ -1009,6 +1014,7 @@ fn daemon_error_view(
                 idempotency_key: args.idempotency_key.clone(),
                 requested_signer_session_id: args.signer_session_id.clone(),
                 signer_mode: Some(config.signer.backend.as_str().to_owned()),
+                signer_session_id: None,
             }),
             event: args.print_event.then_some(event_preview),
             actions: vec![
@@ -1030,6 +1036,7 @@ fn daemon_error_view(
             job_id: None,
             job_status: None,
             signer_mode: None,
+            signer_session_id: None,
             event_id: None,
             event_addr: None,
             idempotency_key: args.idempotency_key.clone(),
@@ -1042,6 +1049,7 @@ fn daemon_error_view(
                 idempotency_key: args.idempotency_key.clone(),
                 requested_signer_session_id: args.signer_session_id.clone(),
                 signer_mode: Some(config.signer.backend.as_str().to_owned()),
+                signer_session_id: None,
             }),
             event: args.print_event.then_some(event_preview),
             actions: vec!["start radrootsd and verify the rpc url".to_owned()],
@@ -1062,6 +1070,7 @@ fn daemon_error_view(
             job_id: None,
             job_status: None,
             signer_mode: None,
+            signer_session_id: None,
             event_id: None,
             event_addr: None,
             idempotency_key: args.idempotency_key.clone(),
@@ -1074,6 +1083,7 @@ fn daemon_error_view(
                 idempotency_key: args.idempotency_key.clone(),
                 requested_signer_session_id: args.signer_session_id.clone(),
                 signer_mode: Some(config.signer.backend.as_str().to_owned()),
+                signer_session_id: None,
             }),
             event: args.print_event.then_some(event_preview),
             actions: vec!["inspect the daemon rpc response contract".to_owned()],

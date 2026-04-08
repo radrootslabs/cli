@@ -331,7 +331,13 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
                 assert_eq!(auth_header.as_deref(), Some("Bearer bridge-secret"));
                 MockRpcResponse::success(json!({
                     "deduplicated": false,
-                    "job": sample_listing_job("job_listing_01", "published", "event_listing_01", "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg")
+                    "job": sample_listing_job(
+                        "job_listing_01",
+                        "published",
+                        "event_listing_01",
+                        "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+                        "sess_publish_01"
+                    )
                 }))
             }
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
@@ -363,7 +369,11 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
     assert_eq!(publish_json["job_status"], "published");
     assert_eq!(publish_json["event_id"], "event_listing_01");
     assert_eq!(publish_json["event"]["kind"], 30402);
+    assert_eq!(publish_json["signer_mode"], "nip46_session");
+    assert_eq!(publish_json["signer_session_id"], "sess_publish_01");
     assert_eq!(publish_json["job"]["rpc_method"], "bridge.listing.publish");
+    assert_eq!(publish_json["job"]["signer_mode"], "nip46_session");
+    assert_eq!(publish_json["job"]["signer_session_id"], "sess_publish_01");
     assert_eq!(
         publish_json["requested_signer_session_id"],
         "sess_publish_01"
@@ -471,7 +481,13 @@ fn listing_archive_and_dry_run_are_truthful() {
             )])),
             "bridge.listing.publish" => MockRpcResponse::success(json!({
                 "deduplicated": false,
-                "job": sample_listing_job("job_listing_archive", "published", "event_listing_archive", "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg")
+                "job": sample_listing_job(
+                    "job_listing_archive",
+                    "published",
+                    "event_listing_archive",
+                    "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+                    "sess_archive_01"
+                )
             })),
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
@@ -495,6 +511,8 @@ fn listing_archive_and_dry_run_are_truthful() {
         serde_json::from_slice(archive_output.stdout.as_slice()).expect("archive json");
     assert_eq!(archive_json["operation"], "archive");
     assert_eq!(archive_json["job_status"], "published");
+    assert_eq!(archive_json["signer_mode"], "nip46_session");
+    assert_eq!(archive_json["signer_session_id"], "sess_archive_01");
     assert_eq!(
         archive_json["requested_signer_session_id"],
         "sess_archive_01"
@@ -520,6 +538,10 @@ fn listing_archive_and_dry_run_are_truthful() {
     assert_eq!(dry_run_json["state"], "dry_run");
     assert_eq!(dry_run_json["dry_run"], true);
     assert_eq!(dry_run_json["job"]["state"], "not_submitted");
+    assert!(dry_run_json["signer_mode"].is_null());
+    assert!(dry_run_json["signer_session_id"].is_null());
+    assert_eq!(dry_run_json["job"]["signer_mode"], "local");
+    assert!(dry_run_json["job"]["signer_session_id"].is_null());
     assert_eq!(dry_run_json["event"]["kind"], 30402);
     assert!(dry_run_json["event"]["event_id"].is_null());
     assert_eq!(
@@ -944,7 +966,13 @@ fn write_response(stream: &mut TcpStream, response: &MockRpcResponse) -> Result<
         .map_err(|error| format!("flush mock rpc response: {error}"))
 }
 
-fn sample_listing_job(job_id: &str, status: &str, event_id: &str, event_addr: &str) -> Value {
+fn sample_listing_job(
+    job_id: &str,
+    status: &str,
+    event_id: &str,
+    event_addr: &str,
+    signer_session_id: &str,
+) -> Value {
     json!({
         "job_id": job_id,
         "command": "bridge.listing.publish",
@@ -954,7 +982,8 @@ fn sample_listing_job(job_id: &str, status: &str, event_id: &str, event_addr: &s
         "recovered_after_restart": false,
         "requested_at_unix": 1_712_720_000,
         "completed_at_unix": 1_712_720_010,
-        "signer_mode": "local",
+        "signer_mode": "nip46_session",
+        "signer_session_id": signer_session_id,
         "event_kind": 30402,
         "event_id": event_id,
         "event_addr": event_addr,
