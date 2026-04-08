@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use assert_cmd::prelude::*;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::tempdir;
 
 fn data_root(workdir: &Path) -> std::path::PathBuf {
@@ -61,6 +61,7 @@ fn order_test_guard() -> MutexGuard<'static, ()> {
 
 #[derive(Debug, Clone)]
 struct MockRpcRequest {
+    body: Value,
     method: String,
     auth_header: Option<String>,
 }
@@ -91,7 +92,7 @@ struct MockRpcServer {
 impl MockRpcServer {
     fn start<F>(handler: F) -> Self
     where
-        F: Fn(String, Option<String>) -> MockRpcResponse + Send + Sync + 'static,
+        F: Fn(Value, Option<String>) -> MockRpcResponse + Send + Sync + 'static,
     {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock rpc listener");
         listener
@@ -103,7 +104,7 @@ impl MockRpcServer {
             .to_string();
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_flag = Arc::clone(&shutdown);
-        let handler: Arc<dyn Fn(String, Option<String>) -> MockRpcResponse + Send + Sync> =
+        let handler: Arc<dyn Fn(Value, Option<String>) -> MockRpcResponse + Send + Sync> =
             Arc::new(handler);
         let handle = thread::spawn(move || {
             while !shutdown_flag.load(Ordering::SeqCst) {
@@ -111,7 +112,7 @@ impl MockRpcServer {
                     Ok((mut stream, _)) => {
                         if let Ok(request) = read_request(&mut stream) {
                             let response =
-                                handler(request.method.clone(), request.auth_header.clone());
+                                handler(request.body.clone(), request.auth_header.clone());
                             let _ = write_response(&mut stream, &response);
                         }
                     }
@@ -192,6 +193,7 @@ fn read_request(stream: &mut TcpStream) -> Result<MockRpcRequest, String> {
         .to_owned();
 
     Ok(MockRpcRequest {
+        body: envelope,
         method,
         auth_header,
     })
@@ -450,28 +452,6 @@ job_id = "job_order_01"
 fn order_submit_persists_submission_metadata_and_reports_job() {
     let _guard = order_test_guard();
     let dir = tempdir().expect("tempdir");
-    let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
-    let recorded = Arc::clone(&requests);
-    let server = MockRpcServer::start(move |method, auth_header| {
-        recorded
-            .lock()
-            .expect("recorded requests lock")
-            .push(MockRpcRequest {
-                method: method.clone(),
-                auth_header,
-            });
-        match method.as_str() {
-            "bridge.order.request" => MockRpcResponse::success(serde_json::json!({
-                "deduplicated": false,
-                "job": sample_bridge_job("job_order_01", "accepted", false),
-            })),
-            "bridge.job.status" => {
-                MockRpcResponse::success(sample_bridge_job("job_order_01", "accepted", false))
-            }
-            other => panic!("unexpected mock rpc method {other}"),
-        }
-    });
-
     let account_output = order_command_in(dir.path())
         .args(["--json", "account", "new"])
         .output()
@@ -496,6 +476,39 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
     let new_json: Value = serde_json::from_slice(new_output.stdout.as_slice()).expect("new json");
     let order_id = new_json["order_id"].as_str().expect("order id");
     let file = new_json["file"].as_str().expect("file");
+    let buyer_pubkey = new_json["buyer_pubkey"]
+        .as_str()
+        .expect("buyer pubkey")
+        .to_owned();
+
+    let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, auth_header| {
+        recorded
+            .lock()
+            .expect("recorded requests lock")
+            .push(MockRpcRequest {
+                body: body.clone(),
+                method: body["method"].as_str().unwrap_or_default().to_owned(),
+                auth_header,
+            });
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session(
+                "sess_order_01",
+                buyer_pubkey.as_str(),
+                &["sign_event"],
+                true
+            )])),
+            "bridge.order.request" => MockRpcResponse::success(serde_json::json!({
+                "deduplicated": false,
+                "job": sample_bridge_job("job_order_01", "accepted", false),
+            })),
+            "bridge.job.status" => {
+                MockRpcResponse::success(sample_bridge_job("job_order_01", "accepted", false))
+            }
+            other => panic!("unexpected mock rpc method {other}"),
+        }
+    });
 
     let submit_output = order_command_in(dir.path())
         .env("RADROOTS_RPC_URL", server.url())
@@ -538,6 +551,16 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
     assert!(
         recorded_requests
             .iter()
+            .any(|request| request.method == "nip46.session.list")
+    );
+    let request = recorded_requests
+        .iter()
+        .find(|request| request.method == "bridge.order.request")
+        .expect("bridge order request");
+    assert_eq!(request.body["params"]["signer_session_id"], "sess_order_01");
+    assert!(
+        recorded_requests
+            .iter()
             .any(|request| { request.auth_header.as_deref() == Some("Bearer test-token") })
     );
 }
@@ -548,17 +571,19 @@ fn order_watch_reports_job_frames_for_submitted_order() {
     let dir = tempdir().expect("tempdir");
     let polls = Arc::new(Mutex::new(0usize));
     let watch_polls = Arc::clone(&polls);
-    let server = MockRpcServer::start(move |method, _auth_header| match method.as_str() {
-        "bridge.job.status" => {
-            let mut count = watch_polls.lock().expect("watch polls lock");
-            *count += 1;
-            if *count == 1 {
-                MockRpcResponse::success(sample_bridge_job("job_watch_01", "accepted", false))
-            } else {
-                MockRpcResponse::success(sample_bridge_job("job_watch_01", "completed", true))
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        match body["method"].as_str().unwrap_or_default() {
+            "bridge.job.status" => {
+                let mut count = watch_polls.lock().expect("watch polls lock");
+                *count += 1;
+                if *count == 1 {
+                    MockRpcResponse::success(sample_bridge_job("job_watch_01", "accepted", false))
+                } else {
+                    MockRpcResponse::success(sample_bridge_job("job_watch_01", "completed", true))
+                }
             }
+            other => panic!("unexpected mock rpc method {other}"),
         }
-        other => panic!("unexpected mock rpc method {other}"),
     });
 
     let drafts_dir = data_root(dir.path()).join("apps/cli/orders/drafts");
@@ -607,6 +632,193 @@ job_id = "job_watch_01"
     assert_eq!(json["frames"].as_array().map(Vec::len), Some(2));
     assert_eq!(json["frames"][0]["state"], "accepted");
     assert_eq!(json["frames"][1]["state"], "completed");
+}
+
+#[test]
+fn order_submit_without_unique_matching_signer_session_exits_unconfigured() {
+    let _guard = order_test_guard();
+    let dir = tempdir().expect("tempdir");
+
+    let account_output = order_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let buyer_pubkey = account_json["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("buyer pubkey")
+        .to_owned();
+
+    let new_output = order_command_in(dir.path())
+        .args([
+            "--json",
+            "order",
+            "new",
+            "--listing",
+            "pasture-eggs",
+            "--listing-addr",
+            "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+            "--bin",
+            "bin-1",
+        ])
+        .output()
+        .expect("run order new");
+    assert!(new_output.status.success());
+    let new_json: Value = serde_json::from_slice(new_output.stdout.as_slice()).expect("new json");
+    let order_id = new_json["order_id"].as_str().expect("order id");
+
+    let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        recorded
+            .lock()
+            .expect("recorded requests lock")
+            .push(MockRpcRequest {
+                body: body.clone(),
+                method: body["method"].as_str().unwrap_or_default().to_owned(),
+                auth_header: None,
+            });
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([
+                sample_session(
+                    "sess_order_01",
+                    buyer_pubkey.as_str(),
+                    &["sign_event"],
+                    true
+                ),
+                sample_session(
+                    "sess_order_02",
+                    buyer_pubkey.as_str(),
+                    &["sign_event"],
+                    true
+                )
+            ])),
+            other => panic!("unexpected mock rpc method {other}"),
+        }
+    });
+
+    let submit_output = order_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "test-token")
+        .args(["--json", "order", "submit", order_id])
+        .output()
+        .expect("run order submit");
+    assert_eq!(submit_output.status.code(), Some(3));
+    let submit_json: Value =
+        serde_json::from_slice(submit_output.stdout.as_slice()).expect("submit json");
+    assert_eq!(submit_json["state"], "unconfigured");
+    assert!(
+        submit_json["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("multiple authorized signer sessions matched buyer pubkey")
+    );
+
+    let recorded_requests = requests.lock().expect("requests lock");
+    assert_eq!(recorded_requests.len(), 1);
+    assert_eq!(recorded_requests[0].method, "nip46.session.list");
+}
+
+#[test]
+fn order_submit_rejects_requested_session_that_mismatches_buyer_pubkey() {
+    let _guard = order_test_guard();
+    let dir = tempdir().expect("tempdir");
+
+    let account_output = order_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+
+    let new_output = order_command_in(dir.path())
+        .args([
+            "--json",
+            "order",
+            "new",
+            "--listing",
+            "pasture-eggs",
+            "--listing-addr",
+            "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+            "--bin",
+            "bin-1",
+        ])
+        .output()
+        .expect("run order new");
+    assert!(new_output.status.success());
+    let new_json: Value = serde_json::from_slice(new_output.stdout.as_slice()).expect("new json");
+    let order_id = new_json["order_id"].as_str().expect("order id");
+
+    let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        recorded
+            .lock()
+            .expect("recorded requests lock")
+            .push(MockRpcRequest {
+                body: body.clone(),
+                method: body["method"].as_str().unwrap_or_default().to_owned(),
+                auth_header: None,
+            });
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session(
+                "sess_wrong_01",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                &["sign_event"],
+                true
+            )])),
+            other => panic!("unexpected mock rpc method {other}"),
+        }
+    });
+
+    let submit_output = order_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "test-token")
+        .args([
+            "--json",
+            "order",
+            "submit",
+            order_id,
+            "--signer-session-id",
+            "sess_wrong_01",
+        ])
+        .output()
+        .expect("run order submit");
+    assert_eq!(submit_output.status.code(), Some(3));
+    let submit_json: Value =
+        serde_json::from_slice(submit_output.stdout.as_slice()).expect("submit json");
+    assert_eq!(submit_json["state"], "unconfigured");
+    assert!(
+        submit_json["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("does not match buyer pubkey")
+    );
+
+    let recorded_requests = requests.lock().expect("requests lock");
+    assert_eq!(recorded_requests.len(), 1);
+    assert_eq!(recorded_requests[0].method, "nip46.session.list");
+}
+
+fn sample_session(
+    session_id: &str,
+    signer_pubkey: &str,
+    permissions: &[&str],
+    authorized: bool,
+) -> Value {
+    json!({
+        "session_id": session_id,
+        "role": "remote_signer",
+        "client_pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "signer_pubkey": signer_pubkey,
+        "user_pubkey": Value::Null,
+        "relays": ["wss://relay.one"],
+        "permissions": permissions,
+        "auth_required": false,
+        "authorized": authorized,
+        "expires_in_secs": Value::Null
+    })
 }
 
 #[test]

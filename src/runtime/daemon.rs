@@ -374,6 +374,7 @@ pub fn bridge_listing_publish(
     listing: &RadrootsListing,
     kind: u32,
     idempotency_key: Option<&str>,
+    signer_session_id: Option<&str>,
 ) -> Result<BridgeListingPublishResult, DaemonRpcError> {
     let response: BridgePublishResponseRemote = call(
         config,
@@ -382,6 +383,7 @@ pub fn bridge_listing_publish(
             "listing": listing,
             "kind": kind,
             "idempotency_key": idempotency_key,
+            "signer_session_id": signer_session_id,
         })),
         RpcAuthMode::BridgeBearer,
     )?;
@@ -401,6 +403,7 @@ pub fn bridge_order_request(
     config: &RuntimeConfig,
     order: &RadrootsTradeOrder,
     idempotency_key: Option<&str>,
+    signer_session_id: Option<&str>,
 ) -> Result<BridgeOrderRequestResult, DaemonRpcError> {
     let response: BridgePublishResponseRemote = call(
         config,
@@ -408,6 +411,7 @@ pub fn bridge_order_request(
         Some(serde_json::json!({
             "order": order,
             "idempotency_key": idempotency_key,
+            "signer_session_id": signer_session_id,
         })),
         RpcAuthMode::BridgeBearer,
     )?;
@@ -444,6 +448,89 @@ fn bridge_job_status(
 
 fn nip46_sessions(config: &RuntimeConfig) -> Result<Vec<Nip46SessionRemote>, DaemonRpcError> {
     call(config, "nip46.session.list", None, RpcAuthMode::None)
+}
+
+pub fn resolve_signer_session_id(
+    config: &RuntimeConfig,
+    actor_role: &str,
+    actor_pubkey: &str,
+    event_kind: u32,
+    requested_session_id: Option<&str>,
+) -> Result<String, DaemonRpcError> {
+    let sessions = nip46_sessions(config)?;
+
+    if let Some(session_id) = requested_session_id {
+        let Some(session) = sessions
+            .into_iter()
+            .find(|session| session.session_id == session_id)
+        else {
+            return Err(DaemonRpcError::Unconfigured(format!(
+                "requested signer session `{session_id}` was not found"
+            )));
+        };
+        validate_signer_session(&session, actor_role, actor_pubkey, event_kind)?;
+        return Ok(session.session_id);
+    }
+
+    let mut matches = sessions
+        .into_iter()
+        .filter(|session| session_matches_actor(session, actor_pubkey, event_kind))
+        .map(|session| session.session_id)
+        .collect::<Vec<_>>();
+
+    match matches.len() {
+        1 => Ok(matches.pop().expect("exactly one signer session")),
+        0 => Err(DaemonRpcError::Unconfigured(format!(
+            "no authorized signer session matched {actor_role} pubkey `{actor_pubkey}` for sign_event:{event_kind}; connect a signer session or pass --signer-session-id"
+        ))),
+        _ => Err(DaemonRpcError::Unconfigured(format!(
+            "multiple authorized signer sessions matched {actor_role} pubkey `{actor_pubkey}` for sign_event:{event_kind}; pass --signer-session-id"
+        ))),
+    }
+}
+
+fn validate_signer_session(
+    session: &Nip46SessionRemote,
+    actor_role: &str,
+    actor_pubkey: &str,
+    event_kind: u32,
+) -> Result<(), DaemonRpcError> {
+    if !session.authorized {
+        return Err(DaemonRpcError::Unconfigured(format!(
+            "requested signer session `{}` is not authorized",
+            session.session_id
+        )));
+    }
+    if !session.signer_pubkey.eq_ignore_ascii_case(actor_pubkey) {
+        return Err(DaemonRpcError::Unconfigured(format!(
+            "requested signer session `{}` signer pubkey `{}` does not match {actor_role} pubkey `{actor_pubkey}`",
+            session.session_id, session.signer_pubkey
+        )));
+    }
+    if !sign_event_allowed(&session.permissions, event_kind) {
+        return Err(DaemonRpcError::Unconfigured(format!(
+            "requested signer session `{}` is not approved for sign_event:{event_kind}",
+            session.session_id
+        )));
+    }
+    Ok(())
+}
+
+fn session_matches_actor(
+    session: &Nip46SessionRemote,
+    actor_pubkey: &str,
+    event_kind: u32,
+) -> bool {
+    session.authorized
+        && session.signer_pubkey.eq_ignore_ascii_case(actor_pubkey)
+        && sign_event_allowed(&session.permissions, event_kind)
+}
+
+fn sign_event_allowed(perms: &[String], kind: u32) -> bool {
+    perms.iter().any(|entry| entry == "sign_event")
+        || perms
+            .iter()
+            .any(|entry| entry == &format!("sign_event:{kind}"))
 }
 
 fn call<T: DeserializeOwned>(

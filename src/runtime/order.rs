@@ -5,7 +5,9 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use radroots_events::kinds::KIND_LISTING;
-use radroots_events::trade::{RadrootsTradeOrder, RadrootsTradeOrderItem};
+use radroots_events::trade::{
+    RadrootsTradeMessageType, RadrootsTradeOrder, RadrootsTradeOrderItem,
+};
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use serde::{Deserialize, Serialize};
@@ -402,8 +404,24 @@ pub fn submit(
         });
     }
 
+    let signer_session_id = match daemon::resolve_signer_session_id(
+        config,
+        "buyer",
+        loaded.document.order.buyer_pubkey.as_str(),
+        u32::from(RadrootsTradeMessageType::OrderRequest.kind()),
+        args.signer_session_id.as_deref(),
+    ) {
+        Ok(session_id) => session_id,
+        Err(error) => return Ok(order_submit_error_view(&loaded, args, error)),
+    };
+
     let order = trade_order_from_document(&loaded.document);
-    match daemon::bridge_order_request(config, &order, args.idempotency_key.as_deref()) {
+    match daemon::bridge_order_request(
+        config,
+        &order,
+        args.idempotency_key.as_deref(),
+        Some(signer_session_id.as_str()),
+    ) {
         Ok(result) => {
             let mut updated = loaded.document.clone();
             updated.submission = Some(OrderDraftSubmission {

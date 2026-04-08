@@ -120,9 +120,10 @@ fn listing_validate_resolves_selected_account_and_matching_farm() {
         serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
     let seller_pubkey = account_json["public_identity"]["public_key_hex"]
         .as_str()
-        .expect("seller pubkey");
+        .expect("seller pubkey")
+        .to_owned();
     let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
-    seed_farm(dir.path(), seller_pubkey, farm_d_tag, "La Huerta");
+    seed_farm(dir.path(), seller_pubkey.as_str(), farm_d_tag, "La Huerta");
 
     let draft_path = dir.path().join("eggs.toml");
     fs::write(
@@ -283,9 +284,10 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
         serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
     let seller_pubkey = account_json["public_identity"]["public_key_hex"]
         .as_str()
-        .expect("seller pubkey");
+        .expect("seller pubkey")
+        .to_owned();
     let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
-    seed_farm(dir.path(), seller_pubkey, farm_d_tag, "La Huerta");
+    seed_farm(dir.path(), seller_pubkey.as_str(), farm_d_tag, "La Huerta");
 
     let draft_path = dir.path().join("eggs.toml");
     fs::write(
@@ -315,12 +317,23 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
     let recorded = Arc::clone(&requests);
     let server = MockRpcServer::start(move |body, auth_header| {
         recorded.lock().expect("recorded").push(body.clone());
-        assert_eq!(auth_header.as_deref(), Some("Bearer bridge-secret"));
         match body["method"].as_str().unwrap_or_default() {
-            "bridge.listing.publish" => MockRpcResponse::success(json!({
-                "deduplicated": false,
-                "job": sample_listing_job("job_listing_01", "published", "event_listing_01", "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg")
-            })),
+            "nip46.session.list" => {
+                assert_eq!(auth_header, None);
+                MockRpcResponse::success(json!([sample_session(
+                    "sess_publish_01",
+                    seller_pubkey.as_str(),
+                    &["sign_event"],
+                    true
+                )]))
+            }
+            "bridge.listing.publish" => {
+                assert_eq!(auth_header.as_deref(), Some("Bearer bridge-secret"));
+                MockRpcResponse::success(json!({
+                    "deduplicated": false,
+                    "job": sample_listing_job("job_listing_01", "published", "event_listing_01", "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg")
+                }))
+            }
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
@@ -377,10 +390,20 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
     assert_eq!(update_json["operation"], "update");
 
     let recorded = requests.lock().expect("requests");
-    assert_eq!(recorded.len(), 2);
-    assert_eq!(recorded[0]["params"]["kind"], 30402);
-    assert_eq!(recorded[0]["params"]["idempotency_key"], "publish-key");
+    assert_eq!(recorded.len(), 4);
+    assert_eq!(recorded[0]["method"], "nip46.session.list");
     assert_eq!(recorded[1]["params"]["kind"], 30402);
+    assert_eq!(recorded[1]["params"]["idempotency_key"], "publish-key");
+    assert_eq!(
+        recorded[1]["params"]["signer_session_id"],
+        "sess_publish_01"
+    );
+    assert_eq!(recorded[2]["method"], "nip46.session.list");
+    assert_eq!(recorded[3]["params"]["kind"], 30402);
+    assert_eq!(
+        recorded[3]["params"]["signer_session_id"],
+        "sess_publish_01"
+    );
 }
 
 #[test]
@@ -402,10 +425,11 @@ fn listing_archive_and_dry_run_are_truthful() {
         serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
     let seller_pubkey = account_json["public_identity"]["public_key_hex"]
         .as_str()
-        .expect("seller pubkey");
+        .expect("seller pubkey")
+        .to_owned();
     seed_farm(
         dir.path(),
-        seller_pubkey,
+        seller_pubkey.as_str(),
         "AAAAAAAAAAAAAAAAAAAAAw",
         "La Huerta",
     );
@@ -438,10 +462,19 @@ fn listing_archive_and_dry_run_are_truthful() {
     let recorded = Arc::clone(&requests);
     let server = MockRpcServer::start(move |body, _auth_header| {
         recorded.lock().expect("recorded").push(body.to_string());
-        MockRpcResponse::success(json!({
-            "deduplicated": false,
-            "job": sample_listing_job("job_listing_archive", "published", "event_listing_archive", "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg")
-        }))
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session(
+                "sess_archive_01",
+                seller_pubkey.as_str(),
+                &["sign_event"],
+                true
+            )])),
+            "bridge.listing.publish" => MockRpcResponse::success(json!({
+                "deduplicated": false,
+                "job": sample_listing_job("job_listing_archive", "published", "event_listing_archive", "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg")
+            })),
+            other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
+        }
     });
 
     let archive_output = cli_command_in(dir.path())
@@ -499,8 +532,198 @@ fn listing_archive_and_dry_run_are_truthful() {
     );
 
     let recorded = requests.lock().expect("requests");
+    assert_eq!(recorded.len(), 2);
+    assert!(recorded[1].contains("archived"));
+}
+
+#[test]
+fn listing_publish_without_matching_signer_session_exits_unconfigured() {
+    let _guard = listing_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    let account_output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let seller_pubkey = account_json["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey")
+        .to_owned();
+    seed_farm(
+        dir.path(),
+        seller_pubkey.as_str(),
+        "AAAAAAAAAAAAAAAAAAAAAw",
+        "La Huerta",
+    );
+
+    let draft_path = dir.path().join("no-session.toml");
+    fs::write(
+        &draft_path,
+        valid_listing_draft(
+            "AAAAAAAAAAAAAAAAAAAAAg",
+            "",
+            "",
+            "eggs",
+            "Pasture eggs",
+            "Protein",
+            "Fresh pasture-raised eggs collected daily.",
+            "12",
+            "each",
+            "4.50",
+            "USD",
+            "1",
+            "each",
+            "18",
+            "pickup",
+            "La Huerta del Sur",
+        ),
+    )
+    .expect("write listing draft");
+
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        recorded.lock().expect("recorded").push(body.clone());
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session(
+                "sess_other_01",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                &["sign_event"],
+                true
+            )])),
+            other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
+        }
+    });
+
+    let publish_output = cli_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
+        .args([
+            "--json",
+            "listing",
+            "publish",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing publish");
+    assert_eq!(publish_output.status.code(), Some(3));
+    let publish_json: Value =
+        serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
+    assert_eq!(publish_json["state"], "unconfigured");
+    assert!(
+        publish_json["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("no authorized signer session matched seller pubkey")
+    );
+
+    let recorded = requests.lock().expect("requests");
     assert_eq!(recorded.len(), 1);
-    assert!(recorded[0].contains("archived"));
+    assert_eq!(recorded[0]["method"], "nip46.session.list");
+}
+
+#[test]
+fn listing_publish_rejects_requested_session_that_mismatches_seller_pubkey() {
+    let _guard = listing_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    let account_output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let seller_pubkey = account_json["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey")
+        .to_owned();
+    seed_farm(
+        dir.path(),
+        seller_pubkey.as_str(),
+        "AAAAAAAAAAAAAAAAAAAAAw",
+        "La Huerta",
+    );
+
+    let draft_path = dir.path().join("mismatch-session.toml");
+    fs::write(
+        &draft_path,
+        valid_listing_draft(
+            "AAAAAAAAAAAAAAAAAAAAAg",
+            "",
+            "",
+            "eggs",
+            "Pasture eggs",
+            "Protein",
+            "Fresh pasture-raised eggs collected daily.",
+            "12",
+            "each",
+            "4.50",
+            "USD",
+            "1",
+            "each",
+            "18",
+            "pickup",
+            "La Huerta del Sur",
+        ),
+    )
+    .expect("write listing draft");
+
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        recorded.lock().expect("recorded").push(body.clone());
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session(
+                "sess_wrong_01",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                &["sign_event"],
+                true
+            )])),
+            other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
+        }
+    });
+
+    let publish_output = cli_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
+        .args([
+            "--json",
+            "listing",
+            "publish",
+            "--signer-session-id",
+            "sess_wrong_01",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing publish");
+    assert_eq!(publish_output.status.code(), Some(3));
+    let publish_json: Value =
+        serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
+    assert_eq!(publish_json["state"], "unconfigured");
+    assert!(
+        publish_json["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("does not match seller pubkey")
+    );
+
+    let recorded = requests.lock().expect("requests");
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["method"], "nip46.session.list");
 }
 
 fn seed_farm(workdir: &Path, pubkey: &str, d_tag: &str, name: &str) {
@@ -744,6 +967,26 @@ fn sample_listing_job(job_id: &str, status: &str, event_id: &str, event_addr: &s
         "attempt_summaries": ["attempt 1: relay.one accepted"],
         "relay_results": [],
         "relay_outcome_summary": "published to 2 relays"
+    })
+}
+
+fn sample_session(
+    session_id: &str,
+    signer_pubkey: &str,
+    permissions: &[&str],
+    authorized: bool,
+) -> Value {
+    json!({
+        "session_id": session_id,
+        "role": "remote_signer",
+        "client_pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "signer_pubkey": signer_pubkey,
+        "user_pubkey": Value::Null,
+        "relays": ["wss://relay.one"],
+        "permissions": permissions,
+        "auth_required": false,
+        "authorized": authorized,
+        "expires_in_secs": Value::Null
     })
 }
 

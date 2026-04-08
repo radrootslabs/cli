@@ -541,11 +541,33 @@ fn mutate(
         });
     }
 
+    let signer_session_id = match daemon::resolve_signer_session_id(
+        config,
+        "seller",
+        canonical.seller_pubkey.as_str(),
+        KIND_LISTING,
+        args.signer_session_id.as_deref(),
+    ) {
+        Ok(session_id) => session_id,
+        Err(error) => {
+            return Ok(daemon_error_view(
+                config,
+                args,
+                operation,
+                &canonical,
+                listing_addr,
+                event_preview,
+                error,
+            ));
+        }
+    };
+
     match daemon::bridge_listing_publish(
         config,
         &canonical.listing,
         KIND_LISTING,
         args.idempotency_key.as_deref(),
+        Some(signer_session_id.as_str()),
     ) {
         Ok(result) => {
             let failed = result.status == "failed";
