@@ -6,6 +6,7 @@ use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::hyf::resolve_runtime_status as resolve_hyf_status;
 use crate::runtime::logging::LoggingState;
 use crate::runtime::signer::resolve_signer_status;
+use crate::runtime::workflow::resolve_workflow_provider;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum DoctorSeverity {
@@ -59,6 +60,7 @@ pub fn report(
     }
 
     checks.push(hyf_check(&resolve_hyf_status(config)));
+    checks.push(workflow_check(&resolve_workflow_provider(config)));
     checks.push(logging_check(config, logging));
     checks.push(binding_check(config));
 
@@ -295,6 +297,20 @@ fn hyf_check(hyf: &crate::runtime::hyf::HyfStatusView) -> EvaluatedCheck {
             name: "hyf".to_owned(),
             status: severity.status().to_owned(),
             detail,
+        },
+        action: None,
+    }
+}
+
+fn workflow_check(
+    workflow: &crate::runtime::workflow::WorkflowProviderStatusView,
+) -> EvaluatedCheck {
+    EvaluatedCheck {
+        severity: DoctorSeverity::Ok,
+        view: DoctorCheckView {
+            name: "workflow".to_owned(),
+            status: "ok".to_owned(),
+            detail: workflow.detail(),
         },
         action: None,
     }

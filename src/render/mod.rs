@@ -617,6 +617,26 @@ fn render_config_show(
         "myc",
         &[("executable", view.myc.executable.as_str())],
     )?;
+    let workflow_target = format_runtime_target(
+        view.workflow.target_kind.as_deref(),
+        view.workflow.target.as_deref(),
+    );
+    render_pairs(
+        stdout,
+        "workflow",
+        &[
+            ("provider", view.workflow.provider_runtime_id.as_str()),
+            ("binding model", view.workflow.binding_model.as_str()),
+            ("state", view.workflow.state.as_str()),
+            ("source", view.workflow.source.as_str()),
+            ("target", workflow_target.as_str()),
+            ("hyf helper", view.workflow.hyf_helper_state.as_str()),
+            (
+                "hyf helper detail",
+                view.workflow.hyf_helper_detail.as_str(),
+            ),
+        ],
+    )?;
     render_pairs(
         stdout,
         "hyf",
@@ -661,14 +681,11 @@ fn render_config_show(
 fn format_capability_binding_target(
     binding: &crate::domain::runtime::CapabilityBindingRuntimeView,
 ) -> String {
-    let Some(target) = binding.target.as_ref() else {
-        return String::new();
-    };
-
-    let mut rendered = match binding.target_kind.as_deref() {
-        Some(kind) => format!("{kind} {target}"),
-        None => target.clone(),
-    };
+    let mut rendered =
+        format_runtime_target(binding.target_kind.as_deref(), binding.target.as_deref());
+    if rendered.is_empty() {
+        return rendered;
+    }
     if let Some(account_ref) = &binding.managed_account_ref {
         rendered.push_str(format!(" · account {account_ref}").as_str());
     }
@@ -676,6 +693,17 @@ fn format_capability_binding_target(
         rendered.push_str(format!(" · session {session_ref}").as_str());
     }
     rendered
+}
+
+fn format_runtime_target(target_kind: Option<&str>, target: Option<&str>) -> String {
+    let Some(target) = target else {
+        return String::new();
+    };
+
+    match target_kind {
+        Some(kind) => format!("{kind} {target}"),
+        None => target.to_owned(),
+    }
 }
 
 fn render_doctor(stdout: &mut dyn Write, view: &DoctorView) -> Result<(), RuntimeError> {

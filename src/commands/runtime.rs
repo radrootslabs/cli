@@ -2,17 +2,19 @@ use crate::domain::runtime::{
     AccountRuntimeView, AccountSecretRuntimeView, CapabilityBindingRuntimeView,
     ConfigFilesRuntimeView, ConfigShowView, HyfRuntimeView, LegacyPathRuntimeView,
     LocalRuntimeView, LoggingRuntimeView, MigrationRuntimeView, MycRuntimeView, OutputRuntimeView,
-    PathsRuntimeView, RelayRuntimeView, RpcRuntimeView, SignerRuntimeView,
+    PathsRuntimeView, RelayRuntimeView, RpcRuntimeView, SignerRuntimeView, WorkflowRuntimeView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
+use crate::runtime::workflow::resolve_workflow_provider;
 
 pub fn show(
     config: &RuntimeConfig,
     logging: &LoggingState,
 ) -> Result<ConfigShowView, RuntimeError> {
     let secret_backend = crate::runtime::accounts::secret_backend_status(config);
+    let workflow = resolve_workflow_provider(config);
     Ok(ConfigShowView {
         source: "local runtime state".to_owned(),
         output: OutputRuntimeView {
@@ -103,6 +105,16 @@ pub fn show(
         },
         myc: MycRuntimeView {
             executable: config.myc.executable.display().to_string(),
+        },
+        workflow: WorkflowRuntimeView {
+            provider_runtime_id: workflow.provider_runtime_id,
+            binding_model: workflow.binding_model,
+            state: workflow.state,
+            source: workflow.source,
+            target_kind: workflow.target_kind,
+            target: workflow.target,
+            hyf_helper_state: workflow.hyf_helper_state,
+            hyf_helper_detail: workflow.hyf_helper_detail,
         },
         hyf: HyfRuntimeView {
             enabled: config.hyf.enabled,

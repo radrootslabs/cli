@@ -118,6 +118,7 @@ pub struct ConfigShowView {
     pub relay: RelayRuntimeView,
     pub local: LocalRuntimeView,
     pub myc: MycRuntimeView,
+    pub workflow: WorkflowRuntimeView,
     pub hyf: HyfRuntimeView,
     pub rpc: RpcRuntimeView,
     pub capability_bindings: Vec<CapabilityBindingRuntimeView>,
@@ -243,6 +244,20 @@ pub struct LocalRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct MycRuntimeView {
     pub executable: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowRuntimeView {
+    pub provider_runtime_id: String,
+    pub binding_model: String,
+    pub state: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    pub hyf_helper_state: String,
+    pub hyf_helper_detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

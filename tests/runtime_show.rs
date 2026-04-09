@@ -279,6 +279,11 @@ fn config_show_json_reports_default_bootstrap_state() {
             .to_string()
     );
     assert_eq!(json["myc"]["executable"], "myc");
+    assert_eq!(json["workflow"]["provider_runtime_id"], "rhi");
+    assert_eq!(json["workflow"]["binding_model"], "out_of_process_worker");
+    assert_eq!(json["workflow"]["state"], "not_configured");
+    assert_eq!(json["workflow"]["source"], "no explicit capability binding");
+    assert_eq!(json["workflow"]["hyf_helper_state"], "not_implied");
     assert_eq!(json["rpc"]["url"], "http://127.0.0.1:7070");
     assert_eq!(json["rpc"]["bridge_auth_configured"], false);
     assert_eq!(
@@ -644,6 +649,20 @@ target = "bin/hyfd-user"
     assert_eq!(workflow["source"], "user config [[capability_binding]]");
     assert_eq!(workflow["target_kind"], "managed_instance");
     assert_eq!(workflow["target"], "workflow-default");
+    assert_eq!(json["workflow"]["provider_runtime_id"], "rhi");
+    assert_eq!(json["workflow"]["state"], "configured");
+    assert_eq!(
+        json["workflow"]["source"],
+        "user config [[capability_binding]]"
+    );
+    assert_eq!(json["workflow"]["target_kind"], "managed_instance");
+    assert_eq!(json["workflow"]["target"], "workflow-default");
+    assert_eq!(json["workflow"]["hyf_helper_state"], "not_implied");
+    assert!(
+        json["workflow"]["hyf_helper_detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("do not imply"))
+    );
 
     let inference = binding_by_capability(&json, "inference.hyf_stdio");
     assert_eq!(inference["state"], "configured");
