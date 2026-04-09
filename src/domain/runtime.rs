@@ -147,7 +147,14 @@ pub struct LoggingRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct PathsRuntimeView {
     pub profile: String,
+    pub profile_source: String,
     pub allowed_profiles: Vec<String>,
+    pub root_source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_local_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_local_root_source: Option<String>,
+    pub subordinate_path_override_source: String,
     pub app_namespace: String,
     pub shared_accounts_namespace: String,
     pub shared_identities_namespace: String,

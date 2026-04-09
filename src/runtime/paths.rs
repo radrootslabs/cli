@@ -24,7 +24,12 @@ pub(crate) const ENV_CLI_PATHS_REPO_LOCAL_ROOT: &str = "RADROOTS_CLI_PATHS_REPO_
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathsConfig {
     pub profile: String,
+    pub profile_source: String,
     pub allowed_profiles: Vec<String>,
+    pub root_source: String,
+    pub repo_local_root: Option<PathBuf>,
+    pub repo_local_root_source: Option<String>,
+    pub subordinate_path_override_source: String,
     pub app_namespace: String,
     pub shared_accounts_namespace: String,
     pub shared_identities_namespace: String,
@@ -43,10 +48,11 @@ pub(crate) fn resolve_paths(
 ) -> Result<PathsConfig, RuntimeError> {
     let current_dir = env.current_dir()?;
     let resolver = env.path_resolver();
-    let (profile, profile_label) = resolve_cli_path_profile(env, env_file)?;
-    let overrides = resolve_cli_path_overrides(current_dir.as_path(), env, env_file, profile)?;
+    let (profile, profile_label, profile_source) = resolve_cli_path_profile(env, env_file)?;
+    let override_selection =
+        resolve_cli_path_overrides(current_dir.as_path(), env, env_file, profile)?;
     let resolved = resolver
-        .resolve(profile, &overrides)
+        .resolve(profile, &override_selection.overrides)
         .map_err(|err| RuntimeError::Config(format!("resolve Radroots path roots: {err}")))?;
     let app_namespace = RadrootsRuntimeNamespace::app(CLI_APP_NAMESPACE_VALUE)
         .map_err(|err| RuntimeError::Config(format!("resolve cli namespace: {err}")))?;
@@ -60,15 +66,21 @@ pub(crate) fn resolve_paths(
         })?;
     let app_paths = resolved.namespaced(&app_namespace);
     let shared_accounts_paths = resolved.namespaced(&shared_accounts_namespace);
-    let default_identity_path = default_shared_identity_path(&resolver, profile, &overrides)
-        .map_err(|err| RuntimeError::Config(format!("resolve shared identity path: {err}")))?;
+    let default_identity_path =
+        default_shared_identity_path(&resolver, profile, &override_selection.overrides)
+            .map_err(|err| RuntimeError::Config(format!("resolve shared identity path: {err}")))?;
 
     Ok(PathsConfig {
         profile: profile_label.to_owned(),
+        profile_source,
         allowed_profiles: CLI_ALLOWED_PROFILES
             .iter()
             .map(|value| (*value).to_owned())
             .collect(),
+        root_source: path_root_source(profile).to_owned(),
+        repo_local_root: override_selection.repo_local_root,
+        repo_local_root_source: override_selection.repo_local_root_source,
+        subordinate_path_override_source: "runtime_config".to_owned(),
         app_namespace: app_namespace.relative_path().display().to_string(),
         shared_accounts_namespace: shared_accounts_namespace
             .relative_path()
@@ -91,10 +103,15 @@ pub(crate) fn resolve_paths(
 fn resolve_cli_path_profile(
     env: &dyn Environment,
     env_file: &EnvFileValues,
-) -> Result<(RadrootsPathProfile, &'static str), RuntimeError> {
+) -> Result<(RadrootsPathProfile, &'static str, String), RuntimeError> {
     match path_env_value_entry(env, env_file, &[ENV_CLI_PATHS_PROFILE]) {
-        Some((key, value)) => parse_cli_path_profile(key.as_str(), value.as_str()),
-        None => Ok((RadrootsPathProfile::InteractiveUser, CLI_DEFAULT_PROFILE)),
+        Some(entry) => parse_cli_path_profile(entry.key.as_str(), entry.value.as_str())
+            .map(|(profile, label)| (profile, label, entry.source_label())),
+        None => Ok((
+            RadrootsPathProfile::InteractiveUser,
+            CLI_DEFAULT_PROFILE,
+            "default".to_owned(),
+        )),
     }
 }
 
@@ -111,34 +128,56 @@ fn parse_cli_path_profile(
     }
 }
 
+struct CliPathOverrideSelection {
+    overrides: RadrootsPathOverrides,
+    repo_local_root: Option<PathBuf>,
+    repo_local_root_source: Option<String>,
+}
+
 fn resolve_cli_path_overrides(
     current_dir: &Path,
     env: &dyn Environment,
     env_file: &EnvFileValues,
     profile: RadrootsPathProfile,
-) -> Result<RadrootsPathOverrides, RuntimeError> {
+) -> Result<CliPathOverrideSelection, RuntimeError> {
     match profile {
-        RadrootsPathProfile::InteractiveUser => Ok(RadrootsPathOverrides::default()),
+        RadrootsPathProfile::InteractiveUser => Ok(CliPathOverrideSelection {
+            overrides: RadrootsPathOverrides::default(),
+            repo_local_root: None,
+            repo_local_root_source: None,
+        }),
         RadrootsPathProfile::RepoLocal => {
-            let Some((key, value)) =
-                path_env_value_entry(env, env_file, &[ENV_CLI_PATHS_REPO_LOCAL_ROOT])
+            let Some(entry) = path_env_value_entry(env, env_file, &[ENV_CLI_PATHS_REPO_LOCAL_ROOT])
             else {
                 return Err(RuntimeError::Config(format!(
                     "{ENV_CLI_PATHS_REPO_LOCAL_ROOT} must be set when {ENV_CLI_PATHS_PROFILE}=repo_local"
                 )));
             };
-            if value.trim().is_empty() {
+            if entry.value.trim().is_empty() {
                 return Err(RuntimeError::Config(format!(
-                    "{key} must not be empty when {ENV_CLI_PATHS_PROFILE}=repo_local"
+                    "{} must not be empty when {ENV_CLI_PATHS_PROFILE}=repo_local",
+                    entry.key
                 )));
             }
-            Ok(RadrootsPathOverrides::repo_local(
-                normalize_explicit_path_root(current_dir, value.as_str()),
-            ))
+            let repo_local_root = normalize_explicit_path_root(current_dir, entry.value.as_str());
+            Ok(CliPathOverrideSelection {
+                overrides: RadrootsPathOverrides::repo_local(repo_local_root.as_path()),
+                repo_local_root: Some(repo_local_root),
+                repo_local_root_source: Some(entry.source_label()),
+            })
         }
         _ => Err(RuntimeError::Config(
             "cli only supports interactive_user and repo_local path profiles".to_owned(),
         )),
+    }
+}
+
+fn path_root_source(profile: RadrootsPathProfile) -> &'static str {
+    match profile {
+        RadrootsPathProfile::InteractiveUser => "host_defaults",
+        RadrootsPathProfile::RepoLocal => "repo_local_root",
+        RadrootsPathProfile::ServiceHost => "service_host_defaults",
+        RadrootsPathProfile::MobileNative => "mobile_native_defaults",
     }
 }
 
@@ -151,18 +190,38 @@ fn normalize_explicit_path_root(current_dir: &Path, value: &str) -> PathBuf {
     }
 }
 
+struct PathEnvValueEntry {
+    key: String,
+    value: String,
+    source_kind: &'static str,
+}
+
+impl PathEnvValueEntry {
+    fn source_label(&self) -> String {
+        format!("{}:{}", self.source_kind, self.key)
+    }
+}
+
 fn path_env_value_entry(
     env: &dyn Environment,
     env_file: &EnvFileValues,
     keys: &[&str],
-) -> Option<(String, String)> {
+) -> Option<PathEnvValueEntry> {
     keys.iter()
-        .find_map(|key| env.var(key).map(|value| ((*key).to_owned(), value)))
+        .find_map(|key| {
+            env.var(key).map(|value| PathEnvValueEntry {
+                key: (*key).to_owned(),
+                value,
+                source_kind: "process_env",
+            })
+        })
         .or_else(|| {
             keys.iter().find_map(|key| {
-                env_file
-                    .get(key)
-                    .map(|value| ((*key).to_owned(), value.to_owned()))
+                env_file.get(key).map(|value| PathEnvValueEntry {
+                    key: (*key).to_owned(),
+                    value: value.to_owned(),
+                    source_kind: "env_file",
+                })
             })
         })
 }

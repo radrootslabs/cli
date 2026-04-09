@@ -106,6 +106,14 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["output"]["color"], true);
     assert_eq!(json["output"]["dry_run"], false);
     assert_eq!(json["paths"]["profile"], "interactive_user");
+    assert_eq!(json["paths"]["profile_source"], "default");
+    assert_eq!(json["paths"]["root_source"], "host_defaults");
+    assert_eq!(json["paths"]["repo_local_root"], Value::Null);
+    assert_eq!(json["paths"]["repo_local_root_source"], Value::Null);
+    assert_eq!(
+        json["paths"]["subordinate_path_override_source"],
+        "runtime_config"
+    );
     assert_eq!(json["paths"]["allowed_profiles"][0], "interactive_user");
     assert_eq!(json["paths"]["allowed_profiles"][1], "repo_local");
     assert_eq!(json["paths"]["app_namespace"], "apps/cli");
@@ -267,6 +275,19 @@ fn config_show_json_reports_repo_local_paths_when_requested() {
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
 
     assert_eq!(json["paths"]["profile"], "repo_local");
+    assert_eq!(
+        json["paths"]["profile_source"],
+        "process_env:RADROOTS_CLI_PATHS_PROFILE"
+    );
+    assert_eq!(json["paths"]["root_source"], "repo_local_root");
+    assert_eq!(
+        json["paths"]["repo_local_root"],
+        repo_local_root.display().to_string()
+    );
+    assert_eq!(
+        json["paths"]["repo_local_root_source"],
+        "process_env:RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT"
+    );
     assert_eq!(json["paths"]["allowed_profiles"][0], "interactive_user");
     assert_eq!(json["paths"]["allowed_profiles"][1], "repo_local");
     assert_eq!(

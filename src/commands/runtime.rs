@@ -26,7 +26,16 @@ pub fn show(
         },
         paths: PathsRuntimeView {
             profile: config.paths.profile.clone(),
+            profile_source: config.paths.profile_source.clone(),
             allowed_profiles: config.paths.allowed_profiles.clone(),
+            root_source: config.paths.root_source.clone(),
+            repo_local_root: config
+                .paths
+                .repo_local_root
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            repo_local_root_source: config.paths.repo_local_root_source.clone(),
+            subordinate_path_override_source: config.paths.subordinate_path_override_source.clone(),
             app_namespace: config.paths.app_namespace.clone(),
             shared_accounts_namespace: config.paths.shared_accounts_namespace.clone(),
             shared_identities_namespace: config.paths.shared_identities_namespace.clone(),

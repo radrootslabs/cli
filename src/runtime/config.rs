@@ -1056,7 +1056,12 @@ mod tests {
             resolved.paths,
             PathsConfig {
                 profile: "interactive_user".to_owned(),
+                profile_source: "default".to_owned(),
                 allowed_profiles: vec!["interactive_user".to_owned(), "repo_local".to_owned(),],
+                root_source: "host_defaults".to_owned(),
+                repo_local_root: None,
+                repo_local_root_source: None,
+                subordinate_path_override_source: "runtime_config".to_owned(),
                 app_namespace: "apps/cli".to_owned(),
                 shared_accounts_namespace: "shared/accounts".to_owned(),
                 shared_identities_namespace: "shared/identities".to_owned(),
@@ -1447,6 +1452,14 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             resolved.paths.app_config_path,
             PathBuf::from("/home/tester/.radroots/config/apps/cli/config.toml")
         );
+        assert_eq!(resolved.paths.profile_source, "default");
+        assert_eq!(resolved.paths.root_source, "host_defaults");
+        assert_eq!(resolved.paths.repo_local_root, None);
+        assert_eq!(resolved.paths.repo_local_root_source, None);
+        assert_eq!(
+            resolved.paths.subordinate_path_override_source,
+            "runtime_config"
+        );
         assert_eq!(resolved.paths.app_namespace, "apps/cli");
         assert_eq!(resolved.paths.shared_accounts_namespace, "shared/accounts");
         assert_eq!(
@@ -1540,6 +1553,21 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             .expect("resolve runtime config");
 
         assert_eq!(resolved.paths.profile, "repo_local");
+        assert_eq!(
+            resolved.paths.profile_source,
+            "process_env:RADROOTS_CLI_PATHS_PROFILE"
+        );
+        assert_eq!(resolved.paths.root_source, "repo_local_root");
+        assert_eq!(
+            resolved.paths.repo_local_root,
+            Some(PathBuf::from(
+                "/workspaces/radroots-cli/.local/radroots/dev"
+            ))
+        );
+        assert_eq!(
+            resolved.paths.repo_local_root_source,
+            Some("process_env:RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT".to_owned())
+        );
         assert_eq!(
             resolved.paths.app_config_path,
             PathBuf::from(
