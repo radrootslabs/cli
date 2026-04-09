@@ -174,6 +174,8 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
                 writeln!(stdout, "reason: {reason}")?;
             }
             writeln!(stdout, "source: {}", view.source)?;
+            writeln!(stdout)?;
+            render_signer_binding(stdout, &view.binding)?;
             if let Some(local) = &view.local {
                 writeln!(stdout)?;
                 render_local_signer(stdout, "local account", local)?;
@@ -2017,6 +2019,8 @@ fn render_myc_status(
     if let Some(service_status) = &view.service_status {
         rows.push(("service status", service_status.as_str()));
     }
+    let remote_session_count = view.remote_session_count.to_string();
+    rows.push(("remote session count", remote_session_count.as_str()));
     render_pairs(stdout, "myc", rows.as_slice())?;
     if let Some(reason) = &view.reason {
         writeln!(stdout, "reason: {reason}")?;
@@ -2029,6 +2033,10 @@ fn render_myc_status(
         writeln!(stdout)?;
         render_local_signer(stdout, "myc local signer", local_signer)?;
     }
+    for session in &view.remote_sessions {
+        writeln!(stdout)?;
+        render_myc_remote_session(stdout, session)?;
+    }
     if let Some(custody) = &view.custody {
         writeln!(stdout)?;
         render_myc_custody_identity(stdout, "myc custody signer", &custody.signer)?;
@@ -2036,6 +2044,64 @@ fn render_myc_status(
         if let Some(discovery_app) = &custody.discovery_app {
             render_myc_custody_identity(stdout, "myc custody discovery app", discovery_app)?;
         }
+    }
+    Ok(())
+}
+
+fn render_signer_binding(
+    stdout: &mut dyn Write,
+    binding: &crate::domain::runtime::SignerBindingStatusView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "signer binding")?;
+    writeln!(stdout, "  capability: {}", binding.capability_id)?;
+    writeln!(stdout, "  provider: {}", binding.provider_runtime_id)?;
+    writeln!(stdout, "  model: {}", binding.binding_model)?;
+    writeln!(stdout, "  status: {}", binding.state)?;
+    writeln!(stdout, "  source: {}", binding.source)?;
+    if let Some(target_kind) = &binding.target_kind {
+        writeln!(stdout, "  target kind: {target_kind}")?;
+    }
+    if let Some(target) = &binding.target {
+        writeln!(stdout, "  target: {target}")?;
+    }
+    if let Some(account_ref) = &binding.managed_account_ref {
+        writeln!(stdout, "  managed account ref: {account_ref}")?;
+    }
+    if let Some(session_ref) = &binding.signer_session_ref {
+        writeln!(stdout, "  signer session ref: {session_ref}")?;
+    }
+    if let Some(session_id) = &binding.resolved_signer_session_id {
+        writeln!(stdout, "  resolved signer session id: {session_id}")?;
+    }
+    if let Some(count) = binding.matched_session_count {
+        writeln!(stdout, "  matched session count: {count}")?;
+    }
+    if let Some(reason) = &binding.reason {
+        writeln!(stdout, "  reason: {reason}")?;
+    }
+    Ok(())
+}
+
+fn render_myc_remote_session(
+    stdout: &mut dyn Write,
+    session: &crate::domain::runtime::MycRemoteSessionView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "myc remote session {}", session.connection_id)?;
+    writeln!(stdout, "  signer id: {}", session.signer_identity.id)?;
+    writeln!(
+        stdout,
+        "  signer npub: {}",
+        session.signer_identity.public_key_npub
+    )?;
+    writeln!(stdout, "  user id: {}", session.user_identity.id)?;
+    writeln!(
+        stdout,
+        "  user npub: {}",
+        session.user_identity.public_key_npub
+    )?;
+    writeln!(stdout, "  relay count: {}", session.relay_count)?;
+    if !session.permissions.is_empty() {
+        writeln!(stdout, "  permissions: {}", session.permissions.join(", "))?;
     }
     Ok(())
 }
@@ -2327,7 +2393,9 @@ mod tests {
             ready: false,
             reason: None,
             reasons: Vec::new(),
+            remote_session_count: 0,
             local_signer: None,
+            remote_sessions: Vec::new(),
             custody: None,
         }));
         let mut buffer = Vec::new();

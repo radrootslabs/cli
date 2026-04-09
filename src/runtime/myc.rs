@@ -3,12 +3,14 @@ use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use radroots_nostr_signer::prelude::RadrootsNostrLocalSignerCapability;
+use radroots_nostr_signer::prelude::{
+    RadrootsNostrLocalSignerCapability, RadrootsNostrRemoteSessionSignerCapability,
+};
 use serde::Deserialize;
 
 use crate::domain::runtime::{
     IdentityPublicView, LocalSignerStatusView, MycCustodyIdentityView, MycCustodyView,
-    MycStatusView,
+    MycRemoteSessionView, MycStatusView,
 };
 use crate::runtime::config::MycConfig;
 
@@ -104,34 +106,47 @@ pub fn resolve_status(config: &MycConfig) -> MycStatusView {
         }
     };
 
-    let local_signer = payload
-        .signer_backend
-        .local_signer
-        .map(local_signer_status_view);
-    let custody = payload.custody.into_view();
-    let state = if payload.ready {
+    let MycStatusPayload {
+        status,
+        ready,
+        reasons,
+        signer_backend,
+        custody,
+    } = payload;
+    let MycSignerBackendPayload {
+        local_signer,
+        remote_session_count,
+        remote_sessions,
+    } = signer_backend;
+
+    let remote_sessions = remote_sessions
+        .iter()
+        .map(remote_session_status_view)
+        .collect::<Vec<_>>();
+    let local_signer = local_signer.map(local_signer_status_view);
+    let remote_session_count = remote_session_count.max(remote_sessions.len());
+    let custody = custody.into_view();
+    let state = if ready {
         "ready"
     } else {
-        match payload.status.as_str() {
+        match status.as_str() {
             "degraded" => "degraded",
             _ => "unavailable",
         }
     };
-    let reason = primary_reason(
-        payload.ready,
-        payload.status.as_str(),
-        payload.reasons.as_slice(),
-    );
+    let reason = primary_reason(ready, status.as_str(), reasons.as_slice());
 
     MycStatusView {
         executable,
         state: state.to_owned(),
         source: "myc status command · local first".to_owned(),
-        service_status: Some(payload.status),
-        ready: payload.ready,
+        service_status: Some(status),
+        ready,
         reason,
-        reasons: payload.reasons,
+        reasons,
+        remote_session_count,
         local_signer,
+        remote_sessions,
         custody,
     }
 }
@@ -208,6 +223,23 @@ fn local_signer_status_view(
     }
 }
 
+fn remote_session_status_view(
+    capability: &RadrootsNostrRemoteSessionSignerCapability,
+) -> MycRemoteSessionView {
+    MycRemoteSessionView {
+        connection_id: capability.connection_id.to_string(),
+        signer_identity: IdentityPublicView::from_public_identity(&capability.signer_identity),
+        user_identity: IdentityPublicView::from_public_identity(&capability.user_identity),
+        relay_count: capability.relays.len(),
+        permissions: capability
+            .permissions
+            .as_slice()
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+    }
+}
+
 fn primary_reason(ready: bool, service_status: &str, reasons: &[String]) -> Option<String> {
     if ready {
         return None;
@@ -228,7 +260,9 @@ fn unavailable_status(executable: String, state: &str, reason: String) -> MycSta
         ready: false,
         reason: Some(reason),
         reasons: Vec::new(),
+        remote_session_count: 0,
         local_signer: None,
+        remote_sessions: Vec::new(),
         custody: None,
     }
 }
@@ -257,6 +291,10 @@ struct MycStatusPayload {
 struct MycSignerBackendPayload {
     #[serde(default)]
     local_signer: Option<RadrootsNostrLocalSignerCapability>,
+    #[serde(default)]
+    remote_session_count: usize,
+    #[serde(default)]
+    remote_sessions: Vec<RadrootsNostrRemoteSessionSignerCapability>,
 }
 
 #[derive(Debug, Default, Deserialize)]

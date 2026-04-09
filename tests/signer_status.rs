@@ -71,6 +71,8 @@ fn signer_status_reports_local_ready_when_account_exists() {
     assert_eq!(json["source"], "shared account store · local first");
     assert_eq!(json["account_id"], json["local"]["account_id"]);
     assert_eq!(json["reason"], Value::Null);
+    assert_eq!(json["binding"]["state"], "disabled");
+    assert_eq!(json["binding"]["source"], "independent local signer mode");
     assert_eq!(json["local"]["availability"], "secret_backed");
     assert_eq!(json["local"]["secret_backed"], true);
     assert_eq!(json["local"]["backend"], "encrypted_file");
@@ -91,6 +93,7 @@ fn signer_status_reports_local_unconfigured_when_no_account_is_selected() {
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
     assert_eq!(json["mode"], "local");
     assert_eq!(json["state"], "unconfigured");
+    assert_eq!(json["binding"]["state"], "disabled");
     assert!(
         json["reason"]
             .as_str()

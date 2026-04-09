@@ -379,7 +379,7 @@ struct CapabilityBindingSpec {
     binding_model: &'static str,
 }
 
-const SIGNER_REMOTE_NIP46_CAPABILITY: &str = "signer.remote_nip46";
+pub(crate) const SIGNER_REMOTE_NIP46_CAPABILITY: &str = "signer.remote_nip46";
 const WRITE_PLANE_TRADE_JSONRPC_CAPABILITY: &str = "write_plane.trade_jsonrpc";
 const WORKFLOW_TRADE_CAPABILITY: &str = "workflow.trade";
 const INFERENCE_HYF_STDIO_CAPABILITY: &str = "inference.hyf_stdio";
@@ -638,6 +638,12 @@ impl RuntimeConfig {
                 }
             })
             .collect()
+    }
+
+    pub fn capability_binding(&self, capability_id: &str) -> Option<&CapabilityBindingConfig> {
+        self.capability_bindings
+            .iter()
+            .find(|binding| binding.capability_id == capability_id)
     }
 }
 

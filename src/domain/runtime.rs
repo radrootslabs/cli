@@ -1340,6 +1340,7 @@ pub struct SignerStatusView {
     pub account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    pub binding: SignerBindingStatusView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local: Option<LocalSignerStatusView>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1369,6 +1370,29 @@ pub struct LocalSignerStatusView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SignerBindingStatusView {
+    pub capability_id: String,
+    pub provider_runtime_id: String,
+    pub binding_model: String,
+    pub state: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_account_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_signer_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_session_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct MycStatusView {
     pub executable: String,
     pub state: String,
@@ -1379,8 +1403,11 @@ pub struct MycStatusView {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasons: Vec<String>,
+    pub remote_session_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_signer: Option<LocalSignerStatusView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_sessions: Vec<MycRemoteSessionView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custody: Option<MycCustodyView>,
 }
@@ -1394,6 +1421,16 @@ impl MycStatusView {
             _ => CommandDisposition::Success,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MycRemoteSessionView {
+    pub connection_id: String,
+    pub signer_identity: IdentityPublicView,
+    pub user_identity: IdentityPublicView,
+    pub relay_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
