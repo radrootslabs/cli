@@ -3,7 +3,7 @@ use crate::domain::runtime::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
-use crate::runtime::hyf::resolve_status as resolve_hyf_status;
+use crate::runtime::hyf::resolve_runtime_status as resolve_hyf_status;
 use crate::runtime::logging::LoggingState;
 use crate::runtime::signer::resolve_signer_status;
 
@@ -58,7 +58,7 @@ pub fn report(
         }
     }
 
-    checks.push(hyf_check(&resolve_hyf_status(&config.hyf)));
+    checks.push(hyf_check(&resolve_hyf_status(config)));
     checks.push(logging_check(config, logging));
     checks.push(binding_check(config));
 

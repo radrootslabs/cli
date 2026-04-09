@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::runtime::config::HyfConfig;
+use crate::runtime::config::{
+    CapabilityBindingTargetKind, HyfConfig, INFERENCE_HYF_STDIO_CAPABILITY, RuntimeConfig,
+};
 
 const HYF_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
 const HYF_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -20,6 +22,33 @@ pub struct HyfStatusView {
     pub reason: Option<String>,
     pub protocol_version: Option<u64>,
     pub deterministic_available: Option<bool>,
+}
+
+pub fn resolve_runtime_status(config: &RuntimeConfig) -> HyfStatusView {
+    if !config.hyf.enabled {
+        return resolve_status(&config.hyf);
+    }
+
+    let Some(binding) = config.capability_binding(INFERENCE_HYF_STDIO_CAPABILITY) else {
+        return resolve_status(&config.hyf);
+    };
+
+    match binding.target_kind {
+        CapabilityBindingTargetKind::ExplicitEndpoint => {
+            let mut hyf = config.hyf.clone();
+            hyf.executable = binding.target.clone().into();
+            resolve_status(&hyf)
+        }
+        CapabilityBindingTargetKind::ManagedInstance => unavailable_status(
+            config.hyf.executable.display().to_string(),
+            format!(
+                "configured hyf binding target `{}` uses unsupported target_kind `managed_instance`; use `explicit_endpoint` for `inference.hyf_stdio`",
+                binding.target
+            ),
+            None,
+            None,
+        ),
+    }
 }
 
 pub fn resolve_status(config: &HyfConfig) -> HyfStatusView {
