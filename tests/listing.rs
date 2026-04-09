@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +54,56 @@ fn cli_command_in(workdir: &Path) -> Command {
     }
     command.env("RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE", "false");
     command
+}
+
+fn write_workspace_config(workdir: &Path, contents: &str) {
+    let config_dir = workdir.join(".radroots");
+    fs::create_dir_all(&config_dir).expect("workspace config dir");
+    fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
+}
+
+fn write_fake_myc(dir: &Path, script: &str) -> std::path::PathBuf {
+    let path = dir.join("fake-myc");
+    fs::write(&path, script).expect("write fake myc");
+    let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("chmod fake myc");
+    path
+}
+
+fn successful_status_script(payload_json: String) -> String {
+    format!(
+        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"full\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\ncat <<'JSON'\n{payload_json}\nJSON\n"
+    )
+}
+
+fn sample_myc_status_payload(
+    account_id: &str,
+    public_identity: &Value,
+    connection_id: &str,
+) -> Value {
+    json!({
+        "status": "healthy",
+        "ready": true,
+        "reasons": [],
+        "signer_backend": {
+            "local_signer": {
+                "account_id": account_id,
+                "public_identity": public_identity,
+                "availability": "SecretBacked"
+            },
+            "remote_session_count": 1,
+            "remote_sessions": [
+                {
+                    "connection_id": connection_id,
+                    "signer_identity": public_identity,
+                    "user_identity": public_identity,
+                    "relays": ["wss://relay.one"],
+                    "permissions": "sign_event"
+                }
+            ]
+        }
+    })
 }
 
 fn listing_test_guard() -> MutexGuard<'static, ()> {
@@ -558,6 +609,271 @@ fn listing_archive_and_dry_run_are_truthful() {
     let recorded = requests.lock().expect("requests");
     assert_eq!(recorded.len(), 2);
     assert!(recorded[1].contains("archived"));
+}
+
+#[test]
+fn listing_publish_uses_myc_binding_before_resolving_daemon_signer_session() {
+    let _guard = listing_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    let account_output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let account_id = account_json["account"]["id"].as_str().expect("account id");
+    let public_identity = account_json["public_identity"].clone();
+    let seller_pubkey = public_identity["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey")
+        .to_owned();
+    seed_farm(
+        dir.path(),
+        seller_pubkey.as_str(),
+        "AAAAAAAAAAAAAAAAAAAAAw",
+        "La Huerta",
+    );
+
+    let draft_path = dir.path().join("myc-listing.toml");
+    fs::write(
+        &draft_path,
+        valid_listing_draft(
+            "AAAAAAAAAAAAAAAAAAAAAg",
+            "AAAAAAAAAAAAAAAAAAAAAw",
+            seller_pubkey.as_str(),
+            "eggs",
+            "Pasture eggs",
+            "Protein",
+            "Fresh pasture-raised eggs collected daily.",
+            "12",
+            "each",
+            "4.50",
+            "USD",
+            "1",
+            "each",
+            "18",
+            "pickup",
+            "La Huerta del Sur",
+        ),
+    )
+    .expect("write listing draft");
+
+    write_workspace_config(
+        dir.path(),
+        format!(
+            r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{account_id}"
+"#
+        )
+        .as_str(),
+    );
+    let myc = write_fake_myc(
+        dir.path(),
+        successful_status_script(
+            sample_myc_status_payload(account_id, &public_identity, "conn_listing_binding_01")
+                .to_string(),
+        )
+        .as_str(),
+    );
+
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, auth_header| {
+        recorded.lock().expect("recorded").push(body.clone());
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => {
+                assert_eq!(auth_header, None);
+                MockRpcResponse::success(json!([sample_session(
+                    "sess_publish_01",
+                    seller_pubkey.as_str(),
+                    &["sign_event"],
+                    true
+                )]))
+            }
+            "bridge.listing.publish" => {
+                assert_eq!(auth_header.as_deref(), Some("Bearer bridge-secret"));
+                MockRpcResponse::success(json!({
+                    "deduplicated": false,
+                    "job": sample_listing_job(
+                        "job_listing_02",
+                        "published",
+                        "event_listing_02",
+                        "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+                        "sess_publish_01"
+                    )
+                }))
+            }
+            other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
+        }
+    });
+
+    let output = cli_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
+        .args([
+            "--json",
+            "--signer",
+            "myc",
+            "--myc-executable",
+            myc.to_str().expect("myc path"),
+            "listing",
+            "publish",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing publish");
+
+    assert!(output.status.success());
+    let publish_json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json");
+    assert_eq!(publish_json["state"], "published");
+    assert_eq!(publish_json["signer_mode"], "nip46_session");
+    assert_eq!(publish_json["signer_session_id"], "sess_publish_01");
+    assert_eq!(publish_json["requested_signer_session_id"], Value::Null);
+
+    let recorded = requests.lock().expect("requests");
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded[0]["method"], "nip46.session.list");
+    assert_eq!(recorded[1]["method"], "bridge.listing.publish");
+    assert_eq!(
+        recorded[1]["params"]["signer_session_id"],
+        "sess_publish_01"
+    );
+}
+
+#[test]
+fn listing_publish_rejects_myc_binding_that_resolves_the_wrong_actor() {
+    let _guard = listing_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    let account_output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let seller_pubkey = account_json["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey")
+        .to_owned();
+    seed_farm(
+        dir.path(),
+        seller_pubkey.as_str(),
+        "AAAAAAAAAAAAAAAAAAAAAw",
+        "La Huerta",
+    );
+
+    let mismatch_account_output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run mismatch account new");
+    assert!(mismatch_account_output.status.success());
+    let mismatch_account_json: Value =
+        serde_json::from_slice(mismatch_account_output.stdout.as_slice()).expect("mismatch json");
+    let mismatch_account_id = mismatch_account_json["account"]["id"]
+        .as_str()
+        .expect("mismatch account id");
+    let mismatch_public_identity = mismatch_account_json["public_identity"].clone();
+
+    let draft_path = dir.path().join("wrong-myc-listing.toml");
+    fs::write(
+        &draft_path,
+        valid_listing_draft(
+            "AAAAAAAAAAAAAAAAAAAAAg",
+            "AAAAAAAAAAAAAAAAAAAAAw",
+            seller_pubkey.as_str(),
+            "eggs",
+            "Pasture eggs",
+            "Protein",
+            "Fresh pasture-raised eggs collected daily.",
+            "12",
+            "each",
+            "4.50",
+            "USD",
+            "1",
+            "each",
+            "18",
+            "pickup",
+            "La Huerta del Sur",
+        ),
+    )
+    .expect("write listing draft");
+
+    write_workspace_config(
+        dir.path(),
+        format!(
+            r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{mismatch_account_id}"
+"#
+        )
+        .as_str(),
+    );
+    let myc = write_fake_myc(
+        dir.path(),
+        successful_status_script(
+            sample_myc_status_payload(
+                mismatch_account_id,
+                &mismatch_public_identity,
+                "conn_listing_binding_02",
+            )
+            .to_string(),
+        )
+        .as_str(),
+    );
+
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        recorded.lock().expect("recorded").push(body.clone());
+        MockRpcResponse::rpc_error(-32601, "daemon write path should not be reached")
+    });
+
+    let output = cli_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
+        .args([
+            "--json",
+            "--signer",
+            "myc",
+            "--myc-executable",
+            myc.to_str().expect("myc path"),
+            "listing",
+            "publish",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing publish");
+
+    assert_eq!(output.status.code(), Some(3));
+    let publish_json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json");
+    assert_eq!(publish_json["state"], "unconfigured");
+    assert_eq!(publish_json["signer_mode"], "myc");
+    assert!(publish_json["reason"].as_str().is_some_and(|value| {
+        value.contains("configured myc signer binding resolves signer pubkey")
+    }));
+    assert!(requests.lock().expect("requests").is_empty());
 }
 
 #[test]

@@ -33,6 +33,7 @@ use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon;
 use crate::runtime::daemon::DaemonRpcError;
+use crate::runtime::signer::{ActorWriteBindingError, validate_actor_write_binding};
 use crate::runtime::sync::freshness_from_executor;
 
 const DRAFT_KIND: &str = "listing_draft_v1";
@@ -541,6 +542,20 @@ fn mutate(
                 args.file.display()
             )],
         });
+    }
+
+    if let Err(error) =
+        validate_actor_write_binding(config, "seller", canonical.seller_pubkey.as_str())
+    {
+        return Ok(binding_error_view(
+            config,
+            args,
+            operation,
+            &canonical,
+            listing_addr,
+            event_preview,
+            error,
+        ));
     }
 
     let signer_session_id = match daemon::resolve_signer_session_id(
@@ -1088,6 +1103,68 @@ fn daemon_error_view(
             event: args.print_event.then_some(event_preview),
             actions: vec!["inspect the daemon rpc response contract".to_owned()],
         },
+    }
+}
+
+fn binding_error_view(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+    canonical: &CanonicalListingDraft,
+    listing_addr: String,
+    event_preview: ListingMutationEventView,
+    error: ActorWriteBindingError,
+) -> ListingMutationView {
+    let (state, reason, actions) = match error {
+        ActorWriteBindingError::Unconfigured(reason) => (
+            "unconfigured".to_owned(),
+            reason,
+            vec![
+                "radroots --signer myc signer status".to_owned(),
+                "radroots rpc sessions".to_owned(),
+            ],
+        ),
+        ActorWriteBindingError::Unavailable(reason) => (
+            "unavailable".to_owned(),
+            reason,
+            vec![
+                "radroots myc status".to_owned(),
+                "verify RADROOTS_MYC_EXECUTABLE and signer.remote_nip46 binding".to_owned(),
+            ],
+        ),
+    };
+
+    ListingMutationView {
+        state: state.clone(),
+        operation: operation.as_str().to_owned(),
+        source: LISTING_WRITE_SOURCE.to_owned(),
+        file: args.file.display().to_string(),
+        listing_id: canonical.listing_id.clone(),
+        listing_addr,
+        seller_pubkey: canonical.seller_pubkey.clone(),
+        event_kind: KIND_LISTING,
+        dry_run: false,
+        deduplicated: false,
+        job_id: None,
+        job_status: None,
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        signer_session_id: None,
+        event_id: None,
+        event_addr: None,
+        idempotency_key: args.idempotency_key.clone(),
+        requested_signer_session_id: args.signer_session_id.clone(),
+        reason: Some(reason),
+        job: args.print_job.then(|| ListingMutationJobView {
+            rpc_method: "bridge.listing.publish".to_owned(),
+            state,
+            job_id: None,
+            idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
+            signer_mode: Some(config.signer.backend.as_str().to_owned()),
+            signer_session_id: None,
+        }),
+        event: args.print_event.then_some(event_preview),
+        actions,
     }
 }
 

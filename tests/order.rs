@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,6 +53,56 @@ fn order_command_in(workdir: &Path) -> Command {
     }
     command.env("RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE", "false");
     command
+}
+
+fn write_workspace_config(workdir: &Path, contents: &str) {
+    let config_dir = workdir.join(".radroots");
+    fs::create_dir_all(&config_dir).expect("workspace config dir");
+    fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
+}
+
+fn write_fake_myc(dir: &Path, script: &str) -> std::path::PathBuf {
+    let path = dir.join("fake-myc");
+    fs::write(&path, script).expect("write fake myc");
+    let mut permissions = fs::metadata(&path).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("chmod fake myc");
+    path
+}
+
+fn successful_status_script(payload_json: String) -> String {
+    format!(
+        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"full\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\ncat <<'JSON'\n{payload_json}\nJSON\n"
+    )
+}
+
+fn sample_myc_status_payload(
+    account_id: &str,
+    public_identity: &Value,
+    connection_id: &str,
+) -> Value {
+    json!({
+        "status": "healthy",
+        "ready": true,
+        "reasons": [],
+        "signer_backend": {
+            "local_signer": {
+                "account_id": account_id,
+                "public_identity": public_identity,
+                "availability": "SecretBacked"
+            },
+            "remote_session_count": 1,
+            "remote_sessions": [
+                {
+                    "connection_id": connection_id,
+                    "signer_identity": public_identity,
+                    "user_identity": public_identity,
+                    "relays": ["wss://relay.one"],
+                    "permissions": "sign_event"
+                }
+            ]
+        }
+    })
 }
 
 fn order_test_guard() -> MutexGuard<'static, ()> {
@@ -248,7 +299,7 @@ fn write_response(stream: &mut TcpStream, response: &MockRpcResponse) -> Result<
         .map_err(|error| format!("flush mock rpc response: {error}"))
 }
 
-fn sample_bridge_job(job_id: &str, state: &str, terminal: bool) -> Value {
+fn sample_bridge_job(job_id: &str, state: &str, terminal: bool, signer_session_id: &str) -> Value {
     serde_json::json!({
         "job_id": job_id,
         "command": "bridge.order.request",
@@ -259,7 +310,7 @@ fn sample_bridge_job(job_id: &str, state: &str, terminal: bool) -> Value {
         "requested_at_unix": 1_712_720_000,
         "completed_at_unix": terminal.then_some(1_712_720_030),
         "signer_mode": "nip46_session",
-        "signer_session_id": "sess_order_01",
+        "signer_session_id": signer_session_id,
         "event_kind": 30420,
         "event_id": "evt_order_01",
         "event_addr": "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
@@ -504,11 +555,14 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
             )])),
             "bridge.order.request" => MockRpcResponse::success(serde_json::json!({
                 "deduplicated": false,
-                "job": sample_bridge_job("job_order_01", "accepted", false),
+                "job": sample_bridge_job("job_order_01", "accepted", false, "sess_order_01"),
             })),
-            "bridge.job.status" => {
-                MockRpcResponse::success(sample_bridge_job("job_order_01", "accepted", false))
-            }
+            "bridge.job.status" => MockRpcResponse::success(sample_bridge_job(
+                "job_order_01",
+                "accepted",
+                false,
+                "sess_order_01",
+            )),
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
@@ -584,9 +638,19 @@ fn order_watch_reports_job_frames_for_submitted_order() {
                 let mut count = watch_polls.lock().expect("watch polls lock");
                 *count += 1;
                 if *count == 1 {
-                    MockRpcResponse::success(sample_bridge_job("job_watch_01", "accepted", false))
+                    MockRpcResponse::success(sample_bridge_job(
+                        "job_watch_01",
+                        "accepted",
+                        false,
+                        "sess_order_01",
+                    ))
                 } else {
-                    MockRpcResponse::success(sample_bridge_job("job_watch_01", "completed", true))
+                    MockRpcResponse::success(sample_bridge_job(
+                        "job_watch_01",
+                        "completed",
+                        true,
+                        "sess_order_01",
+                    ))
                 }
             }
             other => panic!("unexpected mock rpc method {other}"),
@@ -643,6 +707,242 @@ job_id = "job_watch_01"
     assert_eq!(json["frames"][0]["signer_session_id"], "sess_order_01");
     assert_eq!(json["frames"][1]["signer_mode"], "nip46_session");
     assert_eq!(json["frames"][1]["signer_session_id"], "sess_order_01");
+}
+
+#[test]
+fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
+    let _guard = order_test_guard();
+    let dir = tempdir().expect("tempdir");
+
+    let account_output = order_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let account_id = account_json["account"]["id"].as_str().expect("account id");
+    let public_identity = account_json["public_identity"].clone();
+    let buyer_pubkey = public_identity["public_key_hex"]
+        .as_str()
+        .expect("buyer pubkey")
+        .to_owned();
+
+    write_workspace_config(
+        dir.path(),
+        format!(
+            r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{account_id}"
+"#
+        )
+        .as_str(),
+    );
+    let myc = write_fake_myc(
+        dir.path(),
+        successful_status_script(
+            sample_myc_status_payload(account_id, &public_identity, "conn_order_binding_01")
+                .to_string(),
+        )
+        .as_str(),
+    );
+
+    let new_output = order_command_in(dir.path())
+        .args([
+            "--json",
+            "order",
+            "new",
+            "--listing",
+            "pasture-eggs",
+            "--listing-addr",
+            "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+            "--bin",
+            "bin-1",
+            "--qty",
+            "2",
+        ])
+        .output()
+        .expect("run order new");
+    assert!(new_output.status.success());
+    let new_json: Value = serde_json::from_slice(new_output.stdout.as_slice()).expect("new json");
+    let order_id = new_json["order_id"].as_str().expect("order id");
+
+    let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, auth_header| {
+        recorded
+            .lock()
+            .expect("recorded requests lock")
+            .push(MockRpcRequest {
+                body: body.clone(),
+                method: body["method"].as_str().unwrap_or_default().to_owned(),
+                auth_header,
+            });
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session(
+                "sess_order_02",
+                buyer_pubkey.as_str(),
+                &["sign_event"],
+                true
+            )])),
+            "bridge.order.request" => MockRpcResponse::success(serde_json::json!({
+                "deduplicated": false,
+                "job": sample_bridge_job("job_order_02", "accepted", false, "sess_order_02"),
+            })),
+            other => panic!("unexpected mock rpc method {other}"),
+        }
+    });
+
+    let submit_output = order_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "test-token")
+        .args([
+            "--json",
+            "--signer",
+            "myc",
+            "--myc-executable",
+            myc.to_str().expect("myc path"),
+            "order",
+            "submit",
+            order_id,
+        ])
+        .output()
+        .expect("run order submit");
+
+    assert!(submit_output.status.success());
+    let submit_json: Value =
+        serde_json::from_slice(submit_output.stdout.as_slice()).expect("submit json");
+    assert_eq!(submit_json["state"], "accepted");
+    assert_eq!(submit_json["signer_mode"], "nip46_session");
+    assert_eq!(submit_json["signer_session_id"], "sess_order_02");
+    assert_eq!(submit_json["requested_signer_session_id"], Value::Null);
+
+    let recorded_requests = requests.lock().expect("requests lock");
+    assert!(
+        recorded_requests
+            .iter()
+            .any(|request| request.method == "nip46.session.list")
+    );
+    let request = recorded_requests
+        .iter()
+        .find(|request| request.method == "bridge.order.request")
+        .expect("bridge order request");
+    assert_eq!(request.body["params"]["signer_session_id"], "sess_order_02");
+}
+
+#[test]
+fn order_submit_rejects_myc_binding_that_resolves_the_wrong_actor() {
+    let _guard = order_test_guard();
+    let dir = tempdir().expect("tempdir");
+
+    let account_output = order_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+
+    let new_output = order_command_in(dir.path())
+        .args([
+            "--json",
+            "order",
+            "new",
+            "--listing",
+            "pasture-eggs",
+            "--listing-addr",
+            "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+            "--bin",
+            "bin-1",
+            "--qty",
+            "2",
+        ])
+        .output()
+        .expect("run order new");
+    assert!(new_output.status.success());
+    let new_json: Value = serde_json::from_slice(new_output.stdout.as_slice()).expect("new json");
+    let order_id = new_json["order_id"].as_str().expect("order id");
+
+    let mismatch_account_output = order_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run mismatch account new");
+    assert!(mismatch_account_output.status.success());
+    let mismatch_account_json: Value =
+        serde_json::from_slice(mismatch_account_output.stdout.as_slice()).expect("mismatch json");
+    let mismatch_account_id = mismatch_account_json["account"]["id"]
+        .as_str()
+        .expect("mismatch account id");
+    let mismatch_public_identity = mismatch_account_json["public_identity"].clone();
+
+    write_workspace_config(
+        dir.path(),
+        format!(
+            r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{mismatch_account_id}"
+"#
+        )
+        .as_str(),
+    );
+    let myc = write_fake_myc(
+        dir.path(),
+        successful_status_script(
+            sample_myc_status_payload(
+                mismatch_account_id,
+                &mismatch_public_identity,
+                "conn_order_binding_02",
+            )
+            .to_string(),
+        )
+        .as_str(),
+    );
+
+    let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, auth_header| {
+        recorded
+            .lock()
+            .expect("recorded requests lock")
+            .push(MockRpcRequest {
+                body,
+                method: "unexpected".to_owned(),
+                auth_header,
+            });
+        panic!("daemon write path should not be reached");
+    });
+
+    let submit_output = order_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "test-token")
+        .args([
+            "--json",
+            "--signer",
+            "myc",
+            "--myc-executable",
+            myc.to_str().expect("myc path"),
+            "order",
+            "submit",
+            order_id,
+        ])
+        .output()
+        .expect("run order submit");
+
+    assert_eq!(submit_output.status.code(), Some(3));
+    let submit_json: Value =
+        serde_json::from_slice(submit_output.stdout.as_slice()).expect("submit json");
+    assert_eq!(submit_json["state"], "unconfigured");
+    assert_eq!(submit_json["signer_mode"], "myc");
+    assert!(submit_json["reason"].as_str().is_some_and(|value| {
+        value.contains("configured myc signer binding resolves signer pubkey")
+    }));
+    assert!(requests.lock().expect("requests lock").is_empty());
 }
 
 #[test]

@@ -16,11 +16,68 @@ use radroots_nostr_signer::prelude::{
 const SIGNER_BINDING_PROVIDER_RUNTIME_ID: &str = "myc";
 const SIGNER_BINDING_MODEL: &str = "session_authorized_remote_signer";
 
+#[derive(Debug, Clone)]
+struct MycBindingResolution {
+    view: SignerBindingStatusView,
+    resolved_account_id: Option<String>,
+    resolved_signer_public_key_hex: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ActorWriteBindingError {
+    Unconfigured(String),
+    Unavailable(String),
+}
+
 pub fn resolve_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     match config.signer.backend {
         SignerBackend::Local => resolve_local_signer_status(config),
         SignerBackend::Myc => resolve_myc_signer_status(config),
     }
+}
+
+pub fn validate_actor_write_binding(
+    config: &RuntimeConfig,
+    actor_role: &str,
+    actor_pubkey: &str,
+) -> Result<(), ActorWriteBindingError> {
+    if !matches!(config.signer.backend, SignerBackend::Myc) {
+        return Ok(());
+    }
+
+    let myc = crate::runtime::myc::resolve_status(&config.myc);
+    let resolution = resolve_myc_binding(config, &myc);
+    match resolution.view.state.as_str() {
+        "ready" => {}
+        "unavailable" => {
+            return Err(ActorWriteBindingError::Unavailable(
+                resolution.view.reason.unwrap_or_else(|| {
+                    "myc signer binding is unavailable for actor-authored writes".to_owned()
+                }),
+            ));
+        }
+        _ => {
+            return Err(ActorWriteBindingError::Unconfigured(
+                resolution.view.reason.unwrap_or_else(|| {
+                    "myc signer binding is not ready for actor-authored writes".to_owned()
+                }),
+            ));
+        }
+    }
+
+    let Some(resolved_signer_public_key_hex) = resolution.resolved_signer_public_key_hex else {
+        return Err(ActorWriteBindingError::Unconfigured(
+            "myc signer binding reported ready without a resolved signer identity".to_owned(),
+        ));
+    };
+
+    if !resolved_signer_public_key_hex.eq_ignore_ascii_case(actor_pubkey) {
+        return Err(ActorWriteBindingError::Unconfigured(format!(
+            "configured myc signer binding resolves signer pubkey `{resolved_signer_public_key_hex}` instead of {actor_role} pubkey `{actor_pubkey}`"
+        )));
+    }
+
+    Ok(())
 }
 
 fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
@@ -138,7 +195,8 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
 
 fn resolve_myc_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     let myc = crate::runtime::myc::resolve_status(&config.myc);
-    let binding = resolve_myc_binding_status(config, &myc);
+    let resolution = resolve_myc_binding(config, &myc);
+    let binding = resolution.view;
     let state = myc_signer_state(&myc, &binding).to_owned();
     SignerStatusView {
         mode: config.signer.backend.as_str().to_owned(),
@@ -148,7 +206,7 @@ fn resolve_myc_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         } else {
             myc.source.clone()
         },
-        account_id: resolve_myc_account_id(&binding, &myc),
+        account_id: resolution.resolved_account_id,
         reason: if myc.state == "ready" {
             binding.reason.clone()
         } else {
@@ -179,27 +237,28 @@ fn disabled_binding_status() -> SignerBindingStatusView {
     }
 }
 
-fn resolve_myc_binding_status(
-    config: &RuntimeConfig,
-    myc: &MycStatusView,
-) -> SignerBindingStatusView {
+fn resolve_myc_binding(config: &RuntimeConfig, myc: &MycStatusView) -> MycBindingResolution {
     let Some(binding) = config.capability_binding(SIGNER_REMOTE_NIP46_CAPABILITY) else {
-        return SignerBindingStatusView {
-            capability_id: SIGNER_REMOTE_NIP46_CAPABILITY.to_owned(),
-            provider_runtime_id: SIGNER_BINDING_PROVIDER_RUNTIME_ID.to_owned(),
-            binding_model: SIGNER_BINDING_MODEL.to_owned(),
-            state: "unconfigured".to_owned(),
-            source: "no explicit capability binding".to_owned(),
-            target_kind: None,
-            target: None,
-            managed_account_ref: None,
-            signer_session_ref: None,
-            resolved_signer_session_id: None,
-            matched_session_count: None,
-            reason: Some(
-                "configure [[capability_binding]] for `signer.remote_nip46` before using `--signer myc`"
-                    .to_owned(),
-            ),
+        return MycBindingResolution {
+            view: SignerBindingStatusView {
+                capability_id: SIGNER_REMOTE_NIP46_CAPABILITY.to_owned(),
+                provider_runtime_id: SIGNER_BINDING_PROVIDER_RUNTIME_ID.to_owned(),
+                binding_model: SIGNER_BINDING_MODEL.to_owned(),
+                state: "unconfigured".to_owned(),
+                source: "no explicit capability binding".to_owned(),
+                target_kind: None,
+                target: None,
+                managed_account_ref: None,
+                signer_session_ref: None,
+                resolved_signer_session_id: None,
+                matched_session_count: None,
+                reason: Some(
+                    "configure [[capability_binding]] for `signer.remote_nip46` before using `--signer myc`"
+                        .to_owned(),
+                ),
+            },
+            resolved_account_id: None,
+            resolved_signer_public_key_hex: None,
         };
     };
 
@@ -210,6 +269,7 @@ fn resolve_myc_binding_status(
         return binding_status(
             binding,
             "unsupported",
+            None,
             None,
             None,
             format!(
@@ -223,6 +283,7 @@ fn resolve_myc_binding_status(
         return binding_status(
             binding,
             "unsupported",
+            None,
             None,
             None,
             format!(
@@ -240,6 +301,7 @@ fn resolve_myc_binding_status(
                 "unconfigured",
                 None,
                 None,
+                None,
                 myc.reason.clone().unwrap_or_else(|| {
                     "myc is not configured for composed signer bindings".to_owned()
                 }),
@@ -249,6 +311,7 @@ fn resolve_myc_binding_status(
             return binding_status(
                 binding,
                 "unavailable",
+                None,
                 None,
                 None,
                 myc.reason
@@ -275,6 +338,7 @@ fn resolve_myc_binding_status(
                 "unavailable",
                 None,
                 Some(0),
+                None,
                 format!("configured signer session `{session_ref}` is not currently available"),
             );
         };
@@ -285,6 +349,7 @@ fn resolve_myc_binding_status(
                 "unauthorized",
                 None,
                 Some(1),
+                None,
                 format!(
                     "configured signer session `{session_ref}` is not approved for `sign_event`"
                 ),
@@ -298,6 +363,7 @@ fn resolve_myc_binding_status(
                     "unauthorized",
                     None,
                     Some(1),
+                    None,
                     format!(
                         "configured signer session `{session_ref}` resolves signer `{}` instead of managed account `{account_ref}`",
                         session.signer_identity.id
@@ -311,6 +377,7 @@ fn resolve_myc_binding_status(
             "ready",
             Some(session.connection_id.clone()),
             Some(1),
+            Some(session),
             String::new(),
         );
     }
@@ -329,6 +396,7 @@ fn resolve_myc_binding_status(
             "unavailable",
             None,
             Some(0),
+            None,
             "no authorized remote signer session currently exposes `sign_event`".to_owned(),
         );
     }
@@ -339,6 +407,7 @@ fn resolve_myc_binding_status(
             "ambiguous",
             None,
             Some(signing_sessions.len()),
+            None,
             "multiple authorized remote signer sessions expose `sign_event`; set managed_account_ref or signer_session_ref".to_owned(),
         );
     }
@@ -352,6 +421,7 @@ fn resolve_myc_binding_status(
         "ready",
         Some(session.connection_id.clone()),
         Some(1),
+        Some(session),
         String::new(),
     )
 }
@@ -360,13 +430,14 @@ fn resolve_matching_sessions(
     binding: &CapabilityBindingConfig,
     account_ref: &str,
     matching_sessions: Vec<&MycRemoteSessionView>,
-) -> SignerBindingStatusView {
+) -> MycBindingResolution {
     if matching_sessions.is_empty() {
         return binding_status(
             binding,
             "unavailable",
             None,
             Some(0),
+            None,
             format!(
                 "no authorized remote signer session currently matches managed account `{account_ref}`"
             ),
@@ -379,6 +450,7 @@ fn resolve_matching_sessions(
             "ambiguous",
             None,
             Some(matching_sessions.len()),
+            None,
             format!(
                 "multiple authorized remote signer sessions currently match managed account `{account_ref}`; set signer_session_ref"
             ),
@@ -394,6 +466,7 @@ fn resolve_matching_sessions(
         "ready",
         Some(session.connection_id.clone()),
         Some(1),
+        Some(session),
         String::new(),
     )
 }
@@ -403,25 +476,31 @@ fn binding_status(
     state: &str,
     resolved_signer_session_id: Option<String>,
     matched_session_count: Option<usize>,
+    resolved_session: Option<&MycRemoteSessionView>,
     reason: String,
-) -> SignerBindingStatusView {
-    SignerBindingStatusView {
-        capability_id: binding.capability_id.clone(),
-        provider_runtime_id: binding.provider_runtime_id.clone(),
-        binding_model: binding.binding_model.clone(),
-        state: state.to_owned(),
-        source: binding.source.as_str().to_owned(),
-        target_kind: Some(binding.target_kind.as_str().to_owned()),
-        target: Some(binding.target.clone()),
-        managed_account_ref: binding.managed_account_ref.clone(),
-        signer_session_ref: binding.signer_session_ref.clone(),
-        resolved_signer_session_id,
-        matched_session_count,
-        reason: if reason.is_empty() {
-            None
-        } else {
-            Some(reason)
+) -> MycBindingResolution {
+    MycBindingResolution {
+        view: SignerBindingStatusView {
+            capability_id: binding.capability_id.clone(),
+            provider_runtime_id: binding.provider_runtime_id.clone(),
+            binding_model: binding.binding_model.clone(),
+            state: state.to_owned(),
+            source: binding.source.as_str().to_owned(),
+            target_kind: Some(binding.target_kind.as_str().to_owned()),
+            target: Some(binding.target.clone()),
+            managed_account_ref: binding.managed_account_ref.clone(),
+            signer_session_ref: binding.signer_session_ref.clone(),
+            resolved_signer_session_id,
+            matched_session_count,
+            reason: if reason.is_empty() {
+                None
+            } else {
+                Some(reason)
+            },
         },
+        resolved_account_id: resolved_session.map(|session| session.signer_identity.id.clone()),
+        resolved_signer_public_key_hex: resolved_session
+            .map(|session| session.signer_identity.public_key_hex.clone()),
     }
 }
 
@@ -436,26 +515,6 @@ fn myc_signer_state(myc: &MycStatusView, binding: &SignerBindingStatusView) -> &
             _ => "unconfigured",
         },
     }
-}
-
-fn resolve_myc_account_id(
-    binding: &SignerBindingStatusView,
-    myc: &MycStatusView,
-) -> Option<String> {
-    if let Some(account_ref) = &binding.managed_account_ref {
-        return Some(account_ref.clone());
-    }
-
-    binding
-        .resolved_signer_session_id
-        .as_deref()
-        .or(binding.signer_session_ref.as_deref())
-        .and_then(|session_id| {
-            myc.remote_sessions
-                .iter()
-                .find(|session| session.connection_id == session_id)
-                .map(|session| session.signer_identity.id.clone())
-        })
 }
 
 fn session_supports_signing(session: &MycRemoteSessionView) -> bool {

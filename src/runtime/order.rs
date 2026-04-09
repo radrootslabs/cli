@@ -22,6 +22,7 @@ use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon::{self, DaemonRpcError};
+use crate::runtime::signer::{ActorWriteBindingError, validate_actor_write_binding};
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
@@ -416,6 +417,12 @@ pub fn submit(
                 loaded.document.order.order_id
             )],
         });
+    }
+
+    if let Err(error) =
+        validate_actor_write_binding(config, "buyer", loaded.document.order.buyer_pubkey.as_str())
+    {
+        return Ok(order_binding_error_view(config, &loaded, args, error));
     }
 
     let signer_session_id = match daemon::resolve_signer_session_id(
@@ -1177,6 +1184,60 @@ fn order_submit_error_view(
         deduplicated: false,
         idempotency_key: args.idempotency_key.clone(),
         signer_mode: None,
+        signer_session_id: None,
+        requested_signer_session_id: args.signer_session_id.clone(),
+        reason: Some(reason),
+        job: None,
+        issues: Vec::new(),
+        actions,
+    }
+}
+
+fn order_binding_error_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    error: ActorWriteBindingError,
+) -> OrderSubmitView {
+    let (state, reason, actions) = match error {
+        ActorWriteBindingError::Unconfigured(reason) => (
+            "unconfigured".to_owned(),
+            reason,
+            vec![
+                "radroots --signer myc signer status".to_owned(),
+                "radroots rpc sessions".to_owned(),
+            ],
+        ),
+        ActorWriteBindingError::Unavailable(reason) => (
+            "unavailable".to_owned(),
+            reason,
+            vec![
+                "radroots myc status".to_owned(),
+                "verify RADROOTS_MYC_EXECUTABLE and signer.remote_nip46 binding".to_owned(),
+            ],
+        ),
+    };
+
+    let mut actions = actions;
+    actions.push(format!(
+        "radroots order get {}",
+        loaded.document.order.order_id
+    ));
+
+    OrderSubmitView {
+        state: state.clone(),
+        source: daemon::bridge_source().to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        file: loaded.file.display().to_string(),
+        listing_lookup: loaded.document.listing_lookup.clone(),
+        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        dry_run: false,
+        deduplicated: false,
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
         signer_session_id: None,
         requested_signer_session_id: args.signer_session_id.clone(),
         reason: Some(reason),
