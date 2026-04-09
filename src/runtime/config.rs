@@ -24,14 +24,15 @@ const DEFAULT_LOCAL_EXPORTS_DIR: &str = "exports";
 const DEFAULT_SHARED_ACCOUNTS_STORE_FILE: &str = "store.json";
 const DEFAULT_HYF_EXECUTABLE: &str = "hyfd";
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:7070";
-const CLI_PROFILE: &str = "interactive_user";
+const CLI_DEFAULT_PROFILE: &str = "interactive_user";
+const CLI_REPO_LOCAL_PROFILE: &str = "repo_local";
 const CLI_APP_NAMESPACE_VALUE: &str = "cli";
 const SHARED_ACCOUNTS_NAMESPACE_VALUE: &str = "accounts";
 const SHARED_IDENTITIES_NAMESPACE_VALUE: &str = "identities";
 const CLI_HOST_VAULT_POLICY: &str = "desktop";
 const CLI_DEFAULT_SECRET_BACKEND: &str = "host_vault";
 const CLI_DEFAULT_SECRET_FALLBACK: &str = "encrypted_file";
-const CLI_ALLOWED_PROFILES: &[&str] = &[CLI_PROFILE];
+const CLI_ALLOWED_PROFILES: &[&str] = &[CLI_DEFAULT_PROFILE, CLI_REPO_LOCAL_PROFILE];
 const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] =
     &["host_vault", "encrypted_file", "memory", "plaintext_file"];
 const CLI_USES_PROTECTED_STORE: bool = true;
@@ -40,6 +41,8 @@ const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
 const ENV_CLI_LOG_FILTER: &str = "RADROOTS_CLI_LOGGING_FILTER";
 const ENV_CLI_LOG_DIR: &str = "RADROOTS_CLI_LOGGING_OUTPUT_DIR";
 const ENV_CLI_LOG_STDOUT: &str = "RADROOTS_CLI_LOGGING_STDOUT";
+const ENV_CLI_PATHS_PROFILE: &str = "RADROOTS_CLI_PATHS_PROFILE";
+const ENV_CLI_PATHS_REPO_LOCAL_ROOT: &str = "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT";
 const ENV_LOG_FILTER: &str = "RADROOTS_LOG_FILTER";
 const ENV_LOG_DIR: &str = "RADROOTS_LOG_DIR";
 const ENV_LOG_STDOUT: &str = "RADROOTS_LOG_STDOUT";
@@ -59,6 +62,8 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_CLI_LOG_FILTER,
     ENV_CLI_LOG_DIR,
     ENV_CLI_LOG_STDOUT,
+    ENV_CLI_PATHS_PROFILE,
+    ENV_CLI_PATHS_REPO_LOCAL_ROOT,
     ENV_LOG_FILTER,
     ENV_LOG_DIR,
     ENV_LOG_STDOUT,
@@ -331,7 +336,7 @@ impl RuntimeConfig {
         env: &dyn Environment,
         env_file: &EnvFileValues,
     ) -> Result<Self, RuntimeError> {
-        let paths = resolve_paths(env)?;
+        let paths = resolve_paths(env, env_file)?;
         let workspace_config = load_cli_config_file(paths.workspace_config_path.as_path())?;
         let app_config = load_cli_config_file(paths.app_config_path.as_path())?;
         let account_secret_backend = resolve_account_secret_backend(args, env, env_file)?
@@ -466,11 +471,14 @@ impl RuntimeConfig {
     }
 }
 
-fn resolve_paths(env: &dyn Environment) -> Result<PathsConfig, RuntimeError> {
+fn resolve_paths(
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+) -> Result<PathsConfig, RuntimeError> {
     let current_dir = env.current_dir()?;
     let resolver = env.path_resolver();
-    let profile = RadrootsPathProfile::InteractiveUser;
-    let overrides = RadrootsPathOverrides::default();
+    let (profile, profile_label) = resolve_cli_path_profile(env, env_file)?;
+    let overrides = resolve_cli_path_overrides(current_dir.as_path(), env, env_file, profile)?;
     let resolved = resolver
         .resolve(profile, &overrides)
         .map_err(|err| RuntimeError::Config(format!("resolve Radroots path roots: {err}")))?;
@@ -490,7 +498,7 @@ fn resolve_paths(env: &dyn Environment) -> Result<PathsConfig, RuntimeError> {
         .map_err(|err| RuntimeError::Config(format!("resolve shared identity path: {err}")))?;
 
     Ok(PathsConfig {
-        profile: CLI_PROFILE.to_owned(),
+        profile: profile_label.to_owned(),
         allowed_profiles: CLI_ALLOWED_PROFILES
             .iter()
             .map(|value| (*value).to_owned())
@@ -512,6 +520,68 @@ fn resolve_paths(env: &dyn Environment) -> Result<PathsConfig, RuntimeError> {
         shared_accounts_secrets_root: shared_accounts_paths.secrets,
         default_identity_path,
     })
+}
+
+fn resolve_cli_path_profile(
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+) -> Result<(RadrootsPathProfile, &'static str), RuntimeError> {
+    match env_value_entry(env, env_file, &[ENV_CLI_PATHS_PROFILE]) {
+        Some((key, value)) => parse_cli_path_profile(key.as_str(), value.as_str()),
+        None => Ok((RadrootsPathProfile::InteractiveUser, CLI_DEFAULT_PROFILE)),
+    }
+}
+
+fn parse_cli_path_profile(
+    key: &str,
+    value: &str,
+) -> Result<(RadrootsPathProfile, &'static str), RuntimeError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        CLI_DEFAULT_PROFILE => Ok((RadrootsPathProfile::InteractiveUser, CLI_DEFAULT_PROFILE)),
+        CLI_REPO_LOCAL_PROFILE => Ok((RadrootsPathProfile::RepoLocal, CLI_REPO_LOCAL_PROFILE)),
+        other => Err(RuntimeError::Config(format!(
+            "{key} must be `interactive_user` or `repo_local`, got `{other}`"
+        ))),
+    }
+}
+
+fn resolve_cli_path_overrides(
+    current_dir: &Path,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    profile: RadrootsPathProfile,
+) -> Result<RadrootsPathOverrides, RuntimeError> {
+    match profile {
+        RadrootsPathProfile::InteractiveUser => Ok(RadrootsPathOverrides::default()),
+        RadrootsPathProfile::RepoLocal => {
+            let Some((key, value)) =
+                env_value_entry(env, env_file, &[ENV_CLI_PATHS_REPO_LOCAL_ROOT])
+            else {
+                return Err(RuntimeError::Config(format!(
+                    "{ENV_CLI_PATHS_REPO_LOCAL_ROOT} must be set when {ENV_CLI_PATHS_PROFILE}=repo_local"
+                )));
+            };
+            if value.trim().is_empty() {
+                return Err(RuntimeError::Config(format!(
+                    "{key} must not be empty when {ENV_CLI_PATHS_PROFILE}=repo_local"
+                )));
+            }
+            let repo_local_root = normalize_explicit_path_root(current_dir, value.as_str());
+            Ok(RadrootsPathOverrides::repo_local(repo_local_root))
+        }
+        _ => Err(RuntimeError::Config(
+            "cli only supports interactive_user and repo_local path profiles".to_owned(),
+        )),
+    }
+}
+
+fn normalize_explicit_path_root(current_dir: &Path, value: &str) -> PathBuf {
+    let root = PathBuf::from(value.trim());
+    if root.is_absolute() {
+        root
+    } else {
+        current_dir.join(root)
+    }
 }
 
 fn load_cli_config_file(path: &Path) -> Result<Option<CliConfigFile>, RuntimeError> {
@@ -1119,7 +1189,7 @@ mod tests {
             resolved.paths,
             PathsConfig {
                 profile: "interactive_user".to_owned(),
-                allowed_profiles: vec!["interactive_user".to_owned()],
+                allowed_profiles: vec!["interactive_user".to_owned(), "repo_local".to_owned(),],
                 app_namespace: "apps/cli".to_owned(),
                 shared_accounts_namespace: "shared/accounts".to_owned(),
                 shared_identities_namespace: "shared/identities".to_owned(),
@@ -1524,6 +1594,10 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             resolved.paths.app_data_root,
             PathBuf::from("/home/tester/.radroots/data/apps/cli")
         );
+        assert_eq!(
+            resolved.paths.allowed_profiles,
+            vec!["interactive_user".to_owned(), "repo_local".to_owned(),]
+        );
     }
 
     #[test]
@@ -1578,6 +1652,89 @@ RADROOTS_CLI_LOGGING_STDOUT=false
                 .join("shared")
                 .join("identities")
                 .join("default.json")
+        );
+    }
+
+    #[test]
+    fn repo_local_profile_uses_explicit_repo_local_root() {
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::from([
+            (
+                "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
+                "repo_local".to_owned(),
+            ),
+            (
+                "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT".to_owned(),
+                ".local/radroots/dev".to_owned(),
+            ),
+        ]));
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve runtime config");
+
+        assert_eq!(resolved.paths.profile, "repo_local");
+        assert_eq!(
+            resolved.paths.app_config_path,
+            PathBuf::from(
+                "/workspaces/radroots-cli/.local/radroots/dev/config/apps/cli/config.toml"
+            )
+        );
+        assert_eq!(
+            resolved.paths.app_data_root,
+            PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/data/apps/cli")
+        );
+        assert_eq!(
+            resolved.paths.app_logs_root,
+            PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/logs/apps/cli")
+        );
+        assert_eq!(
+            resolved.paths.shared_accounts_data_root,
+            PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/data/shared/accounts")
+        );
+        assert_eq!(
+            resolved.paths.default_identity_path,
+            PathBuf::from(
+                "/workspaces/radroots-cli/.local/radroots/dev/secrets/shared/identities/default.json"
+            )
+        );
+    }
+
+    #[test]
+    fn repo_local_profile_requires_explicit_root() {
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::from([(
+            "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
+            "repo_local".to_owned(),
+        )]));
+
+        let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect_err("repo_local should require an explicit root");
+        assert!(
+            error
+                .to_string()
+                .contains("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT")
+        );
+    }
+
+    #[test]
+    fn env_file_can_select_repo_local_profile() {
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::new());
+        let env_file = parse_env_file_values(
+            r#"
+RADROOTS_CLI_PATHS_PROFILE=repo_local
+RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT=.local/radroots/dev
+"#,
+            Path::new(".env.test"),
+        )
+        .expect("parse env file");
+
+        let resolved =
+            RuntimeConfig::resolve_with_env_file(&args, &env, &env_file).expect("resolve config");
+        assert_eq!(resolved.paths.profile, "repo_local");
+        assert_eq!(
+            resolved.paths.app_data_root,
+            PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/data/apps/cli")
         );
     }
 

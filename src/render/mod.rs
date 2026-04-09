@@ -2165,7 +2165,7 @@ mod tests {
                 },
                 paths: PathsConfig {
                     profile: "interactive_user".into(),
-                    allowed_profiles: vec!["interactive_user".into()],
+                    allowed_profiles: vec!["interactive_user".into(), "repo_local".into()],
                     app_namespace: "apps/cli".into(),
                     shared_accounts_namespace: "shared/accounts".into(),
                     shared_identities_namespace: "shared/identities".into(),
@@ -2302,7 +2302,7 @@ mod tests {
                     },
                     paths: PathsConfig {
                         profile: "interactive_user".into(),
-                        allowed_profiles: vec!["interactive_user".into()],
+                        allowed_profiles: vec!["interactive_user".into(), "repo_local".into()],
                         app_namespace: "apps/cli".into(),
                         shared_accounts_namespace: "shared/accounts".into(),
                         shared_identities_namespace: "shared/identities".into(),

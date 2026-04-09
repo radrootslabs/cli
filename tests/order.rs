@@ -32,6 +32,8 @@ fn order_command_in(workdir: &Path) -> Command {
         "RADROOTS_CLI_LOGGING_FILTER",
         "RADROOTS_CLI_LOGGING_OUTPUT_DIR",
         "RADROOTS_CLI_LOGGING_STDOUT",
+        "RADROOTS_CLI_PATHS_PROFILE",
+        "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT",
         "RADROOTS_LOG_FILTER",
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",

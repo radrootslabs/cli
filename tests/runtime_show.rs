@@ -66,6 +66,8 @@ fn runtime_show_command_in(workdir: &Path) -> Command {
         "RADROOTS_CLI_LOGGING_FILTER",
         "RADROOTS_CLI_LOGGING_OUTPUT_DIR",
         "RADROOTS_CLI_LOGGING_STDOUT",
+        "RADROOTS_CLI_PATHS_PROFILE",
+        "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT",
         "RADROOTS_LOG_FILTER",
         "RADROOTS_LOG_DIR",
         "RADROOTS_LOG_STDOUT",
@@ -105,6 +107,7 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["output"]["dry_run"], false);
     assert_eq!(json["paths"]["profile"], "interactive_user");
     assert_eq!(json["paths"]["allowed_profiles"][0], "interactive_user");
+    assert_eq!(json["paths"]["allowed_profiles"][1], "repo_local");
     assert_eq!(json["paths"]["app_namespace"], "apps/cli");
     assert_eq!(
         json["paths"]["shared_accounts_namespace"],
@@ -246,6 +249,62 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["myc"]["executable"], "myc");
     assert_eq!(json["rpc"]["url"], "http://127.0.0.1:7070");
     assert_eq!(json["rpc"]["bridge_auth_configured"], false);
+}
+
+#[test]
+fn config_show_json_reports_repo_local_paths_when_requested() {
+    let dir = tempdir().expect("tempdir");
+    let repo_local_root = dir.path().join(".local/radroots/dev");
+    let output = runtime_show_command_in(dir.path())
+        .env("RADROOTS_CLI_PATHS_PROFILE", "repo_local")
+        .env("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT", &repo_local_root)
+        .args(["--json", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+
+    assert_eq!(json["paths"]["profile"], "repo_local");
+    assert_eq!(json["paths"]["allowed_profiles"][0], "interactive_user");
+    assert_eq!(json["paths"]["allowed_profiles"][1], "repo_local");
+    assert_eq!(
+        json["paths"]["app_config_path"],
+        repo_local_root
+            .join("config/apps/cli/config.toml")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        json["paths"]["app_data_root"],
+        repo_local_root.join("data/apps/cli").display().to_string()
+    );
+    assert_eq!(
+        json["paths"]["app_logs_root"],
+        repo_local_root.join("logs/apps/cli").display().to_string()
+    );
+    assert_eq!(
+        json["paths"]["shared_accounts_data_root"],
+        repo_local_root
+            .join("data/shared/accounts")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        json["paths"]["shared_accounts_secrets_root"],
+        repo_local_root
+            .join("secrets/shared/accounts")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        json["paths"]["default_identity_path"],
+        repo_local_root
+            .join("secrets/shared/identities/default.json")
+            .display()
+            .to_string()
+    );
 }
 
 #[test]
