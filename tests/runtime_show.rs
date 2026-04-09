@@ -168,6 +168,21 @@ fn config_show_json_reports_default_bootstrap_state() {
             .display()
             .to_string()
     );
+    assert_eq!(
+        json["migration"]["posture"],
+        "explicit_operator_import_required"
+    );
+    assert_eq!(json["migration"]["state"], "ready");
+    assert_eq!(json["migration"]["silent_startup_relocation"], false);
+    assert_eq!(
+        json["migration"]["compatibility_window"],
+        "detect_and_report_only"
+    );
+    assert_eq!(
+        json["migration"]["detected_legacy_paths"],
+        Value::Array(vec![])
+    );
+    assert_eq!(json["migration"]["actions"], Value::Array(vec![]));
     assert_eq!(json["logging"]["initialized"], true);
     assert_eq!(json["logging"]["stdout"], false);
     assert_eq!(
@@ -257,6 +272,54 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["myc"]["executable"], "myc");
     assert_eq!(json["rpc"]["url"], "http://127.0.0.1:7070");
     assert_eq!(json["rpc"]["bridge_auth_configured"], false);
+}
+
+#[test]
+fn config_show_json_reports_detected_legacy_cli_paths_without_moving_them() {
+    let dir = tempdir().expect("tempdir");
+    let home = dir.path().join("home");
+    let old_config = home.join(".config/radroots/config.toml");
+    let old_state_root = home.join(".local/share/radroots");
+    fs::create_dir_all(old_config.parent().expect("old config parent")).expect("old config dir");
+    fs::create_dir_all(old_state_root.join("accounts")).expect("old state dir");
+    fs::write(&old_config, "[relay]\nurls = []\n").expect("old config");
+    fs::write(old_state_root.join("accounts/store.json"), "{}").expect("old store");
+
+    let output = runtime_show_command_in(dir.path())
+        .args(["--json", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+
+    assert_eq!(json["migration"]["state"], "legacy_state_detected");
+    assert_eq!(json["migration"]["silent_startup_relocation"], false);
+    let detected = json["migration"]["detected_legacy_paths"]
+        .as_array()
+        .expect("detected legacy paths array");
+    assert_eq!(detected.len(), 2);
+    assert_eq!(detected[0]["id"], "cli_user_config_v0");
+    assert_eq!(detected[0]["path"], old_config.display().to_string());
+    assert_eq!(
+        detected[0]["destination"],
+        config_root(dir.path())
+            .join("apps/cli/config.toml")
+            .display()
+            .to_string()
+    );
+    assert_eq!(detected[1]["id"], "cli_user_state_root_v0");
+    assert_eq!(detected[1]["path"], old_state_root.display().to_string());
+    assert!(
+        json["migration"]["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .is_some_and(|value| value.contains("startup did not move legacy data")))
+    );
 }
 
 #[test]

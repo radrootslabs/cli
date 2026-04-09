@@ -1,7 +1,8 @@
 use crate::domain::runtime::{
     AccountRuntimeView, AccountSecretRuntimeView, ConfigFilesRuntimeView, ConfigShowView,
-    HyfRuntimeView, LocalRuntimeView, LoggingRuntimeView, MycRuntimeView, OutputRuntimeView,
-    PathsRuntimeView, RelayRuntimeView, RpcRuntimeView, SignerRuntimeView,
+    HyfRuntimeView, LegacyPathRuntimeView, LocalRuntimeView, LoggingRuntimeView,
+    MigrationRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
+    RpcRuntimeView, SignerRuntimeView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -51,6 +52,7 @@ pub fn show(
                 .to_string(),
             default_identity_path: config.paths.default_identity_path.display().to_string(),
         },
+        migration: migration_runtime_view(config),
         logging: LoggingRuntimeView {
             initialized: logging.initialized,
             filter: config.logging.filter.clone(),
@@ -111,4 +113,39 @@ pub fn show(
             bridge_auth_configured: config.rpc.bridge_bearer_token.is_some(),
         },
     })
+}
+
+fn migration_runtime_view(config: &RuntimeConfig) -> MigrationRuntimeView {
+    let report = &config.migration.report;
+    let detected_legacy_paths = report
+        .detected_legacy_paths
+        .iter()
+        .map(|path| LegacyPathRuntimeView {
+            id: path.id.clone(),
+            description: path.description.clone(),
+            path: path.path.display().to_string(),
+            destination: path
+                .destination
+                .as_ref()
+                .map(|destination| destination.display().to_string()),
+            import_hint: path.import_hint.clone(),
+        })
+        .collect::<Vec<_>>();
+    let actions = if detected_legacy_paths.is_empty() {
+        Vec::new()
+    } else {
+        vec![
+            "inspect detected_legacy_paths before writing new local state".to_owned(),
+            "perform an explicit export/import or manual copy; startup did not move legacy data"
+                .to_owned(),
+        ]
+    };
+    MigrationRuntimeView {
+        posture: report.posture.to_owned(),
+        state: report.state.to_owned(),
+        silent_startup_relocation: report.silent_startup_relocation,
+        compatibility_window: report.compatibility_window.to_owned(),
+        detected_legacy_paths,
+        actions,
+    }
 }

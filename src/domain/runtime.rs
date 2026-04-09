@@ -111,6 +111,7 @@ pub struct ConfigShowView {
     pub output: OutputRuntimeView,
     pub config_files: ConfigFilesRuntimeView,
     pub paths: PathsRuntimeView,
+    pub migration: MigrationRuntimeView,
     pub logging: LoggingRuntimeView,
     pub account: AccountRuntimeView,
     pub signer: SignerRuntimeView,
@@ -119,6 +120,26 @@ pub struct ConfigShowView {
     pub myc: MycRuntimeView,
     pub hyf: HyfRuntimeView,
     pub rpc: RpcRuntimeView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MigrationRuntimeView {
+    pub posture: String,
+    pub state: String,
+    pub silent_startup_relocation: bool,
+    pub compatibility_window: String,
+    pub detected_legacy_paths: Vec<LegacyPathRuntimeView>,
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LegacyPathRuntimeView {
+    pub id: String,
+    pub description: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    pub import_hint: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

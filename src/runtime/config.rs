@@ -3,7 +3,10 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use radroots_runtime_paths::RadrootsPathResolver;
+use radroots_runtime_paths::{
+    RadrootsLegacyPathCandidate, RadrootsMigrationReport, RadrootsPathResolver,
+    inspect_legacy_paths,
+};
 use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
 use serde::Deserialize;
 use url::Url;
@@ -234,6 +237,7 @@ pub struct RpcConfig {
 pub struct RuntimeConfig {
     pub output: OutputConfig,
     pub paths: PathsConfig,
+    pub migration: MigrationConfig,
     pub logging: LoggingConfig,
     pub account: AccountConfig,
     pub account_secret_contract: AccountSecretContractConfig,
@@ -244,6 +248,11 @@ pub struct RuntimeConfig {
     pub myc: MycConfig,
     pub hyf: HyfConfig,
     pub rpc: RpcConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationConfig {
+    pub report: RadrootsMigrationReport,
 }
 
 #[derive(Debug, Default)]
@@ -317,6 +326,7 @@ impl RuntimeConfig {
         env_file: &EnvFileValues,
     ) -> Result<Self, RuntimeError> {
         let paths = resolve_paths(env, env_file)?;
+        let migration = resolve_migration(paths.clone(), env);
         let workspace_config = load_cli_config_file(paths.workspace_config_path.as_path())?;
         let app_config = load_cli_config_file(paths.app_config_path.as_path())?;
         let account_secret_backend = resolve_account_secret_backend(args, env, env_file)?
@@ -336,6 +346,7 @@ impl RuntimeConfig {
                 dry_run: args.dry_run,
             },
             paths: paths.clone(),
+            migration,
             logging: LoggingConfig {
                 filter: args
                     .log_filter
@@ -449,6 +460,40 @@ impl RuntimeConfig {
             )?,
         })
     }
+}
+
+fn resolve_migration(paths: PathsConfig, env: &dyn Environment) -> MigrationConfig {
+    MigrationConfig {
+        report: inspect_legacy_paths(legacy_path_candidates(&paths, env)),
+    }
+}
+
+fn legacy_path_candidates(
+    paths: &PathsConfig,
+    env: &dyn Environment,
+) -> Vec<RadrootsLegacyPathCandidate> {
+    let Some(home_dir) = env.var("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let old_user_config = home_dir.join(".config/radroots/config.toml");
+    let old_user_state_root = home_dir.join(".local/share/radroots");
+
+    vec![
+        RadrootsLegacyPathCandidate::new(
+            "cli_user_config_v0",
+            "legacy cli user config",
+            old_user_config,
+            Some(paths.app_config_path.clone()),
+            "merge this config into the canonical app config path; the cli will not copy it on startup",
+        ),
+        RadrootsLegacyPathCandidate::new(
+            "cli_user_state_root_v0",
+            "legacy cli user state root",
+            old_user_state_root,
+            Some(paths.app_data_root.clone()),
+            "export/import the old local state into the canonical app and shared namespaces; the cli will not move it on startup",
+        ),
+    ]
 }
 
 fn load_cli_config_file(path: &Path) -> Result<Option<CliConfigFile>, RuntimeError> {

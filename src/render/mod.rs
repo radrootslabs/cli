@@ -2146,11 +2146,12 @@ mod tests {
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, LocalConfig,
-        LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RelayConfig,
-        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
-        SignerConfig, Verbosity,
+        LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
+        RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
+        SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
+    use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
 
     #[test]
@@ -2183,6 +2184,9 @@ mod tests {
                         .into(),
                     default_identity_path:
                         "/home/tester/.radroots/secrets/shared/identities/default.json".into(),
+                },
+                migration: MigrationConfig {
+                    report: RadrootsMigrationReport::empty(),
                 },
                 logging: LoggingConfig {
                     filter: "info".to_owned(),
@@ -2327,6 +2331,9 @@ mod tests {
                             "/home/tester/.radroots/secrets/shared/accounts".into(),
                         default_identity_path:
                             "/home/tester/.radroots/secrets/shared/identities/default.json".into(),
+                    },
+                    migration: MigrationConfig {
+                        report: RadrootsMigrationReport::empty(),
                     },
                     logging: LoggingConfig {
                         filter: "info".to_owned(),
