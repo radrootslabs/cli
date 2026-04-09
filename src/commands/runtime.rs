@@ -1,8 +1,8 @@
 use crate::domain::runtime::{
-    AccountRuntimeView, AccountSecretRuntimeView, ConfigFilesRuntimeView, ConfigShowView,
-    HyfRuntimeView, LegacyPathRuntimeView, LocalRuntimeView, LoggingRuntimeView,
-    MigrationRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
-    RpcRuntimeView, SignerRuntimeView,
+    AccountRuntimeView, AccountSecretRuntimeView, CapabilityBindingRuntimeView,
+    ConfigFilesRuntimeView, ConfigShowView, HyfRuntimeView, LegacyPathRuntimeView,
+    LocalRuntimeView, LoggingRuntimeView, MigrationRuntimeView, MycRuntimeView, OutputRuntimeView,
+    PathsRuntimeView, RelayRuntimeView, RpcRuntimeView, SignerRuntimeView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -112,6 +112,21 @@ pub fn show(
             url: config.rpc.url.clone(),
             bridge_auth_configured: config.rpc.bridge_bearer_token.is_some(),
         },
+        capability_bindings: config
+            .inspect_capability_bindings()
+            .into_iter()
+            .map(|binding| CapabilityBindingRuntimeView {
+                capability_id: binding.capability_id,
+                provider_runtime_id: binding.provider_runtime_id,
+                binding_model: binding.binding_model,
+                state: binding.state.as_str().to_owned(),
+                source: binding.source,
+                target_kind: binding.target_kind,
+                target: binding.target,
+                managed_account_ref: binding.managed_account_ref,
+                signer_session_ref: binding.signer_session_ref,
+            })
+            .collect(),
     })
 }
 

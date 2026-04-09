@@ -227,6 +227,78 @@ pub struct HyfConfig {
     pub executable: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityBindingTargetKind {
+    ManagedInstance,
+    ExplicitEndpoint,
+}
+
+impl CapabilityBindingTargetKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ManagedInstance => "managed_instance",
+            Self::ExplicitEndpoint => "explicit_endpoint",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityBindingSource {
+    UserConfig,
+    WorkspaceConfig,
+}
+
+impl CapabilityBindingSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserConfig => "user config [[capability_binding]]",
+            Self::WorkspaceConfig => "workspace config [[capability_binding]]",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityBindingConfig {
+    pub capability_id: String,
+    pub provider_runtime_id: String,
+    pub binding_model: String,
+    pub target_kind: CapabilityBindingTargetKind,
+    pub target: String,
+    pub managed_account_ref: Option<String>,
+    pub signer_session_ref: Option<String>,
+    pub source: CapabilityBindingSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityBindingInspectionState {
+    Configured,
+    NotConfigured,
+    Disabled,
+}
+
+impl CapabilityBindingInspectionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::NotConfigured => "not_configured",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityBindingInspection {
+    pub capability_id: String,
+    pub provider_runtime_id: String,
+    pub binding_model: String,
+    pub state: CapabilityBindingInspectionState,
+    pub source: String,
+    pub target_kind: Option<String>,
+    pub target: Option<String>,
+    pub managed_account_ref: Option<String>,
+    pub signer_session_ref: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpcConfig {
     pub url: String,
@@ -248,6 +320,7 @@ pub struct RuntimeConfig {
     pub myc: MycConfig,
     pub hyf: HyfConfig,
     pub rpc: RpcConfig,
+    pub capability_bindings: Vec<CapabilityBindingConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,6 +342,7 @@ struct CliConfigFile {
     relay: Option<RelayFileConfig>,
     hyf: Option<HyfFileConfig>,
     rpc: Option<RpcFileConfig>,
+    capability_binding: Option<Vec<CapabilityBindingFileConfig>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -287,6 +361,51 @@ struct HyfFileConfig {
     enabled: Option<bool>,
     executable: Option<PathBuf>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+struct CapabilityBindingFileConfig {
+    capability: String,
+    provider: String,
+    target_kind: String,
+    target: String,
+    managed_account_ref: Option<String>,
+    signer_session_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CapabilityBindingSpec {
+    capability_id: &'static str,
+    provider_runtime_id: &'static str,
+    binding_model: &'static str,
+}
+
+const SIGNER_REMOTE_NIP46_CAPABILITY: &str = "signer.remote_nip46";
+const WRITE_PLANE_TRADE_JSONRPC_CAPABILITY: &str = "write_plane.trade_jsonrpc";
+const WORKFLOW_TRADE_CAPABILITY: &str = "workflow.trade";
+const INFERENCE_HYF_STDIO_CAPABILITY: &str = "inference.hyf_stdio";
+
+const CAPABILITY_BINDING_SPECS: &[CapabilityBindingSpec] = &[
+    CapabilityBindingSpec {
+        capability_id: SIGNER_REMOTE_NIP46_CAPABILITY,
+        provider_runtime_id: "myc",
+        binding_model: "session_authorized_remote_signer",
+    },
+    CapabilityBindingSpec {
+        capability_id: WRITE_PLANE_TRADE_JSONRPC_CAPABILITY,
+        provider_runtime_id: "radrootsd",
+        binding_model: "daemon_backed_jsonrpc",
+    },
+    CapabilityBindingSpec {
+        capability_id: WORKFLOW_TRADE_CAPABILITY,
+        provider_runtime_id: "rhi",
+        binding_model: "out_of_process_worker",
+    },
+    CapabilityBindingSpec {
+        capability_id: INFERENCE_HYF_STDIO_CAPABILITY,
+        provider_runtime_id: "hyf",
+        binding_model: "stdio_service",
+    },
+];
 
 pub(crate) trait Environment {
     fn var(&self, key: &str) -> Option<String>;
@@ -339,6 +458,10 @@ impl RuntimeConfig {
                 _ => None,
             });
         Ok(Self {
+            capability_bindings: resolve_capability_bindings(
+                app_config.as_ref(),
+                workspace_config.as_ref(),
+            )?,
             output: OutputConfig {
                 format: resolve_output_format(args, env, env_file)?,
                 verbosity: resolve_verbosity(args)?,
@@ -460,6 +583,62 @@ impl RuntimeConfig {
             )?,
         })
     }
+
+    pub fn inspect_capability_bindings(&self) -> Vec<CapabilityBindingInspection> {
+        CAPABILITY_BINDING_SPECS
+            .iter()
+            .map(|spec| {
+                if let Some(binding) = self
+                    .capability_bindings
+                    .iter()
+                    .find(|binding| binding.capability_id == spec.capability_id)
+                {
+                    return CapabilityBindingInspection {
+                        capability_id: binding.capability_id.clone(),
+                        provider_runtime_id: binding.provider_runtime_id.clone(),
+                        binding_model: binding.binding_model.clone(),
+                        state: CapabilityBindingInspectionState::Configured,
+                        source: binding.source.as_str().to_owned(),
+                        target_kind: Some(binding.target_kind.as_str().to_owned()),
+                        target: Some(binding.target.clone()),
+                        managed_account_ref: binding.managed_account_ref.clone(),
+                        signer_session_ref: binding.signer_session_ref.clone(),
+                    };
+                }
+
+                let (state, source) = match spec.capability_id {
+                    SIGNER_REMOTE_NIP46_CAPABILITY
+                        if matches!(self.signer.backend, SignerBackend::Local) =>
+                    {
+                        (
+                            CapabilityBindingInspectionState::Disabled,
+                            "independent local signer mode".to_owned(),
+                        )
+                    }
+                    INFERENCE_HYF_STDIO_CAPABILITY if !self.hyf.enabled => (
+                        CapabilityBindingInspectionState::Disabled,
+                        "hyf disabled by config".to_owned(),
+                    ),
+                    _ => (
+                        CapabilityBindingInspectionState::NotConfigured,
+                        "no explicit capability binding".to_owned(),
+                    ),
+                };
+
+                CapabilityBindingInspection {
+                    capability_id: spec.capability_id.to_owned(),
+                    provider_runtime_id: spec.provider_runtime_id.to_owned(),
+                    binding_model: spec.binding_model.to_owned(),
+                    state,
+                    source,
+                    target_kind: None,
+                    target: None,
+                    managed_account_ref: None,
+                    signer_session_ref: None,
+                }
+            })
+            .collect()
+    }
 }
 
 fn resolve_migration(paths: PathsConfig, env: &dyn Environment) -> MigrationConfig {
@@ -545,6 +724,132 @@ fn resolve_rpc_config(
         url: validate_rpc_url(url.as_str())?,
         bridge_bearer_token: env_value(env, env_file, &[ENV_RPC_BEARER_TOKEN]),
     })
+}
+
+fn resolve_capability_bindings(
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<Vec<CapabilityBindingConfig>, RuntimeError> {
+    let workspace = resolve_file_capability_bindings(
+        workspace_config.and_then(|config| config.capability_binding.as_deref()),
+        CapabilityBindingSource::WorkspaceConfig,
+    )?;
+    let user = resolve_file_capability_bindings(
+        user_config.and_then(|config| config.capability_binding.as_deref()),
+        CapabilityBindingSource::UserConfig,
+    )?;
+
+    let mut merged = BTreeMap::new();
+    for binding in workspace.into_iter().chain(user) {
+        merged.insert(binding.capability_id.clone(), binding);
+    }
+
+    Ok(CAPABILITY_BINDING_SPECS
+        .iter()
+        .filter_map(|spec| merged.remove(spec.capability_id))
+        .collect())
+}
+
+fn resolve_file_capability_bindings(
+    bindings: Option<&[CapabilityBindingFileConfig]>,
+    source: CapabilityBindingSource,
+) -> Result<Vec<CapabilityBindingConfig>, RuntimeError> {
+    let Some(bindings) = bindings else {
+        return Ok(Vec::new());
+    };
+
+    let mut seen = BTreeMap::new();
+    let mut resolved = Vec::with_capacity(bindings.len());
+
+    for binding in bindings {
+        let capability = binding.capability.trim();
+        let provider = binding.provider.trim();
+        let Some(spec) = capability_binding_spec(capability) else {
+            return Err(RuntimeError::Config(format!(
+                "unknown capability_binding capability `{capability}`"
+            )));
+        };
+        if provider != spec.provider_runtime_id {
+            return Err(RuntimeError::Config(format!(
+                "capability_binding `{capability}` must use provider `{}`, got `{provider}`",
+                spec.provider_runtime_id
+            )));
+        }
+        if seen.insert(spec.capability_id.to_owned(), ()).is_some() {
+            return Err(RuntimeError::Config(format!(
+                "capability_binding `{capability}` is duplicated in one config file"
+            )));
+        }
+
+        let target = binding.target.trim();
+        if target.is_empty() {
+            return Err(RuntimeError::Config(format!(
+                "capability_binding `{capability}` target must not be empty"
+            )));
+        }
+
+        let managed_account_ref = normalize_binding_ref(
+            binding
+                .managed_account_ref
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+        );
+        let signer_session_ref = normalize_binding_ref(
+            binding
+                .signer_session_ref
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+        );
+        if spec.capability_id != SIGNER_REMOTE_NIP46_CAPABILITY
+            && (managed_account_ref.is_some() || signer_session_ref.is_some())
+        {
+            return Err(RuntimeError::Config(format!(
+                "capability_binding `{capability}` may not set managed_account_ref or signer_session_ref"
+            )));
+        }
+
+        resolved.push(CapabilityBindingConfig {
+            capability_id: spec.capability_id.to_owned(),
+            provider_runtime_id: spec.provider_runtime_id.to_owned(),
+            binding_model: spec.binding_model.to_owned(),
+            target_kind: parse_capability_binding_target_kind(
+                binding.target_kind.as_str(),
+                spec.capability_id,
+            )?,
+            target: target.to_owned(),
+            managed_account_ref,
+            signer_session_ref,
+            source,
+        });
+    }
+
+    Ok(resolved)
+}
+
+fn capability_binding_spec(capability_id: &str) -> Option<CapabilityBindingSpec> {
+    CAPABILITY_BINDING_SPECS
+        .iter()
+        .copied()
+        .find(|spec| spec.capability_id == capability_id)
+}
+
+fn parse_capability_binding_target_kind(
+    value: &str,
+    capability_id: &str,
+) -> Result<CapabilityBindingTargetKind, RuntimeError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "managed_instance" => Ok(CapabilityBindingTargetKind::ManagedInstance),
+        "explicit_endpoint" => Ok(CapabilityBindingTargetKind::ExplicitEndpoint),
+        other => Err(RuntimeError::Config(format!(
+            "capability_binding `{capability_id}` target_kind must be `managed_instance` or `explicit_endpoint`, got `{other}`"
+        ))),
+    }
+}
+
+fn normalize_binding_ref(value: Option<&str>) -> Option<String> {
+    value.map(ToOwned::to_owned)
 }
 
 fn resolve_relay_config(
@@ -995,9 +1300,11 @@ fn parse_bool_env(key: &str, value: &str) -> Result<bool, RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountConfig, AccountSecretContractConfig, EnvFileValues, Environment, HyfConfig,
-        OutputConfig, OutputFormat, PathsConfig, RelayConfigSource, RelayPublishPolicy,
-        RuntimeConfig, SignerBackend, Verbosity, parse_env_file_values,
+        AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
+        CapabilityBindingSource, CapabilityBindingTargetKind, EnvFileValues, Environment,
+        HyfConfig, INFERENCE_HYF_STDIO_CAPABILITY, OutputConfig, OutputFormat, PathsConfig,
+        RelayConfigSource, RelayPublishPolicy, RuntimeConfig, SignerBackend, Verbosity,
+        parse_env_file_values,
     };
     use crate::cli::CliArgs;
     use clap::Parser;
@@ -1468,6 +1775,108 @@ RADROOTS_CLI_LOGGING_STDOUT=false
                 enabled: true,
                 executable: PathBuf::from("user-hyfd"),
             }
+        );
+    }
+
+    #[test]
+    fn user_capability_binding_overrides_workspace_binding() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(workspace_root.join(".radroots")).expect("workspace config dir");
+        fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
+        fs::write(
+            workspace_root.join(".radroots/config.toml"),
+            r#"
+[[capability_binding]]
+capability = "inference.hyf_stdio"
+provider = "hyf"
+target_kind = "managed_instance"
+target = "workspace-hyf"
+"#,
+        )
+        .expect("write workspace config");
+        fs::write(
+            user_home.join(".radroots/config/apps/cli/config.toml"),
+            r#"
+[[capability_binding]]
+capability = "inference.hyf_stdio"
+provider = "hyf"
+target_kind = "explicit_endpoint"
+target = "bin/user-hyfd"
+"#,
+        )
+        .expect("write user config");
+
+        let env = MapEnvironment {
+            values: BTreeMap::new(),
+            current_dir: workspace_root,
+            path_resolver: RadrootsPathResolver::new(
+                RadrootsPlatform::Linux,
+                RadrootsHostEnvironment {
+                    home_dir: Some(user_home),
+                    ..RadrootsHostEnvironment::default()
+                },
+            ),
+        };
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve config");
+        assert_eq!(resolved.capability_bindings.len(), 1);
+        assert_eq!(
+            resolved.capability_bindings[0],
+            CapabilityBindingConfig {
+                capability_id: INFERENCE_HYF_STDIO_CAPABILITY.to_owned(),
+                provider_runtime_id: "hyf".to_owned(),
+                binding_model: "stdio_service".to_owned(),
+                target_kind: CapabilityBindingTargetKind::ExplicitEndpoint,
+                target: "bin/user-hyfd".to_owned(),
+                managed_account_ref: None,
+                signer_session_ref: None,
+                source: CapabilityBindingSource::UserConfig,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_capability_binding_provider_fails() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(workspace_root.join(".radroots")).expect("workspace config dir");
+        fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
+        fs::write(
+            workspace_root.join(".radroots/config.toml"),
+            r#"
+[[capability_binding]]
+capability = "write_plane.trade_jsonrpc"
+provider = "hyf"
+target_kind = "explicit_endpoint"
+target = "https://rpc.workspace.test/jsonrpc"
+"#,
+        )
+        .expect("write workspace config");
+
+        let env = MapEnvironment {
+            values: BTreeMap::new(),
+            current_dir: workspace_root,
+            path_resolver: RadrootsPathResolver::new(
+                RadrootsPlatform::Linux,
+                RadrootsHostEnvironment {
+                    home_dir: Some(user_home),
+                    ..RadrootsHostEnvironment::default()
+                },
+            ),
+        };
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+
+        let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect_err("invalid capability binding provider");
+        assert!(
+            error
+                .to_string()
+                .contains("must use provider `radrootsd`, got `hyf`")
         );
     }
 

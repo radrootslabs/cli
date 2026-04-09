@@ -88,6 +88,15 @@ fn runtime_show_command_in(workdir: &Path) -> Command {
     command
 }
 
+fn binding_by_capability<'a>(json: &'a Value, capability_id: &str) -> &'a Value {
+    json["capability_bindings"]
+        .as_array()
+        .expect("capability bindings array")
+        .iter()
+        .find(|binding| binding["capability_id"] == capability_id)
+        .expect("binding present")
+}
+
 #[test]
 fn config_show_json_reports_default_bootstrap_state() {
     let dir = tempdir().expect("tempdir");
@@ -272,6 +281,31 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["myc"]["executable"], "myc");
     assert_eq!(json["rpc"]["url"], "http://127.0.0.1:7070");
     assert_eq!(json["rpc"]["bridge_auth_configured"], false);
+    assert_eq!(
+        json["capability_bindings"]
+            .as_array()
+            .expect("capability bindings")
+            .len(),
+        4
+    );
+    let signer = binding_by_capability(&json, "signer.remote_nip46");
+    assert_eq!(signer["provider_runtime_id"], "myc");
+    assert_eq!(signer["binding_model"], "session_authorized_remote_signer");
+    assert_eq!(signer["state"], "disabled");
+    assert_eq!(signer["source"], "independent local signer mode");
+    let write = binding_by_capability(&json, "write_plane.trade_jsonrpc");
+    assert_eq!(write["provider_runtime_id"], "radrootsd");
+    assert_eq!(write["binding_model"], "daemon_backed_jsonrpc");
+    assert_eq!(write["state"], "not_configured");
+    let workflow = binding_by_capability(&json, "workflow.trade");
+    assert_eq!(workflow["provider_runtime_id"], "rhi");
+    assert_eq!(workflow["binding_model"], "out_of_process_worker");
+    assert_eq!(workflow["state"], "not_configured");
+    let inference = binding_by_capability(&json, "inference.hyf_stdio");
+    assert_eq!(inference["provider_runtime_id"], "hyf");
+    assert_eq!(inference["binding_model"], "stdio_service");
+    assert_eq!(inference["state"], "disabled");
+    assert_eq!(inference["source"], "hyf disabled by config");
 }
 
 #[test]
@@ -531,6 +565,91 @@ fn config_show_reads_workspace_rpc_config() {
     let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
     assert_eq!(json["rpc"]["url"], "https://rpc.workspace.test/jsonrpc");
     assert_eq!(json["rpc"]["bridge_auth_configured"], false);
+}
+
+#[test]
+fn config_show_reports_explicit_capability_bindings() {
+    let dir = tempdir().expect("tempdir");
+    let workspace_config_dir = dir.path().join(".radroots");
+    let user_config_dir = config_root(dir.path()).join("apps/cli");
+    fs::create_dir_all(&workspace_config_dir).expect("workspace config dir");
+    fs::create_dir_all(&user_config_dir).expect("user config dir");
+    fs::write(
+        workspace_config_dir.join("config.toml"),
+        r#"
+[[capability_binding]]
+capability = "write_plane.trade_jsonrpc"
+provider = "radrootsd"
+target_kind = "explicit_endpoint"
+target = "https://rpc.workspace.test/jsonrpc"
+
+[[capability_binding]]
+capability = "inference.hyf_stdio"
+provider = "hyf"
+target_kind = "managed_instance"
+target = "workspace-hyf"
+"#,
+    )
+    .expect("write workspace config");
+    fs::write(
+        user_config_dir.join("config.toml"),
+        r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "acct_demo"
+signer_session_ref = "session_demo"
+
+[[capability_binding]]
+capability = "workflow.trade"
+provider = "rhi"
+target_kind = "managed_instance"
+target = "workflow-default"
+
+[[capability_binding]]
+capability = "inference.hyf_stdio"
+provider = "hyf"
+target_kind = "explicit_endpoint"
+target = "bin/hyfd-user"
+"#,
+    )
+    .expect("write user config");
+
+    let output = runtime_show_command_in(dir.path())
+        .args(["--json", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+
+    let signer = binding_by_capability(&json, "signer.remote_nip46");
+    assert_eq!(signer["state"], "configured");
+    assert_eq!(signer["source"], "user config [[capability_binding]]");
+    assert_eq!(signer["target_kind"], "managed_instance");
+    assert_eq!(signer["target"], "default");
+    assert_eq!(signer["managed_account_ref"], "acct_demo");
+    assert_eq!(signer["signer_session_ref"], "session_demo");
+
+    let write = binding_by_capability(&json, "write_plane.trade_jsonrpc");
+    assert_eq!(write["state"], "configured");
+    assert_eq!(write["source"], "workspace config [[capability_binding]]");
+    assert_eq!(write["target_kind"], "explicit_endpoint");
+    assert_eq!(write["target"], "https://rpc.workspace.test/jsonrpc");
+
+    let workflow = binding_by_capability(&json, "workflow.trade");
+    assert_eq!(workflow["state"], "configured");
+    assert_eq!(workflow["source"], "user config [[capability_binding]]");
+    assert_eq!(workflow["target_kind"], "managed_instance");
+    assert_eq!(workflow["target"], "workflow-default");
+
+    let inference = binding_by_capability(&json, "inference.hyf_stdio");
+    assert_eq!(inference["state"], "configured");
+    assert_eq!(inference["source"], "user config [[capability_binding]]");
+    assert_eq!(inference["target_kind"], "explicit_endpoint");
+    assert_eq!(inference["target"], "bin/hyfd-user");
 }
 
 #[test]

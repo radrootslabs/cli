@@ -60,6 +60,7 @@ pub fn report(
 
     checks.push(hyf_check(&resolve_hyf_status(&config.hyf)));
     checks.push(logging_check(config, logging));
+    checks.push(binding_check(config));
 
     let severity = checks
         .iter()
@@ -313,6 +314,32 @@ fn logging_check(config: &RuntimeConfig, logging: &LoggingState) -> EvaluatedChe
             name: "logging".to_owned(),
             status: "ok".to_owned(),
             detail,
+        },
+        action: None,
+    }
+}
+
+fn binding_check(config: &RuntimeConfig) -> EvaluatedCheck {
+    let inspections = config.inspect_capability_bindings();
+    let mut configured = 0usize;
+    let mut disabled = 0usize;
+    let mut not_configured = 0usize;
+    for inspection in inspections {
+        match inspection.state.as_str() {
+            "configured" => configured += 1,
+            "disabled" => disabled += 1,
+            _ => not_configured += 1,
+        }
+    }
+
+    EvaluatedCheck {
+        severity: DoctorSeverity::Ok,
+        view: DoctorCheckView {
+            name: "bindings".to_owned(),
+            status: "ok".to_owned(),
+            detail: format!(
+                "{configured} configured · {disabled} disabled · {not_configured} not configured"
+            ),
         },
         action: None,
     }

@@ -120,6 +120,7 @@ pub struct ConfigShowView {
     pub myc: MycRuntimeView,
     pub hyf: HyfRuntimeView,
     pub rpc: RpcRuntimeView,
+    pub capability_bindings: Vec<CapabilityBindingRuntimeView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -254,6 +255,23 @@ pub struct HyfRuntimeView {
 pub struct RpcRuntimeView {
     pub url: String,
     pub bridge_auth_configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CapabilityBindingRuntimeView {
+    pub capability_id: String,
+    pub provider_runtime_id: String,
+    pub binding_model: String,
+    pub state: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_account_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

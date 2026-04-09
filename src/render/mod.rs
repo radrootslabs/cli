@@ -634,8 +634,46 @@ fn render_config_show(
             ),
         ],
     )?;
+    writeln!(stdout)?;
+    writeln!(stdout, "capability bindings")?;
+    let table = Table {
+        headers: &["capability", "provider", "state", "target"],
+        rows: view
+            .capability_bindings
+            .iter()
+            .map(|binding| {
+                vec![
+                    binding.capability_id.clone(),
+                    binding.provider_runtime_id.clone(),
+                    binding.state.clone(),
+                    format_capability_binding_target(binding),
+                ]
+            })
+            .collect(),
+    };
+    render_table(stdout, &table)?;
     writeln!(stdout, "source: {}", view.source)?;
     Ok(())
+}
+
+fn format_capability_binding_target(
+    binding: &crate::domain::runtime::CapabilityBindingRuntimeView,
+) -> String {
+    let Some(target) = binding.target.as_ref() else {
+        return String::new();
+    };
+
+    let mut rendered = match binding.target_kind.as_deref() {
+        Some(kind) => format!("{kind} {target}"),
+        None => target.clone(),
+    };
+    if let Some(account_ref) = &binding.managed_account_ref {
+        rendered.push_str(format!(" · account {account_ref}").as_str());
+    }
+    if let Some(session_ref) = &binding.signer_session_ref {
+        rendered.push_str(format!(" · session {session_ref}").as_str());
+    }
+    rendered
 }
 
 fn render_doctor(stdout: &mut dyn Write, view: &DoctorView) -> Result<(), RuntimeError> {
@@ -2241,6 +2279,7 @@ mod tests {
                     url: "http://127.0.0.1:7070".to_owned(),
                     bridge_bearer_token: None,
                 },
+                capability_bindings: Vec::new(),
             },
             &LoggingState {
                 initialized: true,
@@ -2266,6 +2305,7 @@ mod tests {
         assert_eq!(view.relay.publish_policy, "any");
         assert!(!view.hyf.enabled);
         assert_eq!(view.hyf.executable, "hyfd");
+        assert_eq!(view.capability_bindings.len(), 4);
         assert_eq!(
             view.account.secret_backend.contract_default_backend,
             "host_vault"
@@ -2389,6 +2429,7 @@ mod tests {
                         url: "http://127.0.0.1:7070".to_owned(),
                         bridge_bearer_token: None,
                     },
+                    capability_bindings: Vec::new(),
                 },
                 &LoggingState {
                     initialized: true,
