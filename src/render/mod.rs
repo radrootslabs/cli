@@ -774,7 +774,12 @@ fn render_runtime_action(
 ) -> Result<(), RuntimeError> {
     write_context(
         stdout,
-        format!("runtime · {} · {}", view.runtime_id, view.action.replace('_', " ")).as_str(),
+        format!(
+            "runtime · {} · {}",
+            view.runtime_id,
+            view.action.replace('_', " ")
+        )
+        .as_str(),
     )?;
     render_pairs(
         stdout,
@@ -800,7 +805,10 @@ fn render_runtime_config_show(
     stdout: &mut dyn Write,
     view: &RuntimeManagedConfigView,
 ) -> Result<(), RuntimeError> {
-    write_context(stdout, format!("runtime · {} · config", view.runtime_id).as_str())?;
+    write_context(
+        stdout,
+        format!("runtime · {} · config", view.runtime_id).as_str(),
+    )?;
     let mut rows = vec![
         ("runtime", view.runtime_id.as_str()),
         ("instance", view.instance_id.as_str()),
@@ -828,10 +836,7 @@ fn render_runtime_config_show(
         ));
     }
     if let Some(requires_signer_provider) = view.requires_signer_provider {
-        rows.push((
-            "requires signer provider",
-            yes_no(requires_signer_provider),
-        ));
+        rows.push(("requires signer provider", yes_no(requires_signer_provider)));
     }
     render_pairs(stdout, "runtime config", rows.as_slice())?;
     writeln!(stdout, "detail: {}", view.detail)?;
@@ -839,11 +844,11 @@ fn render_runtime_config_show(
     Ok(())
 }
 
-fn render_runtime_logs(
-    stdout: &mut dyn Write,
-    view: &RuntimeLogsView,
-) -> Result<(), RuntimeError> {
-    write_context(stdout, format!("runtime · {} · logs", view.runtime_id).as_str())?;
+fn render_runtime_logs(stdout: &mut dyn Write, view: &RuntimeLogsView) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        format!("runtime · {} · logs", view.runtime_id).as_str(),
+    )?;
     let mut rows = vec![
         ("runtime", view.runtime_id.as_str()),
         ("instance", view.instance_id.as_str()),
@@ -869,7 +874,10 @@ fn render_runtime_status(
     stdout: &mut dyn Write,
     view: &RuntimeStatusView,
 ) -> Result<(), RuntimeError> {
-    write_context(stdout, format!("runtime · {} · status", view.runtime_id).as_str())?;
+    write_context(
+        stdout,
+        format!("runtime · {} · status", view.runtime_id).as_str(),
+    )?;
     let mut rows = vec![
         ("runtime", view.runtime_id.as_str()),
         ("instance", view.instance_id.as_str()),
@@ -947,7 +955,11 @@ fn render_runtime_status(
         render_pairs(stdout, "instance record", record_rows.as_slice())?;
     }
     if !view.lifecycle_actions.is_empty() {
-        writeln!(stdout, "lifecycle actions: {}", view.lifecycle_actions.join(", "))?;
+        writeln!(
+            stdout,
+            "lifecycle actions: {}",
+            view.lifecycle_actions.join(", ")
+        )?;
     }
     writeln!(stdout, "source: {}", view.source)?;
     Ok(())

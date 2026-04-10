@@ -1,8 +1,9 @@
+use crate::cli::{RuntimeConfigSetArgs, RuntimeTargetArgs};
 use crate::domain::runtime::{
-    AccountRuntimeView, AccountSecretRuntimeView, CapabilityBindingRuntimeView,
-    CommandOutput, CommandView, ConfigFilesRuntimeView, ConfigShowView, HyfProviderRuntimeView,
-    HyfRuntimeView, LegacyPathRuntimeView, LocalRuntimeView, LoggingRuntimeView,
-    MigrationRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
+    AccountRuntimeView, AccountSecretRuntimeView, CapabilityBindingRuntimeView, CommandOutput,
+    CommandView, ConfigFilesRuntimeView, ConfigShowView, HyfProviderRuntimeView, HyfRuntimeView,
+    LegacyPathRuntimeView, LocalRuntimeView, LoggingRuntimeView, MigrationRuntimeView,
+    MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
     ResolvedProviderRuntimeView, RpcRuntimeView, SignerRuntimeView, WorkflowRuntimeView,
     WritePlaneRuntimeView,
 };
@@ -17,7 +18,6 @@ use crate::runtime::provider::{
     resolve_capability_providers, resolve_hyf_provider, resolve_workflow_provider,
     resolve_write_plane_provider,
 };
-use crate::cli::{RuntimeConfigSetArgs, RuntimeTargetArgs};
 
 pub fn show(
     config: &RuntimeConfig,
@@ -300,8 +300,7 @@ pub fn config_show(
     _logging: &LoggingState,
     args: &RuntimeTargetArgs,
 ) -> Result<CommandOutput, RuntimeError> {
-    let inspection =
-        inspect_config_show(config, args.runtime.as_str(), args.instance.as_deref())?;
+    let inspection = inspect_config_show(config, args.runtime.as_str(), args.instance.as_deref())?;
     Ok(command_output(
         inspection.availability,
         CommandView::RuntimeConfigShow(inspection.view),

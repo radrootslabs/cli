@@ -513,8 +513,8 @@ mod tests {
     use super::{
         AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, JobWatchArgs, ListingCommand,
         LocalCommand, LocalExportFormatArg, MycCommand, NetCommand, OrderCommand, OrderWatchArgs,
-        RelayCommand, RpcCommand, RuntimeCommand, RuntimeConfigCommand, SignerCommand,
-        SyncCommand, SyncWatchArgs,
+        RelayCommand, RpcCommand, RuntimeCommand, RuntimeConfigCommand, SignerCommand, SyncCommand,
+        SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     use clap::Parser;
@@ -922,13 +922,8 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
-        let runtime_config_show = CliArgs::parse_from([
-            "radroots",
-            "runtime",
-            "config",
-            "show",
-            "radrootsd",
-        ]);
+        let runtime_config_show =
+            CliArgs::parse_from(["radroots", "runtime", "config", "show", "radrootsd"]);
         match runtime_config_show.command {
             Command::Runtime(args) => match args.command {
                 RuntimeCommand::Config(runtime_config) => match runtime_config.command {

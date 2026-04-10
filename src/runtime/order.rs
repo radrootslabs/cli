@@ -419,11 +419,14 @@ pub fn submit(
         });
     }
 
-    let signer_authority =
-        match resolve_actor_write_authority(config, "buyer", loaded.document.order.buyer_pubkey.as_str()) {
-            Ok(authority) => authority,
-            Err(error) => return Ok(order_binding_error_view(config, &loaded, args, error)),
-        };
+    let signer_authority = match resolve_actor_write_authority(
+        config,
+        "buyer",
+        loaded.document.order.buyer_pubkey.as_str(),
+    ) {
+        Ok(authority) => authority,
+        Err(error) => return Ok(order_binding_error_view(config, &loaded, args, error)),
+    };
 
     let signer_session_id = match daemon::resolve_signer_session_id(
         config,

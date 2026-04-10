@@ -707,7 +707,7 @@ fn listing_publish_uses_myc_binding_before_resolving_daemon_signer_session() {
                 &public_identity,
                 "conn_listing_binding_01",
             )
-                .to_string(),
+            .to_string(),
         )
         .as_str(),
     );
@@ -1015,14 +1015,16 @@ fn listing_publish_rejects_daemon_session_with_mismatched_myc_authority() {
     let server = MockRpcServer::start(move |body, _auth_header| {
         recorded.lock().expect("recorded").push(body.clone());
         match body["method"].as_str().unwrap_or_default() {
-            "nip46.session.list" => MockRpcResponse::success(json!([sample_session_with_authority(
-                "sess_mismatch_01",
-                seller_pubkey.as_str(),
-                &["sign_event:30402"],
-                true,
-                Some("acct_wrong"),
-                Some("conn_listing_binding_03"),
-            )])),
+            "nip46.session.list" => {
+                MockRpcResponse::success(json!([sample_session_with_authority(
+                    "sess_mismatch_01",
+                    seller_pubkey.as_str(),
+                    &["sign_event:30402"],
+                    true,
+                    Some("acct_wrong"),
+                    Some("conn_listing_binding_03"),
+                )]))
+            }
             _ => MockRpcResponse::rpc_error(-32601, "unexpected rpc method"),
         }
     });
@@ -1605,7 +1607,14 @@ fn sample_session(
     permissions: &[&str],
     authorized: bool,
 ) -> Value {
-    sample_session_with_authority(session_id, signer_pubkey, permissions, authorized, None, None)
+    sample_session_with_authority(
+        session_id,
+        signer_pubkey,
+        permissions,
+        authorized,
+        None,
+        None,
+    )
 }
 
 fn sample_session_with_authority(

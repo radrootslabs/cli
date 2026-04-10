@@ -803,14 +803,16 @@ fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
                 auth_header,
             });
         match body["method"].as_str().unwrap_or_default() {
-            "nip46.session.list" => MockRpcResponse::success(json!([sample_session_with_authority(
-                "sess_order_02",
-                buyer_pubkey.as_str(),
-                &["sign_event"],
-                true,
-                Some(session_account_id.as_str()),
-                Some("conn_order_binding_01")
-            )])),
+            "nip46.session.list" => {
+                MockRpcResponse::success(json!([sample_session_with_authority(
+                    "sess_order_02",
+                    buyer_pubkey.as_str(),
+                    &["sign_event"],
+                    true,
+                    Some(session_account_id.as_str()),
+                    Some("conn_order_binding_01")
+                )]))
+            }
             "bridge.order.request" => MockRpcResponse::success(serde_json::json!({
                 "deduplicated": false,
                 "job": sample_bridge_job("job_order_02", "accepted", false, "sess_order_02"),
@@ -1178,7 +1180,14 @@ fn sample_session(
     permissions: &[&str],
     authorized: bool,
 ) -> Value {
-    sample_session_with_authority(session_id, signer_pubkey, permissions, authorized, None, None)
+    sample_session_with_authority(
+        session_id,
+        signer_pubkey,
+        permissions,
+        authorized,
+        None,
+        None,
+    )
 }
 
 fn sample_session_with_authority(

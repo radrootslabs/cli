@@ -728,22 +728,13 @@ fn config_show_uses_managed_default_write_plane_when_local_instance_exists() {
     let registry_path = runtime_manager_registry_path(dir.path());
     fs::create_dir_all(registry_path.parent().expect("registry parent")).expect("registry dir");
     let managed_config_path = dir.path().join("managed-radrootsd.toml");
+    let bridge_token_path = dir.path().join("managed-bridge-token.txt");
     fs::write(
         &managed_config_path,
-        r#"[metadata]
-name = "managed-radrootsd"
-
-[config]
-
-[config.rpc]
-addr = "127.0.0.1:7444"
-
-[config.bridge]
-enabled = true
-bearer_token = "managed-bridge-token"
-"#,
+        "[metadata]\nname = \"managed-radrootsd\"\n",
     )
     .expect("write managed config");
+    fs::write(&bridge_token_path, "managed-bridge-token").expect("write managed token");
     fs::write(
         &registry_path,
         format!(
@@ -760,8 +751,11 @@ config_path = "{}"
 logs_path = "/tmp/radrootsd/logs"
 run_path = "/tmp/radrootsd/run"
 installed_version = "0.1.0"
+health_endpoint = "http://127.0.0.1:7444"
+secret_material_ref = "{}"
 "#,
-            managed_config_path.display()
+            managed_config_path.display(),
+            bridge_token_path.display()
         ),
     )
     .expect("write managed registry");

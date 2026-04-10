@@ -1,8 +1,6 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use radroots_runtime_manager::{ManagedRuntimeInstallState, load_registry};
-use serde::Deserialize;
+use radroots_runtime_manager::{ManagedRuntimeInstallState, load_registry, read_secret_file};
 use url::Url;
 
 use crate::runtime::config::{
@@ -392,7 +390,44 @@ fn resolve_managed_write_plane_instance(
             registry_path.display()
         ));
     }
-    load_managed_radrootsd_target(record.config_path.as_path(), instance_id)
+    let Some(health_endpoint) = record
+        .health_endpoint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(format!(
+            "managed radrootsd instance `{instance_id}` is missing health_endpoint in {}",
+            registry_path.display()
+        ));
+    };
+    let url = validate_write_plane_url(health_endpoint)?;
+    let Some(secret_material_ref) = record
+        .secret_material_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(format!(
+            "managed radrootsd instance `{instance_id}` is missing secret_material_ref in {}",
+            registry_path.display()
+        ));
+    };
+    let bridge_bearer_token = read_secret_file(secret_material_ref).map_err(|err| {
+        format!(
+            "read managed radrootsd secret material for instance `{instance_id}` at {secret_material_ref}: {err}"
+        )
+    })?;
+    let bridge_bearer_token = bridge_bearer_token.trim().to_owned();
+    if bridge_bearer_token.is_empty() {
+        return Err(format!(
+            "managed radrootsd instance `{instance_id}` has empty secret material at {secret_material_ref}"
+        ));
+    }
+    Ok(ResolvedWritePlaneTarget {
+        url,
+        bridge_bearer_token,
+    })
 }
 
 fn runtime_manager_registry_path(config: &RuntimeConfig) -> Result<PathBuf, String> {
@@ -406,105 +441,6 @@ fn runtime_manager_registry_path(config: &RuntimeConfig) -> Result<PathBuf, Stri
         return Err("resolve cli config root for runtime-manager lookup".to_owned());
     };
     Ok(config_root.join("shared/runtime-manager/instances.toml"))
-}
-
-#[derive(Debug, Deserialize)]
-struct ManagedRadrootsdSettingsFile {
-    config: ManagedRadrootsdConfigFile,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct ManagedRadrootsdConfigFile {
-    #[serde(default)]
-    rpc: ManagedRadrootsdRpcConfig,
-    #[serde(default)]
-    rpc_addr: Option<String>,
-    #[serde(default)]
-    bridge: ManagedRadrootsdBridgeConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct ManagedRadrootsdRpcConfig {
-    #[serde(default = "default_managed_radrootsd_rpc_addr")]
-    addr: String,
-}
-
-impl Default for ManagedRadrootsdRpcConfig {
-    fn default() -> Self {
-        Self {
-            addr: default_managed_radrootsd_rpc_addr(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct ManagedRadrootsdBridgeConfig {
-    #[serde(default)]
-    enabled: bool,
-    #[serde(default)]
-    bearer_token: Option<String>,
-}
-
-fn default_managed_radrootsd_rpc_addr() -> String {
-    "127.0.0.1:7070".to_owned()
-}
-
-fn load_managed_radrootsd_target(
-    config_path: &Path,
-    instance_id: &str,
-) -> Result<ResolvedWritePlaneTarget, String> {
-    let raw = fs::read_to_string(config_path).map_err(|err| {
-        format!(
-            "read managed radrootsd config for instance `{instance_id}` at {}: {err}",
-            config_path.display()
-        )
-    })?;
-    let settings: ManagedRadrootsdSettingsFile = toml::from_str(raw.as_str()).map_err(|err| {
-        format!(
-            "parse managed radrootsd config for instance `{instance_id}` at {}: {err}",
-            config_path.display()
-        )
-    })?;
-    if !settings.config.bridge.enabled {
-        return Err(format!(
-            "managed radrootsd instance `{instance_id}` has bridge ingress disabled in {}",
-            config_path.display()
-        ));
-    }
-    let Some(bridge_bearer_token) = settings
-        .config
-        .bridge
-        .bearer_token
-        .as_deref()
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(ToOwned::to_owned)
-    else {
-        return Err(format!(
-            "managed radrootsd instance `{instance_id}` is missing bridge bearer_token in {}",
-            config_path.display()
-        ));
-    };
-    let rpc_addr = settings
-        .config
-        .rpc_addr
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(settings.config.rpc.addr.as_str());
-    let url = rpc_addr_to_url(rpc_addr)?;
-    Ok(ResolvedWritePlaneTarget {
-        url,
-        bridge_bearer_token,
-    })
-}
-
-fn rpc_addr_to_url(value: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    if trimmed.contains("://") {
-        return validate_write_plane_url(trimmed);
-    }
-    validate_write_plane_url(format!("http://{trimmed}").as_str())
 }
 
 fn validate_write_plane_url(value: &str) -> Result<String, String> {
@@ -586,7 +522,7 @@ fn hyf_executable(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
@@ -747,11 +683,13 @@ mod tests {
         fs::create_dir_all(registry_path.parent().expect("registry parent"))
             .expect("create registry parent");
         let managed_config_path = dir.path().join("radrootsd-config.toml");
-        write_managed_radrootsd_config(
-            managed_config_path.as_path(),
-            "127.0.0.1:7444",
-            "managed-bridge-token",
-        );
+        let bridge_token_path = dir.path().join("bridge-token.txt");
+        fs::write(
+            &managed_config_path,
+            "[metadata]\nname = \"managed-radrootsd\"\n",
+        )
+        .expect("write managed config");
+        fs::write(&bridge_token_path, "managed-bridge-token").expect("write token");
         fs::write(
             &registry_path,
             format!(
@@ -768,8 +706,11 @@ config_path = "{}"
 logs_path = "/tmp/logs"
 run_path = "/tmp/run"
 installed_version = "0.1.0"
+health_endpoint = "http://127.0.0.1:7444"
+secret_material_ref = "{}"
 "#,
-                managed_config_path.display()
+                managed_config_path.display(),
+                bridge_token_path.display()
             ),
         )
         .expect("write registry");
@@ -828,26 +769,5 @@ installed_version = "0.1.0"
         assert_eq!(providers[0].capability_id, "write_plane.trade_jsonrpc");
         assert_eq!(providers[1].capability_id, "workflow.trade");
         assert_eq!(providers[2].capability_id, "inference.hyf_stdio");
-    }
-
-    fn write_managed_radrootsd_config(path: &Path, rpc_addr: &str, bearer_token: &str) {
-        fs::write(
-            path,
-            format!(
-                r#"[metadata]
-name = "managed-radrootsd"
-
-[config]
-
-[config.rpc]
-addr = "{rpc_addr}"
-
-[config.bridge]
-enabled = true
-bearer_token = "{bearer_token}"
-"#
-            ),
-        )
-        .expect("write managed radrootsd config");
     }
 }
