@@ -59,13 +59,15 @@ fn doctor_reports_unconfigured_local_bootstrap_state() {
     assert_eq!(json["checks"][2]["status"], "warn");
     assert_eq!(json["checks"][3]["name"], "signer");
     assert_eq!(json["checks"][3]["status"], "warn");
+    assert_eq!(json["checks"][5]["name"], "workflow");
+    assert_eq!(json["checks"][5]["status"], "warn");
     assert_eq!(json["source"], "local diagnostics");
     assert_eq!(json["actions"][0], "radroots account new");
     assert_eq!(json["actions"][1], "radroots relay ls");
 }
 
 #[test]
-fn doctor_reports_ready_local_bootstrap_state() {
+fn doctor_reports_warn_for_ready_local_bootstrap_without_workflow_provider() {
     let dir = tempdir().expect("tempdir");
     let init = doctor_command_in(dir.path())
         .args(["--json", "account", "new"])
@@ -78,18 +80,20 @@ fn doctor_reports_ready_local_bootstrap_state() {
         .output()
         .expect("run doctor");
 
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(3));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
-    assert_eq!(json["ok"], true);
-    assert_eq!(json["state"], "ok");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["state"], "warn");
     assert_eq!(json["checks"][1]["name"], "account");
     assert_eq!(json["checks"][1]["status"], "ok");
     assert_eq!(json["checks"][2]["name"], "relays");
     assert_eq!(json["checks"][2]["status"], "ok");
     assert_eq!(json["checks"][3]["name"], "signer");
     assert_eq!(json["checks"][3]["status"], "ok");
-    assert_eq!(json["actions"], Value::Null);
+    assert_eq!(json["checks"][5]["name"], "workflow");
+    assert_eq!(json["checks"][5]["status"], "warn");
+    assert!(json["actions"].is_null());
 }
 
 #[test]
@@ -116,5 +120,7 @@ fn doctor_reports_external_failure_for_missing_myc() {
     assert_eq!(json["checks"][3]["status"], "fail");
     assert_eq!(json["checks"][4]["name"], "myc");
     assert_eq!(json["checks"][4]["status"], "fail");
+    assert_eq!(json["checks"][6]["name"], "workflow");
+    assert_eq!(json["checks"][6]["status"], "warn");
     assert_eq!(json["source"], "local diagnostics + myc status command");
 }

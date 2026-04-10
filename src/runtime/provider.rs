@@ -77,15 +77,20 @@ pub struct WorkflowProviderView {
 
 impl WorkflowProviderView {
     pub fn detail(&self) -> String {
-        match (self.target_kind.as_deref(), self.target.as_deref()) {
-            (Some(target_kind), Some(target)) if self.state == "configured" => {
+        match (self.state.as_str(), self.target_kind.as_deref(), self.target.as_deref()) {
+            ("not_configured", _, _) => {
+                "optional workflow provider is not configured; rhi remains status-only in this wave"
+                    .to_owned()
+            }
+            ("unsupported", Some(target_kind), Some(target)) => {
                 format!(
-                    "{} workflow provider configured via {} {}",
-                    self.provider_runtime_id, target_kind, target
+                    "configured workflow binding via {} {} is not executable in this wave; rhi remains status-only",
+                    target_kind, target
                 )
             }
-            _ if self.state == "configured" => {
-                format!("{} workflow provider configured", self.provider_runtime_id)
+            ("unsupported", _, _) => {
+                "configured workflow binding is not executable in this wave; rhi remains status-only"
+                    .to_owned()
             }
             _ => self.source.clone(),
         }
@@ -133,12 +138,25 @@ pub fn resolve_actor_write_plane_target(
 
 pub fn resolve_workflow_provider(config: &RuntimeConfig) -> WorkflowProviderView {
     let binding = inspect_binding(config, WORKFLOW_TRADE_CAPABILITY);
-    let provenance = binding_provenance(&binding).as_str().to_owned();
+    let (state, provenance) = match binding.state {
+        CapabilityBindingInspectionState::Configured => (
+            "unsupported".to_owned(),
+            ProviderProvenance::ExplicitBinding.as_str().to_owned(),
+        ),
+        CapabilityBindingInspectionState::Disabled => (
+            "disabled".to_owned(),
+            ProviderProvenance::Disabled.as_str().to_owned(),
+        ),
+        CapabilityBindingInspectionState::NotConfigured => (
+            "not_configured".to_owned(),
+            ProviderProvenance::Unavailable.as_str().to_owned(),
+        ),
+    };
 
     WorkflowProviderView {
         provider_runtime_id: binding.provider_runtime_id,
         binding_model: binding.binding_model,
-        state: binding.state.as_str().to_owned(),
+        state,
         provenance,
         source: binding.source,
         target_kind: binding.target_kind,
@@ -642,6 +660,7 @@ mod tests {
             signer_session_ref: None,
         };
         let view = resolve_workflow_provider(&sample_config(vec![binding], false));
+        assert_eq!(view.state, "unsupported");
         assert_eq!(
             view.provenance,
             ProviderProvenance::ExplicitBinding.as_str()

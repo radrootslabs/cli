@@ -35,6 +35,8 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_ACCOUNT_SECRET_BACKEND",
         "RADROOTS_ACCOUNT_SECRET_FALLBACK",
         "RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE",
+        "RADROOTS_HYF_ENABLED",
+        "RADROOTS_HYF_EXECUTABLE",
         "RADROOTS_IDENTITY_PATH",
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
@@ -179,6 +181,110 @@ fn find_reports_empty_results_without_failing() {
     );
 }
 
+#[test]
+fn find_uses_hyf_query_rewrite_when_available() {
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    seed_trade_product(
+        dir.path(),
+        "00000000-0000-0000-0000-000000000104",
+        "fresh-eggs",
+        "protein",
+        "Fresh Eggs",
+        "Pasture-raised eggs",
+        36,
+        24,
+        Some("Marshall"),
+    );
+
+    let hyfd = write_fake_hyfd(
+        dir.path(),
+        r#"{"version":1,"request_id":"cli-doctor-hyf-status","trace_id":"cli-doctor-hyf-status","ok":true,"output":{"build_identity":{"protocol_version":1},"enabled_execution_modes":{"deterministic":true}}}"#,
+        r#"{"version":1,"request_id":"cli-find-query-rewrite","trace_id":"cli-find-query-rewrite","ok":true,"output":{"original_text":"henhouse","normalized_text":"henhouse","rewritten_text":"eggs","query_terms":["eggs"],"normalization_signals":["query_rewrite"],"ranking_hints":["local_first"],"extracted_filters":{"local_intent":false,"fulfillment":"any","time_window":"any"}}}"#,
+    );
+
+    let json_output = cli_command_in(dir.path())
+        .env("RADROOTS_HYF_ENABLED", "true")
+        .env("RADROOTS_HYF_EXECUTABLE", &hyfd)
+        .args(["--json", "find", "henhouse"])
+        .output()
+        .expect("run hyf json find");
+    assert!(json_output.status.success());
+    let json: Value = serde_json::from_slice(json_output.stdout.as_slice()).expect("json");
+    assert_eq!(json["state"], "ready");
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["query"], "henhouse");
+    assert_eq!(json["hyf"]["state"], "query_rewrite_applied");
+    assert_eq!(json["hyf"]["rewritten_query"], "eggs");
+    assert_eq!(json["hyf"]["query_terms"], json!(["eggs"]));
+    assert_eq!(json["results"][0]["title"], "Fresh Eggs");
+    assert_eq!(json["results"][0]["hyf"]["rewritten_query"], "eggs");
+
+    let human_output = cli_command_in(dir.path())
+        .env("RADROOTS_HYF_ENABLED", "true")
+        .env("RADROOTS_HYF_EXECUTABLE", &hyfd)
+        .args(["find", "henhouse"])
+        .output()
+        .expect("run hyf human find");
+    assert!(human_output.status.success());
+    let stdout = String::from_utf8(human_output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("hyf: query rewritten to eggs"));
+
+    let ndjson_output = cli_command_in(dir.path())
+        .env("RADROOTS_HYF_ENABLED", "true")
+        .env("RADROOTS_HYF_EXECUTABLE", &hyfd)
+        .args(["--ndjson", "find", "henhouse"])
+        .output()
+        .expect("run hyf ndjson find");
+    assert!(ndjson_output.status.success());
+    let stdout = String::from_utf8(ndjson_output.stdout).expect("utf8 stdout");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].contains("\"title\":\"Fresh Eggs\""));
+    assert!(lines[0].contains("\"rewritten_query\":\"eggs\""));
+}
+
+#[test]
+fn find_falls_back_cleanly_when_hyf_is_unavailable() {
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    seed_trade_product(
+        dir.path(),
+        "00000000-0000-0000-0000-000000000105",
+        "fresh-eggs",
+        "protein",
+        "Fresh Eggs",
+        "Pasture-raised eggs",
+        36,
+        24,
+        Some("Marshall"),
+    );
+
+    let output = cli_command_in(dir.path())
+        .env("RADROOTS_HYF_ENABLED", "true")
+        .env("RADROOTS_HYF_EXECUTABLE", dir.path().join("missing-hyfd"))
+        .args(["--json", "find", "eggs"])
+        .output()
+        .expect("run fallback find");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json");
+    assert_eq!(json["state"], "ready");
+    assert_eq!(json["count"], 1);
+    assert!(json["hyf"].is_null());
+    assert_eq!(json["results"][0]["title"], "Fresh Eggs");
+}
+
 fn seed_trade_product(
     workdir: &Path,
     product_id: &str,
@@ -264,4 +370,24 @@ fn seed_trade_product(
             )
             .expect("insert trade product location");
     }
+}
+
+fn write_fake_hyfd(
+    workdir: &Path,
+    status_response: &str,
+    rewrite_response: &str,
+) -> std::path::PathBuf {
+    let path = workdir.join("fake-hyfd");
+    let script = format!(
+        "#!/bin/sh\nread -r request || exit 64\ncase \"$request\" in\n  *'\"capability\":\"sys.status\"'*)\n    cat <<'JSON'\n{status_response}\nJSON\n    ;;\n  *'\"capability\":\"query_rewrite\"'*)\n    cat <<'JSON'\n{rewrite_response}\nJSON\n    ;;\n  *)\n    cat <<'JSON'\n{{\"version\":1,\"request_id\":\"unexpected\",\"ok\":false,\"error\":{{\"code\":\"unsupported_capability\",\"message\":\"unexpected request\"}}}}\nJSON\n    ;;\nesac\n"
+    );
+    std::fs::write(&path, script).expect("write fake hyfd");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).expect("chmod fake hyfd");
+    }
+    path
 }

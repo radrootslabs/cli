@@ -1023,6 +1023,9 @@ fn render_find(stdout: &mut dyn Write, view: &FindView) -> Result<(), RuntimeErr
     };
     write_context(stdout, context.as_str())?;
     writeln!(stdout, "query: {}", view.query)?;
+    if let Some(hyf) = &view.hyf {
+        writeln!(stdout, "hyf: query rewritten to {}", hyf.rewritten_query)?;
+    }
 
     match view.state.as_str() {
         "unconfigured" => {

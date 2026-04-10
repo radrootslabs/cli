@@ -126,15 +126,8 @@ impl HyfClient {
         TRequest: Serialize,
         TResponse: for<'de> Deserialize<'de>,
     {
-        let request = serde_json::to_string(&HyfRequestEnvelope {
-            version: HYF_PROTOCOL_VERSION,
-            request_id,
-            trace_id,
-            capability,
-            context,
-            input,
-        })
-        .map_err(HyfClientError::SerializeRequest)?;
+        let request = serialize_request(request_id, trace_id, capability, context, input)
+            .map_err(HyfClientError::SerializeRequest)?;
 
         let output = self.run_request(request.as_str())?;
         let stdout = String::from_utf8(output.stdout).map_err(HyfClientError::InvalidUtf8)?;
@@ -190,6 +183,23 @@ impl HyfClient {
         }
         Ok(output)
     }
+}
+
+fn serialize_request<TRequest: Serialize>(
+    request_id: &str,
+    trace_id: Option<&str>,
+    capability: &str,
+    context: Option<&HyfRequestContext>,
+    input: &TRequest,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&HyfRequestEnvelope {
+        version: HYF_PROTOCOL_VERSION,
+        request_id,
+        trace_id,
+        capability,
+        context,
+        input,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -500,6 +510,16 @@ pub fn resolve_runtime_client(config: &RuntimeConfig) -> Result<HyfClient, HyfSt
     }
 }
 
+pub fn resolve_ready_runtime_client(config: &RuntimeConfig) -> Result<HyfClient, HyfStatusView> {
+    let client = resolve_runtime_client(config)?;
+    let status = resolve_status_for_client(&client);
+    if status.state == "ready" {
+        Ok(client)
+    } else {
+        Err(status)
+    }
+}
+
 pub fn resolve_runtime_status(config: &RuntimeConfig) -> HyfStatusView {
     match resolve_runtime_client(config) {
         Ok(client) => resolve_status_for_client(&client),
@@ -765,10 +785,12 @@ fn format_nonzero_exit(request_label: &str, status: Option<i32>, stderr: &str) -
 #[cfg(test)]
 mod tests {
     use super::{
-        HYF_PROTOCOL_VERSION, HyfClient, HyfExplainResultRequest, HyfQueryRewriteRequest,
-        HyfRequestContext, HyfSemanticCandidate, HyfSemanticRankRequest, resolve_status,
+        HYF_PROTOCOL_VERSION, HyfClient, HyfEmptyInput, HyfExplainResultRequest,
+        HyfQueryRewriteRequest, HyfRequestContext, HyfSemanticCandidate, HyfSemanticRankRequest,
+        resolve_status,
     };
     use crate::runtime::config::HyfConfig;
+    use serde::Serialize;
     use serde_json::Value;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -838,15 +860,21 @@ mod tests {
     fn capabilities_request_uses_typed_client() {
         let _guard = hyf_test_lock().lock().expect("hyf test lock");
         let dir = tempdir().expect("tempdir");
-        let (executable, request_path) = write_capture_script(
+        let executable = write_response_script(
             dir.path(),
             "{\"version\":1,\"request_id\":\"cli-runtime-hyf-capabilities\",\"ok\":true,\"output\":{\"control_routes\":[\"sys.status\",\"sys.capabilities\"],\"business_capabilities\":[{\"id\":\"query_rewrite\",\"kind\":\"business\",\"deterministic_execution\":\"enabled\",\"implementation_status\":\"implemented\",\"callable\":true,\"implemented\":true,\"assisted_execution\":\"unavailable\",\"assisted_backend_available\":false}],\"assisted_backend_capabilities\":[],\"request_context_contract\":{\"accepted_features\":[\"consumer\",\"execution_mode_preference\"],\"effective_features\":[\"execution_mode_preference\"],\"unsupported_field_behavior\":\"reject\"}}}",
         );
 
+        let request = request_json(
+            "cli-runtime-hyf-capabilities",
+            None,
+            "sys.capabilities",
+            None,
+            &HyfEmptyInput::default(),
+        );
         let response = HyfClient::new(executable)
             .capabilities()
             .expect("capabilities");
-        let request = read_request_json(request_path.as_path());
 
         assert_eq!(request["capability"], "sys.capabilities");
         assert_eq!(request["input"], serde_json::json!({}));
@@ -862,11 +890,18 @@ mod tests {
     fn query_rewrite_request_round_trips_typed_output() {
         let _guard = hyf_test_lock().lock().expect("hyf test lock");
         let dir = tempdir().expect("tempdir");
-        let (executable, request_path) = write_capture_script(
+        let executable = write_response_script(
             dir.path(),
             "{\"version\":1,\"request_id\":\"rewrite-test-1\",\"trace_id\":\"trace-rewrite-test-1\",\"ok\":true,\"output\":{\"original_text\":\"apples near me with weekend pickup\",\"normalized_text\":\"apples near me with weekend pickup\",\"rewritten_text\":\"apples\",\"query_terms\":[\"apples\"],\"normalization_signals\":[\"local_intent_detected\"],\"ranking_hints\":[\"prefer_local_results\"],\"extracted_filters\":{\"local_intent\":true,\"fulfillment\":\"pickup\",\"time_window\":\"weekend\"}},\"meta\":{\"execution_mode\":\"deterministic\",\"backend\":\"heuristic\"}}",
         );
         let context = HyfRequestContext::deterministic_cli().with_return_provenance(true);
+        let request = request_json(
+            "rewrite-test-1",
+            Some("trace-rewrite-test-1"),
+            "query_rewrite",
+            Some(&context),
+            &HyfQueryRewriteRequest::new("apples near me with weekend pickup"),
+        );
         let client = HyfClient::new(executable);
         let response = client
             .query_rewrite(
@@ -876,8 +911,6 @@ mod tests {
                 &HyfQueryRewriteRequest::new("apples near me with weekend pickup"),
             )
             .expect("query rewrite");
-        let request = read_request_json(request_path.as_path());
-
         assert_eq!(request["capability"], "query_rewrite");
         assert_eq!(
             request["context"]["execution_mode_preference"],
@@ -901,24 +934,34 @@ mod tests {
     fn semantic_rank_request_round_trips_typed_output() {
         let _guard = hyf_test_lock().lock().expect("hyf test lock");
         let dir = tempdir().expect("tempdir");
-        let (executable, request_path) = write_capture_script(
+        let executable = write_response_script(
             dir.path(),
             "{\"version\":1,\"request_id\":\"rank-test-1\",\"ok\":true,\"output\":{\"ranked_ids\":[\"listing_local_1\",\"listing_regional_1\"],\"reasons\":{\"listing_local_1\":[\"apples match\",\"pickup match\"],\"listing_regional_1\":[\"delivery mismatch\"]},\"scored_candidates\":[{\"id\":\"listing_local_1\",\"heuristic_score\":14,\"matched_terms\":[\"apples\"],\"reasons\":[\"apples match\",\"pickup match\"],\"delivery_alignment\":\"match\",\"distance_band\":\"closer\",\"freshness_band\":\"fresher\",\"scope_match\":true}],\"ranking_hints\":[\"prefer_local_results\"],\"extracted_filters\":{\"local_intent\":true,\"fulfillment\":\"pickup\",\"time_window\":\"weekend\"}},\"meta\":{\"execution_mode\":\"deterministic\",\"backend\":\"heuristic\"}}",
+        );
+        let context = HyfRequestContext::deterministic_cli()
+            .with_listing_scope(vec!["listing_local_1".to_owned()]);
+        let request = request_json(
+            "rank-test-1",
+            None,
+            "semantic_rank",
+            Some(&context),
+            &HyfSemanticRankRequest::new(
+                "apples near me with weekend pickup",
+                vec![sample_candidate("listing_local_1")],
+            ),
         );
         let client = HyfClient::new(executable);
         let response = client
             .semantic_rank(
                 "rank-test-1",
                 None,
-                &HyfRequestContext::deterministic_cli()
-                    .with_listing_scope(vec!["listing_local_1".to_owned()]),
+                &context,
                 &HyfSemanticRankRequest::new(
                     "apples near me with weekend pickup",
                     vec![sample_candidate("listing_local_1")],
                 ),
             )
             .expect("semantic rank");
-        let request = read_request_json(request_path.as_path());
 
         assert_eq!(request["capability"], "semantic_rank");
         assert_eq!(
@@ -934,23 +977,33 @@ mod tests {
     fn explain_result_request_round_trips_typed_output() {
         let _guard = hyf_test_lock().lock().expect("hyf test lock");
         let dir = tempdir().expect("tempdir");
-        let (executable, request_path) = write_capture_script(
+        let executable = write_response_script(
             dir.path(),
             "{\"version\":1,\"request_id\":\"explain-test-1\",\"trace_id\":\"trace-explain-test-1\",\"ok\":true,\"output\":{\"result_id\":\"listing_local_1\",\"explanation_kind\":\"deterministic\",\"summary\":\"Result listing_local_1 was ranked using deterministic heuristic signals: apples match and pickup match.\",\"score\":14,\"reasons\":[\"apples match\",\"pickup match\"],\"matched_terms\":[\"apples\"],\"ranking_hints\":[\"prefer_local_results\"],\"extracted_filters\":{\"local_intent\":true,\"fulfillment\":\"pickup\",\"time_window\":\"weekend\"},\"signal_assessment\":{\"delivery_alignment\":\"match\",\"distance_band\":\"closer\",\"freshness_band\":\"fresher\",\"scope_match\":true}},\"meta\":{\"execution_mode\":\"deterministic\",\"backend\":\"heuristic\"}}",
+        );
+        let context = HyfRequestContext::deterministic_cli().with_return_provenance(true);
+        let request = request_json(
+            "explain-test-1",
+            Some("trace-explain-test-1"),
+            "explain_result",
+            Some(&context),
+            &HyfExplainResultRequest::new(
+                "apples near me with weekend pickup",
+                sample_candidate("listing_local_1"),
+            ),
         );
         let client = HyfClient::new(executable);
         let response = client
             .explain_result(
                 "explain-test-1",
                 Some("trace-explain-test-1"),
-                &HyfRequestContext::deterministic_cli().with_return_provenance(true),
+                &context,
                 &HyfExplainResultRequest::new(
                     "apples near me with weekend pickup",
                     sample_candidate("listing_local_1"),
                 ),
             )
             .expect("explain result");
-        let request = read_request_json(request_path.as_path());
 
         assert_eq!(request["capability"], "explain_result");
         assert_eq!(request["context"]["return_provenance"], true);
@@ -973,9 +1026,16 @@ mod tests {
         }
     }
 
-    fn read_request_json(path: &Path) -> Value {
-        let raw = fs::read_to_string(path).expect("request raw");
-        serde_json::from_str(raw.trim()).expect("request json")
+    fn request_json<T: Serialize>(
+        request_id: &str,
+        trace_id: Option<&str>,
+        capability: &str,
+        context: Option<&HyfRequestContext>,
+        input: &T,
+    ) -> Value {
+        let raw = super::serialize_request(request_id, trace_id, capability, context, input)
+            .expect("serialize request");
+        serde_json::from_str(raw.as_str()).expect("request json")
     }
 
     fn write_response_script(dir: &Path, response: &str) -> PathBuf {
@@ -985,20 +1045,6 @@ mod tests {
                 .as_str(),
         )
     }
-
-    fn write_capture_script(dir: &Path, response: &str) -> (PathBuf, PathBuf) {
-        let request_path = dir.join("request.json");
-        let executable = write_script(
-            dir,
-            format!(
-                "#!/bin/sh\ncat > '{}'\ncat <<'JSON'\n{response}\nJSON\n",
-                request_path.display()
-            )
-            .as_str(),
-        );
-        (executable, request_path)
-    }
-
     fn write_script(dir: &Path, script: &str) -> PathBuf {
         let path = dir.join("fake-hyfd");
         fs::write(&path, script).expect("write fake hyfd");

@@ -642,6 +642,8 @@ pub struct FindView {
     pub freshness: SyncFreshnessView,
     pub results: Vec<FindResultView>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub hyf: Option<FindHyfView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
@@ -654,6 +656,15 @@ impl FindView {
             _ => CommandDisposition::Success,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FindHyfView {
+    pub state: String,
+    pub source: String,
+    pub rewritten_query: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query_terms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1227,6 +1238,16 @@ pub struct FindResultView {
     pub available: FindQuantityView,
     pub price: FindPriceView,
     pub provenance: FindResultProvenanceView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hyf: Option<FindResultHyfView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FindResultHyfView {
+    pub state: String,
+    pub rewritten_query: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query_terms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
