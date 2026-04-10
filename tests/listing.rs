@@ -355,6 +355,10 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
     assert!(account_output.status.success());
     let account_json: Value =
         serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let account_id = account_json["account"]["id"]
+        .as_str()
+        .expect("account id")
+        .to_owned();
     let seller_pubkey = account_json["public_identity"]["public_key_hex"]
         .as_str()
         .expect("seller pubkey")
@@ -393,11 +397,13 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
         match body["method"].as_str().unwrap_or_default() {
             "nip46.session.list" => {
                 assert_eq!(auth_header, None);
-                MockRpcResponse::success(json!([sample_session(
+                MockRpcResponse::success(json!([sample_session_with_authority(
                     "sess_publish_01",
                     seller_pubkey.as_str(),
                     &["sign_event"],
-                    true
+                    true,
+                    Some(account_id.as_str()),
+                    Some("conn_listing_binding_01")
                 )]))
             }
             "bridge.listing.publish" => {
@@ -653,7 +659,10 @@ fn listing_publish_uses_myc_binding_before_resolving_daemon_signer_session() {
     assert!(account_output.status.success());
     let account_json: Value =
         serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
-    let account_id = account_json["account"]["id"].as_str().expect("account id");
+    let account_id = account_json["account"]["id"]
+        .as_str()
+        .expect("account id")
+        .to_owned();
     let public_identity = account_json["public_identity"].clone();
     let seller_pubkey = public_identity["public_key_hex"]
         .as_str()
@@ -693,7 +702,11 @@ fn listing_publish_uses_myc_binding_before_resolving_daemon_signer_session() {
     let myc = write_fake_myc(
         dir.path(),
         successful_status_script(
-            sample_myc_status_payload(account_id, &public_identity, "conn_listing_binding_01")
+            sample_myc_status_payload(
+                account_id.as_str(),
+                &public_identity,
+                "conn_listing_binding_01",
+            )
                 .to_string(),
         )
         .as_str(),
@@ -701,16 +714,19 @@ fn listing_publish_uses_myc_binding_before_resolving_daemon_signer_session() {
 
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
     let recorded = Arc::clone(&requests);
+    let session_account_id = account_id.clone();
     let server = MockRpcServer::start(move |body, auth_header| {
         recorded.lock().expect("recorded").push(body.clone());
         match body["method"].as_str().unwrap_or_default() {
             "nip46.session.list" => {
                 assert_eq!(auth_header, None);
-                MockRpcResponse::success(json!([sample_session(
+                MockRpcResponse::success(json!([sample_session_with_authority(
                     "sess_publish_01",
                     seller_pubkey.as_str(),
                     &["sign_event"],
-                    true
+                    true,
+                    Some(session_account_id.as_str()),
+                    Some("conn_listing_binding_01"),
                 )]))
             }
             "bridge.listing.publish" => {
@@ -763,7 +779,12 @@ managed_account_ref = "{account_id}"
         .output()
         .expect("run listing publish");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\n\nstderr:\n{}",
+        String::from_utf8_lossy(output.stdout.as_slice()),
+        String::from_utf8_lossy(output.stderr.as_slice())
+    );
     let publish_json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json");
     assert_eq!(publish_json["state"], "published");
     assert_eq!(publish_json["signer_mode"], "nip46_session");
@@ -777,6 +798,18 @@ managed_account_ref = "{account_id}"
     assert_eq!(
         recorded[1]["params"]["signer_session_id"],
         "sess_publish_01"
+    );
+    assert_eq!(
+        recorded[1]["params"]["signer_authority"]["provider_runtime_id"],
+        "myc"
+    );
+    assert_eq!(
+        recorded[1]["params"]["signer_authority"]["account_identity_id"],
+        account_id
+    );
+    assert_eq!(
+        recorded[1]["params"]["signer_authority"]["provider_signer_session_id"],
+        "conn_listing_binding_01"
     );
 }
 
@@ -905,6 +938,136 @@ managed_account_ref = "{mismatch_account_id}"
         value.contains("configured myc signer binding resolves signer pubkey")
     }));
     assert!(requests.lock().expect("requests").is_empty());
+}
+
+#[test]
+fn listing_publish_rejects_daemon_session_with_mismatched_myc_authority() {
+    let _guard = listing_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    let account_output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let account_id = account_json["account"]["id"]
+        .as_str()
+        .expect("account id")
+        .to_owned();
+    let public_identity = account_json["public_identity"].clone();
+    let seller_pubkey = public_identity["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey")
+        .to_owned();
+    seed_farm(
+        dir.path(),
+        seller_pubkey.as_str(),
+        "AAAAAAAAAAAAAAAAAAAAAw",
+        "La Huerta",
+    );
+
+    let draft_path = dir.path().join("mismatched-authority.toml");
+    fs::write(
+        &draft_path,
+        valid_listing_draft(
+            "AAAAAAAAAAAAAAAAAAAAAg",
+            "",
+            "",
+            "eggs",
+            "Pasture eggs",
+            "Protein",
+            "Fresh pasture-raised eggs collected daily.",
+            "12",
+            "each",
+            "4.50",
+            "USD",
+            "1",
+            "each",
+            "18",
+            "pickup",
+            "La Huerta del Sur",
+        ),
+    )
+    .expect("write listing draft");
+
+    let myc = write_fake_myc(
+        dir.path(),
+        successful_status_script(
+            sample_myc_status_payload(
+                account_id.as_str(),
+                &public_identity,
+                "conn_listing_binding_03",
+            )
+            .to_string(),
+        )
+        .as_str(),
+    );
+
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        recorded.lock().expect("recorded").push(body.clone());
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session_with_authority(
+                "sess_mismatch_01",
+                seller_pubkey.as_str(),
+                &["sign_event:30402"],
+                true,
+                Some("acct_wrong"),
+                Some("conn_listing_binding_03"),
+            )])),
+            _ => MockRpcResponse::rpc_error(-32601, "unexpected rpc method"),
+        }
+    });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane(
+            format!(
+                r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{account_id}"
+"#
+            )
+            .as_str(),
+            server.url().as_str(),
+        )
+        .as_str(),
+    );
+
+    let output = cli_command_in(dir.path())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
+        .args([
+            "--json",
+            "--signer",
+            "myc",
+            "--myc-executable",
+            myc.to_str().expect("myc path"),
+            "listing",
+            "publish",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing publish");
+
+    assert_eq!(output.status.code(), Some(3));
+    let publish_json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json");
+    assert_eq!(publish_json["state"], "unconfigured");
+    assert!(publish_json["reason"].as_str().is_some());
+
+    let recorded = requests.lock().expect("requests");
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["method"], "nip46.session.list");
 }
 
 #[test]
@@ -1442,6 +1605,17 @@ fn sample_session(
     permissions: &[&str],
     authorized: bool,
 ) -> Value {
+    sample_session_with_authority(session_id, signer_pubkey, permissions, authorized, None, None)
+}
+
+fn sample_session_with_authority(
+    session_id: &str,
+    signer_pubkey: &str,
+    permissions: &[&str],
+    authorized: bool,
+    account_identity_id: Option<&str>,
+    provider_signer_session_id: Option<&str>,
+) -> Value {
     json!({
         "session_id": session_id,
         "role": "remote_signer",
@@ -1452,7 +1626,12 @@ fn sample_session(
         "permissions": permissions,
         "auth_required": false,
         "authorized": authorized,
-        "expires_in_secs": Value::Null
+        "expires_in_secs": Value::Null,
+        "signer_authority": account_identity_id.map(|account_identity_id| json!({
+            "provider_runtime_id": "myc",
+            "account_identity_id": account_identity_id,
+            "provider_signer_session_id": provider_signer_session_id
+        }))
     })
 }
 

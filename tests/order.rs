@@ -361,7 +361,10 @@ fn order_new_creates_a_local_draft_with_selected_account_defaults() {
     assert!(account_output.status.success());
     let account_json: Value =
         serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
-    let account_id = account_json["account"]["id"].as_str().expect("account id");
+    let account_id = account_json["account"]["id"]
+        .as_str()
+        .expect("account id")
+        .to_owned();
     let buyer_pubkey = account_json["public_identity"]["public_key_hex"]
         .as_str()
         .expect("buyer pubkey");
@@ -744,7 +747,10 @@ fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
     assert!(account_output.status.success());
     let account_json: Value =
         serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
-    let account_id = account_json["account"]["id"].as_str().expect("account id");
+    let account_id = account_json["account"]["id"]
+        .as_str()
+        .expect("account id")
+        .to_owned();
     let public_identity = account_json["public_identity"].clone();
     let buyer_pubkey = public_identity["public_key_hex"]
         .as_str()
@@ -754,8 +760,12 @@ fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
     let myc = write_fake_myc(
         dir.path(),
         successful_status_script(
-            sample_myc_status_payload(account_id, &public_identity, "conn_order_binding_01")
-                .to_string(),
+            sample_myc_status_payload(
+                account_id.as_str(),
+                &public_identity,
+                "conn_order_binding_01",
+            )
+            .to_string(),
         )
         .as_str(),
     );
@@ -782,6 +792,7 @@ fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
 
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
+    let session_account_id = account_id.clone();
     let server = MockRpcServer::start(move |body, auth_header| {
         recorded
             .lock()
@@ -792,11 +803,13 @@ fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
                 auth_header,
             });
         match body["method"].as_str().unwrap_or_default() {
-            "nip46.session.list" => MockRpcResponse::success(json!([sample_session(
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session_with_authority(
                 "sess_order_02",
                 buyer_pubkey.as_str(),
                 &["sign_event"],
-                true
+                true,
+                Some(session_account_id.as_str()),
+                Some("conn_order_binding_01")
             )])),
             "bridge.order.request" => MockRpcResponse::success(serde_json::json!({
                 "deduplicated": false,
@@ -858,6 +871,18 @@ managed_account_ref = "{account_id}"
         .find(|request| request.method == "bridge.order.request")
         .expect("bridge order request");
     assert_eq!(request.body["params"]["signer_session_id"], "sess_order_02");
+    assert_eq!(
+        request.body["params"]["signer_authority"]["provider_runtime_id"],
+        "myc"
+    );
+    assert_eq!(
+        request.body["params"]["signer_authority"]["account_identity_id"],
+        account_id
+    );
+    assert_eq!(
+        request.body["params"]["signer_authority"]["provider_signer_session_id"],
+        "conn_order_binding_01"
+    );
 }
 
 #[test]
@@ -1153,6 +1178,17 @@ fn sample_session(
     permissions: &[&str],
     authorized: bool,
 ) -> Value {
+    sample_session_with_authority(session_id, signer_pubkey, permissions, authorized, None, None)
+}
+
+fn sample_session_with_authority(
+    session_id: &str,
+    signer_pubkey: &str,
+    permissions: &[&str],
+    authorized: bool,
+    account_identity_id: Option<&str>,
+    provider_signer_session_id: Option<&str>,
+) -> Value {
     json!({
         "session_id": session_id,
         "role": "remote_signer",
@@ -1163,7 +1199,12 @@ fn sample_session(
         "permissions": permissions,
         "auth_required": false,
         "authorized": authorized,
-        "expires_in_secs": Value::Null
+        "expires_in_secs": Value::Null,
+        "signer_authority": account_identity_id.map(|account_identity_id| json!({
+            "provider_runtime_id": "myc",
+            "account_identity_id": account_identity_id,
+            "provider_signer_session_id": provider_signer_session_id
+        }))
     })
 }
 

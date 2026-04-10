@@ -12,6 +12,7 @@ use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
     RadrootsNostrSignerCapability,
 };
+use serde::{Deserialize, Serialize};
 
 const SIGNER_BINDING_PROVIDER_RUNTIME_ID: &str = "myc";
 const SIGNER_BINDING_MODEL: &str = "session_authorized_remote_signer";
@@ -29,6 +30,14 @@ pub enum ActorWriteBindingError {
     Unavailable(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActorWriteSignerAuthority {
+    pub provider_runtime_id: String,
+    pub account_identity_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_signer_session_id: Option<String>,
+}
+
 pub fn resolve_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     match config.signer.backend {
         SignerBackend::Local => resolve_local_signer_status(config),
@@ -36,13 +45,13 @@ pub fn resolve_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     }
 }
 
-pub fn validate_actor_write_binding(
+pub fn resolve_actor_write_authority(
     config: &RuntimeConfig,
     actor_role: &str,
     actor_pubkey: &str,
-) -> Result<(), ActorWriteBindingError> {
+) -> Result<Option<ActorWriteSignerAuthority>, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Myc) {
-        return Ok(());
+        return Ok(None);
     }
 
     let myc = crate::runtime::myc::resolve_status(&config.myc);
@@ -77,7 +86,17 @@ pub fn validate_actor_write_binding(
         )));
     }
 
-    Ok(())
+    let Some(resolved_account_id) = resolution.resolved_account_id else {
+        return Err(ActorWriteBindingError::Unconfigured(
+            "myc signer binding reported ready without a resolved account identity".to_owned(),
+        ));
+    };
+
+    Ok(Some(ActorWriteSignerAuthority {
+        provider_runtime_id: SIGNER_BINDING_PROVIDER_RUNTIME_ID.to_owned(),
+        account_identity_id: resolved_account_id,
+        provider_signer_session_id: resolution.view.resolved_signer_session_id.clone(),
+    }))
 }
 
 fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {

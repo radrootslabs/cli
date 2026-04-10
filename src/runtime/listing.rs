@@ -33,7 +33,7 @@ use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon;
 use crate::runtime::daemon::DaemonRpcError;
-use crate::runtime::signer::{ActorWriteBindingError, validate_actor_write_binding};
+use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::freshness_from_executor;
 
 const DRAFT_KIND: &str = "listing_draft_v1";
@@ -544,19 +544,21 @@ fn mutate(
         });
     }
 
-    if let Err(error) =
-        validate_actor_write_binding(config, "seller", canonical.seller_pubkey.as_str())
-    {
-        return Ok(binding_error_view(
-            config,
-            args,
-            operation,
-            &canonical,
-            listing_addr,
-            event_preview,
-            error,
-        ));
-    }
+    let signer_authority =
+        match resolve_actor_write_authority(config, "seller", canonical.seller_pubkey.as_str()) {
+            Ok(authority) => authority,
+            Err(error) => {
+                return Ok(binding_error_view(
+                    config,
+                    args,
+                    operation,
+                    &canonical,
+                    listing_addr,
+                    event_preview,
+                    error,
+                ));
+            }
+        };
 
     let signer_session_id = match daemon::resolve_signer_session_id(
         config,
@@ -564,6 +566,7 @@ fn mutate(
         canonical.seller_pubkey.as_str(),
         KIND_LISTING,
         args.signer_session_id.as_deref(),
+        signer_authority.as_ref(),
     ) {
         Ok(session_id) => session_id,
         Err(error) => {
@@ -585,6 +588,7 @@ fn mutate(
         KIND_LISTING,
         args.idempotency_key.as_deref(),
         Some(signer_session_id.as_str()),
+        signer_authority.as_ref(),
     ) {
         Ok(result) => {
             let failed = result.status == "failed";

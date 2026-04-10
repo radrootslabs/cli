@@ -13,6 +13,7 @@ use crate::domain::runtime::{
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::provider;
+use crate::runtime::signer::ActorWriteSignerAuthority;
 
 const RPC_SOURCE: &str = "daemon rpc · durable write plane";
 const BRIDGE_SOURCE: &str = "daemon bridge · durable write plane";
@@ -126,6 +127,8 @@ struct Nip46SessionRemote {
     auth_required: bool,
     authorized: bool,
     expires_in_secs: Option<u64>,
+    #[serde(default)]
+    signer_authority: Option<ActorWriteSignerAuthority>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -386,6 +389,7 @@ pub fn bridge_listing_publish(
     kind: u32,
     idempotency_key: Option<&str>,
     signer_session_id: Option<&str>,
+    signer_authority: Option<&ActorWriteSignerAuthority>,
 ) -> Result<BridgeListingPublishResult, DaemonRpcError> {
     let target = actor_write_target(config)?;
     let response: BridgePublishResponseRemote = call(
@@ -396,6 +400,7 @@ pub fn bridge_listing_publish(
             "kind": kind,
             "idempotency_key": idempotency_key,
             "signer_session_id": signer_session_id,
+            "signer_authority": signer_authority,
         })),
         RpcAuthMode::BridgeBearer,
     )?;
@@ -417,6 +422,7 @@ pub fn bridge_order_request(
     order: &RadrootsTradeOrder,
     idempotency_key: Option<&str>,
     signer_session_id: Option<&str>,
+    signer_authority: Option<&ActorWriteSignerAuthority>,
 ) -> Result<BridgeOrderRequestResult, DaemonRpcError> {
     let target = actor_write_target(config)?;
     let response: BridgePublishResponseRemote = call(
@@ -426,6 +432,7 @@ pub fn bridge_order_request(
             "order": order,
             "idempotency_key": idempotency_key,
             "signer_session_id": signer_session_id,
+            "signer_authority": signer_authority,
         })),
         RpcAuthMode::BridgeBearer,
     )?;
@@ -503,6 +510,7 @@ pub fn resolve_signer_session_id(
     actor_pubkey: &str,
     event_kind: u32,
     requested_session_id: Option<&str>,
+    signer_authority: Option<&ActorWriteSignerAuthority>,
 ) -> Result<String, DaemonRpcError> {
     let target = actor_write_target(config)?;
     let sessions = nip46_sessions_with_target(&target)?;
@@ -516,13 +524,21 @@ pub fn resolve_signer_session_id(
                 "requested signer session `{session_id}` was not found"
             )));
         };
-        validate_signer_session(&session, actor_role, actor_pubkey, event_kind)?;
+        validate_signer_session(
+            &session,
+            actor_role,
+            actor_pubkey,
+            event_kind,
+            signer_authority,
+        )?;
         return Ok(session.session_id);
     }
 
     let mut matches = sessions
         .into_iter()
-        .filter(|session| session_matches_actor(session, actor_pubkey, event_kind))
+        .filter(|session| {
+            session_matches_actor(session, actor_pubkey, event_kind, signer_authority)
+        })
         .map(|session| session.session_id)
         .collect::<Vec<_>>();
 
@@ -542,6 +558,7 @@ fn validate_signer_session(
     actor_role: &str,
     actor_pubkey: &str,
     event_kind: u32,
+    signer_authority: Option<&ActorWriteSignerAuthority>,
 ) -> Result<(), DaemonRpcError> {
     if !session.authorized {
         return Err(DaemonRpcError::Unconfigured(format!(
@@ -561,6 +578,7 @@ fn validate_signer_session(
             session.session_id
         )));
     }
+    validate_signer_authority(session, signer_authority)?;
     Ok(())
 }
 
@@ -568,10 +586,61 @@ fn session_matches_actor(
     session: &Nip46SessionRemote,
     actor_pubkey: &str,
     event_kind: u32,
+    signer_authority: Option<&ActorWriteSignerAuthority>,
 ) -> bool {
     session.authorized
         && session.signer_pubkey.eq_ignore_ascii_case(actor_pubkey)
         && sign_event_allowed(&session.permissions, event_kind)
+        && signer_authority_matches(session, signer_authority)
+}
+
+fn validate_signer_authority(
+    session: &Nip46SessionRemote,
+    signer_authority: Option<&ActorWriteSignerAuthority>,
+) -> Result<(), DaemonRpcError> {
+    let Some(expected) = signer_authority else {
+        return Ok(());
+    };
+    let Some(actual) = session.signer_authority.as_ref() else {
+        return Err(DaemonRpcError::Unconfigured(format!(
+            "requested signer session `{}` is missing signer authority continuity metadata",
+            session.session_id
+        )));
+    };
+    if actual.provider_runtime_id != expected.provider_runtime_id {
+        return Err(DaemonRpcError::Unconfigured(format!(
+            "requested signer session `{}` provider `{}` does not match required provider `{}`",
+            session.session_id, actual.provider_runtime_id, expected.provider_runtime_id
+        )));
+    }
+    if actual.account_identity_id != expected.account_identity_id {
+        return Err(DaemonRpcError::Unconfigured(format!(
+            "requested signer session `{}` account identity `{}` does not match required account `{}`",
+            session.session_id, actual.account_identity_id, expected.account_identity_id
+        )));
+    }
+    if actual.provider_signer_session_id != expected.provider_signer_session_id {
+        return Err(DaemonRpcError::Unconfigured(format!(
+            "requested signer session `{}` provider signer session `{}` does not match required provider session `{}`",
+            session.session_id,
+            actual
+                .provider_signer_session_id
+                .as_deref()
+                .unwrap_or("<none>"),
+            expected
+                .provider_signer_session_id
+                .as_deref()
+                .unwrap_or("<none>")
+        )));
+    }
+    Ok(())
+}
+
+fn signer_authority_matches(
+    session: &Nip46SessionRemote,
+    signer_authority: Option<&ActorWriteSignerAuthority>,
+) -> bool {
+    validate_signer_authority(session, signer_authority).is_ok()
 }
 
 fn sign_event_allowed(perms: &[String], kind: u32) -> bool {

@@ -22,7 +22,7 @@ use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon::{self, DaemonRpcError};
-use crate::runtime::signer::{ActorWriteBindingError, validate_actor_write_binding};
+use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
@@ -419,11 +419,11 @@ pub fn submit(
         });
     }
 
-    if let Err(error) =
-        validate_actor_write_binding(config, "buyer", loaded.document.order.buyer_pubkey.as_str())
-    {
-        return Ok(order_binding_error_view(config, &loaded, args, error));
-    }
+    let signer_authority =
+        match resolve_actor_write_authority(config, "buyer", loaded.document.order.buyer_pubkey.as_str()) {
+            Ok(authority) => authority,
+            Err(error) => return Ok(order_binding_error_view(config, &loaded, args, error)),
+        };
 
     let signer_session_id = match daemon::resolve_signer_session_id(
         config,
@@ -431,6 +431,7 @@ pub fn submit(
         loaded.document.order.buyer_pubkey.as_str(),
         u32::from(RadrootsTradeMessageType::OrderRequest.kind()),
         args.signer_session_id.as_deref(),
+        signer_authority.as_ref(),
     ) {
         Ok(session_id) => session_id,
         Err(error) => return Ok(order_submit_error_view(&loaded, args, error)),
@@ -442,6 +443,7 @@ pub fn submit(
         &order,
         args.idempotency_key.as_deref(),
         Some(signer_session_id.as_str()),
+        signer_authority.as_ref(),
     ) {
         Ok(result) => {
             let mut updated = loaded.document.clone();
