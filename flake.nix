@@ -108,7 +108,8 @@
           };
           test = mkApp "test" {
             text = ''
-              cargo test
+              # serialize integration test binaries; plain cargo test is flaky here
+              cargo test -j1
             '';
           };
         }

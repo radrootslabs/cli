@@ -343,10 +343,17 @@ mod tests {
     use crate::runtime::config::HyfConfig;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
+
+    fn hyf_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn disabled_hyf_reports_disabled_state_without_spawning() {
+        let _guard = hyf_test_lock().lock().expect("hyf test lock");
         let view = resolve_status(&HyfConfig {
             enabled: false,
             executable: "hyfd".into(),
@@ -357,6 +364,7 @@ mod tests {
 
     #[test]
     fn healthy_hyf_status_reports_ready() {
+        let _guard = hyf_test_lock().lock().expect("hyf test lock");
         let dir = tempdir().expect("tempdir");
         let executable = write_script(
             dir.path(),
@@ -377,6 +385,7 @@ mod tests {
 
     #[test]
     fn incompatible_hyf_status_reports_unavailable() {
+        let _guard = hyf_test_lock().lock().expect("hyf test lock");
         let dir = tempdir().expect("tempdir");
         let executable = write_script(
             dir.path(),
