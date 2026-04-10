@@ -279,13 +279,39 @@ fn config_show_json_reports_default_bootstrap_state() {
             .to_string()
     );
     assert_eq!(json["myc"]["executable"], "myc");
+    assert_eq!(json["write_plane"]["provider_runtime_id"], "radrootsd");
+    assert_eq!(json["write_plane"]["binding_model"], "daemon_backed_jsonrpc");
+    assert_eq!(json["write_plane"]["state"], "configured");
+    assert_eq!(json["write_plane"]["provenance"], "direct_config");
+    assert_eq!(
+        json["write_plane"]["source"],
+        "raw rpc config resolves the current write plane"
+    );
+    assert_eq!(json["write_plane"]["target"], "http://127.0.0.1:7070");
+    assert_eq!(json["write_plane"]["bridge_auth_configured"], false);
     assert_eq!(json["workflow"]["provider_runtime_id"], "rhi");
     assert_eq!(json["workflow"]["binding_model"], "out_of_process_worker");
     assert_eq!(json["workflow"]["state"], "not_configured");
+    assert_eq!(json["workflow"]["provenance"], "unavailable");
     assert_eq!(json["workflow"]["source"], "no explicit capability binding");
     assert_eq!(json["workflow"]["hyf_helper_state"], "not_implied");
+    assert_eq!(json["hyf_provider"]["provider_runtime_id"], "hyf");
+    assert_eq!(json["hyf_provider"]["binding_model"], "stdio_service");
+    assert_eq!(json["hyf_provider"]["state"], "disabled");
+    assert_eq!(json["hyf_provider"]["provenance"], "disabled");
+    assert_eq!(
+        json["hyf_provider"]["source"],
+        "hyf status control request · local first"
+    );
     assert_eq!(json["rpc"]["url"], "http://127.0.0.1:7070");
     assert_eq!(json["rpc"]["bridge_auth_configured"], false);
+    assert_eq!(
+        json["resolved_providers"]
+            .as_array()
+            .expect("resolved providers")
+            .len(),
+        3
+    );
     assert_eq!(
         json["capability_bindings"]
             .as_array()
@@ -651,6 +677,7 @@ target = "bin/hyfd-user"
     assert_eq!(workflow["target"], "workflow-default");
     assert_eq!(json["workflow"]["provider_runtime_id"], "rhi");
     assert_eq!(json["workflow"]["state"], "configured");
+    assert_eq!(json["workflow"]["provenance"], "managed_default");
     assert_eq!(
         json["workflow"]["source"],
         "user config [[capability_binding]]"
@@ -663,6 +690,13 @@ target = "bin/hyfd-user"
             .as_str()
             .is_some_and(|detail| detail.contains("do not imply"))
     );
+    assert_eq!(json["write_plane"]["provenance"], "direct_config");
+    assert_eq!(json["write_plane"]["target"], "http://127.0.0.1:7070");
+    assert_eq!(json["hyf_provider"]["provider_runtime_id"], "hyf");
+    assert_eq!(json["hyf_provider"]["provenance"], "explicit_binding");
+    assert_eq!(json["hyf_provider"]["target_kind"], "explicit_endpoint");
+    assert_eq!(json["hyf_provider"]["target"], "bin/hyfd-user");
+    assert_eq!(json["hyf_provider"]["executable"], "bin/hyfd-user");
 
     let inference = binding_by_capability(&json, "inference.hyf_stdio");
     assert_eq!(inference["state"], "configured");

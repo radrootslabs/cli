@@ -1,20 +1,28 @@
 use crate::domain::runtime::{
     AccountRuntimeView, AccountSecretRuntimeView, CapabilityBindingRuntimeView,
-    ConfigFilesRuntimeView, ConfigShowView, HyfRuntimeView, LegacyPathRuntimeView,
-    LocalRuntimeView, LoggingRuntimeView, MigrationRuntimeView, MycRuntimeView, OutputRuntimeView,
-    PathsRuntimeView, RelayRuntimeView, RpcRuntimeView, SignerRuntimeView, WorkflowRuntimeView,
+    ConfigFilesRuntimeView, ConfigShowView, HyfProviderRuntimeView, HyfRuntimeView,
+    LegacyPathRuntimeView, LocalRuntimeView, LoggingRuntimeView, MigrationRuntimeView,
+    MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
+    ResolvedProviderRuntimeView, RpcRuntimeView, SignerRuntimeView, WorkflowRuntimeView,
+    WritePlaneRuntimeView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
-use crate::runtime::workflow::resolve_workflow_provider;
+use crate::runtime::provider::{
+    resolve_capability_providers, resolve_hyf_provider, resolve_workflow_provider,
+    resolve_write_plane_provider,
+};
 
 pub fn show(
     config: &RuntimeConfig,
     logging: &LoggingState,
 ) -> Result<ConfigShowView, RuntimeError> {
     let secret_backend = crate::runtime::accounts::secret_backend_status(config);
+    let write_plane = resolve_write_plane_provider(config);
     let workflow = resolve_workflow_provider(config);
+    let hyf_provider = resolve_hyf_provider(config);
+    let resolved_providers = resolve_capability_providers(config);
     Ok(ConfigShowView {
         source: "local runtime state".to_owned(),
         output: OutputRuntimeView {
@@ -106,15 +114,40 @@ pub fn show(
         myc: MycRuntimeView {
             executable: config.myc.executable.display().to_string(),
         },
+        write_plane: WritePlaneRuntimeView {
+            provider_runtime_id: write_plane.provider_runtime_id,
+            binding_model: write_plane.binding_model,
+            state: write_plane.state,
+            provenance: write_plane.provenance,
+            source: write_plane.source,
+            target_kind: write_plane.target_kind,
+            target: write_plane.target,
+            detail: write_plane.detail,
+            bridge_auth_configured: write_plane.bridge_auth_configured,
+        },
         workflow: WorkflowRuntimeView {
             provider_runtime_id: workflow.provider_runtime_id,
             binding_model: workflow.binding_model,
             state: workflow.state,
+            provenance: workflow.provenance,
             source: workflow.source,
             target_kind: workflow.target_kind,
             target: workflow.target,
             hyf_helper_state: workflow.hyf_helper_state,
             hyf_helper_detail: workflow.hyf_helper_detail,
+        },
+        hyf_provider: HyfProviderRuntimeView {
+            provider_runtime_id: hyf_provider.provider_runtime_id,
+            binding_model: hyf_provider.binding_model,
+            state: hyf_provider.state,
+            provenance: hyf_provider.provenance,
+            source: hyf_provider.source,
+            target_kind: hyf_provider.target_kind,
+            target: hyf_provider.target,
+            executable: hyf_provider.executable,
+            reason: hyf_provider.reason,
+            protocol_version: hyf_provider.protocol_version,
+            deterministic_available: hyf_provider.deterministic_available,
         },
         hyf: HyfRuntimeView {
             enabled: config.hyf.enabled,
@@ -124,6 +157,19 @@ pub fn show(
             url: config.rpc.url.clone(),
             bridge_auth_configured: config.rpc.bridge_bearer_token.is_some(),
         },
+        resolved_providers: resolved_providers
+            .into_iter()
+            .map(|provider| ResolvedProviderRuntimeView {
+                capability_id: provider.capability_id,
+                provider_runtime_id: provider.provider_runtime_id,
+                binding_model: provider.binding_model,
+                state: provider.state,
+                provenance: provider.provenance,
+                source: provider.source,
+                target_kind: provider.target_kind,
+                target: provider.target,
+            })
+            .collect(),
         capability_bindings: config
             .inspect_capability_bindings()
             .into_iter()

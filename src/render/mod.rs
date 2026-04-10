@@ -617,6 +617,27 @@ fn render_config_show(
         "myc",
         &[("executable", view.myc.executable.as_str())],
     )?;
+    let write_plane_target = format_runtime_target(
+        view.write_plane.target_kind.as_deref(),
+        view.write_plane.target.as_deref(),
+    );
+    render_pairs(
+        stdout,
+        "write plane",
+        &[
+            ("provider", view.write_plane.provider_runtime_id.as_str()),
+            ("binding model", view.write_plane.binding_model.as_str()),
+            ("state", view.write_plane.state.as_str()),
+            ("provenance", view.write_plane.provenance.as_str()),
+            ("source", view.write_plane.source.as_str()),
+            ("target", write_plane_target.as_str()),
+            ("detail", view.write_plane.detail.as_str()),
+            (
+                "bridge auth configured",
+                yes_no(view.write_plane.bridge_auth_configured),
+            ),
+        ],
+    )?;
     let workflow_target = format_runtime_target(
         view.workflow.target_kind.as_deref(),
         view.workflow.target.as_deref(),
@@ -628,6 +649,7 @@ fn render_config_show(
             ("provider", view.workflow.provider_runtime_id.as_str()),
             ("binding model", view.workflow.binding_model.as_str()),
             ("state", view.workflow.state.as_str()),
+            ("provenance", view.workflow.provenance.as_str()),
             ("source", view.workflow.source.as_str()),
             ("target", workflow_target.as_str()),
             ("hyf helper", view.workflow.hyf_helper_state.as_str()),
@@ -645,6 +667,23 @@ fn render_config_show(
             ("executable", view.hyf.executable.as_str()),
         ],
     )?;
+    let hyf_provider_target = format_runtime_target(
+        view.hyf_provider.target_kind.as_deref(),
+        view.hyf_provider.target.as_deref(),
+    );
+    let mut hyf_provider_rows = vec![
+        ("provider", view.hyf_provider.provider_runtime_id.as_str()),
+        ("binding model", view.hyf_provider.binding_model.as_str()),
+        ("state", view.hyf_provider.state.as_str()),
+        ("provenance", view.hyf_provider.provenance.as_str()),
+        ("source", view.hyf_provider.source.as_str()),
+        ("target", hyf_provider_target.as_str()),
+        ("executable", view.hyf_provider.executable.as_str()),
+    ];
+    if let Some(reason) = &view.hyf_provider.reason {
+        hyf_provider_rows.push(("reason", reason.as_str()));
+    }
+    render_pairs(stdout, "hyf provider", hyf_provider_rows.as_slice())?;
     render_pairs(
         stdout,
         "rpc",
@@ -674,6 +713,28 @@ fn render_config_show(
             .collect(),
     };
     render_table(stdout, &table)?;
+    writeln!(stdout)?;
+    writeln!(stdout, "resolved providers")?;
+    let resolved_table = Table {
+        headers: &["capability", "provider", "state", "provenance", "target"],
+        rows: view
+            .resolved_providers
+            .iter()
+            .map(|provider| {
+                vec![
+                    provider.capability_id.clone(),
+                    provider.provider_runtime_id.clone(),
+                    provider.state.clone(),
+                    provider.provenance.clone(),
+                    format_runtime_target(
+                        provider.target_kind.as_deref(),
+                        provider.target.as_deref(),
+                    ),
+                ]
+            })
+            .collect(),
+    };
+    render_table(stdout, &resolved_table)?;
     writeln!(stdout, "source: {}", view.source)?;
     Ok(())
 }

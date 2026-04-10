@@ -118,10 +118,13 @@ pub struct ConfigShowView {
     pub relay: RelayRuntimeView,
     pub local: LocalRuntimeView,
     pub myc: MycRuntimeView,
+    pub write_plane: WritePlaneRuntimeView,
     pub workflow: WorkflowRuntimeView,
+    pub hyf_provider: HyfProviderRuntimeView,
     pub hyf: HyfRuntimeView,
     pub rpc: RpcRuntimeView,
     pub capability_bindings: Vec<CapabilityBindingRuntimeView>,
+    pub resolved_providers: Vec<ResolvedProviderRuntimeView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -251,6 +254,7 @@ pub struct WorkflowRuntimeView {
     pub provider_runtime_id: String,
     pub binding_model: String,
     pub state: String,
+    pub provenance: String,
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_kind: Option<String>,
@@ -267,9 +271,58 @@ pub struct HyfRuntimeView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct HyfProviderRuntimeView {
+    pub provider_runtime_id: String,
+    pub binding_model: String,
+    pub state: String,
+    pub provenance: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    pub executable: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deterministic_available: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WritePlaneRuntimeView {
+    pub provider_runtime_id: String,
+    pub binding_model: String,
+    pub state: String,
+    pub provenance: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    pub detail: String,
+    pub bridge_auth_configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RpcRuntimeView {
     pub url: String,
     pub bridge_auth_configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolvedProviderRuntimeView {
+    pub capability_id: String,
+    pub provider_runtime_id: String,
+    pub binding_model: String,
+    pub state: String,
+    pub provenance: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

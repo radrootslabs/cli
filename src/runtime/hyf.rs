@@ -378,7 +378,7 @@ mod tests {
             enabled: true,
             executable,
         });
-        assert_eq!(view.state, "ready");
+        assert_eq!(view.state, "ready", "reason: {:?}", view.reason);
         assert_eq!(view.protocol_version, Some(HYF_PROTOCOL_VERSION));
         assert_eq!(view.deterministic_available, Some(true));
     }
@@ -396,7 +396,7 @@ mod tests {
             enabled: true,
             executable,
         });
-        assert_eq!(view.state, "unavailable");
+        assert_eq!(view.state, "unavailable", "reason: {:?}", view.reason);
         assert!(
             view.reason
                 .as_deref()
