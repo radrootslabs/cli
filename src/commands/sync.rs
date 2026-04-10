@@ -40,6 +40,7 @@ fn output_from_disposition(disposition: CommandDisposition, view: CommandView) -
         CommandDisposition::Success => CommandOutput::success(view),
         CommandDisposition::Unconfigured => CommandOutput::unconfigured(view),
         CommandDisposition::ExternalUnavailable => CommandOutput::external_unavailable(view),
+        CommandDisposition::Unsupported => CommandOutput::unsupported(view),
         CommandDisposition::InternalError => CommandOutput::internal_error(view),
     }
 }

@@ -13,6 +13,7 @@ pub fn new(config: &RuntimeConfig, args: &OrderNewArgs) -> Result<CommandOutput,
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::OrderNew(view))
         }
+        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::OrderNew(view)),
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::OrderNew(view))
         }
@@ -29,6 +30,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<CommandOutput
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::OrderGet(view))
         }
+        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::OrderGet(view)),
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::OrderGet(view))
         }
@@ -45,6 +47,7 @@ pub fn list(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::OrderList(view))
         }
+        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::OrderList(view)),
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::OrderList(view))
         }
@@ -64,6 +67,9 @@ pub fn submit(
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::OrderSubmit(view))
         }
+        CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::OrderSubmit(view))
+        }
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::OrderSubmit(view))
         }
@@ -79,6 +85,9 @@ pub fn watch(config: &RuntimeConfig, args: &OrderWatchArgs) -> Result<CommandOut
         }
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::OrderWatch(view))
+        }
+        CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::OrderWatch(view))
         }
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::OrderWatch(view))
@@ -96,6 +105,9 @@ pub fn cancel(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<CommandOut
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::OrderCancel(view))
         }
+        CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::OrderCancel(view))
+        }
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::OrderCancel(view))
         }
@@ -111,6 +123,9 @@ pub fn history(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
         }
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::OrderHistory(view))
+        }
+        CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::OrderHistory(view))
         }
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::OrderHistory(view))

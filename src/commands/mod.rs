@@ -15,7 +15,8 @@ pub mod sync;
 
 use crate::cli::{
     AccountCommand, Command, ConfigCommand, JobCommand, ListingCommand, LocalCommand, MycCommand,
-    NetCommand, OrderCommand, RelayCommand, RpcCommand, SignerCommand, SyncCommand,
+    NetCommand, OrderCommand, RelayCommand, RpcCommand, RuntimeCommand, RuntimeConfigCommand,
+    SignerCommand, SyncCommand,
 };
 use crate::domain::runtime::{CommandOutput, CommandView};
 use crate::runtime::RuntimeError;
@@ -88,6 +89,19 @@ pub fn dispatch(
         Command::Rpc(rpc) => match &rpc.command {
             RpcCommand::Status => Ok(rpc::status(config)),
             RpcCommand::Sessions => Ok(rpc::sessions(config)),
+        },
+        Command::Runtime(runtime_command) => match &runtime_command.command {
+            RuntimeCommand::Install(args) => runtime::install(config, args),
+            RuntimeCommand::Uninstall(args) => runtime::uninstall(config, args),
+            RuntimeCommand::Status(args) => runtime::status(config, args),
+            RuntimeCommand::Start(args) => runtime::start(config, args),
+            RuntimeCommand::Stop(args) => runtime::stop(config, args),
+            RuntimeCommand::Restart(args) => runtime::restart(config, args),
+            RuntimeCommand::Logs(args) => runtime::logs(config, args),
+            RuntimeCommand::Config(runtime_config) => match &runtime_config.command {
+                RuntimeConfigCommand::Show(args) => runtime::config_show(config, logging, args),
+                RuntimeConfigCommand::Set(args) => runtime::config_set(config, args),
+            },
         },
         Command::Sync(sync) => match &sync.command {
             SyncCommand::Status => sync::status(config),

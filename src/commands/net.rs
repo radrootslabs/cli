@@ -13,6 +13,7 @@ pub fn status(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::NetStatus(view))
         }
+        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::NetStatus(view)),
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::NetStatus(view))
         }

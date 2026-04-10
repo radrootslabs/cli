@@ -83,6 +83,7 @@ pub fn report(
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::Doctor(view))
         }
+        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::Doctor(view)),
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::Doctor(view))
         }

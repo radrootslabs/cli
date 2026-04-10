@@ -7,6 +7,7 @@ pub mod job;
 pub mod listing;
 pub mod local;
 pub mod logging;
+pub mod management;
 pub mod myc;
 pub mod network;
 pub mod order;
@@ -33,6 +34,8 @@ pub enum RuntimeError {
     Json(#[from] serde_json::Error),
     #[error("failed to write output: {0}")]
     Io(#[from] std::io::Error),
+    #[error("runtime manager error: {0}")]
+    RuntimeManager(#[from] radroots_runtime_manager::RadrootsRuntimeManagerError),
 }
 
 impl RuntimeError {
@@ -44,7 +47,8 @@ impl RuntimeError {
             | Self::Sql(_)
             | Self::ReplicaSync(_)
             | Self::Json(_)
-            | Self::Io(_) => ExitCode::from(1),
+            | Self::Io(_)
+            | Self::RuntimeManager(_) => ExitCode::from(1),
         }
     }
 }

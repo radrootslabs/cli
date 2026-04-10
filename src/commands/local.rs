@@ -19,6 +19,9 @@ pub fn status(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::LocalStatus(view))
         }
+        CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::LocalStatus(view))
+        }
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::LocalStatus(view))
         }
@@ -38,6 +41,9 @@ pub fn backup(
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::LocalBackup(view))
         }
+        CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::LocalBackup(view))
+        }
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::LocalBackup(view))
         }
@@ -56,6 +62,9 @@ pub fn export(
         }
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::LocalExport(view))
+        }
+        CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::LocalExport(view))
         }
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::LocalExport(view))

@@ -6,7 +6,8 @@ use crate::domain::runtime::{
     ListingNewView, ListingValidateView, LocalBackupView, LocalExportView, LocalInitView,
     LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView, OrderGetView,
     OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderWatchView,
-    RelayListView, RpcSessionsView, RpcStatusView, SyncActionView, SyncStatusView, SyncWatchView,
+    RelayListView, RpcSessionsView, RpcStatusView, RuntimeActionView, RuntimeLogsView,
+    RuntimeManagedConfigView, RuntimeStatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -150,6 +151,18 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::RelayList(view) => {
             render_relay_list(stdout, view)?;
+        }
+        CommandView::RuntimeAction(view) => {
+            render_runtime_action(stdout, view)?;
+        }
+        CommandView::RuntimeConfigShow(view) => {
+            render_runtime_config_show(stdout, view)?;
+        }
+        CommandView::RuntimeLogs(view) => {
+            render_runtime_logs(stdout, view)?;
+        }
+        CommandView::RuntimeStatus(view) => {
+            render_runtime_status(stdout, view)?;
         }
         CommandView::SignerStatus(view) => {
             write_context(
@@ -325,6 +338,22 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::RelayList(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::RuntimeAction(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::RuntimeConfigShow(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::RuntimeLogs(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::RuntimeStatus(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -735,6 +764,191 @@ fn render_config_show(
             .collect(),
     };
     render_table(stdout, &resolved_table)?;
+    writeln!(stdout, "source: {}", view.source)?;
+    Ok(())
+}
+
+fn render_runtime_action(
+    stdout: &mut dyn Write,
+    view: &RuntimeActionView,
+) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        format!("runtime · {} · {}", view.runtime_id, view.action.replace('_', " ")).as_str(),
+    )?;
+    render_pairs(
+        stdout,
+        "runtime",
+        &[
+            ("runtime", view.runtime_id.as_str()),
+            ("instance", view.instance_id.as_str()),
+            ("instance source", view.instance_source.as_str()),
+            ("group", view.runtime_group.as_str()),
+            ("state", view.state.as_str()),
+            ("mutates bindings", yes_no(view.mutates_bindings)),
+        ],
+    )?;
+    writeln!(stdout, "detail: {}", view.detail)?;
+    if let Some(next_step) = &view.next_step {
+        writeln!(stdout, "next step: {next_step}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    Ok(())
+}
+
+fn render_runtime_config_show(
+    stdout: &mut dyn Write,
+    view: &RuntimeManagedConfigView,
+) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("runtime · {} · config", view.runtime_id).as_str())?;
+    let mut rows = vec![
+        ("runtime", view.runtime_id.as_str()),
+        ("instance", view.instance_id.as_str()),
+        ("instance source", view.instance_source.as_str()),
+        ("group", view.runtime_group.as_str()),
+        ("state", view.state.as_str()),
+        ("config present", yes_no(view.config_present)),
+    ];
+    if let Some(config_format) = &view.config_format {
+        rows.push(("config format", config_format.as_str()));
+    }
+    if let Some(config_path) = &view.config_path {
+        rows.push(("config path", config_path.as_str()));
+    }
+    if let Some(requires_bootstrap_secret) = view.requires_bootstrap_secret {
+        rows.push((
+            "requires bootstrap secret",
+            yes_no(requires_bootstrap_secret),
+        ));
+    }
+    if let Some(requires_config_bootstrap) = view.requires_config_bootstrap {
+        rows.push((
+            "requires config bootstrap",
+            yes_no(requires_config_bootstrap),
+        ));
+    }
+    if let Some(requires_signer_provider) = view.requires_signer_provider {
+        rows.push((
+            "requires signer provider",
+            yes_no(requires_signer_provider),
+        ));
+    }
+    render_pairs(stdout, "runtime config", rows.as_slice())?;
+    writeln!(stdout, "detail: {}", view.detail)?;
+    writeln!(stdout, "source: {}", view.source)?;
+    Ok(())
+}
+
+fn render_runtime_logs(
+    stdout: &mut dyn Write,
+    view: &RuntimeLogsView,
+) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("runtime · {} · logs", view.runtime_id).as_str())?;
+    let mut rows = vec![
+        ("runtime", view.runtime_id.as_str()),
+        ("instance", view.instance_id.as_str()),
+        ("instance source", view.instance_source.as_str()),
+        ("group", view.runtime_group.as_str()),
+        ("state", view.state.as_str()),
+        ("stdout present", yes_no(view.stdout_log_present)),
+        ("stderr present", yes_no(view.stderr_log_present)),
+    ];
+    if let Some(stdout_log_path) = &view.stdout_log_path {
+        rows.push(("stdout log", stdout_log_path.as_str()));
+    }
+    if let Some(stderr_log_path) = &view.stderr_log_path {
+        rows.push(("stderr log", stderr_log_path.as_str()));
+    }
+    render_pairs(stdout, "runtime logs", rows.as_slice())?;
+    writeln!(stdout, "detail: {}", view.detail)?;
+    writeln!(stdout, "source: {}", view.source)?;
+    Ok(())
+}
+
+fn render_runtime_status(
+    stdout: &mut dyn Write,
+    view: &RuntimeStatusView,
+) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("runtime · {} · status", view.runtime_id).as_str())?;
+    let mut rows = vec![
+        ("runtime", view.runtime_id.as_str()),
+        ("instance", view.instance_id.as_str()),
+        ("instance source", view.instance_source.as_str()),
+        ("group", view.runtime_group.as_str()),
+        ("posture", view.management_posture.as_str()),
+        ("state", view.state.as_str()),
+        ("install state", view.install_state.as_str()),
+        ("health state", view.health_state.as_str()),
+        ("health source", view.health_source.as_str()),
+        ("registry", view.registry_path.as_str()),
+    ];
+    if let Some(mode) = &view.management_mode {
+        rows.push(("management mode", mode.as_str()));
+    }
+    if let Some(service_manager_integration) = view.service_manager_integration {
+        rows.push((
+            "service manager integration",
+            yes_no(service_manager_integration),
+        ));
+    }
+    if let Some(uses_absolute_binary_paths) = view.uses_absolute_binary_paths {
+        rows.push((
+            "uses absolute binary paths",
+            yes_no(uses_absolute_binary_paths),
+        ));
+    }
+    if let Some(preferred_cli_binding) = view.preferred_cli_binding {
+        rows.push(("preferred cli binding", yes_no(preferred_cli_binding)));
+    }
+    render_pairs(stdout, "runtime status", rows.as_slice())?;
+    writeln!(stdout, "detail: {}", view.detail)?;
+    if let Some(instance_paths) = &view.instance_paths {
+        render_pairs(
+            stdout,
+            "instance paths",
+            &[
+                ("install dir", instance_paths.install_dir.as_str()),
+                ("state dir", instance_paths.state_dir.as_str()),
+                ("logs dir", instance_paths.logs_dir.as_str()),
+                ("run dir", instance_paths.run_dir.as_str()),
+                ("secrets dir", instance_paths.secrets_dir.as_str()),
+                ("pid file", instance_paths.pid_file_path.as_str()),
+                ("stdout log", instance_paths.stdout_log_path.as_str()),
+                ("stderr log", instance_paths.stderr_log_path.as_str()),
+                ("metadata", instance_paths.metadata_path.as_str()),
+            ],
+        )?;
+    }
+    if let Some(record) = &view.instance_record {
+        let mut record_rows = vec![
+            ("management mode", record.management_mode.as_str()),
+            ("install state", record.install_state.as_str()),
+            ("binary path", record.binary_path.as_str()),
+            ("config path", record.config_path.as_str()),
+            ("logs path", record.logs_path.as_str()),
+            ("run path", record.run_path.as_str()),
+            ("installed version", record.installed_version.as_str()),
+        ];
+        if let Some(health_endpoint) = &record.health_endpoint {
+            record_rows.push(("health endpoint", health_endpoint.as_str()));
+        }
+        if let Some(secret_material_ref) = &record.secret_material_ref {
+            record_rows.push(("secret material ref", secret_material_ref.as_str()));
+        }
+        if let Some(last_started_at) = &record.last_started_at {
+            record_rows.push(("last started at", last_started_at.as_str()));
+        }
+        if let Some(last_stopped_at) = &record.last_stopped_at {
+            record_rows.push(("last stopped at", last_stopped_at.as_str()));
+        }
+        if let Some(notes) = &record.notes {
+            record_rows.push(("notes", notes.as_str()));
+        }
+        render_pairs(stdout, "instance record", record_rows.as_slice())?;
+    }
+    if !view.lifecycle_actions.is_empty() {
+        writeln!(stdout, "lifecycle actions: {}", view.lifecycle_actions.join(", "))?;
+    }
     writeln!(stdout, "source: {}", view.source)?;
     Ok(())
 }
@@ -2321,6 +2535,18 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::RpcSessions(_) => "rpc sessions",
         CommandView::RpcStatus(_) => "rpc status",
         CommandView::RelayList(_) => "relay ls",
+        CommandView::RuntimeAction(view) => match view.action.as_str() {
+            "install" => "runtime install",
+            "uninstall" => "runtime uninstall",
+            "start" => "runtime start",
+            "stop" => "runtime stop",
+            "restart" => "runtime restart",
+            "config_set" => "runtime config set",
+            _ => "runtime",
+        },
+        CommandView::RuntimeConfigShow(_) => "runtime config show",
+        CommandView::RuntimeLogs(_) => "runtime logs",
+        CommandView::RuntimeStatus(_) => "runtime status",
         CommandView::SignerStatus(_) => "signer status",
         CommandView::SyncPull(_) => "sync pull",
         CommandView::SyncPush(_) => "sync push",

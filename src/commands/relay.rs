@@ -12,6 +12,7 @@ pub fn list(config: &RuntimeConfig) -> CommandOutput {
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::RelayList(view))
         }
+        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::RelayList(view)),
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::RelayList(view))
         }

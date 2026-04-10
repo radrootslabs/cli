@@ -65,6 +65,7 @@ pub enum Command {
     Order(OrderArgs),
     Relay(RelayArgs),
     Rpc(RpcArgs),
+    Runtime(RuntimeArgs),
     Signer(SignerArgs),
     Sync(SyncArgs),
 }
@@ -123,6 +124,19 @@ impl Command {
             Self::Rpc(rpc) => match rpc.command {
                 RpcCommand::Status => "rpc status",
                 RpcCommand::Sessions => "rpc sessions",
+            },
+            Self::Runtime(runtime) => match &runtime.command {
+                RuntimeCommand::Install(_) => "runtime install",
+                RuntimeCommand::Uninstall(_) => "runtime uninstall",
+                RuntimeCommand::Status(_) => "runtime status",
+                RuntimeCommand::Start(_) => "runtime start",
+                RuntimeCommand::Stop(_) => "runtime stop",
+                RuntimeCommand::Restart(_) => "runtime restart",
+                RuntimeCommand::Logs(_) => "runtime logs",
+                RuntimeCommand::Config(runtime_config) => match &runtime_config.command {
+                    RuntimeConfigCommand::Show(_) => "runtime config show",
+                    RuntimeConfigCommand::Set(_) => "runtime config set",
+                },
             },
             Self::Signer(signer) => match signer.command {
                 SignerCommand::Status => "signer status",
@@ -398,6 +412,51 @@ pub enum RpcCommand {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct RuntimeArgs {
+    #[command(subcommand)]
+    pub command: RuntimeCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum RuntimeCommand {
+    Install(RuntimeTargetArgs),
+    Uninstall(RuntimeTargetArgs),
+    Status(RuntimeTargetArgs),
+    Start(RuntimeTargetArgs),
+    Stop(RuntimeTargetArgs),
+    Restart(RuntimeTargetArgs),
+    Logs(RuntimeTargetArgs),
+    Config(RuntimeConfigArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RuntimeTargetArgs {
+    pub runtime: String,
+    #[arg(long)]
+    pub instance: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RuntimeConfigArgs {
+    #[command(subcommand)]
+    pub command: RuntimeConfigCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum RuntimeConfigCommand {
+    Show(RuntimeTargetArgs),
+    Set(RuntimeConfigSetArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RuntimeConfigSetArgs {
+    #[command(flatten)]
+    pub target: RuntimeTargetArgs,
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct OrderArgs {
     #[command(subcommand)]
     pub command: OrderCommand,
@@ -454,7 +513,8 @@ mod tests {
     use super::{
         AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, JobWatchArgs, ListingCommand,
         LocalCommand, LocalExportFormatArg, MycCommand, NetCommand, OrderCommand, OrderWatchArgs,
-        RelayCommand, RpcCommand, SignerCommand, SyncCommand, SyncWatchArgs,
+        RelayCommand, RpcCommand, RuntimeCommand, RuntimeConfigCommand, SignerCommand,
+        SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     use clap::Parser;
@@ -831,6 +891,85 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
+        let runtime_status = CliArgs::parse_from(["radroots", "runtime", "status", "radrootsd"]);
+        match runtime_status.command {
+            Command::Runtime(args) => match args.command {
+                RuntimeCommand::Status(target) => {
+                    assert_eq!(target.runtime, "radrootsd");
+                    assert!(target.instance.is_none());
+                }
+                _ => panic!("unexpected runtime subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let runtime_logs = CliArgs::parse_from([
+            "radroots",
+            "runtime",
+            "logs",
+            "radrootsd",
+            "--instance",
+            "local",
+        ]);
+        match runtime_logs.command {
+            Command::Runtime(args) => match args.command {
+                RuntimeCommand::Logs(target) => {
+                    assert_eq!(target.runtime, "radrootsd");
+                    assert_eq!(target.instance.as_deref(), Some("local"));
+                }
+                _ => panic!("unexpected runtime subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let runtime_config_show = CliArgs::parse_from([
+            "radroots",
+            "runtime",
+            "config",
+            "show",
+            "radrootsd",
+        ]);
+        match runtime_config_show.command {
+            Command::Runtime(args) => match args.command {
+                RuntimeCommand::Config(runtime_config) => match runtime_config.command {
+                    RuntimeConfigCommand::Show(target) => {
+                        assert_eq!(target.runtime, "radrootsd");
+                        assert!(target.instance.is_none());
+                    }
+                    _ => panic!("unexpected runtime config subcommand"),
+                },
+                _ => panic!("unexpected runtime subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let runtime_config_set = CliArgs::parse_from([
+            "radroots",
+            "runtime",
+            "config",
+            "set",
+            "radrootsd",
+            "--instance",
+            "local",
+            "bridge.enabled",
+            "true",
+        ]);
+        match runtime_config_set.command {
+            Command::Runtime(args) => match args.command {
+                RuntimeCommand::Config(runtime_config) => match runtime_config.command {
+                    RuntimeConfigCommand::Set(set) => {
+                        assert_eq!(set.target.runtime, "radrootsd");
+                        assert_eq!(set.target.instance.as_deref(), Some("local"));
+                        assert_eq!(set.key, "bridge.enabled");
+                        assert_eq!(set.value, "true");
+                    }
+                    _ => panic!("unexpected runtime config subcommand"),
+                },
+                _ => panic!("unexpected runtime subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
         let order_new = CliArgs::parse_from([
             "radroots",
             "order",
@@ -971,5 +1110,14 @@ mod tests {
         let order_submit = CliArgs::parse_from(["radroots", "order", "submit", "ord_demo"]);
         assert_eq!(order_submit.command.display_name(), "order submit");
         assert!(order_submit.command.supports_dry_run());
+
+        let runtime_status = CliArgs::parse_from(["radroots", "runtime", "status", "radrootsd"]);
+        assert_eq!(runtime_status.command.display_name(), "runtime status");
+        assert!(runtime_status.command.supports_dry_run());
+        assert!(
+            !runtime_status
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
     }
 }

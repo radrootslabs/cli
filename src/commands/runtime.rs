@@ -1,18 +1,23 @@
 use crate::domain::runtime::{
     AccountRuntimeView, AccountSecretRuntimeView, CapabilityBindingRuntimeView,
-    ConfigFilesRuntimeView, ConfigShowView, HyfProviderRuntimeView, HyfRuntimeView,
-    LegacyPathRuntimeView, LocalRuntimeView, LoggingRuntimeView, MigrationRuntimeView,
-    MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
+    CommandOutput, CommandView, ConfigFilesRuntimeView, ConfigShowView, HyfProviderRuntimeView,
+    HyfRuntimeView, LegacyPathRuntimeView, LocalRuntimeView, LoggingRuntimeView,
+    MigrationRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
     ResolvedProviderRuntimeView, RpcRuntimeView, SignerRuntimeView, WorkflowRuntimeView,
     WritePlaneRuntimeView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
+use crate::runtime::management::{
+    RuntimeCommandAvailability, RuntimeConfigMutationRequest, RuntimeLifecycleAction,
+    inspect_action, inspect_config_set, inspect_config_show, inspect_logs, inspect_status,
+};
 use crate::runtime::provider::{
     resolve_capability_providers, resolve_hyf_provider, resolve_workflow_provider,
     resolve_write_plane_provider,
 };
+use crate::cli::{RuntimeConfigSetArgs, RuntimeTargetArgs};
 
 pub fn show(
     config: &RuntimeConfig,
@@ -188,6 +193,140 @@ pub fn show(
     })
 }
 
+pub fn status(
+    config: &RuntimeConfig,
+    args: &RuntimeTargetArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let inspection = inspect_status(config, args.runtime.as_str(), args.instance.as_deref())?;
+    Ok(command_output(
+        inspection.availability,
+        CommandView::RuntimeStatus(inspection.view),
+    ))
+}
+
+pub fn install(
+    config: &RuntimeConfig,
+    args: &RuntimeTargetArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let inspection = inspect_action(
+        config,
+        args.runtime.as_str(),
+        args.instance.as_deref(),
+        RuntimeLifecycleAction::Install,
+    )?;
+    Ok(command_output(
+        inspection.availability,
+        CommandView::RuntimeAction(inspection.view),
+    ))
+}
+
+pub fn uninstall(
+    config: &RuntimeConfig,
+    args: &RuntimeTargetArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let inspection = inspect_action(
+        config,
+        args.runtime.as_str(),
+        args.instance.as_deref(),
+        RuntimeLifecycleAction::Uninstall,
+    )?;
+    Ok(command_output(
+        inspection.availability,
+        CommandView::RuntimeAction(inspection.view),
+    ))
+}
+
+pub fn start(
+    config: &RuntimeConfig,
+    args: &RuntimeTargetArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let inspection = inspect_action(
+        config,
+        args.runtime.as_str(),
+        args.instance.as_deref(),
+        RuntimeLifecycleAction::Start,
+    )?;
+    Ok(command_output(
+        inspection.availability,
+        CommandView::RuntimeAction(inspection.view),
+    ))
+}
+
+pub fn stop(
+    config: &RuntimeConfig,
+    args: &RuntimeTargetArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let inspection = inspect_action(
+        config,
+        args.runtime.as_str(),
+        args.instance.as_deref(),
+        RuntimeLifecycleAction::Stop,
+    )?;
+    Ok(command_output(
+        inspection.availability,
+        CommandView::RuntimeAction(inspection.view),
+    ))
+}
+
+pub fn restart(
+    config: &RuntimeConfig,
+    args: &RuntimeTargetArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let inspection = inspect_action(
+        config,
+        args.runtime.as_str(),
+        args.instance.as_deref(),
+        RuntimeLifecycleAction::Restart,
+    )?;
+    Ok(command_output(
+        inspection.availability,
+        CommandView::RuntimeAction(inspection.view),
+    ))
+}
+
+pub fn logs(
+    config: &RuntimeConfig,
+    args: &RuntimeTargetArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let inspection = inspect_logs(config, args.runtime.as_str(), args.instance.as_deref())?;
+    Ok(command_output(
+        inspection.availability,
+        CommandView::RuntimeLogs(inspection.view),
+    ))
+}
+
+pub fn config_show(
+    config: &RuntimeConfig,
+    _logging: &LoggingState,
+    args: &RuntimeTargetArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let inspection =
+        inspect_config_show(config, args.runtime.as_str(), args.instance.as_deref())?;
+    Ok(command_output(
+        inspection.availability,
+        CommandView::RuntimeConfigShow(inspection.view),
+    ))
+}
+
+pub fn config_set(
+    config: &RuntimeConfig,
+    args: &RuntimeConfigSetArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let inspection = inspect_config_set(
+        config,
+        &RuntimeConfigMutationRequest {
+            runtime_id: args.target.runtime.clone(),
+            instance_id: args.target.instance.clone(),
+            key: args.key.clone(),
+            value: args.value.clone(),
+        },
+    )?;
+    Ok(command_output(
+        inspection.availability,
+        CommandView::RuntimeAction(inspection.view),
+    ))
+}
+
 fn migration_runtime_view(config: &RuntimeConfig) -> MigrationRuntimeView {
     let report = &config.migration.report;
     let detected_legacy_paths = report
@@ -220,5 +359,13 @@ fn migration_runtime_view(config: &RuntimeConfig) -> MigrationRuntimeView {
         compatibility_window: report.compatibility_window.to_owned(),
         detected_legacy_paths,
         actions,
+    }
+}
+
+fn command_output(availability: RuntimeCommandAvailability, view: CommandView) -> CommandOutput {
+    match availability {
+        RuntimeCommandAvailability::Success => CommandOutput::success(view),
+        RuntimeCommandAvailability::Unconfigured => CommandOutput::unconfigured(view),
+        RuntimeCommandAvailability::Unsupported => CommandOutput::unsupported(view),
     }
 }

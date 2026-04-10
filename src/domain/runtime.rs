@@ -31,6 +31,13 @@ impl CommandOutput {
         }
     }
 
+    pub fn unsupported(view: CommandView) -> Self {
+        Self {
+            disposition: CommandDisposition::Unsupported,
+            view,
+        }
+    }
+
     pub fn internal_error(view: CommandView) -> Self {
         Self {
             disposition: CommandDisposition::InternalError,
@@ -52,6 +59,7 @@ pub enum CommandDisposition {
     Success,
     Unconfigured,
     ExternalUnavailable,
+    Unsupported,
     InternalError,
 }
 
@@ -61,6 +69,7 @@ impl CommandDisposition {
             Self::Success => ExitCode::SUCCESS,
             Self::Unconfigured => ExitCode::from(3),
             Self::ExternalUnavailable => ExitCode::from(4),
+            Self::Unsupported => ExitCode::from(5),
             Self::InternalError => ExitCode::from(1),
         }
     }
@@ -98,6 +107,10 @@ pub enum CommandView {
     RpcSessions(RpcSessionsView),
     RpcStatus(RpcStatusView),
     RelayList(RelayListView),
+    RuntimeAction(RuntimeActionView),
+    RuntimeConfigShow(RuntimeManagedConfigView),
+    RuntimeLogs(RuntimeLogsView),
+    RuntimeStatus(RuntimeStatusView),
     SignerStatus(SignerStatusView),
     SyncPull(SyncActionView),
     SyncPush(SyncActionView),
@@ -125,6 +138,123 @@ pub struct ConfigShowView {
     pub rpc: RpcRuntimeView,
     pub capability_bindings: Vec<CapabilityBindingRuntimeView>,
     pub resolved_providers: Vec<ResolvedProviderRuntimeView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeActionView {
+    pub action: String,
+    pub runtime_id: String,
+    pub instance_id: String,
+    pub instance_source: String,
+    pub runtime_group: String,
+    pub state: String,
+    pub source: String,
+    pub detail: String,
+    pub mutates_bindings: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeManagedConfigView {
+    pub runtime_id: String,
+    pub instance_id: String,
+    pub instance_source: String,
+    pub runtime_group: String,
+    pub state: String,
+    pub source: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_path: Option<String>,
+    pub config_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_bootstrap_secret: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_config_bootstrap: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_signer_provider: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeLogsView {
+    pub runtime_id: String,
+    pub instance_id: String,
+    pub instance_source: String,
+    pub runtime_group: String,
+    pub state: String,
+    pub source: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout_log_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr_log_path: Option<String>,
+    pub stdout_log_present: bool,
+    pub stderr_log_present: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeStatusView {
+    pub runtime_id: String,
+    pub instance_id: String,
+    pub instance_source: String,
+    pub runtime_group: String,
+    pub management_posture: String,
+    pub state: String,
+    pub source: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub management_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_manager_integration: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uses_absolute_binary_paths: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_cli_binding: Option<bool>,
+    pub install_state: String,
+    pub health_state: String,
+    pub health_source: String,
+    pub registry_path: String,
+    pub lifecycle_actions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_paths: Option<RuntimeInstancePathsView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_record: Option<RuntimeInstanceRecordView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeInstancePathsView {
+    pub install_dir: String,
+    pub state_dir: String,
+    pub logs_dir: String,
+    pub run_dir: String,
+    pub secrets_dir: String,
+    pub pid_file_path: String,
+    pub stdout_log_path: String,
+    pub stderr_log_path: String,
+    pub metadata_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeInstanceRecordView {
+    pub management_mode: String,
+    pub install_state: String,
+    pub binary_path: String,
+    pub config_path: String,
+    pub logs_path: String,
+    pub run_path: String,
+    pub installed_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_material_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_stopped_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -28,6 +28,9 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<CommandOutput
         crate::domain::runtime::CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::ListingGet(view))
         }
+        crate::domain::runtime::CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::ListingGet(view))
+        }
         crate::domain::runtime::CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::ListingGet(view))
         }
@@ -50,6 +53,9 @@ pub fn publish(
         crate::domain::runtime::CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::ListingMutation(view))
         }
+        crate::domain::runtime::CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::ListingMutation(view))
+        }
         crate::domain::runtime::CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::ListingMutation(view))
         }
@@ -71,6 +77,9 @@ pub fn update(
         crate::domain::runtime::CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::ListingMutation(view))
         }
+        crate::domain::runtime::CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::ListingMutation(view))
+        }
         crate::domain::runtime::CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::ListingMutation(view))
         }
@@ -91,6 +100,9 @@ pub fn archive(
         }
         crate::domain::runtime::CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::ListingMutation(view))
+        }
+        crate::domain::runtime::CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::ListingMutation(view))
         }
         crate::domain::runtime::CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::ListingMutation(view))

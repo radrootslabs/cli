@@ -11,6 +11,7 @@ pub fn search(config: &RuntimeConfig, args: &FindArgs) -> Result<CommandOutput, 
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::Find(view))
         }
+        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::Find(view)),
         CommandDisposition::InternalError => CommandOutput::internal_error(CommandView::Find(view)),
     })
 }

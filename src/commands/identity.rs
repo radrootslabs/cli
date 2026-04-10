@@ -63,6 +63,9 @@ pub fn show(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::AccountWhoami(view))
         }
+        CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::AccountWhoami(view))
+        }
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::AccountWhoami(view))
         }

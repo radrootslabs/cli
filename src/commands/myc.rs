@@ -11,6 +11,7 @@ pub fn status(config: &RuntimeConfig) -> CommandOutput {
         CommandDisposition::ExternalUnavailable => {
             CommandOutput::external_unavailable(CommandView::MycStatus(view))
         }
+        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::MycStatus(view)),
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::MycStatus(view))
         }
