@@ -12,6 +12,7 @@ use crate::domain::runtime::{
     RpcStatusView,
 };
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime::provider;
 
 const RPC_SOURCE: &str = "daemon rpc · durable write plane";
 const BRIDGE_SOURCE: &str = "daemon bridge · durable write plane";
@@ -32,6 +33,12 @@ pub enum DaemonRpcError {
 enum RpcAuthMode {
     None,
     BridgeBearer,
+}
+
+#[derive(Debug, Clone)]
+struct RpcTarget {
+    url: String,
+    bridge_bearer_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -380,8 +387,9 @@ pub fn bridge_listing_publish(
     idempotency_key: Option<&str>,
     signer_session_id: Option<&str>,
 ) -> Result<BridgeListingPublishResult, DaemonRpcError> {
+    let target = actor_write_target(config)?;
     let response: BridgePublishResponseRemote = call(
-        config,
+        &target,
         "bridge.listing.publish",
         Some(serde_json::json!({
             "listing": listing,
@@ -410,8 +418,9 @@ pub fn bridge_order_request(
     idempotency_key: Option<&str>,
     signer_session_id: Option<&str>,
 ) -> Result<BridgeOrderRequestResult, DaemonRpcError> {
+    let target = actor_write_target(config)?;
     let response: BridgePublishResponseRemote = call(
-        config,
+        &target,
         "bridge.order.request",
         Some(serde_json::json!({
             "order": order,
@@ -433,11 +442,21 @@ pub fn bridge_order_request(
 }
 
 fn bridge_status(config: &RuntimeConfig) -> Result<BridgeStatusRemote, DaemonRpcError> {
-    call(config, "bridge.status", None, RpcAuthMode::BridgeBearer)
+    call(
+        &default_target(config),
+        "bridge.status",
+        None,
+        RpcAuthMode::BridgeBearer,
+    )
 }
 
 fn bridge_jobs(config: &RuntimeConfig) -> Result<Vec<BridgeJobRemote>, DaemonRpcError> {
-    call(config, "bridge.job.list", None, RpcAuthMode::BridgeBearer)
+    call(
+        &default_target(config),
+        "bridge.job.list",
+        None,
+        RpcAuthMode::BridgeBearer,
+    )
 }
 
 fn bridge_job_status(
@@ -445,7 +464,7 @@ fn bridge_job_status(
     job_id: &str,
 ) -> Result<BridgeJobRemote, DaemonRpcError> {
     call(
-        config,
+        &default_target(config),
         "bridge.job.status",
         Some(serde_json::json!({ "job_id": job_id })),
         RpcAuthMode::BridgeBearer,
@@ -453,7 +472,29 @@ fn bridge_job_status(
 }
 
 fn nip46_sessions(config: &RuntimeConfig) -> Result<Vec<Nip46SessionRemote>, DaemonRpcError> {
-    call(config, "nip46.session.list", None, RpcAuthMode::None)
+    nip46_sessions_with_target(&default_target(config))
+}
+
+fn nip46_sessions_with_target(
+    target: &RpcTarget,
+) -> Result<Vec<Nip46SessionRemote>, DaemonRpcError> {
+    call(target, "nip46.session.list", None, RpcAuthMode::None)
+}
+
+fn actor_write_target(config: &RuntimeConfig) -> Result<RpcTarget, DaemonRpcError> {
+    let resolved =
+        provider::resolve_actor_write_plane_target(config).map_err(DaemonRpcError::Unconfigured)?;
+    Ok(RpcTarget {
+        url: resolved.url,
+        bridge_bearer_token: Some(resolved.bridge_bearer_token),
+    })
+}
+
+fn default_target(config: &RuntimeConfig) -> RpcTarget {
+    RpcTarget {
+        url: config.rpc.url.clone(),
+        bridge_bearer_token: config.rpc.bridge_bearer_token.clone(),
+    }
 }
 
 pub fn resolve_signer_session_id(
@@ -463,7 +504,8 @@ pub fn resolve_signer_session_id(
     event_kind: u32,
     requested_session_id: Option<&str>,
 ) -> Result<String, DaemonRpcError> {
-    let sessions = nip46_sessions(config)?;
+    let target = actor_write_target(config)?;
+    let sessions = nip46_sessions_with_target(&target)?;
 
     if let Some(session_id) = requested_session_id {
         let Some(session) = sessions
@@ -540,7 +582,7 @@ fn sign_event_allowed(perms: &[String], kind: u32) -> bool {
 }
 
 fn call<T: DeserializeOwned>(
-    config: &RuntimeConfig,
+    target: &RpcTarget,
     method: &str,
     params: Option<Value>,
     auth_mode: RpcAuthMode,
@@ -550,7 +592,7 @@ fn call<T: DeserializeOwned>(
         .build()
         .map_err(|error| DaemonRpcError::InvalidResponse(format!("build rpc client: {error}")))?;
 
-    let mut request = client.post(config.rpc.url.as_str()).json(&JsonRpcRequest {
+    let mut request = client.post(target.url.as_str()).json(&JsonRpcRequest {
         jsonrpc: "2.0",
         id: 1,
         method,
@@ -558,7 +600,7 @@ fn call<T: DeserializeOwned>(
     });
 
     if matches!(auth_mode, RpcAuthMode::BridgeBearer) {
-        let Some(token) = config.rpc.bridge_bearer_token.as_deref() else {
+        let Some(token) = target.bridge_bearer_token.as_deref() else {
             return Err(DaemonRpcError::Unconfigured(
                 "bridge bearer token is not configured".to_owned(),
             ));
@@ -569,7 +611,7 @@ fn call<T: DeserializeOwned>(
     let response = request.send().map_err(|error| {
         DaemonRpcError::External(format!(
             "failed to reach daemon rpc at {}: {error}",
-            config.rpc.url
+            target.url
         ))
     })?;
     let status = response.status();

@@ -62,6 +62,26 @@ fn write_workspace_config(workdir: &Path, contents: &str) {
     fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
 }
 
+fn workspace_config_with_write_plane(extra: &str, url: &str) -> String {
+    let mut rendered = String::new();
+    if !extra.trim().is_empty() {
+        rendered.push_str(extra.trim());
+        rendered.push_str("\n\n");
+    }
+    rendered.push_str(
+        format!(
+            r#"[[capability_binding]]
+capability = "write_plane.trade_jsonrpc"
+provider = "radrootsd"
+target_kind = "explicit_endpoint"
+target = "{url}"
+"#
+        )
+        .as_str(),
+    );
+    rendered
+}
+
 fn write_fake_myc(dir: &Path, script: &str) -> std::path::PathBuf {
     let path = dir.join("fake-myc");
     fs::write(&path, script).expect("write fake myc");
@@ -396,9 +416,12 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+    );
 
     let publish_output = cli_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
         .args([
             "--json",
@@ -437,7 +460,6 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
     );
 
     let update_output = cli_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
         .args([
             "--json",
@@ -545,9 +567,12 @@ fn listing_archive_and_dry_run_are_truthful() {
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+    );
 
     let archive_output = cli_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
         .args([
             "--json",
@@ -665,20 +690,6 @@ fn listing_publish_uses_myc_binding_before_resolving_daemon_signer_session() {
     )
     .expect("write listing draft");
 
-    write_workspace_config(
-        dir.path(),
-        format!(
-            r#"
-[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "managed_instance"
-target = "default"
-managed_account_ref = "{account_id}"
-"#
-        )
-        .as_str(),
-    );
     let myc = write_fake_myc(
         dir.path(),
         successful_status_script(
@@ -718,9 +729,26 @@ managed_account_ref = "{account_id}"
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane(
+            format!(
+                r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{account_id}"
+"#
+            )
+            .as_str(),
+            server.url().as_str(),
+        )
+        .as_str(),
+    );
 
     let output = cli_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
         .args([
             "--json",
@@ -816,20 +844,6 @@ fn listing_publish_rejects_myc_binding_that_resolves_the_wrong_actor() {
     )
     .expect("write listing draft");
 
-    write_workspace_config(
-        dir.path(),
-        format!(
-            r#"
-[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "managed_instance"
-target = "default"
-managed_account_ref = "{mismatch_account_id}"
-"#
-        )
-        .as_str(),
-    );
     let myc = write_fake_myc(
         dir.path(),
         successful_status_script(
@@ -849,9 +863,26 @@ managed_account_ref = "{mismatch_account_id}"
         recorded.lock().expect("recorded").push(body.clone());
         MockRpcResponse::rpc_error(-32601, "daemon write path should not be reached")
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane(
+            format!(
+                r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{mismatch_account_id}"
+"#
+            )
+            .as_str(),
+            server.url().as_str(),
+        )
+        .as_str(),
+    );
 
     let output = cli_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
         .args([
             "--json",
@@ -942,9 +973,12 @@ fn listing_publish_without_matching_signer_session_exits_unconfigured() {
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+    );
 
     let publish_output = cli_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
         .args([
             "--json",
@@ -1036,9 +1070,12 @@ fn listing_publish_rejects_requested_session_that_mismatches_seller_pubkey() {
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+    );
 
     let publish_output = cli_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
         .args([
             "--json",
@@ -1064,6 +1101,88 @@ fn listing_publish_rejects_requested_session_that_mismatches_seller_pubkey() {
     let recorded = requests.lock().expect("requests");
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0]["method"], "nip46.session.list");
+}
+
+#[test]
+fn listing_publish_requires_authoritative_write_plane_binding() {
+    let _guard = listing_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    let account_output = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let seller_pubkey = account_json["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey")
+        .to_owned();
+    seed_farm(
+        dir.path(),
+        seller_pubkey.as_str(),
+        "AAAAAAAAAAAAAAAAAAAAAw",
+        "La Huerta",
+    );
+
+    let draft_path = dir.path().join("missing-write-binding.toml");
+    fs::write(
+        &draft_path,
+        valid_listing_draft(
+            "AAAAAAAAAAAAAAAAAAAAAg",
+            "",
+            "",
+            "eggs",
+            "Pasture eggs",
+            "Protein",
+            "Fresh pasture-raised eggs collected daily.",
+            "12",
+            "each",
+            "4.50",
+            "USD",
+            "1",
+            "each",
+            "18",
+            "pickup",
+            "La Huerta del Sur",
+        ),
+    )
+    .expect("write listing draft");
+
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        recorded.lock().expect("recorded").push(body);
+        MockRpcResponse::rpc_error(-32601, "daemon write path should not be reached")
+    });
+
+    let publish_output = cli_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge-secret")
+        .args([
+            "--json",
+            "listing",
+            "publish",
+            draft_path.to_str().expect("draft path"),
+        ])
+        .output()
+        .expect("run listing publish");
+    assert_eq!(publish_output.status.code(), Some(3));
+    let publish_json: Value =
+        serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
+    assert_eq!(publish_json["state"], "unconfigured");
+    assert!(
+        publish_json["reason"].as_str().expect("reason").contains(
+            "explicit write-plane capability binding or managed radrootsd instance `local`"
+        )
+    );
+    assert!(requests.lock().expect("requests").is_empty());
 }
 
 fn seed_farm(workdir: &Path, pubkey: &str, d_tag: &str, name: &str) {

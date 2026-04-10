@@ -61,6 +61,26 @@ fn write_workspace_config(workdir: &Path, contents: &str) {
     fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
 }
 
+fn workspace_config_with_write_plane(extra: &str, url: &str) -> String {
+    let mut rendered = String::new();
+    if !extra.trim().is_empty() {
+        rendered.push_str(extra.trim());
+        rendered.push_str("\n\n");
+    }
+    rendered.push_str(
+        format!(
+            r#"[[capability_binding]]
+capability = "write_plane.trade_jsonrpc"
+provider = "radrootsd"
+target_kind = "explicit_endpoint"
+target = "{url}"
+"#
+        )
+        .as_str(),
+    );
+    rendered
+}
+
 fn write_fake_myc(dir: &Path, script: &str) -> std::path::PathBuf {
     let path = dir.join("fake-myc");
     fs::write(&path, script).expect("write fake myc");
@@ -566,9 +586,12 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+    );
 
     let submit_output = order_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "test-token")
         .args([
             "--json",
@@ -728,20 +751,6 @@ fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
         .expect("buyer pubkey")
         .to_owned();
 
-    write_workspace_config(
-        dir.path(),
-        format!(
-            r#"
-[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "managed_instance"
-target = "default"
-managed_account_ref = "{account_id}"
-"#
-        )
-        .as_str(),
-    );
     let myc = write_fake_myc(
         dir.path(),
         successful_status_script(
@@ -796,9 +805,26 @@ managed_account_ref = "{account_id}"
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane(
+            format!(
+                r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{account_id}"
+"#
+            )
+            .as_str(),
+            server.url().as_str(),
+        )
+        .as_str(),
+    );
 
     let submit_output = order_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "test-token")
         .args([
             "--json",
@@ -877,20 +903,6 @@ fn order_submit_rejects_myc_binding_that_resolves_the_wrong_actor() {
         .expect("mismatch account id");
     let mismatch_public_identity = mismatch_account_json["public_identity"].clone();
 
-    write_workspace_config(
-        dir.path(),
-        format!(
-            r#"
-[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "managed_instance"
-target = "default"
-managed_account_ref = "{mismatch_account_id}"
-"#
-        )
-        .as_str(),
-    );
     let myc = write_fake_myc(
         dir.path(),
         successful_status_script(
@@ -917,9 +929,26 @@ managed_account_ref = "{mismatch_account_id}"
             });
         panic!("daemon write path should not be reached");
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane(
+            format!(
+                r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{mismatch_account_id}"
+"#
+            )
+            .as_str(),
+            server.url().as_str(),
+        )
+        .as_str(),
+    );
 
     let submit_output = order_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "test-token")
         .args([
             "--json",
@@ -1009,9 +1038,12 @@ fn order_submit_without_unique_matching_signer_session_exits_unconfigured() {
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+    );
 
     let submit_output = order_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "test-token")
         .args(["--json", "order", "submit", order_id])
         .output()
@@ -1082,9 +1114,12 @@ fn order_submit_rejects_requested_session_that_mismatches_buyer_pubkey() {
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+    );
 
     let submit_output = order_command_in(dir.path())
-        .env("RADROOTS_RPC_URL", server.url())
         .env("RADROOTS_RPC_BEARER_TOKEN", "test-token")
         .args([
             "--json",

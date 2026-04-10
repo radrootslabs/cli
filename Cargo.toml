@@ -31,6 +31,7 @@ radroots_nostr_signer = { path = "../lib/crates/nostr_signer" }
 radroots_protected_store = { path = "../lib/crates/protected_store", features = ["std"] }
 radroots_replica_db = { path = "../lib/crates/replica_db" }
 radroots_replica_sync = { path = "../lib/crates/replica_sync" }
+radroots_runtime_manager = { path = "../lib/crates/runtime_manager" }
 radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
 radroots_secret_vault = { path = "../lib/crates/secret_vault", features = ["std", "os-keyring"] }
 radroots_sql_core = { path = "../lib/crates/sql_core", features = ["native"] }

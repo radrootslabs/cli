@@ -1,6 +1,13 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use radroots_runtime_manager::{ManagedRuntimeInstallState, load_registry};
+use serde::Deserialize;
+use url::Url;
+
 use crate::runtime::config::{
-    CapabilityBindingInspection, CapabilityBindingInspectionState, RuntimeConfig,
-    INFERENCE_HYF_STDIO_CAPABILITY, WORKFLOW_TRADE_CAPABILITY,
+    CapabilityBindingInspection, CapabilityBindingInspectionState, CapabilityBindingTargetKind,
+    INFERENCE_HYF_STDIO_CAPABILITY, RuntimeConfig, WORKFLOW_TRADE_CAPABILITY,
     WRITE_PLANE_TRADE_JSONRPC_CAPABILITY,
 };
 use crate::runtime::hyf;
@@ -52,6 +59,12 @@ pub struct WritePlaneProviderView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWritePlaneTarget {
+    pub url: String,
+    pub bridge_bearer_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowProviderView {
     pub provider_runtime_id: String,
     pub binding_model: String,
@@ -96,18 +109,27 @@ pub struct HyfProviderView {
     pub deterministic_available: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WritePlaneResolution {
+    Ready {
+        target: ResolvedWritePlaneTarget,
+        view: WritePlaneProviderView,
+    },
+    Unconfigured(WritePlaneProviderView),
+}
+
 pub fn resolve_write_plane_provider(config: &RuntimeConfig) -> WritePlaneProviderView {
-    let _binding = inspect_binding(config, WRITE_PLANE_TRADE_JSONRPC_CAPABILITY);
-    WritePlaneProviderView {
-        provider_runtime_id: "radrootsd".to_owned(),
-        binding_model: "daemon_backed_jsonrpc".to_owned(),
-        state: "configured".to_owned(),
-        provenance: ProviderProvenance::DirectConfig.as_str().to_owned(),
-        source: "raw rpc config resolves the current write plane".to_owned(),
-        target_kind: None,
-        target: Some(config.rpc.url.clone()),
-        detail: "actor-authored durable writes still resolve through rpc.url until authoritative write-plane binding resolution lands".to_owned(),
-        bridge_auth_configured: config.rpc.bridge_bearer_token.is_some(),
+    match resolve_write_plane_resolution(config) {
+        WritePlaneResolution::Ready { view, .. } | WritePlaneResolution::Unconfigured(view) => view,
+    }
+}
+
+pub fn resolve_actor_write_plane_target(
+    config: &RuntimeConfig,
+) -> Result<ResolvedWritePlaneTarget, String> {
+    match resolve_write_plane_resolution(config) {
+        WritePlaneResolution::Ready { target, .. } => Ok(target),
+        WritePlaneResolution::Unconfigured(view) => Err(view.detail),
     }
 }
 
@@ -206,6 +228,300 @@ pub fn resolve_capability_providers(config: &RuntimeConfig) -> Vec<ResolvedProvi
     ]
 }
 
+fn resolve_write_plane_resolution(config: &RuntimeConfig) -> WritePlaneResolution {
+    if let Some(binding) = config.capability_binding(WRITE_PLANE_TRADE_JSONRPC_CAPABILITY) {
+        return resolve_bound_write_plane(config, binding);
+    }
+
+    match resolve_managed_write_plane_instance(config, "local") {
+        Ok(target) => WritePlaneResolution::Ready {
+            view: WritePlaneProviderView {
+                provider_runtime_id: "radrootsd".to_owned(),
+                binding_model: "daemon_backed_jsonrpc".to_owned(),
+                state: "configured".to_owned(),
+                provenance: ProviderProvenance::ManagedDefault.as_str().to_owned(),
+                source: "managed preferred radrootsd instance".to_owned(),
+                target_kind: Some("managed_instance".to_owned()),
+                target: Some("local".to_owned()),
+                detail: format!(
+                    "actor-authored durable writes resolve through managed radrootsd instance `local` at {}",
+                    target.url
+                ),
+                bridge_auth_configured: true,
+            },
+            target,
+        },
+        Err(reason) => WritePlaneResolution::Unconfigured(WritePlaneProviderView {
+            provider_runtime_id: "radrootsd".to_owned(),
+            binding_model: "daemon_backed_jsonrpc".to_owned(),
+            state: "unconfigured".to_owned(),
+            provenance: ProviderProvenance::Unavailable.as_str().to_owned(),
+            source: "no explicit capability binding or managed preferred default".to_owned(),
+            target_kind: None,
+            target: None,
+            detail: reason,
+            bridge_auth_configured: false,
+        }),
+    }
+}
+
+fn resolve_bound_write_plane(
+    config: &RuntimeConfig,
+    binding: &crate::runtime::config::CapabilityBindingConfig,
+) -> WritePlaneResolution {
+    match binding.target_kind {
+        CapabilityBindingTargetKind::ExplicitEndpoint => {
+            let target_url = match validate_write_plane_url(binding.target.as_str()) {
+                Ok(url) => url,
+                Err(reason) => {
+                    return WritePlaneResolution::Unconfigured(WritePlaneProviderView {
+                        provider_runtime_id: "radrootsd".to_owned(),
+                        binding_model: "daemon_backed_jsonrpc".to_owned(),
+                        state: "unconfigured".to_owned(),
+                        provenance: ProviderProvenance::ExplicitBinding.as_str().to_owned(),
+                        source: binding.source.as_str().to_owned(),
+                        target_kind: Some(binding.target_kind.as_str().to_owned()),
+                        target: Some(binding.target.clone()),
+                        detail: reason,
+                        bridge_auth_configured: false,
+                    });
+                }
+            };
+            let Some(bridge_bearer_token) = config
+                .rpc
+                .bridge_bearer_token
+                .as_deref()
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(ToOwned::to_owned)
+            else {
+                return WritePlaneResolution::Unconfigured(WritePlaneProviderView {
+                    provider_runtime_id: "radrootsd".to_owned(),
+                    binding_model: "daemon_backed_jsonrpc".to_owned(),
+                    state: "unconfigured".to_owned(),
+                    provenance: ProviderProvenance::ExplicitBinding.as_str().to_owned(),
+                    source: binding.source.as_str().to_owned(),
+                    target_kind: Some(binding.target_kind.as_str().to_owned()),
+                    target: Some(binding.target.clone()),
+                    detail:
+                        "explicit write-plane capability bindings require RADROOTS_RPC_BEARER_TOKEN for actor-authored durable writes"
+                            .to_owned(),
+                    bridge_auth_configured: false,
+                });
+            };
+            WritePlaneResolution::Ready {
+                view: WritePlaneProviderView {
+                    provider_runtime_id: "radrootsd".to_owned(),
+                    binding_model: "daemon_backed_jsonrpc".to_owned(),
+                    state: "configured".to_owned(),
+                    provenance: ProviderProvenance::ExplicitBinding.as_str().to_owned(),
+                    source: binding.source.as_str().to_owned(),
+                    target_kind: Some(binding.target_kind.as_str().to_owned()),
+                    target: Some(target_url.clone()),
+                    detail: format!(
+                        "actor-authored durable writes resolve through explicit write-plane endpoint {}",
+                        target_url
+                    ),
+                    bridge_auth_configured: true,
+                },
+                target: ResolvedWritePlaneTarget {
+                    url: target_url,
+                    bridge_bearer_token,
+                },
+            }
+        }
+        CapabilityBindingTargetKind::ManagedInstance => {
+            match resolve_managed_write_plane_instance(config, binding.target.as_str()) {
+                Ok(target) => WritePlaneResolution::Ready {
+                    view: WritePlaneProviderView {
+                        provider_runtime_id: "radrootsd".to_owned(),
+                        binding_model: "daemon_backed_jsonrpc".to_owned(),
+                        state: "configured".to_owned(),
+                        provenance: ProviderProvenance::ManagedDefault.as_str().to_owned(),
+                        source: binding.source.as_str().to_owned(),
+                        target_kind: Some(binding.target_kind.as_str().to_owned()),
+                        target: Some(binding.target.clone()),
+                        detail: format!(
+                            "actor-authored durable writes resolve through managed radrootsd instance `{}` at {}",
+                            binding.target, target.url
+                        ),
+                        bridge_auth_configured: true,
+                    },
+                    target,
+                },
+                Err(reason) => WritePlaneResolution::Unconfigured(WritePlaneProviderView {
+                    provider_runtime_id: "radrootsd".to_owned(),
+                    binding_model: "daemon_backed_jsonrpc".to_owned(),
+                    state: "unconfigured".to_owned(),
+                    provenance: ProviderProvenance::ManagedDefault.as_str().to_owned(),
+                    source: binding.source.as_str().to_owned(),
+                    target_kind: Some(binding.target_kind.as_str().to_owned()),
+                    target: Some(binding.target.clone()),
+                    detail: reason,
+                    bridge_auth_configured: false,
+                }),
+            }
+        }
+    }
+}
+
+fn resolve_managed_write_plane_instance(
+    config: &RuntimeConfig,
+    instance_id: &str,
+) -> Result<ResolvedWritePlaneTarget, String> {
+    let registry_path = runtime_manager_registry_path(config)?;
+    let registry = load_registry(&registry_path).map_err(|err| {
+        format!(
+            "load runtime-manager registry {}: {err}",
+            registry_path.display()
+        )
+    })?;
+    let Some(record) = registry
+        .instances
+        .iter()
+        .find(|record| record.runtime_id == "radrootsd" && record.instance_id == instance_id)
+    else {
+        return Err(format!(
+            "actor-authored durable writes require an explicit write-plane capability binding or managed radrootsd instance `{instance_id}` in {}",
+            registry_path.display()
+        ));
+    };
+    if record.install_state != ManagedRuntimeInstallState::Configured {
+        return Err(format!(
+            "managed radrootsd instance `{instance_id}` is not configured in {}",
+            registry_path.display()
+        ));
+    }
+    load_managed_radrootsd_target(record.config_path.as_path(), instance_id)
+}
+
+fn runtime_manager_registry_path(config: &RuntimeConfig) -> Result<PathBuf, String> {
+    let Some(app_dir) = config.paths.app_config_path.parent() else {
+        return Err("resolve cli app config directory for runtime-manager lookup".to_owned());
+    };
+    let Some(apps_dir) = app_dir.parent() else {
+        return Err("resolve cli apps config root for runtime-manager lookup".to_owned());
+    };
+    let Some(config_root) = apps_dir.parent() else {
+        return Err("resolve cli config root for runtime-manager lookup".to_owned());
+    };
+    Ok(config_root.join("shared/runtime-manager/instances.toml"))
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagedRadrootsdSettingsFile {
+    config: ManagedRadrootsdConfigFile,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ManagedRadrootsdConfigFile {
+    #[serde(default)]
+    rpc: ManagedRadrootsdRpcConfig,
+    #[serde(default)]
+    rpc_addr: Option<String>,
+    #[serde(default)]
+    bridge: ManagedRadrootsdBridgeConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManagedRadrootsdRpcConfig {
+    #[serde(default = "default_managed_radrootsd_rpc_addr")]
+    addr: String,
+}
+
+impl Default for ManagedRadrootsdRpcConfig {
+    fn default() -> Self {
+        Self {
+            addr: default_managed_radrootsd_rpc_addr(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ManagedRadrootsdBridgeConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    bearer_token: Option<String>,
+}
+
+fn default_managed_radrootsd_rpc_addr() -> String {
+    "127.0.0.1:7070".to_owned()
+}
+
+fn load_managed_radrootsd_target(
+    config_path: &Path,
+    instance_id: &str,
+) -> Result<ResolvedWritePlaneTarget, String> {
+    let raw = fs::read_to_string(config_path).map_err(|err| {
+        format!(
+            "read managed radrootsd config for instance `{instance_id}` at {}: {err}",
+            config_path.display()
+        )
+    })?;
+    let settings: ManagedRadrootsdSettingsFile = toml::from_str(raw.as_str()).map_err(|err| {
+        format!(
+            "parse managed radrootsd config for instance `{instance_id}` at {}: {err}",
+            config_path.display()
+        )
+    })?;
+    if !settings.config.bridge.enabled {
+        return Err(format!(
+            "managed radrootsd instance `{instance_id}` has bridge ingress disabled in {}",
+            config_path.display()
+        ));
+    }
+    let Some(bridge_bearer_token) = settings
+        .config
+        .bridge
+        .bearer_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return Err(format!(
+            "managed radrootsd instance `{instance_id}` is missing bridge bearer_token in {}",
+            config_path.display()
+        ));
+    };
+    let rpc_addr = settings
+        .config
+        .rpc_addr
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(settings.config.rpc.addr.as_str());
+    let url = rpc_addr_to_url(rpc_addr)?;
+    Ok(ResolvedWritePlaneTarget {
+        url,
+        bridge_bearer_token,
+    })
+}
+
+fn rpc_addr_to_url(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.contains("://") {
+        return validate_write_plane_url(trimmed);
+    }
+    validate_write_plane_url(format!("http://{trimmed}").as_str())
+}
+
+fn validate_write_plane_url(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("write-plane endpoint must not be empty".to_owned());
+    }
+    let parsed = Url::parse(trimmed)
+        .map_err(|err| format!("write-plane endpoint `{trimmed}` is invalid: {err}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(format!(
+            "write-plane endpoint must use http or https, got `{trimmed}`"
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
 fn inspect_binding(config: &RuntimeConfig, capability_id: &str) -> CapabilityBindingInspection {
     config
         .inspect_capability_bindings()
@@ -256,7 +572,10 @@ fn hyf_executable(
     if binding.state == CapabilityBindingInspectionState::Configured
         && binding.target_kind.as_deref() == Some("explicit_endpoint")
     {
-        return binding.target.clone().unwrap_or_else(|| status.executable.clone());
+        return binding
+            .target
+            .clone()
+            .unwrap_or_else(|| status.executable.clone());
     }
     if !config.hyf.enabled {
         return status.executable.clone();
@@ -266,14 +585,16 @@ fn hyf_executable(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
+    use tempfile::tempdir;
 
     use super::{
-        ProviderProvenance, resolve_capability_providers, resolve_hyf_provider,
-        resolve_workflow_provider, resolve_write_plane_provider,
+        ProviderProvenance, resolve_actor_write_plane_target, resolve_capability_providers,
+        resolve_hyf_provider, resolve_workflow_provider, resolve_write_plane_provider,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
@@ -302,8 +623,8 @@ mod tests {
                 app_namespace: "apps/cli".into(),
                 shared_accounts_namespace: "shared/accounts".into(),
                 shared_identities_namespace: "shared/identities".into(),
-                app_config_path: PathBuf::from("/tmp/config.toml"),
-                workspace_config_path: PathBuf::from("/tmp/workspace-config.toml"),
+                app_config_path: PathBuf::from("/tmp/config/apps/cli/config.toml"),
+                workspace_config_path: PathBuf::from("/tmp/workspace/.radroots/config.toml"),
                 app_data_root: PathBuf::from("/tmp/data"),
                 app_logs_root: PathBuf::from("/tmp/logs"),
                 shared_accounts_data_root: PathBuf::from("/tmp/shared/accounts"),
@@ -365,10 +686,11 @@ mod tests {
     }
 
     #[test]
-    fn write_plane_uses_direct_config_provenance() {
+    fn write_plane_requires_authoritative_binding_or_managed_default() {
         let view = resolve_write_plane_provider(&sample_config(Vec::new(), false));
-        assert_eq!(view.provenance, ProviderProvenance::DirectConfig.as_str());
-        assert_eq!(view.target.as_deref(), Some("http://127.0.0.1:7070"));
+        assert_eq!(view.state, "unconfigured");
+        assert_eq!(view.provenance, ProviderProvenance::Unavailable.as_str());
+        assert!(view.target.is_none());
     }
 
     #[test]
@@ -384,8 +706,87 @@ mod tests {
             signer_session_ref: None,
         };
         let view = resolve_workflow_provider(&sample_config(vec![binding], false));
-        assert_eq!(view.provenance, ProviderProvenance::ExplicitBinding.as_str());
+        assert_eq!(
+            view.provenance,
+            ProviderProvenance::ExplicitBinding.as_str()
+        );
         assert_eq!(view.target_kind.as_deref(), Some("explicit_endpoint"));
+    }
+
+    #[test]
+    fn explicit_write_plane_binding_requires_bridge_bearer_auth() {
+        let binding = CapabilityBindingConfig {
+            capability_id: "write_plane.trade_jsonrpc".into(),
+            provider_runtime_id: "radrootsd".into(),
+            binding_model: "daemon_backed_jsonrpc".into(),
+            source: CapabilityBindingSource::WorkspaceConfig,
+            target_kind: CapabilityBindingTargetKind::ExplicitEndpoint,
+            target: "https://rpc.workspace.test".into(),
+            managed_account_ref: None,
+            signer_session_ref: None,
+        };
+        let view = resolve_write_plane_provider(&sample_config(vec![binding], false));
+        assert_eq!(view.state, "unconfigured");
+        assert_eq!(
+            view.provenance,
+            ProviderProvenance::ExplicitBinding.as_str()
+        );
+        assert_eq!(view.target.as_deref(), Some("https://rpc.workspace.test"));
+    }
+
+    #[test]
+    fn managed_default_write_plane_uses_runtime_manager_registry() {
+        let dir = tempdir().expect("tempdir");
+        let config_dir = dir.path().join("config");
+        let app_config_path = config_dir.join("apps/cli/config.toml");
+        fs::create_dir_all(app_config_path.parent().expect("app config parent"))
+            .expect("create app config dir");
+        fs::write(&app_config_path, "").expect("write app config");
+
+        let registry_path = config_dir.join("shared/runtime-manager/instances.toml");
+        fs::create_dir_all(registry_path.parent().expect("registry parent"))
+            .expect("create registry parent");
+        let managed_config_path = dir.path().join("radrootsd-config.toml");
+        write_managed_radrootsd_config(
+            managed_config_path.as_path(),
+            "127.0.0.1:7444",
+            "managed-bridge-token",
+        );
+        fs::write(
+            &registry_path,
+            format!(
+                r#"schema = "radroots_runtime-instance-registry"
+schema_version = 1
+
+[[instances]]
+runtime_id = "radrootsd"
+instance_id = "local"
+management_mode = "interactive_user_managed"
+install_state = "configured"
+binary_path = "/tmp/radrootsd"
+config_path = "{}"
+logs_path = "/tmp/logs"
+run_path = "/tmp/run"
+installed_version = "0.1.0"
+"#,
+                managed_config_path.display()
+            ),
+        )
+        .expect("write registry");
+
+        let mut config = sample_config(Vec::new(), false);
+        config.paths.app_config_path = app_config_path;
+
+        let view = resolve_write_plane_provider(&config);
+        assert_eq!(view.state, "configured");
+        assert_eq!(view.provenance, ProviderProvenance::ManagedDefault.as_str());
+        assert_eq!(view.target_kind.as_deref(), Some("managed_instance"));
+        assert_eq!(view.target.as_deref(), Some("local"));
+
+        let target =
+            resolve_actor_write_plane_target(&config).expect("resolve actor write plane target");
+        assert_eq!(target.url, "http://127.0.0.1:7444");
+        assert_eq!(target.bridge_bearer_token, "managed-bridge-token");
     }
 
     #[test]
@@ -410,7 +811,10 @@ mod tests {
         };
         let view = resolve_hyf_provider(&sample_config(vec![binding], false));
         assert_eq!(view.state, "disabled");
-        assert_eq!(view.provenance, ProviderProvenance::ExplicitBinding.as_str());
+        assert_eq!(
+            view.provenance,
+            ProviderProvenance::ExplicitBinding.as_str()
+        );
         assert_eq!(view.source, "user config [[capability_binding]]");
         assert_eq!(view.target_kind.as_deref(), Some("explicit_endpoint"));
         assert_eq!(view.target.as_deref(), Some("bin/hyfd-user"));
@@ -424,5 +828,26 @@ mod tests {
         assert_eq!(providers[0].capability_id, "write_plane.trade_jsonrpc");
         assert_eq!(providers[1].capability_id, "workflow.trade");
         assert_eq!(providers[2].capability_id, "inference.hyf_stdio");
+    }
+
+    fn write_managed_radrootsd_config(path: &Path, rpc_addr: &str, bearer_token: &str) {
+        fs::write(
+            path,
+            format!(
+                r#"[metadata]
+name = "managed-radrootsd"
+
+[config]
+
+[config.rpc]
+addr = "{rpc_addr}"
+
+[config.bridge]
+enabled = true
+bearer_token = "{bearer_token}"
+"#
+            ),
+        )
+        .expect("write managed radrootsd config");
     }
 }

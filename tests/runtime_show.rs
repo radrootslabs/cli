@@ -30,6 +30,10 @@ fn config_root(workdir: &Path) -> std::path::PathBuf {
     }
 }
 
+fn runtime_manager_registry_path(workdir: &Path) -> std::path::PathBuf {
+    config_root(workdir).join("shared/runtime-manager/instances.toml")
+}
+
 fn data_root(workdir: &Path) -> std::path::PathBuf {
     if cfg!(windows) {
         localappdata_root(workdir).join("data")
@@ -280,14 +284,17 @@ fn config_show_json_reports_default_bootstrap_state() {
     );
     assert_eq!(json["myc"]["executable"], "myc");
     assert_eq!(json["write_plane"]["provider_runtime_id"], "radrootsd");
-    assert_eq!(json["write_plane"]["binding_model"], "daemon_backed_jsonrpc");
-    assert_eq!(json["write_plane"]["state"], "configured");
-    assert_eq!(json["write_plane"]["provenance"], "direct_config");
+    assert_eq!(
+        json["write_plane"]["binding_model"],
+        "daemon_backed_jsonrpc"
+    );
+    assert_eq!(json["write_plane"]["state"], "unconfigured");
+    assert_eq!(json["write_plane"]["provenance"], "unavailable");
     assert_eq!(
         json["write_plane"]["source"],
-        "raw rpc config resolves the current write plane"
+        "no explicit capability binding or managed preferred default"
     );
-    assert_eq!(json["write_plane"]["target"], "http://127.0.0.1:7070");
+    assert!(json["write_plane"]["target"].is_null());
     assert_eq!(json["write_plane"]["bridge_auth_configured"], false);
     assert_eq!(json["workflow"]["provider_runtime_id"], "rhi");
     assert_eq!(json["workflow"]["binding_model"], "out_of_process_worker");
@@ -690,8 +697,18 @@ target = "bin/hyfd-user"
             .as_str()
             .is_some_and(|detail| detail.contains("do not imply"))
     );
-    assert_eq!(json["write_plane"]["provenance"], "direct_config");
-    assert_eq!(json["write_plane"]["target"], "http://127.0.0.1:7070");
+    assert_eq!(json["write_plane"]["state"], "unconfigured");
+    assert_eq!(json["write_plane"]["provenance"], "explicit_binding");
+    assert_eq!(
+        json["write_plane"]["source"],
+        "workspace config [[capability_binding]]"
+    );
+    assert_eq!(json["write_plane"]["target_kind"], "explicit_endpoint");
+    assert_eq!(
+        json["write_plane"]["target"],
+        "https://rpc.workspace.test/jsonrpc"
+    );
+    assert_eq!(json["write_plane"]["bridge_auth_configured"], false);
     assert_eq!(json["hyf_provider"]["provider_runtime_id"], "hyf");
     assert_eq!(json["hyf_provider"]["provenance"], "explicit_binding");
     assert_eq!(json["hyf_provider"]["target_kind"], "explicit_endpoint");
@@ -703,6 +720,68 @@ target = "bin/hyfd-user"
     assert_eq!(inference["source"], "user config [[capability_binding]]");
     assert_eq!(inference["target_kind"], "explicit_endpoint");
     assert_eq!(inference["target"], "bin/hyfd-user");
+}
+
+#[test]
+fn config_show_uses_managed_default_write_plane_when_local_instance_exists() {
+    let dir = tempdir().expect("tempdir");
+    let registry_path = runtime_manager_registry_path(dir.path());
+    fs::create_dir_all(registry_path.parent().expect("registry parent")).expect("registry dir");
+    let managed_config_path = dir.path().join("managed-radrootsd.toml");
+    fs::write(
+        &managed_config_path,
+        r#"[metadata]
+name = "managed-radrootsd"
+
+[config]
+
+[config.rpc]
+addr = "127.0.0.1:7444"
+
+[config.bridge]
+enabled = true
+bearer_token = "managed-bridge-token"
+"#,
+    )
+    .expect("write managed config");
+    fs::write(
+        &registry_path,
+        format!(
+            r#"schema = "radroots_runtime-instance-registry"
+schema_version = 1
+
+[[instances]]
+runtime_id = "radrootsd"
+instance_id = "local"
+management_mode = "interactive_user_managed"
+install_state = "configured"
+binary_path = "/tmp/radrootsd"
+config_path = "{}"
+logs_path = "/tmp/radrootsd/logs"
+run_path = "/tmp/radrootsd/run"
+installed_version = "0.1.0"
+"#,
+            managed_config_path.display()
+        ),
+    )
+    .expect("write managed registry");
+
+    let output = runtime_show_command_in(dir.path())
+        .args(["--json", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+    assert_eq!(json["write_plane"]["state"], "configured");
+    assert_eq!(json["write_plane"]["provenance"], "managed_default");
+    assert_eq!(
+        json["write_plane"]["source"],
+        "managed preferred radrootsd instance"
+    );
+    assert_eq!(json["write_plane"]["target_kind"], "managed_instance");
+    assert_eq!(json["write_plane"]["target"], "local");
+    assert_eq!(json["write_plane"]["bridge_auth_configured"], true);
 }
 
 #[test]

@@ -1658,6 +1658,7 @@ dependencies = [
  "radroots_protected_store",
  "radroots_replica_db",
  "radroots_replica_sync",
+ "radroots_runtime_manager",
  "radroots_runtime_paths",
  "radroots_secret_vault",
  "radroots_sql_core",
@@ -1841,6 +1842,16 @@ dependencies = [
  "toml",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "radroots_runtime_manager"
+version = "0.1.0-alpha.1"
+dependencies = [
+ "radroots_runtime_paths",
+ "serde",
+ "thiserror 1.0.69",
+ "toml",
 ]
 
 [[package]]
