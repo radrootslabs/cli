@@ -163,7 +163,7 @@ fn attempt_query_rewrite(
         return None;
     }
 
-    let client = hyf::resolve_ready_runtime_client(config).ok()?;
+    let client = hyf::resolve_runtime_client(config).ok()?;
     let response = client
         .query_rewrite(
             FIND_HYF_QUERY_REWRITE_REQUEST_ID,

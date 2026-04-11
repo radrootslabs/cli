@@ -14,8 +14,9 @@ use crate::runtime::config::{
     CapabilityBindingTargetKind, HyfConfig, INFERENCE_HYF_STDIO_CAPABILITY, RuntimeConfig,
 };
 
-const HYF_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
-const HYF_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const HYF_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+const HYF_BUSINESS_TIMEOUT: Duration = Duration::from_secs(4);
+const HYF_TIMEOUT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const HYF_STATUS_REQUEST_ID: &str = "cli-doctor-hyf-status";
 const HYF_CAPABILITIES_REQUEST_ID: &str = "cli-runtime-hyf-capabilities";
 const HYF_SOURCE: &str = "hyf status control request · local first";
@@ -53,6 +54,7 @@ impl HyfClient {
             "sys.status",
             None,
             &HyfEmptyInput::default(),
+            HYF_CONTROL_TIMEOUT,
         )
     }
 
@@ -63,6 +65,7 @@ impl HyfClient {
             "sys.capabilities",
             None,
             &HyfEmptyInput::default(),
+            HYF_CONTROL_TIMEOUT,
         )
     }
 
@@ -79,6 +82,7 @@ impl HyfClient {
             "query_rewrite",
             Some(context),
             request,
+            HYF_BUSINESS_TIMEOUT,
         )
     }
 
@@ -95,6 +99,7 @@ impl HyfClient {
             "semantic_rank",
             Some(context),
             request,
+            HYF_BUSINESS_TIMEOUT,
         )
     }
 
@@ -111,6 +116,7 @@ impl HyfClient {
             "explain_result",
             Some(context),
             request,
+            HYF_BUSINESS_TIMEOUT,
         )
     }
 
@@ -121,6 +127,7 @@ impl HyfClient {
         capability: &str,
         context: Option<&HyfRequestContext>,
         input: &TRequest,
+        timeout: Duration,
     ) -> Result<HyfSuccess<TResponse>, HyfClientError>
     where
         TRequest: Serialize,
@@ -129,7 +136,7 @@ impl HyfClient {
         let request = serialize_request(request_id, trace_id, capability, context, input)
             .map_err(HyfClientError::SerializeRequest)?;
 
-        let output = self.run_request(request.as_str())?;
+        let output = self.run_request(request.as_str(), timeout)?;
         let stdout = String::from_utf8(output.stdout).map_err(HyfClientError::InvalidUtf8)?;
         let response: HyfWireResponse<TResponse> =
             serde_json::from_str(stdout.as_str()).map_err(HyfClientError::InvalidJson)?;
@@ -159,7 +166,7 @@ impl HyfClient {
         })
     }
 
-    fn run_request(&self, request: &str) -> Result<Output, HyfClientError> {
+    fn run_request(&self, request: &str, timeout: Duration) -> Result<Output, HyfClientError> {
         let mut child = Command::new(&self.executable)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -174,7 +181,7 @@ impl HyfClient {
             writeln!(stdin, "{request}").map_err(HyfClientError::Write)?;
         }
 
-        let output = collect_output_with_timeout(child)?;
+        let output = collect_output_with_timeout(child, timeout)?;
         if !output.status.success() {
             return Err(HyfClientError::NonZeroExit {
                 status: output.status.code(),
@@ -510,16 +517,6 @@ pub fn resolve_runtime_client(config: &RuntimeConfig) -> Result<HyfClient, HyfSt
     }
 }
 
-pub fn resolve_ready_runtime_client(config: &RuntimeConfig) -> Result<HyfClient, HyfStatusView> {
-    let client = resolve_runtime_client(config)?;
-    let status = resolve_status_for_client(&client);
-    if status.state == "ready" {
-        Ok(client)
-    } else {
-        Err(status)
-    }
-}
-
 pub fn resolve_runtime_status(config: &RuntimeConfig) -> HyfStatusView {
     match resolve_runtime_client(config) {
         Ok(client) => resolve_status_for_client(&client),
@@ -700,18 +697,18 @@ fn resolve_status_for_client(client: &HyfClient) -> HyfStatusView {
     }
 }
 
-fn collect_output_with_timeout(mut child: Child) -> Result<Output, HyfClientError> {
+fn collect_output_with_timeout(mut child: Child, timeout: Duration) -> Result<Output, HyfClientError> {
     let started_at = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return collect_output(child, status),
             Ok(None) => {
-                if started_at.elapsed() >= HYF_STATUS_TIMEOUT {
+                if started_at.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(HyfClientError::Timeout(HYF_STATUS_TIMEOUT.as_millis()));
+                    return Err(HyfClientError::Timeout(timeout.as_millis()));
                 }
-                thread::sleep(HYF_STATUS_POLL_INTERVAL);
+                thread::sleep(HYF_TIMEOUT_POLL_INTERVAL);
             }
             Err(error) => {
                 let _ = child.kill();
@@ -785,9 +782,9 @@ fn format_nonzero_exit(request_label: &str, status: Option<i32>, stderr: &str) -
 #[cfg(test)]
 mod tests {
     use super::{
-        HYF_PROTOCOL_VERSION, HyfClient, HyfEmptyInput, HyfExplainResultRequest,
-        HyfQueryRewriteRequest, HyfRequestContext, HyfSemanticCandidate, HyfSemanticRankRequest,
-        resolve_status,
+        HYF_PROTOCOL_VERSION, HyfClient, HyfClientError, HyfEmptyInput,
+        HyfExplainResultRequest, HyfQueryRewriteRequest, HyfRequestContext,
+        HyfSemanticCandidate, HyfSemanticRankRequest, resolve_status,
     };
     use crate::runtime::config::HyfConfig;
     use serde::Serialize;
@@ -928,6 +925,30 @@ mod tests {
             response.meta,
             Some(serde_json::json!({"execution_mode":"deterministic","backend":"heuristic"}))
         );
+    }
+
+    #[test]
+    fn business_requests_use_a_longer_timeout_than_control_requests() {
+        let _guard = hyf_test_lock().lock().expect("hyf test lock");
+        let dir = tempdir().expect("tempdir");
+        let executable = write_script(
+            dir.path(),
+            "#!/bin/sh\nread -r request || exit 64\ncase \"$request\" in\n  *'\"capability\":\"sys.status\"'*)\n    sleep 3\n    cat <<'JSON'\n{\"version\":1,\"request_id\":\"cli-doctor-hyf-status\",\"trace_id\":\"cli-doctor-hyf-status\",\"ok\":true,\"output\":{\"build_identity\":{\"protocol_version\":1},\"enabled_execution_modes\":{\"deterministic\":true}}}\nJSON\n    ;;\n  *'\"capability\":\"query_rewrite\"'*)\n    sleep 3\n    cat <<'JSON'\n{\"version\":1,\"request_id\":\"rewrite-timeout-test\",\"trace_id\":\"rewrite-timeout-test\",\"ok\":true,\"output\":{\"original_text\":\"henhouse\",\"normalized_text\":\"henhouse\",\"rewritten_text\":\"eggs\",\"query_terms\":[\"eggs\"],\"normalization_signals\":[\"query_rewrite\"],\"ranking_hints\":[\"local_first\"],\"extracted_filters\":{\"local_intent\":false,\"fulfillment\":\"any\",\"time_window\":\"any\"}}}\nJSON\n    ;;\n  *)\n    exit 65\n    ;;\nesac\n",
+        );
+        let client = HyfClient::new(executable);
+
+        let status = client.status().expect_err("status should time out");
+        assert!(matches!(status, HyfClientError::Timeout(2000)));
+
+        let rewrite = client
+            .query_rewrite(
+                "rewrite-timeout-test",
+                Some("rewrite-timeout-test"),
+                &HyfRequestContext::deterministic_cli(),
+                &HyfQueryRewriteRequest::new("henhouse"),
+            )
+            .expect("query rewrite should use longer timeout");
+        assert_eq!(rewrite.output.rewritten_text, "eggs");
     }
 
     #[test]
