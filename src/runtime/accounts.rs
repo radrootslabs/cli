@@ -2,23 +2,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
-use getrandom::getrandom;
 use radroots_nostr_accounts::prelude::{
-    RadrootsNostrAccountRecord, RadrootsNostrAccountsManager, RadrootsNostrFileAccountStore,
-    RadrootsNostrSecretVaultMemory, RadrootsNostrSelectedAccountStatus,
+    RadrootsNostrAccountRecord, RadrootsNostrAccountsManager, RadrootsNostrSecretVaultMemory,
+    RadrootsNostrSelectedAccountStatus,
 };
-use radroots_protected_store::{
-    RADROOTS_PROTECTED_STORE_KEY_LENGTH, RADROOTS_PROTECTED_STORE_NONCE_LENGTH,
-    RadrootsProtectedStoreEnvelope,
-};
+use radroots_protected_store::RadrootsProtectedFileSecretVault;
 use radroots_secret_vault::{
     RadrootsHostVaultCapabilities, RadrootsResolvedSecretBackend, RadrootsSecretBackend,
-    RadrootsSecretBackendSelection, RadrootsSecretKeyWrapping, RadrootsSecretVault,
-    RadrootsSecretVaultAccessError, RadrootsSecretVaultError, RadrootsSecretVaultOsKeyring,
+    RadrootsSecretBackendSelection, RadrootsSecretVault, RadrootsSecretVaultAccessError,
+    RadrootsSecretVaultError, RadrootsSecretVaultOsKeyring,
 };
-use zeroize::Zeroize;
 
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -26,10 +19,7 @@ use crate::runtime::config::RuntimeConfig;
 const HOST_VAULT_AVAILABILITY_OVERRIDE_ENV: &str = "RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE";
 const HOST_VAULT_SERVICE_NAME: &str = "org.radroots.cli.local-account";
 const HOST_VAULT_PROBE_SLOT: &str = "__radroots_cli_host_vault_probe__";
-const ENCRYPTED_FILE_MASTER_KEY_FILE: &str = ".vault.key";
-const ENCRYPTED_FILE_SECRET_SUFFIX: &str = ".secret.json";
 const PLAINTEXT_FILE_SECRET_SUFFIX: &str = ".secret";
-const WRAPPED_KEY_VERSION: u8 = 1;
 pub const SHARED_ACCOUNT_STORE_SOURCE: &str = "shared account store · local first";
 
 #[derive(Debug, Clone)]
@@ -242,11 +232,11 @@ fn find_by_selector<'a>(
 }
 
 fn account_manager(config: &RuntimeConfig) -> Result<RadrootsNostrAccountsManager, RuntimeError> {
-    let store = Arc::new(RadrootsNostrFileAccountStore::new(
-        config.account.store_path.as_path(),
-    ));
     let vault = secret_vault(config)?;
-    Ok(RadrootsNostrAccountsManager::new(store, vault)?)
+    Ok(RadrootsNostrAccountsManager::new_file_backed(
+        config.account.store_path.as_path(),
+        vault,
+    )?)
 }
 
 fn secret_vault(config: &RuntimeConfig) -> Result<Arc<dyn RadrootsSecretVault>, RuntimeError> {
@@ -255,9 +245,9 @@ fn secret_vault(config: &RuntimeConfig) -> Result<Arc<dyn RadrootsSecretVault>, 
         RadrootsSecretBackend::HostVault(_) => Ok(Arc::new(RadrootsSecretVaultOsKeyring::new(
             HOST_VAULT_SERVICE_NAME,
         ))),
-        RadrootsSecretBackend::EncryptedFile => Ok(Arc::new(CliEncryptedFileSecretVault::new(
-            config.account.secrets_dir.as_path(),
-        ))),
+        RadrootsSecretBackend::EncryptedFile => Ok(Arc::new(
+            RadrootsProtectedFileSecretVault::new(config.account.secrets_dir.as_path()),
+        )),
         RadrootsSecretBackend::Memory => Ok(Arc::new(RadrootsNostrSecretVaultMemory::new())),
         RadrootsSecretBackend::PlaintextFile => Ok(Arc::new(CliPlaintextFileSecretVault::new(
             config.account.secrets_dir.as_path(),
@@ -353,164 +343,6 @@ enum SecretBackendResolutionError {
 }
 
 #[derive(Debug, Clone)]
-struct CliEncryptedFileSecretVault {
-    secrets_dir: PathBuf,
-}
-
-impl CliEncryptedFileSecretVault {
-    fn new(path: impl AsRef<Path>) -> Self {
-        Self {
-            secrets_dir: path.as_ref().to_path_buf(),
-        }
-    }
-
-    fn secret_file_path(&self, slot: &str) -> PathBuf {
-        self.secrets_dir
-            .join(format!("{slot}{ENCRYPTED_FILE_SECRET_SUFFIX}"))
-    }
-
-    fn wrapping_key_path(&self) -> PathBuf {
-        self.secrets_dir.join(ENCRYPTED_FILE_MASTER_KEY_FILE)
-    }
-
-    fn load_or_create_wrapping_key(
-        &self,
-    ) -> Result<[u8; RADROOTS_PROTECTED_STORE_KEY_LENGTH], RadrootsSecretVaultAccessError> {
-        if self.wrapping_key_path().exists() {
-            return self.load_wrapping_key();
-        }
-
-        fs::create_dir_all(&self.secrets_dir).map_err(io_backend_error)?;
-        let mut key = [0_u8; RADROOTS_PROTECTED_STORE_KEY_LENGTH];
-        getrandom(&mut key)
-            .map_err(|_| RadrootsSecretVaultAccessError::Backend("entropy unavailable".into()))?;
-        fs::write(self.wrapping_key_path(), key.as_slice()).map_err(io_backend_error)?;
-        set_secret_permissions(self.wrapping_key_path().as_path())?;
-        Ok(key)
-    }
-
-    fn load_wrapping_key(
-        &self,
-    ) -> Result<[u8; RADROOTS_PROTECTED_STORE_KEY_LENGTH], RadrootsSecretVaultAccessError> {
-        let raw = fs::read(self.wrapping_key_path()).map_err(io_backend_error)?;
-        if raw.len() != RADROOTS_PROTECTED_STORE_KEY_LENGTH {
-            return Err(RadrootsSecretVaultAccessError::Backend(format!(
-                "encrypted file wrapping key {} has invalid length {}",
-                self.wrapping_key_path().display(),
-                raw.len()
-            )));
-        }
-
-        let mut key = [0_u8; RADROOTS_PROTECTED_STORE_KEY_LENGTH];
-        key.copy_from_slice(&raw);
-        Ok(key)
-    }
-}
-
-impl RadrootsSecretVault for CliEncryptedFileSecretVault {
-    fn store_secret(&self, slot: &str, secret: &str) -> Result<(), RadrootsSecretVaultAccessError> {
-        fs::create_dir_all(&self.secrets_dir).map_err(io_backend_error)?;
-        let envelope =
-            RadrootsProtectedStoreEnvelope::seal_with_wrapped_key(self, slot, secret.as_bytes())
-                .map_err(|error| RadrootsSecretVaultAccessError::Backend(error.to_string()))?;
-        let encoded = envelope
-            .encode_json()
-            .map_err(|error| RadrootsSecretVaultAccessError::Backend(error.to_string()))?;
-        let path = self.secret_file_path(slot);
-        fs::write(&path, encoded).map_err(io_backend_error)?;
-        set_secret_permissions(&path)?;
-        Ok(())
-    }
-
-    fn load_secret(&self, slot: &str) -> Result<Option<String>, RadrootsSecretVaultAccessError> {
-        let path = self.secret_file_path(slot);
-        let encoded = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(io_backend_error(source)),
-        };
-        let envelope = RadrootsProtectedStoreEnvelope::decode_json(encoded.as_slice())
-            .map_err(|error| RadrootsSecretVaultAccessError::Backend(error.to_string()))?;
-        let plaintext = envelope
-            .open_with_wrapped_key(self)
-            .map_err(|error| RadrootsSecretVaultAccessError::Backend(error.to_string()))?;
-        String::from_utf8(plaintext)
-            .map(Some)
-            .map_err(|error| RadrootsSecretVaultAccessError::Backend(error.to_string()))
-    }
-
-    fn remove_secret(&self, slot: &str) -> Result<(), RadrootsSecretVaultAccessError> {
-        match fs::remove_file(self.secret_file_path(slot)) {
-            Ok(()) => Ok(()),
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(io_backend_error(source)),
-        }
-    }
-}
-
-impl RadrootsSecretKeyWrapping for CliEncryptedFileSecretVault {
-    type Error = RadrootsSecretVaultAccessError;
-
-    fn wrap_data_key(&self, key_slot: &str, plaintext_key: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        let mut master_key = self.load_or_create_wrapping_key()?;
-        let mut nonce = [0_u8; RADROOTS_PROTECTED_STORE_NONCE_LENGTH];
-        getrandom(&mut nonce)
-            .map_err(|_| RadrootsSecretVaultAccessError::Backend("entropy unavailable".into()))?;
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&master_key));
-        let ciphertext = cipher
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: plaintext_key,
-                    aad: key_slot.as_bytes(),
-                },
-            )
-            .map_err(|_| {
-                RadrootsSecretVaultAccessError::Backend("failed to wrap data key".into())
-            })?;
-        master_key.zeroize();
-
-        let mut encoded = Vec::with_capacity(1 + nonce.len() + ciphertext.len());
-        encoded.push(WRAPPED_KEY_VERSION);
-        encoded.extend_from_slice(&nonce);
-        encoded.extend_from_slice(ciphertext.as_slice());
-        Ok(encoded)
-    }
-
-    fn unwrap_data_key(&self, key_slot: &str, wrapped_key: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        if wrapped_key.len() <= 1 + RADROOTS_PROTECTED_STORE_NONCE_LENGTH {
-            return Err(RadrootsSecretVaultAccessError::Backend(
-                "wrapped data key is truncated".into(),
-            ));
-        }
-        if wrapped_key[0] != WRAPPED_KEY_VERSION {
-            return Err(RadrootsSecretVaultAccessError::Backend(format!(
-                "unsupported wrapped data key version {}",
-                wrapped_key[0]
-            )));
-        }
-
-        let mut master_key = self.load_wrapping_key()?;
-        let nonce_offset = 1;
-        let ciphertext_offset = nonce_offset + RADROOTS_PROTECTED_STORE_NONCE_LENGTH;
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&master_key));
-        let plaintext = cipher
-            .decrypt(
-                XNonce::from_slice(&wrapped_key[nonce_offset..ciphertext_offset]),
-                Payload {
-                    msg: &wrapped_key[ciphertext_offset..],
-                    aad: key_slot.as_bytes(),
-                },
-            )
-            .map_err(|_| {
-                RadrootsSecretVaultAccessError::Backend("failed to unwrap data key".into())
-            })?;
-        master_key.zeroize();
-        Ok(plaintext)
-    }
-}
-
-#[derive(Debug, Clone)]
 struct CliPlaintextFileSecretVault {
     secrets_dir: PathBuf,
 }
@@ -578,9 +410,9 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn encrypted_file_vault_round_trips_secret() {
+    fn protected_file_vault_round_trips_secret() {
         let temp = tempdir().expect("tempdir");
-        let vault = CliEncryptedFileSecretVault::new(temp.path());
+        let vault = RadrootsProtectedFileSecretVault::new(temp.path());
 
         vault.store_secret("acct_demo", "deadbeef").expect("store");
         let loaded = vault.load_secret("acct_demo").expect("load");
@@ -590,9 +422,9 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_file_vault_removes_secret() {
+    fn protected_file_vault_removes_secret() {
         let temp = tempdir().expect("tempdir");
-        let vault = CliEncryptedFileSecretVault::new(temp.path());
+        let vault = RadrootsProtectedFileSecretVault::new(temp.path());
 
         vault.store_secret("acct_demo", "deadbeef").expect("store");
         vault.remove_secret("acct_demo").expect("remove");
