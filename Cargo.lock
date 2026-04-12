@@ -1823,6 +1823,7 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "radroots_identity",
  "radroots_nostr_signer",
+ "radroots_protected_store",
  "radroots_runtime",
  "radroots_secret_vault",
  "serde",

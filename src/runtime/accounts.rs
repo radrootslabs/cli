@@ -1,15 +1,9 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
 use radroots_nostr_accounts::prelude::{
-    RadrootsNostrAccountRecord, RadrootsNostrAccountsManager, RadrootsNostrSecretVaultMemory,
-    RadrootsNostrSelectedAccountStatus,
+    RadrootsNostrAccountRecord, RadrootsNostrAccountsManager, RadrootsNostrSelectedAccountStatus,
 };
-use radroots_protected_store::RadrootsProtectedFileSecretVault;
 use radroots_secret_vault::{
-    RadrootsHostVaultCapabilities, RadrootsResolvedSecretBackend, RadrootsSecretBackend,
-    RadrootsSecretBackendSelection, RadrootsSecretVault, RadrootsSecretVaultAccessError,
+    RadrootsHostVaultCapabilities, RadrootsResolvedSecretBackend,
+    RadrootsSecretBackendAvailability, RadrootsSecretBackendSelection, RadrootsSecretVault,
     RadrootsSecretVaultError, RadrootsSecretVaultOsKeyring,
 };
 
@@ -19,7 +13,6 @@ use crate::runtime::config::RuntimeConfig;
 const HOST_VAULT_AVAILABILITY_OVERRIDE_ENV: &str = "RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE";
 const HOST_VAULT_SERVICE_NAME: &str = "org.radroots.cli.local-account";
 const HOST_VAULT_PROBE_SLOT: &str = "__radroots_cli_host_vault_probe__";
-const PLAINTEXT_FILE_SECRET_SUFFIX: &str = ".secret";
 pub const SHARED_ACCOUNT_STORE_SOURCE: &str = "shared account store · local first";
 
 #[derive(Debug, Clone)]
@@ -232,30 +225,14 @@ fn find_by_selector<'a>(
 }
 
 fn account_manager(config: &RuntimeConfig) -> Result<RadrootsNostrAccountsManager, RuntimeError> {
-    let vault = secret_vault(config)?;
-    Ok(RadrootsNostrAccountsManager::new_file_backed(
+    let (manager, _) = RadrootsNostrAccountsManager::new_local_file_backed(
         config.account.store_path.as_path(),
-        vault,
-    )?)
-}
-
-fn secret_vault(config: &RuntimeConfig) -> Result<Arc<dyn RadrootsSecretVault>, RuntimeError> {
-    let resolved = resolve_secret_backend(config).map_err(secret_backend_runtime_error)?;
-    match resolved.backend {
-        RadrootsSecretBackend::HostVault(_) => Ok(Arc::new(RadrootsSecretVaultOsKeyring::new(
-            HOST_VAULT_SERVICE_NAME,
-        ))),
-        RadrootsSecretBackend::EncryptedFile => Ok(Arc::new(
-            RadrootsProtectedFileSecretVault::new(config.account.secrets_dir.as_path()),
-        )),
-        RadrootsSecretBackend::Memory => Ok(Arc::new(RadrootsNostrSecretVaultMemory::new())),
-        RadrootsSecretBackend::PlaintextFile => Ok(Arc::new(CliPlaintextFileSecretVault::new(
-            config.account.secrets_dir.as_path(),
-        ))),
-        RadrootsSecretBackend::ExternalCommand => Err(RuntimeError::Config(
-            "external_command secret backend is not supported for local cli accounts".to_owned(),
-        )),
-    }
+        config.account.secrets_dir.as_path(),
+        account_secret_backend_selection(config),
+        secret_backend_availability()?,
+        HOST_VAULT_SERVICE_NAME,
+    )?;
+    Ok(manager)
 }
 
 fn resolve_secret_backend(
@@ -264,35 +241,35 @@ fn resolve_secret_backend(
     let availability = secret_backend_availability().map_err(|error| {
         SecretBackendResolutionError::Invalid(format!("account secret backend: {error}"))
     })?;
-    let selection = RadrootsSecretBackendSelection {
-        primary: config.account.secret_backend,
-        fallback: config.account.secret_fallback,
-    };
-
-    selection
-        .resolve(availability)
-        .map_err(|error| match error {
-            RadrootsSecretVaultError::BackendUnavailable { .. }
-            | RadrootsSecretVaultError::FallbackUnavailable { .. } => {
-                SecretBackendResolutionError::Unavailable(format!(
-                    "account secret backend: {error}"
-                ))
-            }
-            RadrootsSecretVaultError::FallbackDisallowed { .. }
-            | RadrootsSecretVaultError::HostVaultPolicyUnsupported { .. } => {
-                SecretBackendResolutionError::Invalid(format!("account secret backend: {error}"))
-            }
-        })
+    RadrootsNostrAccountsManager::resolve_local_backend(
+        account_secret_backend_selection(config),
+        availability,
+    )
+    .map_err(|error| match error {
+        RadrootsSecretVaultError::BackendUnavailable { .. }
+        | RadrootsSecretVaultError::FallbackUnavailable { .. } => {
+            SecretBackendResolutionError::Unavailable(format!("account secret backend: {error}"))
+        }
+        RadrootsSecretVaultError::FallbackDisallowed { .. }
+        | RadrootsSecretVaultError::HostVaultPolicyUnsupported { .. } => {
+            SecretBackendResolutionError::Invalid(format!("account secret backend: {error}"))
+        }
+    })
 }
 
-fn secret_backend_availability()
--> Result<radroots_secret_vault::RadrootsSecretBackendAvailability, RuntimeError> {
-    Ok(radroots_secret_vault::RadrootsSecretBackendAvailability {
+fn account_secret_backend_selection(config: &RuntimeConfig) -> RadrootsSecretBackendSelection {
+    RadrootsSecretBackendSelection {
+        primary: config.account.secret_backend,
+        fallback: config.account.secret_fallback,
+    }
+}
+
+fn secret_backend_availability() -> Result<RadrootsSecretBackendAvailability, RuntimeError> {
+    Ok(RadrootsSecretBackendAvailability {
         host_vault: host_vault_capabilities()?,
         encrypted_file: true,
         external_command: false,
         memory: true,
-        plaintext_file: true,
     })
 }
 
@@ -329,84 +306,18 @@ fn parse_bool_value(key: &str, value: &str) -> Result<bool, RuntimeError> {
     }
 }
 
-fn secret_backend_runtime_error(error: SecretBackendResolutionError) -> RuntimeError {
-    match error {
-        SecretBackendResolutionError::Unavailable(message)
-        | SecretBackendResolutionError::Invalid(message) => RuntimeError::Config(message),
-    }
-}
-
 #[derive(Debug, Clone)]
 enum SecretBackendResolutionError {
     Unavailable(String),
     Invalid(String),
 }
 
-#[derive(Debug, Clone)]
-struct CliPlaintextFileSecretVault {
-    secrets_dir: PathBuf,
-}
-
-impl CliPlaintextFileSecretVault {
-    fn new(path: impl AsRef<Path>) -> Self {
-        Self {
-            secrets_dir: path.as_ref().to_path_buf(),
-        }
-    }
-
-    fn secret_file_path(&self, slot: &str) -> PathBuf {
-        self.secrets_dir
-            .join(format!("{slot}{PLAINTEXT_FILE_SECRET_SUFFIX}"))
-    }
-}
-
-impl RadrootsSecretVault for CliPlaintextFileSecretVault {
-    fn store_secret(&self, slot: &str, secret: &str) -> Result<(), RadrootsSecretVaultAccessError> {
-        fs::create_dir_all(&self.secrets_dir).map_err(io_backend_error)?;
-        let path = self.secret_file_path(slot);
-        fs::write(&path, secret.as_bytes()).map_err(io_backend_error)?;
-        set_secret_permissions(&path)?;
-        Ok(())
-    }
-
-    fn load_secret(&self, slot: &str) -> Result<Option<String>, RadrootsSecretVaultAccessError> {
-        match fs::read_to_string(self.secret_file_path(slot)) {
-            Ok(contents) => Ok(Some(contents.trim().to_owned())),
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(source) => Err(io_backend_error(source)),
-        }
-    }
-
-    fn remove_secret(&self, slot: &str) -> Result<(), RadrootsSecretVaultAccessError> {
-        match fs::remove_file(self.secret_file_path(slot)) {
-            Ok(()) => Ok(()),
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(io_backend_error(source)),
-        }
-    }
-}
-
-fn io_backend_error(source: std::io::Error) -> RadrootsSecretVaultAccessError {
-    RadrootsSecretVaultAccessError::Backend(source.to_string())
-}
-
-#[cfg(unix)]
-fn set_secret_permissions(path: &Path) -> Result<(), RadrootsSecretVaultAccessError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut permissions = fs::metadata(path).map_err(io_backend_error)?.permissions();
-    permissions.set_mode(0o600);
-    fs::set_permissions(path, permissions).map_err(io_backend_error)
-}
-
-#[cfg(not(unix))]
-fn set_secret_permissions(_path: &Path) -> Result<(), RadrootsSecretVaultAccessError> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use radroots_protected_store::RadrootsProtectedFileSecretVault;
+    use radroots_secret_vault::RadrootsSecretVault;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]

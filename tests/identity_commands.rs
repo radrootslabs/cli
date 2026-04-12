@@ -129,7 +129,7 @@ fn account_new_rejects_dry_run_without_creating_store_state() {
 }
 
 #[test]
-fn account_new_rejects_plaintext_fallback_downgrade() {
+fn account_new_rejects_plaintext_fallback_backend() {
     let dir = tempdir().expect("tempdir");
 
     let output = cli_command_in(dir.path())
@@ -141,7 +141,9 @@ fn account_new_rejects_plaintext_fallback_downgrade() {
 
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
-    assert!(stderr.contains("may not silently downgrade to plaintext_file"));
+    assert!(
+        stderr.contains("must be `host_vault`, `encrypted_file`, `memory`, or `none` for fallback")
+    );
 }
 
 #[test]

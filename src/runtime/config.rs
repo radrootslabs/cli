@@ -28,8 +28,7 @@ const DEFAULT_RPC_URL: &str = "http://127.0.0.1:7070";
 const CLI_HOST_VAULT_POLICY: &str = "desktop";
 const CLI_DEFAULT_SECRET_BACKEND: &str = "host_vault";
 const CLI_DEFAULT_SECRET_FALLBACK: &str = "encrypted_file";
-const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] =
-    &["host_vault", "encrypted_file", "memory", "plaintext_file"];
+const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] = &["host_vault", "encrypted_file", "memory"];
 const CLI_USES_PROTECTED_STORE: bool = true;
 const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
 const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
@@ -1286,9 +1285,8 @@ fn parse_account_secret_backend(
         )),
         "encrypted_file" => Ok(RadrootsSecretBackend::EncryptedFile),
         "memory" => Ok(RadrootsSecretBackend::Memory),
-        "plaintext_file" => Ok(RadrootsSecretBackend::PlaintextFile),
         other => Err(RuntimeError::Config(format!(
-            "{key} must be `host_vault`, `encrypted_file`, `memory`, `plaintext_file`, or `none` for fallback, got `{other}`"
+            "{key} must be `host_vault`, `encrypted_file`, `memory`, or `none` for fallback, got `{other}`"
         ))),
     }
 }
@@ -1469,7 +1467,6 @@ mod tests {
                     "host_vault".to_owned(),
                     "encrypted_file".to_owned(),
                     "memory".to_owned(),
-                    "plaintext_file".to_owned(),
                 ],
                 host_vault_policy: Some("desktop".to_owned()),
                 uses_protected_store: true,

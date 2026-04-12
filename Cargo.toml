@@ -26,7 +26,7 @@ radroots_events = { path = "../lib/crates/events" }
 radroots_events_codec = { path = "../lib/crates/events_codec", features = ["serde_json"] }
 radroots_identity = { path = "../lib/crates/identity" }
 radroots_log = { path = "../lib/crates/log" }
-radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts" }
+radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts", features = ["os-keyring"] }
 radroots_nostr_signer = { path = "../lib/crates/nostr_signer" }
 radroots_protected_store = { path = "../lib/crates/protected_store", features = ["std"] }
 radroots_replica_db = { path = "../lib/crates/replica_db" }
