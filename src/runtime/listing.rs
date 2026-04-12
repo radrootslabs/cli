@@ -18,6 +18,7 @@ use radroots_events::trade::RadrootsTradeListingValidationError;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_sql_core::{SqlExecutor, SqliteExecutor, utils};
+use radroots_trade::listing::publish::validate_listing_for_seller;
 use radroots_trade::listing::validation::validate_listing_event;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -970,17 +971,12 @@ fn build_listing_event_preview(
 ) -> Result<(ListingMutationEventView, String), RuntimeError> {
     let parts = to_wire_parts_with_kind(&canonical.listing, KIND_LISTING)
         .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
-    let event = RadrootsNostrEvent {
-        id: String::new(),
-        author: canonical.seller_pubkey.clone(),
-        created_at: 0,
-        kind: KIND_LISTING,
-        tags: parts.tags.clone(),
-        content: parts.content.clone(),
-        sig: String::new(),
-    };
-    let validated = validate_listing_event(&event)
-        .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
+    let validated = validate_listing_for_seller(
+        canonical.listing.clone(),
+        canonical.seller_pubkey.as_str(),
+        KIND_LISTING,
+    )
+    .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
     Ok((
         ListingMutationEventView {
             kind: KIND_LISTING,

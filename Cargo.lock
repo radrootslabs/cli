@@ -1967,6 +1967,7 @@ dependencies = [
  "radroots_events_codec",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "ts-rs",
 ]
 
