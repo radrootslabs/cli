@@ -109,7 +109,7 @@ fn write_cached_radrootsd_artifact(workdir: &Path) -> PathBuf {
     let artifact_dir = runtime_manager_artifact_cache_dir(workdir);
     fs::create_dir_all(&artifact_dir).expect("artifact dir");
     let file_name = format!(
-        "radrootsd-0.1.0-alpha.1-{}.tar.gz",
+        "radrootsd-0.1.0-alpha.2-{}.tar.gz",
         current_server_target_id()
     );
     let archive_path = artifact_dir.join(file_name);
