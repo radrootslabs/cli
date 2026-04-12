@@ -5,12 +5,13 @@ use chrono::Utc;
 use getrandom::getrandom;
 use radroots_runtime_distribution::{RadrootsRuntimeDistributionResolver, RuntimeArtifactRequest};
 use radroots_runtime_manager::{
-    BootstrapRuntimeContract, ManagedRuntimeHealthState, ManagedRuntimeInstallState,
-    ManagedRuntimeInstanceRecord, ManagedRuntimeInstanceRegistry, ManagementModeContract,
-    RadrootsRuntimeManagementContract, extract_binary_archive, parse_contract_str,
+    extract_binary_archive, load_management_context as load_manager_context, parse_contract_str,
     process_running as managed_process_running, remove_instance, remove_instance_artifacts,
-    resolve_instance_paths, resolve_shared_paths, save_registry, start_process, stop_process,
-    upsert_instance, write_instance_metadata, write_managed_file, write_secret_file,
+    resolve_runtime_target, save_registry, start_process, stop_process, upsert_instance,
+    write_instance_metadata, write_managed_file, write_secret_file,
+    ManagedRuntimeContext as RuntimeManagementContext, ManagedRuntimeGroup as RuntimeGroup,
+    ManagedRuntimeHealthState, ManagedRuntimeInstallState, ManagedRuntimeInstanceRecord,
+    ManagedRuntimeTarget as RuntimeTarget,
 };
 use radroots_runtime_paths::{RadrootsPathOverrides, RadrootsPathProfile, RadrootsPathResolver};
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,7 @@ use crate::domain::runtime::{
     RuntimeActionView, RuntimeInstancePathsView, RuntimeInstanceRecordView, RuntimeLogsView,
     RuntimeManagedConfigView, RuntimeStatusView,
 };
-use crate::runtime::{RuntimeError, config::RuntimeConfig};
+use crate::runtime::{config::RuntimeConfig, RuntimeError};
 
 const MANAGEMENT_CONTRACT_RAW: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -138,55 +139,6 @@ pub struct RuntimeConfigMutationRequest {
     pub value: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeGroup {
-    ActiveManagedTarget,
-    DefinedManagedTarget,
-    BootstrapOnly,
-    Unknown,
-}
-
-impl RuntimeGroup {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::ActiveManagedTarget => "active_managed_target",
-            Self::DefinedManagedTarget => "defined_managed_target",
-            Self::BootstrapOnly => "bootstrap_only",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    fn posture(self) -> &'static str {
-        match self {
-            Self::ActiveManagedTarget => "active_managed_target",
-            Self::DefinedManagedTarget => "defined_future_target",
-            Self::BootstrapOnly => "bootstrap_only_direct_binding",
-            Self::Unknown => "unknown_runtime",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RuntimeManagementContext {
-    contract: RadrootsRuntimeManagementContract,
-    shared_paths: radroots_runtime_manager::ManagedRuntimeSharedPaths,
-    registry: ManagedRuntimeInstanceRegistry,
-}
-
-#[derive(Debug, Clone)]
-struct RuntimeTarget {
-    runtime_id: String,
-    instance_id: String,
-    instance_source: String,
-    runtime_group: RuntimeGroup,
-    management_mode: Option<String>,
-    mode_contract: Option<ManagementModeContract>,
-    bootstrap: Option<BootstrapRuntimeContract>,
-    instance_record: Option<ManagedRuntimeInstanceRecord>,
-    predicted_paths: Option<radroots_runtime_manager::ManagedRuntimeInstancePaths>,
-    registry_path: PathBuf,
-}
-
 pub fn inspect_status(
     config: &RuntimeConfig,
     runtime_id: &str,
@@ -270,14 +222,7 @@ fn load_management_context(
     let profile = cli_path_profile(config)?;
     let overrides = cli_path_overrides(config)?;
     let resolver = RadrootsPathResolver::current();
-    let mode_id = active_management_mode_for_profile(&contract, profile)?;
-    let shared_paths = resolve_shared_paths(&contract, &resolver, profile, &overrides, mode_id)?;
-    let registry = radroots_runtime_manager::load_registry(&shared_paths.instance_registry_path)?;
-    Ok(RuntimeManagementContext {
-        contract,
-        shared_paths,
-        registry,
-    })
+    load_manager_context(contract, &resolver, profile, &overrides).map_err(RuntimeError::from)
 }
 
 fn cli_path_profile(config: &RuntimeConfig) -> Result<RadrootsPathProfile, RuntimeError> {
@@ -304,114 +249,6 @@ fn cli_path_overrides(config: &RuntimeConfig) -> Result<RadrootsPathOverrides, R
         other => Err(RuntimeError::Config(format!(
             "runtime management only supports cli path profiles `interactive_user` and `repo_local`, got `{other}`"
         ))),
-    }
-}
-
-fn active_management_mode_for_profile<'a>(
-    contract: &'a RadrootsRuntimeManagementContract,
-    profile: RadrootsPathProfile,
-) -> Result<&'a str, RuntimeError> {
-    let profile_id = profile.to_string();
-    contract
-        .mode
-        .iter()
-        .find(|(_, mode)| {
-            mode.contract_state == "active"
-                && mode
-                    .supported_profiles
-                    .iter()
-                    .any(|entry| entry == &profile_id)
-        })
-        .map(|(mode_id, _)| mode_id.as_str())
-        .ok_or_else(|| {
-            RuntimeError::Config(format!(
-                "no active runtime-management mode supports cli profile `{profile_id}`"
-            ))
-        })
-}
-
-fn resolve_runtime_target(
-    context: &RuntimeManagementContext,
-    runtime_id: &str,
-    requested_instance_id: Option<&str>,
-) -> RuntimeTarget {
-    let runtime_group = runtime_group(&context.contract, runtime_id);
-    let bootstrap = context.contract.bootstrap.get(runtime_id).cloned();
-    let instance_id = requested_instance_id
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            bootstrap
-                .as_ref()
-                .map(|entry| entry.default_instance_id.clone())
-        })
-        .unwrap_or_else(|| "default".to_owned());
-    let instance_source = if requested_instance_id.is_some() {
-        "command_arg".to_owned()
-    } else if bootstrap.is_some() {
-        "bootstrap_default".to_owned()
-    } else {
-        "implicit_default".to_owned()
-    };
-    let management_mode = bootstrap
-        .as_ref()
-        .map(|entry| entry.management_mode.clone());
-    let mode_contract = management_mode
-        .as_ref()
-        .and_then(|mode_id| context.contract.mode.get(mode_id).cloned());
-    let instance_record = context
-        .registry
-        .instances
-        .iter()
-        .find(|record| record.runtime_id == runtime_id && record.instance_id == instance_id)
-        .cloned();
-    let predicted_paths = if runtime_group == RuntimeGroup::ActiveManagedTarget {
-        Some(resolve_instance_paths(
-            &context.shared_paths,
-            runtime_id,
-            instance_id.as_str(),
-        ))
-    } else {
-        None
-    };
-
-    RuntimeTarget {
-        runtime_id: runtime_id.to_owned(),
-        instance_id,
-        instance_source,
-        runtime_group,
-        management_mode,
-        mode_contract,
-        bootstrap,
-        instance_record,
-        predicted_paths,
-        registry_path: context.shared_paths.instance_registry_path.clone(),
-    }
-}
-
-fn runtime_group(contract: &RadrootsRuntimeManagementContract, runtime_id: &str) -> RuntimeGroup {
-    if contract
-        .managed_runtime_targets
-        .active
-        .iter()
-        .any(|entry| entry == runtime_id)
-    {
-        RuntimeGroup::ActiveManagedTarget
-    } else if contract
-        .managed_runtime_targets
-        .defined
-        .iter()
-        .any(|entry| entry == runtime_id)
-    {
-        RuntimeGroup::DefinedManagedTarget
-    } else if contract
-        .managed_runtime_targets
-        .bootstrap_only
-        .iter()
-        .any(|entry| entry == runtime_id)
-    {
-        RuntimeGroup::BootstrapOnly
-    } else {
-        RuntimeGroup::Unknown
     }
 }
 
