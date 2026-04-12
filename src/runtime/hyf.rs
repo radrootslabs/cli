@@ -697,7 +697,10 @@ fn resolve_status_for_client(client: &HyfClient) -> HyfStatusView {
     }
 }
 
-fn collect_output_with_timeout(mut child: Child, timeout: Duration) -> Result<Output, HyfClientError> {
+fn collect_output_with_timeout(
+    mut child: Child,
+    timeout: Duration,
+) -> Result<Output, HyfClientError> {
     let started_at = Instant::now();
     loop {
         match child.try_wait() {
@@ -782,9 +785,9 @@ fn format_nonzero_exit(request_label: &str, status: Option<i32>, stderr: &str) -
 #[cfg(test)]
 mod tests {
     use super::{
-        HYF_PROTOCOL_VERSION, HyfClient, HyfClientError, HyfEmptyInput,
-        HyfExplainResultRequest, HyfQueryRewriteRequest, HyfRequestContext,
-        HyfSemanticCandidate, HyfSemanticRankRequest, resolve_status,
+        HYF_PROTOCOL_VERSION, HyfClient, HyfClientError, HyfEmptyInput, HyfExplainResultRequest,
+        HyfQueryRewriteRequest, HyfRequestContext, HyfSemanticCandidate, HyfSemanticRankRequest,
+        resolve_status,
     };
     use crate::runtime::config::HyfConfig;
     use serde::Serialize;

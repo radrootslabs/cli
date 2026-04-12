@@ -79,17 +79,17 @@ impl WorkflowProviderView {
     pub fn detail(&self) -> String {
         match (self.state.as_str(), self.target_kind.as_deref(), self.target.as_deref()) {
             ("not_configured", _, _) => {
-                "optional workflow provider is not configured; rhi remains status-only in this wave"
+                "optional workflow provider is not configured; standalone rhi remains outside the cli composed-provider path in this wave"
                     .to_owned()
             }
             ("unsupported", Some(target_kind), Some(target)) => {
                 format!(
-                    "configured workflow binding via {} {} is not executable in this wave; rhi remains status-only",
+                    "configured workflow binding via {} {} is not executable through the cli composed-provider path in this wave; standalone rhi remains a separate workflow worker",
                     target_kind, target
                 )
             }
             ("unsupported", _, _) => {
-                "configured workflow binding is not executable in this wave; rhi remains status-only"
+                "configured workflow binding is not executable through the cli composed-provider path in this wave; standalone rhi remains a separate workflow worker"
                     .to_owned()
             }
             _ => self.source.clone(),
