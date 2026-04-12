@@ -5,15 +5,20 @@ use chrono::Utc;
 use getrandom::getrandom;
 use radroots_runtime_distribution::{RadrootsRuntimeDistributionResolver, RuntimeArtifactRequest};
 use radroots_runtime_manager::{
+    ManagedRuntimeActionInspection, ManagedRuntimeConfigInspection,
     ManagedRuntimeContext as RuntimeManagementContext, ManagedRuntimeGroup as RuntimeGroup,
-    ManagedRuntimeHealthState, ManagedRuntimeInstallState, ManagedRuntimeInstanceRecord,
+    ManagedRuntimeInspection, ManagedRuntimeInspectionAvailability, ManagedRuntimeInstallState,
+    ManagedRuntimeInstancePaths, ManagedRuntimeInstanceRecord, ManagedRuntimeLifecycleAction,
+    ManagedRuntimeLogsInspection, ManagedRuntimeStatusInspection,
     ManagedRuntimeTarget as RuntimeTarget, extract_binary_archive,
-    load_management_context as load_manager_context, parse_contract_str,
-    process_running as managed_process_running, remove_instance, remove_instance_artifacts,
-    resolve_runtime_target, save_registry, start_process, stop_process, upsert_instance,
-    write_instance_metadata, write_managed_file, write_secret_file,
+    inspect_runtime_action as inspect_target_action,
+    inspect_runtime_config as inspect_target_config, inspect_runtime_logs as inspect_target_logs,
+    inspect_runtime_status as inspect_target_status, load_management_context_with_selection,
+    parse_contract_str, process_running as managed_process_running, remove_instance,
+    remove_instance_artifacts, resolve_runtime_target, save_registry, start_process, stop_process,
+    upsert_instance, write_instance_metadata, write_managed_file, write_secret_file,
 };
-use radroots_runtime_paths::{RadrootsPathOverrides, RadrootsPathProfile, RadrootsPathResolver};
+use radroots_runtime_paths::{RadrootsPathResolver, RadrootsRuntimePathSelection};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
@@ -95,42 +100,6 @@ impl Default for ManagedRadrootsdNip46 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeCommandAvailability {
-    Success,
-    Unconfigured,
-    Unsupported,
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeInspection<T> {
-    pub availability: RuntimeCommandAvailability,
-    pub view: T,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum RuntimeLifecycleAction {
-    Install,
-    Uninstall,
-    Start,
-    Stop,
-    Restart,
-    ConfigSet,
-}
-
-impl RuntimeLifecycleAction {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Install => "install",
-            Self::Uninstall => "uninstall",
-            Self::Start => "start",
-            Self::Stop => "stop",
-            Self::Restart => "restart",
-            Self::ConfigSet => "config_set",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct RuntimeConfigMutationRequest {
     pub runtime_id: String,
@@ -139,6 +108,11 @@ pub struct RuntimeConfigMutationRequest {
     pub value: String,
 }
 
+pub type RuntimeCommandAvailability = ManagedRuntimeInspectionAvailability;
+pub type RuntimeLifecycleAction = ManagedRuntimeLifecycleAction;
+
+type RuntimeInspection<T> = ManagedRuntimeInspection<T>;
+
 pub fn inspect_status(
     config: &RuntimeConfig,
     runtime_id: &str,
@@ -146,14 +120,10 @@ pub fn inspect_status(
 ) -> Result<RuntimeInspection<RuntimeStatusView>, RuntimeError> {
     let context = load_management_context(config)?;
     let target = resolve_runtime_target(&context, runtime_id, instance_id);
-    let availability = if target.runtime_group == RuntimeGroup::Unknown {
-        RuntimeCommandAvailability::Unconfigured
-    } else {
-        RuntimeCommandAvailability::Success
-    };
+    let inspection = inspect_target_status(&target, &context.contract.lifecycle.actions);
     Ok(RuntimeInspection {
-        availability,
-        view: status_view(&target, &context.contract.lifecycle.actions),
+        availability: inspection.availability,
+        view: runtime_status_view(inspection.view),
     })
 }
 
@@ -164,8 +134,11 @@ pub fn inspect_logs(
 ) -> Result<RuntimeInspection<RuntimeLogsView>, RuntimeError> {
     let context = load_management_context(config)?;
     let target = resolve_runtime_target(&context, runtime_id, instance_id);
-    let (availability, view) = logs_view(&target);
-    Ok(RuntimeInspection { availability, view })
+    let inspection = inspect_target_logs(&target);
+    Ok(RuntimeInspection {
+        availability: inspection.availability,
+        view: runtime_logs_view(inspection.view),
+    })
 }
 
 pub fn inspect_config_show(
@@ -175,8 +148,11 @@ pub fn inspect_config_show(
 ) -> Result<RuntimeInspection<RuntimeManagedConfigView>, RuntimeError> {
     let context = load_management_context(config)?;
     let target = resolve_runtime_target(&context, runtime_id, instance_id);
-    let (availability, view) = config_show_view(&target);
-    Ok(RuntimeInspection { availability, view })
+    let inspection = inspect_target_config(&target);
+    Ok(RuntimeInspection {
+        availability: inspection.availability,
+        view: runtime_config_view(inspection.view),
+    })
 }
 
 pub fn inspect_action(
@@ -190,8 +166,11 @@ pub fn inspect_action(
     if target.runtime_group == RuntimeGroup::ActiveManagedTarget {
         return execute_action(config, &mut context, target, action);
     }
-    let (availability, view) = action_view(&target, action, None);
-    Ok(RuntimeInspection { availability, view })
+    let inspection = inspect_target_action(&target, action, None);
+    Ok(RuntimeInspection {
+        availability: inspection.availability,
+        view: runtime_action_view(inspection.view),
+    })
 }
 
 pub fn inspect_config_set(
@@ -211,252 +190,98 @@ pub fn inspect_config_set(
         "requested managed config mutation {}={} for runtime `{}` instance `{}`; runtime `{}` is not an active managed target in this wave",
         request.key, request.value, target.runtime_id, target.instance_id, target.runtime_id
     ));
-    let (availability, view) = action_view(&target, RuntimeLifecycleAction::ConfigSet, detail);
-    Ok(RuntimeInspection { availability, view })
+    let inspection = inspect_target_action(&target, RuntimeLifecycleAction::ConfigSet, detail);
+    Ok(RuntimeInspection {
+        availability: inspection.availability,
+        view: runtime_action_view(inspection.view),
+    })
 }
 
 fn load_management_context(
     config: &RuntimeConfig,
 ) -> Result<RuntimeManagementContext, RuntimeError> {
     let contract = parse_contract_str(MANAGEMENT_CONTRACT_RAW)?;
-    let profile = cli_path_profile(config)?;
-    let overrides = cli_path_overrides(config)?;
+    let selection = RadrootsRuntimePathSelection::from_profile_value(
+        config.paths.profile.as_str(),
+        config.paths.repo_local_root.clone(),
+    )
+    .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let resolver = RadrootsPathResolver::current();
-    load_manager_context(contract, &resolver, profile, &overrides).map_err(RuntimeError::from)
+    load_management_context_with_selection(contract, &resolver, &selection)
+        .map_err(RuntimeError::from)
 }
 
-fn cli_path_profile(config: &RuntimeConfig) -> Result<RadrootsPathProfile, RuntimeError> {
-    match config.paths.profile.as_str() {
-        "interactive_user" => Ok(RadrootsPathProfile::InteractiveUser),
-        "repo_local" => Ok(RadrootsPathProfile::RepoLocal),
-        other => Err(RuntimeError::Config(format!(
-            "runtime management only supports cli path profiles `interactive_user` and `repo_local`, got `{other}`"
-        ))),
-    }
-}
-
-fn cli_path_overrides(config: &RuntimeConfig) -> Result<RadrootsPathOverrides, RuntimeError> {
-    match config.paths.profile.as_str() {
-        "interactive_user" => Ok(RadrootsPathOverrides::default()),
-        "repo_local" => {
-            let Some(repo_local_root) = &config.paths.repo_local_root else {
-                return Err(RuntimeError::Config(
-                    "repo_local runtime management requires a repo-local root override".to_owned(),
-                ));
-            };
-            Ok(RadrootsPathOverrides::repo_local(repo_local_root))
-        }
-        other => Err(RuntimeError::Config(format!(
-            "runtime management only supports cli path profiles `interactive_user` and `repo_local`, got `{other}`"
-        ))),
-    }
-}
-
-fn status_view(target: &RuntimeTarget, lifecycle_actions: &[String]) -> RuntimeStatusView {
-    let install_state = target
-        .instance_record
-        .as_ref()
-        .map(|record| install_state_label(record.install_state))
-        .unwrap_or_else(|| install_state_label(ManagedRuntimeInstallState::NotInstalled));
-    let (health_state, health_source) = infer_health_state(target);
-
+fn runtime_status_view(view: ManagedRuntimeStatusInspection) -> RuntimeStatusView {
     RuntimeStatusView {
-        runtime_id: target.runtime_id.clone(),
-        instance_id: target.instance_id.clone(),
-        instance_source: target.instance_source.clone(),
-        runtime_group: target.runtime_group.as_str().to_owned(),
-        management_posture: target.runtime_group.posture().to_owned(),
-        state: status_state(target).to_owned(),
-        source: "runtime management contract + shared instance registry".to_owned(),
-        detail: status_detail(target),
-        management_mode: target.management_mode.clone(),
-        service_manager_integration: target
-            .mode_contract
-            .as_ref()
-            .map(|mode| mode.service_manager_integration),
-        uses_absolute_binary_paths: target
-            .mode_contract
-            .as_ref()
-            .map(|mode| mode.uses_absolute_binary_paths),
-        preferred_cli_binding: target
-            .bootstrap
-            .as_ref()
-            .map(|entry| entry.preferred_cli_binding),
-        install_state: install_state.to_owned(),
-        health_state: health_state.to_owned(),
-        health_source: health_source.to_owned(),
-        registry_path: target.registry_path.display().to_string(),
-        lifecycle_actions: if target.runtime_group == RuntimeGroup::ActiveManagedTarget {
-            lifecycle_actions.to_vec()
-        } else {
-            Vec::new()
-        },
-        instance_paths: target.predicted_paths.as_ref().map(instance_paths_view),
-        instance_record: target.instance_record.as_ref().map(instance_record_view),
+        runtime_id: view.runtime_id,
+        instance_id: view.instance_id,
+        instance_source: view.instance_source,
+        runtime_group: view.runtime_group,
+        management_posture: view.management_posture,
+        state: view.state,
+        source: view.source,
+        detail: view.detail,
+        management_mode: view.management_mode,
+        service_manager_integration: view.service_manager_integration,
+        uses_absolute_binary_paths: view.uses_absolute_binary_paths,
+        preferred_cli_binding: view.preferred_cli_binding,
+        install_state: view.install_state,
+        health_state: view.health_state,
+        health_source: view.health_source,
+        registry_path: view.registry_path.display().to_string(),
+        lifecycle_actions: view.lifecycle_actions,
+        instance_paths: view.instance_paths.map(runtime_instance_paths_view),
+        instance_record: view.instance_record.map(runtime_instance_record_view),
     }
 }
 
-fn logs_view(target: &RuntimeTarget) -> (RuntimeCommandAvailability, RuntimeLogsView) {
-    let stdout_log_path = target
-        .predicted_paths
-        .as_ref()
-        .map(|paths| paths.stdout_log_path.display().to_string());
-    let stderr_log_path = target
-        .predicted_paths
-        .as_ref()
-        .map(|paths| paths.stderr_log_path.display().to_string());
-    let availability = match target.runtime_group {
-        RuntimeGroup::Unknown => RuntimeCommandAvailability::Unconfigured,
-        RuntimeGroup::ActiveManagedTarget => RuntimeCommandAvailability::Success,
-        RuntimeGroup::DefinedManagedTarget | RuntimeGroup::BootstrapOnly => {
-            if target.instance_record.is_some() {
-                RuntimeCommandAvailability::Success
-            } else {
-                RuntimeCommandAvailability::Unsupported
-            }
-        }
-    };
-    let detail = match target.runtime_group {
-        RuntimeGroup::ActiveManagedTarget => {
-            "runtime logs report the managed stdout/stderr locations for the active managed instance"
-                .to_owned()
-        }
-        RuntimeGroup::DefinedManagedTarget => format!(
-            "runtime `{}` is only a defined future managed target; no active generic logs surface exists without a registered instance",
-            target.runtime_id
-        ),
-        RuntimeGroup::BootstrapOnly => format!(
-            "runtime `{}` remains bootstrap_only and direct-bindable in this wave; generic managed logs are not admitted",
-            target.runtime_id
-        ),
-        RuntimeGroup::Unknown => unknown_runtime_detail(target),
-    };
-
-    (
-        availability,
-        RuntimeLogsView {
-            runtime_id: target.runtime_id.clone(),
-            instance_id: target.instance_id.clone(),
-            instance_source: target.instance_source.clone(),
-            runtime_group: target.runtime_group.as_str().to_owned(),
-            state: match availability {
-                RuntimeCommandAvailability::Success => "ready".to_owned(),
-                RuntimeCommandAvailability::Unconfigured => "unknown_runtime".to_owned(),
-                RuntimeCommandAvailability::Unsupported => "unsupported".to_owned(),
-            },
-            source: "runtime management contract + shared instance registry".to_owned(),
-            detail,
-            stdout_log_path: stdout_log_path.clone().or_else(|| {
-                target
-                    .instance_record
-                    .as_ref()
-                    .map(|record| record.logs_path.join("stdout.log").display().to_string())
-            }),
-            stderr_log_path: stderr_log_path.clone().or_else(|| {
-                target
-                    .instance_record
-                    .as_ref()
-                    .map(|record| record.logs_path.join("stderr.log").display().to_string())
-            }),
-            stdout_log_present: path_present(stdout_log_path.as_deref()).unwrap_or_else(|| {
-                target
-                    .instance_record
-                    .as_ref()
-                    .is_some_and(|record| record.logs_path.join("stdout.log").exists())
-            }),
-            stderr_log_present: path_present(stderr_log_path.as_deref()).unwrap_or_else(|| {
-                target
-                    .instance_record
-                    .as_ref()
-                    .is_some_and(|record| record.logs_path.join("stderr.log").exists())
-            }),
-        },
-    )
+fn runtime_logs_view(view: ManagedRuntimeLogsInspection) -> RuntimeLogsView {
+    RuntimeLogsView {
+        runtime_id: view.runtime_id,
+        instance_id: view.instance_id,
+        instance_source: view.instance_source,
+        runtime_group: view.runtime_group,
+        state: view.state,
+        source: view.source,
+        detail: view.detail,
+        stdout_log_path: view.stdout_log_path.map(|path| path.display().to_string()),
+        stderr_log_path: view.stderr_log_path.map(|path| path.display().to_string()),
+        stdout_log_present: view.stdout_log_present,
+        stderr_log_present: view.stderr_log_present,
+    }
 }
 
-fn config_show_view(
-    target: &RuntimeTarget,
-) -> (RuntimeCommandAvailability, RuntimeManagedConfigView) {
-    let availability = match target.runtime_group {
-        RuntimeGroup::Unknown => RuntimeCommandAvailability::Unconfigured,
-        RuntimeGroup::ActiveManagedTarget => RuntimeCommandAvailability::Success,
-        RuntimeGroup::DefinedManagedTarget | RuntimeGroup::BootstrapOnly => {
-            if target.instance_record.is_some() {
-                RuntimeCommandAvailability::Success
-            } else {
-                RuntimeCommandAvailability::Unsupported
-            }
-        }
-    };
-    let config_path = target
-        .instance_record
-        .as_ref()
-        .map(|record| record.config_path.display().to_string());
-    let detail = match target.runtime_group {
-        RuntimeGroup::ActiveManagedTarget => {
-            if config_path.is_some() {
-                "runtime config show reports the managed config location without mutating bindings"
-                    .to_owned()
-            } else {
-                format!(
-                    "managed runtime `{}` has no registered instance config yet",
-                    target.runtime_id
-                )
-            }
-        }
-        RuntimeGroup::DefinedManagedTarget => format!(
-            "runtime `{}` is only a defined future managed target; generic config surfaces are not admitted without a registered instance",
-            target.runtime_id
-        ),
-        RuntimeGroup::BootstrapOnly => format!(
-            "runtime `{}` remains bootstrap_only and direct-bindable in this wave; generic managed config is not admitted",
-            target.runtime_id
-        ),
-        RuntimeGroup::Unknown => unknown_runtime_detail(target),
-    };
+fn runtime_config_view(view: ManagedRuntimeConfigInspection) -> RuntimeManagedConfigView {
+    RuntimeManagedConfigView {
+        runtime_id: view.runtime_id,
+        instance_id: view.instance_id,
+        instance_source: view.instance_source,
+        runtime_group: view.runtime_group,
+        state: view.state,
+        source: view.source,
+        detail: view.detail,
+        config_format: view.config_format,
+        config_path: view.config_path.map(|path| path.display().to_string()),
+        config_present: view.config_present,
+        requires_bootstrap_secret: view.requires_bootstrap_secret,
+        requires_config_bootstrap: view.requires_config_bootstrap,
+        requires_signer_provider: view.requires_signer_provider,
+    }
+}
 
-    (
-        availability,
-        RuntimeManagedConfigView {
-            runtime_id: target.runtime_id.clone(),
-            instance_id: target.instance_id.clone(),
-            instance_source: target.instance_source.clone(),
-            runtime_group: target.runtime_group.as_str().to_owned(),
-            state: match availability {
-                RuntimeCommandAvailability::Success => {
-                    if config_path.is_some() {
-                        "ready".to_owned()
-                    } else {
-                        "not_installed".to_owned()
-                    }
-                }
-                RuntimeCommandAvailability::Unconfigured => "unknown_runtime".to_owned(),
-                RuntimeCommandAvailability::Unsupported => "unsupported".to_owned(),
-            },
-            source: "runtime management contract + shared instance registry".to_owned(),
-            detail,
-            config_format: target
-                .bootstrap
-                .as_ref()
-                .map(|entry| entry.config_format.clone()),
-            config_path: config_path.clone(),
-            config_present: config_path
-                .as_deref()
-                .is_some_and(|path| PathBuf::from(path).exists()),
-            requires_bootstrap_secret: target
-                .bootstrap
-                .as_ref()
-                .map(|entry| entry.requires_bootstrap_secret),
-            requires_config_bootstrap: target
-                .bootstrap
-                .as_ref()
-                .map(|entry| entry.requires_config_bootstrap),
-            requires_signer_provider: target
-                .bootstrap
-                .as_ref()
-                .map(|entry| entry.requires_signer_provider),
-        },
-    )
+fn runtime_action_view(view: ManagedRuntimeActionInspection) -> RuntimeActionView {
+    RuntimeActionView {
+        action: view.action,
+        runtime_id: view.runtime_id,
+        instance_id: view.instance_id,
+        instance_source: view.instance_source,
+        runtime_group: view.runtime_group,
+        state: view.state,
+        source: view.source,
+        detail: view.detail,
+        mutates_bindings: view.mutates_bindings,
+        next_step: view.next_step,
+    }
 }
 
 fn execute_action(
@@ -466,7 +291,7 @@ fn execute_action(
     action: RuntimeLifecycleAction,
 ) -> Result<RuntimeInspection<RuntimeActionView>, RuntimeError> {
     if target.runtime_id != RADROOTSD_RUNTIME_ID {
-        let (availability, view) = action_view(
+        let inspection = inspect_target_action(
             &target,
             action,
             Some(format!(
@@ -474,7 +299,10 @@ fn execute_action(
                 target.runtime_id
             )),
         );
-        return Ok(RuntimeInspection { availability, view });
+        return Ok(RuntimeInspection {
+            availability: inspection.availability,
+            view: runtime_action_view(inspection.view),
+        });
     }
 
     match action {
@@ -494,7 +322,7 @@ fn execute_config_set(
     request: &RuntimeConfigMutationRequest,
 ) -> Result<RuntimeInspection<RuntimeActionView>, RuntimeError> {
     if target.runtime_id != RADROOTSD_RUNTIME_ID {
-        let (availability, view) = action_view(
+        let inspection = inspect_target_action(
             &target,
             RuntimeLifecycleAction::ConfigSet,
             Some(format!(
@@ -502,7 +330,10 @@ fn execute_config_set(
                 target.runtime_id
             )),
         );
-        return Ok(RuntimeInspection { availability, view });
+        return Ok(RuntimeInspection {
+            availability: inspection.availability,
+            view: runtime_action_view(inspection.view),
+        });
     }
 
     let Some(predicted_paths) = target.predicted_paths.as_ref() else {
@@ -1259,187 +1090,7 @@ fn generate_bridge_token() -> Result<String, RuntimeError> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn action_view(
-    target: &RuntimeTarget,
-    action: RuntimeLifecycleAction,
-    detail_override: Option<String>,
-) -> (RuntimeCommandAvailability, RuntimeActionView) {
-    let (availability, state, detail, next_step) = match target.runtime_group {
-        RuntimeGroup::ActiveManagedTarget => (
-            RuntimeCommandAvailability::Unsupported,
-            "deferred",
-            detail_override.unwrap_or_else(|| {
-                format!(
-                    "runtime {} `{}` is not supported for this managed target",
-                    action.as_str().replace('_', " "),
-                    target.runtime_id
-                )
-            }),
-            None,
-        ),
-        RuntimeGroup::DefinedManagedTarget => (
-            RuntimeCommandAvailability::Unsupported,
-            "unsupported",
-            detail_override.unwrap_or_else(|| {
-                format!(
-                    "runtime `{}` is only a defined future managed target; `{}` is not admitted in the current wave",
-                    target.runtime_id,
-                    action.as_str().replace('_', " ")
-                )
-            }),
-            None,
-        ),
-        RuntimeGroup::BootstrapOnly => (
-            RuntimeCommandAvailability::Unsupported,
-            "unsupported",
-            detail_override.unwrap_or_else(|| {
-                format!(
-                    "runtime `{}` remains bootstrap_only and direct-bindable in this wave; generic managed `{}` is not admitted",
-                    target.runtime_id,
-                    action.as_str().replace('_', " ")
-                )
-            }),
-            None,
-        ),
-        RuntimeGroup::Unknown => (
-            RuntimeCommandAvailability::Unconfigured,
-            "unknown_runtime",
-            detail_override.unwrap_or_else(|| unknown_runtime_detail(target)),
-            None,
-        ),
-    };
-
-    (
-        availability,
-        RuntimeActionView {
-            action: action.as_str().to_owned(),
-            runtime_id: target.runtime_id.clone(),
-            instance_id: target.instance_id.clone(),
-            instance_source: target.instance_source.clone(),
-            runtime_group: target.runtime_group.as_str().to_owned(),
-            state: state.to_owned(),
-            source: "generic runtime-management command family".to_owned(),
-            detail,
-            mutates_bindings: false,
-            next_step,
-        },
-    )
-}
-
-fn status_state(target: &RuntimeTarget) -> &'static str {
-    match target.runtime_group {
-        RuntimeGroup::ActiveManagedTarget => match target.instance_record.as_ref() {
-            Some(record) => install_state_label(record.install_state),
-            None => "not_installed",
-        },
-        RuntimeGroup::DefinedManagedTarget => "defined_not_active",
-        RuntimeGroup::BootstrapOnly => "bootstrap_only",
-        RuntimeGroup::Unknown => "unknown_runtime",
-    }
-}
-
-fn status_detail(target: &RuntimeTarget) -> String {
-    match target.runtime_group {
-        RuntimeGroup::ActiveManagedTarget => match &target.instance_record {
-            Some(record) => format!(
-                "managed runtime `{}` instance `{}` is registered with config at {}",
-                target.runtime_id,
-                target.instance_id,
-                record.config_path.display()
-            ),
-            None => format!(
-                "managed runtime `{}` has no registered instance `{}` in {}",
-                target.runtime_id,
-                target.instance_id,
-                target.registry_path.display()
-            ),
-        },
-        RuntimeGroup::DefinedManagedTarget => format!(
-            "runtime `{}` is defined in the management contract but not yet admitted as an active managed target",
-            target.runtime_id
-        ),
-        RuntimeGroup::BootstrapOnly => format!(
-            "runtime `{}` is bootstrap_only in the management contract and remains direct-bindable outside managed lifecycle in this wave",
-            target.runtime_id
-        ),
-        RuntimeGroup::Unknown => unknown_runtime_detail(target),
-    }
-}
-
-fn unknown_runtime_detail(target: &RuntimeTarget) -> String {
-    format!(
-        "runtime `{}` is not present in the current runtime-management contract",
-        target.runtime_id
-    )
-}
-
-fn infer_health_state(target: &RuntimeTarget) -> (&'static str, &'static str) {
-    let Some(record) = &target.instance_record else {
-        return (
-            health_state_label(ManagedRuntimeHealthState::NotInstalled),
-            "registry_absent",
-        );
-    };
-    if record.install_state == ManagedRuntimeInstallState::Failed {
-        return (
-            health_state_label(ManagedRuntimeHealthState::Failed),
-            "registry_install_state",
-        );
-    }
-
-    if let Some(paths) = target.predicted_paths.as_ref() {
-        if managed_process_running(paths).unwrap_or(false) {
-            return (
-                health_state_label(ManagedRuntimeHealthState::Running),
-                "process_probe",
-            );
-        }
-    } else if record.run_path.join("runtime.pid").exists() {
-        return (
-            health_state_label(ManagedRuntimeHealthState::Running),
-            "pid_file_presence",
-        );
-    }
-
-    match record.install_state {
-        ManagedRuntimeInstallState::NotInstalled => (
-            health_state_label(ManagedRuntimeHealthState::NotInstalled),
-            "registry_install_state",
-        ),
-        ManagedRuntimeInstallState::Installed | ManagedRuntimeInstallState::Configured => (
-            health_state_label(ManagedRuntimeHealthState::Stopped),
-            "pid_file_absent",
-        ),
-        ManagedRuntimeInstallState::Failed => (
-            health_state_label(ManagedRuntimeHealthState::Failed),
-            "registry_install_state",
-        ),
-    }
-}
-
-fn install_state_label(state: ManagedRuntimeInstallState) -> &'static str {
-    match state {
-        ManagedRuntimeInstallState::NotInstalled => "not_installed",
-        ManagedRuntimeInstallState::Installed => "installed",
-        ManagedRuntimeInstallState::Configured => "configured",
-        ManagedRuntimeInstallState::Failed => "failed",
-    }
-}
-
-fn health_state_label(state: ManagedRuntimeHealthState) -> &'static str {
-    match state {
-        ManagedRuntimeHealthState::NotInstalled => "not_installed",
-        ManagedRuntimeHealthState::Stopped => "stopped",
-        ManagedRuntimeHealthState::Starting => "starting",
-        ManagedRuntimeHealthState::Running => "running",
-        ManagedRuntimeHealthState::Degraded => "degraded",
-        ManagedRuntimeHealthState::Failed => "failed",
-    }
-}
-
-fn instance_paths_view(
-    paths: &radroots_runtime_manager::ManagedRuntimeInstancePaths,
-) -> RuntimeInstancePathsView {
+fn runtime_instance_paths_view(paths: ManagedRuntimeInstancePaths) -> RuntimeInstancePathsView {
     RuntimeInstancePathsView {
         install_dir: paths.install_dir.display().to_string(),
         state_dir: paths.state_dir.display().to_string(),
@@ -1453,23 +1104,24 @@ fn instance_paths_view(
     }
 }
 
-fn instance_record_view(record: &ManagedRuntimeInstanceRecord) -> RuntimeInstanceRecordView {
+fn runtime_instance_record_view(record: ManagedRuntimeInstanceRecord) -> RuntimeInstanceRecordView {
     RuntimeInstanceRecordView {
-        management_mode: record.management_mode.clone(),
-        install_state: install_state_label(record.install_state).to_owned(),
+        management_mode: record.management_mode,
+        install_state: match record.install_state {
+            ManagedRuntimeInstallState::NotInstalled => "not_installed".to_owned(),
+            ManagedRuntimeInstallState::Installed => "installed".to_owned(),
+            ManagedRuntimeInstallState::Configured => "configured".to_owned(),
+            ManagedRuntimeInstallState::Failed => "failed".to_owned(),
+        },
         binary_path: record.binary_path.display().to_string(),
         config_path: record.config_path.display().to_string(),
         logs_path: record.logs_path.display().to_string(),
         run_path: record.run_path.display().to_string(),
-        installed_version: record.installed_version.clone(),
-        health_endpoint: record.health_endpoint.clone(),
-        secret_material_ref: record.secret_material_ref.clone(),
-        last_started_at: record.last_started_at.clone(),
-        last_stopped_at: record.last_stopped_at.clone(),
-        notes: record.notes.clone(),
+        installed_version: record.installed_version,
+        health_endpoint: record.health_endpoint,
+        secret_material_ref: record.secret_material_ref,
+        last_started_at: record.last_started_at,
+        last_stopped_at: record.last_stopped_at,
+        notes: record.notes,
     }
-}
-
-fn path_present(path: Option<&str>) -> Option<bool> {
-    path.map(|value| PathBuf::from(value).exists())
 }
