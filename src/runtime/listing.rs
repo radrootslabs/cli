@@ -7,7 +7,6 @@ use radroots_core::{
     RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreMoney, RadrootsCoreQuantity,
     RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
-use radroots_events::RadrootsNostrEvent;
 use radroots_events::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
 use radroots_events::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingBin,
@@ -15,13 +14,14 @@ use radroots_events::listing::{
     RadrootsListingProduct, RadrootsListingStatus,
 };
 use radroots_events::trade::RadrootsTradeListingValidationError;
+use radroots_events::RadrootsNostrEvent;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
-use radroots_sql_core::{SqlExecutor, SqliteExecutor, utils};
+use radroots_replica_db::ReplicaSql;
+use radroots_sql_core::SqliteExecutor;
 use radroots_trade::listing::publish::validate_listing_for_seller;
 use radroots_trade::listing::validation::validate_listing_event;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::cli::{ListingFileArgs, ListingMutationArgs, ListingNewArgs, RecordKeyArgs};
 use crate::domain::runtime::{
@@ -29,13 +29,13 @@ use crate::domain::runtime::{
     ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
     ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon;
 use crate::runtime::daemon::DaemonRpcError;
-use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
+use crate::runtime::signer::{resolve_actor_write_authority, ActorWriteBindingError};
 use crate::runtime::sync::freshness_from_executor;
+use crate::runtime::RuntimeError;
 
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
@@ -139,29 +139,6 @@ struct CanonicalListingDraft {
     seller_pubkey: String,
     farm_d_tag: String,
     listing: RadrootsListing,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ListingRow {
-    id: String,
-    key: String,
-    category: String,
-    title: String,
-    summary: String,
-    qty_amt: i64,
-    qty_unit: String,
-    qty_label: Option<String>,
-    qty_avail: Option<i64>,
-    price_amt: f64,
-    price_currency: String,
-    price_qty_amt: u32,
-    price_qty_unit: String,
-    location_primary: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct FarmRow {
-    d_tag: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -398,8 +375,8 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<ListingGetVie
         });
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
-    let rows = query_listing_rows(&executor, args.key.as_str())?;
+    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
+    let rows = db.trade_product_lookup(args.key.as_str())?;
     let Some(row) = rows.into_iter().next() else {
         return Ok(ListingGetView {
             state: "missing".to_owned(),
@@ -1218,28 +1195,6 @@ fn issue_from_trade_validation(
     }
 }
 
-fn query_listing_rows(
-    executor: &SqliteExecutor,
-    lookup: &str,
-) -> Result<Vec<ListingRow>, RuntimeError> {
-    let sql = "SELECT tp.id, tp.key, tp.category, tp.title, tp.summary, tp.qty_amt, tp.qty_unit, tp.qty_label, tp.qty_avail, tp.price_amt, tp.price_currency, tp.price_qty_amt, tp.price_qty_unit, loc.location_primary \
-         FROM trade_product tp \
-         LEFT JOIN (\
-             SELECT tpl.tb_tp AS trade_product_id, MIN(COALESCE(gl.label, gl.gc_name, gl.gc_admin1_name, gl.gc_country_name, gl.d_tag)) AS location_primary \
-             FROM trade_product_location tpl \
-             JOIN gcs_location gl ON gl.id = tpl.tb_gl \
-             GROUP BY tpl.tb_tp\
-         ) loc ON loc.trade_product_id = tp.id \
-         WHERE tp.id = ? OR tp.key = ? \
-         ORDER BY lower(tp.title) ASC, tp.id ASC;";
-    let params = utils::to_params_json(vec![
-        Value::from(lookup.to_owned()),
-        Value::from(lookup.to_owned()),
-    ])?;
-    let raw = executor.query_raw(sql, &params)?;
-    serde_json::from_str(&raw).map_err(RuntimeError::from)
-}
-
 fn resolve_selected_farm_d_tag(
     config: &RuntimeConfig,
     seller_pubkey: &str,
@@ -1247,16 +1202,9 @@ fn resolve_selected_farm_d_tag(
     if !config.local.replica_db_path.exists() {
         return Ok(None);
     }
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
-    let sql = "SELECT d_tag FROM farm WHERE pubkey = ? ORDER BY d_tag ASC;";
-    let params = utils::to_params_json(vec![Value::from(seller_pubkey.to_owned())])?;
-    let raw = executor.query_raw(sql, &params)?;
-    let rows: Vec<FarmRow> = serde_json::from_str(&raw).map_err(RuntimeError::from)?;
-    if rows.len() == 1 {
-        Ok(Some(rows[0].d_tag.clone()))
-    } else {
-        Ok(None)
-    }
+    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
+    db.farm_unique_d_tag_by_pubkey(seller_pubkey)
+        .map_err(RuntimeError::from)
 }
 
 fn parse_decimal_field(
@@ -1407,7 +1355,7 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DRAFT_KIND, ListingDraftDocument, encode_base64url_no_pad, generate_d_tag};
+    use super::{encode_base64url_no_pad, generate_d_tag, ListingDraftDocument, DRAFT_KIND};
     use radroots_events_codec::d_tag::is_d_tag_base64url;
 
     #[test]

@@ -1,17 +1,17 @@
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use radroots_replica_db::ReplicaSql;
 use radroots_replica_sync::radroots_replica_sync_status;
-use radroots_sql_core::{SqlExecutor, SqliteExecutor};
-use serde_json::Value;
+use radroots_sql_core::SqliteExecutor;
 
 use crate::cli::SyncWatchArgs;
 use crate::domain::runtime::{
     SyncActionView, SyncFreshnessView, SyncQueueView, SyncStatusView, SyncWatchFrameView,
     SyncWatchView,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime::RuntimeError;
 
 const SYNC_SOURCE: &str = "local replica · local first";
 const RELAY_SETUP_ACTION: &str = "radroots relay ls --relay wss://relay.example.com";
@@ -215,20 +215,8 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
 pub(crate) fn freshness_from_executor(
     executor: &SqliteExecutor,
 ) -> Result<SyncFreshnessView, RuntimeError> {
-    let raw = executor.query_raw(
-        "SELECT MAX(last_created_at) AS last_created_at FROM nostr_event_state WHERE last_created_at IS NOT NULL",
-        "[]",
-    )?;
-    let json: Value = serde_json::from_str(&raw)?;
-    let last_event_at = json
-        .as_array()
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("last_created_at"))
-        .and_then(|value| {
-            value
-                .as_u64()
-                .or_else(|| value.as_i64().and_then(|signed| u64::try_from(signed).ok()))
-        });
+    let db = ReplicaSql::new(executor);
+    let last_event_at = db.nostr_event_last_created_at()?;
 
     Ok(match last_event_at {
         Some(last_event_at) => {

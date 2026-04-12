@@ -1,38 +1,19 @@
-use radroots_sql_core::{SqlExecutor, SqliteExecutor, utils};
-use serde::Deserialize;
-use serde_json::Value;
+use radroots_replica_db::ReplicaSql;
+use radroots_sql_core::SqliteExecutor;
 
 use crate::cli::FindArgs;
 use crate::domain::runtime::{
     FindHyfView, FindPriceView, FindQuantityView, FindResultHyfView, FindResultProvenanceView,
     FindResultView, FindView, SyncFreshnessView,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::hyf::{self, HyfQueryRewriteRequest, HyfRequestContext};
 use crate::runtime::sync::freshness_from_executor;
+use crate::runtime::RuntimeError;
 
 const FIND_SOURCE: &str = "local replica · local first";
 const FIND_HYF_SOURCE: &str = "hyf query_rewrite · local first";
 const FIND_HYF_QUERY_REWRITE_REQUEST_ID: &str = "cli-find-query-rewrite";
-
-#[derive(Debug, Clone, Deserialize)]
-struct FindRow {
-    id: String,
-    key: String,
-    category: String,
-    title: String,
-    summary: String,
-    qty_amt: i64,
-    qty_unit: String,
-    qty_label: Option<String>,
-    qty_avail: Option<i64>,
-    price_amt: f64,
-    price_currency: String,
-    price_qty_amt: u32,
-    price_qty_unit: String,
-    location_primary: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 struct AppliedQueryRewrite {
@@ -82,14 +63,14 @@ pub fn search(config: &RuntimeConfig, args: &FindArgs) -> Result<FindView, Runti
         });
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
-    let freshness = freshness_from_executor(&executor)?;
+    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
+    let freshness = freshness_from_executor(db.executor())?;
     let applied_query_rewrite = attempt_query_rewrite(config, query.as_str(), &args.query);
     let effective_query_terms = applied_query_rewrite
         .as_ref()
         .map(|rewrite| rewrite.query_terms.clone())
         .unwrap_or_else(|| normalize_query_terms(args.query.clone()));
-    let rows = query_rows(&executor, effective_query_terms.as_slice())?;
+    let rows = db.trade_product_search(effective_query_terms.as_slice())?;
     let relay_count = config.relay.urls.len();
     let result_provenance = FindResultProvenanceView {
         origin: "local_replica.trade_product".to_owned(),
@@ -195,42 +176,6 @@ fn attempt_query_rewrite(
         rewritten_query,
         query_terms: rewritten_terms,
     })
-}
-
-fn query_rows(
-    executor: &SqliteExecutor,
-    query_terms: &[String],
-) -> Result<Vec<FindRow>, RuntimeError> {
-    let mut where_clauses = Vec::with_capacity(query_terms.len());
-    let mut bind_values = Vec::<Value>::with_capacity(query_terms.len() * 5);
-
-    for term in query_terms {
-        let pattern = format!("%{}%", term.to_lowercase());
-        where_clauses.push(
-            "(lower(tp.title) LIKE ? OR lower(tp.summary) LIKE ? OR lower(tp.category) LIKE ? OR lower(tp.key) LIKE ? OR lower(COALESCE(tp.notes, '')) LIKE ?)"
-                .to_owned(),
-        );
-        for _ in 0..5 {
-            bind_values.push(Value::from(pattern.clone()));
-        }
-    }
-
-    let sql = format!(
-        "SELECT tp.id, tp.key, tp.category, tp.title, tp.summary, tp.qty_amt, tp.qty_unit, tp.qty_label, tp.qty_avail, tp.price_amt, tp.price_currency, tp.price_qty_amt, tp.price_qty_unit, loc.location_primary \
-         FROM trade_product tp \
-         LEFT JOIN (\
-             SELECT tpl.tb_tp AS trade_product_id, MIN(COALESCE(gl.label, gl.gc_name, gl.gc_admin1_name, gl.gc_country_name, gl.d_tag)) AS location_primary \
-             FROM trade_product_location tpl \
-             JOIN gcs_location gl ON gl.id = tpl.tb_gl \
-             GROUP BY tpl.tb_tp\
-         ) loc ON loc.trade_product_id = tp.id \
-         WHERE {} \
-         ORDER BY lower(tp.title) ASC, tp.id ASC;",
-        where_clauses.join(" AND ")
-    );
-    let params_json = utils::to_params_json(bind_values)?;
-    let raw = executor.query_raw(&sql, &params_json)?;
-    serde_json::from_str(&raw).map_err(RuntimeError::from)
 }
 
 fn non_empty(value: String) -> Option<String> {
