@@ -2,6 +2,10 @@ use std::time::Duration;
 
 use radroots_events::listing::RadrootsListing;
 use radroots_events::trade::RadrootsTradeOrder;
+use radroots_sdk::{
+    RadrootsSdkConfig, RadrootsdAuth, SdkPublishError, SdkRadrootsdListingPublishOptions,
+    SdkRadrootsdSignerAuthority, SdkRadrootsdSignerSessionRef, SdkTransportMode, SignerConfig,
+};
 use reqwest::blocking::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -98,8 +102,6 @@ struct BridgeJobRemote {
     signer_mode: String,
     #[serde(default)]
     signer_session_id: Option<String>,
-    #[serde(default)]
-    event_kind: Option<u32>,
     event_id: Option<String>,
     event_addr: Option<String>,
     delivery_policy: String,
@@ -391,30 +393,35 @@ pub fn bridge_listing_publish(
     signer_session_id: Option<&str>,
     signer_authority: Option<&ActorWriteSignerAuthority>,
 ) -> Result<BridgeListingPublishResult, DaemonRpcError> {
-    let target = actor_write_target(config)?;
-    let response: BridgePublishResponseRemote = call(
-        &target,
-        "bridge.listing.publish",
-        Some(serde_json::json!({
-            "listing": listing,
-            "kind": kind,
-            "idempotency_key": idempotency_key,
-            "signer_session_id": signer_session_id,
-            "signer_authority": signer_authority,
-        })),
-        RpcAuthMode::BridgeBearer,
-    )?;
-    Ok(BridgeListingPublishResult {
-        deduplicated: response.deduplicated,
-        job_id: response.job.job_id,
-        idempotency_key: response.job.idempotency_key,
-        status: response.job.status,
-        signer_mode: response.job.signer_mode,
-        signer_session_id: response.job.signer_session_id,
-        event_kind: response.job.event_kind,
-        event_id: response.job.event_id,
-        event_addr: response.job.event_addr,
-    })
+    if kind != 30402 {
+        return Err(DaemonRpcError::External(format!(
+            "sdk listing publish only supports kind 30402, got {kind}"
+        )));
+    }
+
+    let Some(signer_session_id) = signer_session_id else {
+        return Err(DaemonRpcError::Unconfigured(
+            "listing publish requires a signer session id".to_owned(),
+        ));
+    };
+
+    let sdk = actor_write_sdk_client(config)?;
+    let session = SdkRadrootsdSignerSessionRef::from_session_id(signer_session_id.to_owned());
+    let mut options = SdkRadrootsdListingPublishOptions::from_signer_session_ref(&session);
+    if let Some(idempotency_key) = idempotency_key {
+        options = options.with_idempotency_key(idempotency_key.to_owned());
+    }
+    if let Some(signer_authority) = signer_authority {
+        options = options.with_signer_authority(sdk_signer_authority(signer_authority));
+    }
+
+    let receipt = block_on_sdk(sdk.listing().publish_listing_via_radrootsd_with_options(
+        listing,
+        &options,
+    ))?
+    .map_err(map_sdk_publish_error)?;
+
+    map_listing_publish_receipt(receipt, idempotency_key)
 }
 
 pub fn bridge_order_request(
@@ -502,6 +509,86 @@ fn default_target(config: &RuntimeConfig) -> RpcTarget {
         url: config.rpc.url.clone(),
         bridge_bearer_token: config.rpc.bridge_bearer_token.clone(),
     }
+}
+
+fn actor_write_sdk_client(config: &RuntimeConfig) -> Result<radroots_sdk::RadrootsSdkClient, DaemonRpcError> {
+    let target = actor_write_target(config)?;
+    let mut sdk_config = RadrootsSdkConfig::custom();
+    sdk_config.transport = SdkTransportMode::Radrootsd;
+    sdk_config.signer = SignerConfig::Nip46;
+    sdk_config.radrootsd.endpoint = Some(target.url);
+    let Some(bridge_bearer_token) = target.bridge_bearer_token else {
+        return Err(DaemonRpcError::Unconfigured(
+            "actor write plane target is missing a bridge bearer token".to_owned(),
+        ));
+    };
+    sdk_config.radrootsd.auth = RadrootsdAuth::BearerToken(bridge_bearer_token);
+    radroots_sdk::RadrootsSdkClient::from_config(sdk_config)
+        .map_err(|err| DaemonRpcError::Unconfigured(err.to_string()))
+}
+
+fn sdk_signer_authority(value: &ActorWriteSignerAuthority) -> SdkRadrootsdSignerAuthority {
+    SdkRadrootsdSignerAuthority {
+        provider_runtime_id: value.provider_runtime_id.clone(),
+        account_identity_id: value.account_identity_id.clone(),
+        provider_signer_session_id: value.provider_signer_session_id.clone(),
+    }
+}
+
+fn map_sdk_publish_error(error: SdkPublishError) -> DaemonRpcError {
+    match error {
+        SdkPublishError::Config(err) => DaemonRpcError::Unconfigured(err.to_string()),
+        SdkPublishError::Radrootsd(message) => DaemonRpcError::Remote(message),
+        other => DaemonRpcError::External(other.to_string()),
+    }
+}
+
+fn map_listing_publish_receipt(
+    receipt: radroots_sdk::SdkPublishReceipt,
+    idempotency_key: Option<&str>,
+) -> Result<BridgeListingPublishResult, DaemonRpcError> {
+    let radroots_sdk::SdkTransportReceipt::Radrootsd(transport_receipt) = receipt.transport_receipt else {
+        return Err(DaemonRpcError::InvalidResponse(
+            "sdk listing publish returned a non-radrootsd transport receipt".to_owned(),
+        ));
+    };
+    let Some(job_id) = transport_receipt.job_id else {
+        return Err(DaemonRpcError::InvalidResponse(
+            "sdk listing publish did not return a job id".to_owned(),
+        ));
+    };
+    let Some(status) = transport_receipt.status else {
+        return Err(DaemonRpcError::InvalidResponse(
+            "sdk listing publish did not return a job status".to_owned(),
+        ));
+    };
+    let Some(signer_mode) = transport_receipt.signer_mode else {
+        return Err(DaemonRpcError::InvalidResponse(
+            "sdk listing publish did not return a signer mode".to_owned(),
+        ));
+    };
+    Ok(BridgeListingPublishResult {
+        deduplicated: transport_receipt.deduplicated,
+        job_id,
+        idempotency_key: idempotency_key.map(str::to_owned),
+        status,
+        signer_mode,
+        signer_session_id: transport_receipt.signer_session_id,
+        event_kind: receipt.event_kind,
+        event_id: receipt.event_id,
+        event_addr: transport_receipt.event_addr,
+    })
+}
+
+fn block_on_sdk<F, T>(future: F) -> Result<T, DaemonRpcError>
+where
+    F: std::future::Future<Output = T>,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| DaemonRpcError::External(format!("build sdk runtime: {err}")))?;
+    Ok(runtime.block_on(future))
 }
 
 pub fn resolve_signer_session_id(

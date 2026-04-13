@@ -35,12 +35,14 @@ radroots_runtime_distribution = { path = "../lib/crates/runtime_distribution" }
 radroots_runtime_manager = { path = "../lib/crates/runtime_manager" }
 radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
 radroots_secret_vault = { path = "../lib/crates/secret_vault", features = ["std", "os-keyring"] }
+radroots_sdk = { path = "../lib/crates/sdk", default-features = false, features = ["std", "serde", "serde_json", "radrootsd-client"] }
 radroots_sql_core = { path = "../lib/crates/sql_core", features = ["native"] }
 radroots_trade = { path = "../lib/crates/trade" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
+tokio = { version = "1", features = ["net", "rt-multi-thread", "time"] }
 toml = "0.8"
 url = "2.5"
 zeroize = "1.8"

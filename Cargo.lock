@@ -1738,6 +1738,7 @@ dependencies = [
  "radroots_runtime_distribution",
  "radroots_runtime_manager",
  "radroots_runtime_paths",
+ "radroots_sdk",
  "radroots_secret_vault",
  "radroots_sql_core",
  "radroots_trade",
@@ -1747,6 +1748,7 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "toml",
  "url",
  "zeroize",
@@ -1776,6 +1778,7 @@ dependencies = [
 name = "radroots_events_codec"
 version = "0.1.0-alpha.2"
 dependencies = [
+ "nostr",
  "radroots_core",
  "radroots_events",
  "serde",
@@ -1964,6 +1967,18 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "radroots_sdk"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "radroots_events",
+ "radroots_events_codec",
+ "radroots_trade",
+ "reqwest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
