@@ -92,8 +92,6 @@ struct BridgeStatusRemote {
 struct BridgeJobRemote {
     job_id: String,
     command: String,
-    #[serde(default)]
-    idempotency_key: Option<String>,
     status: String,
     terminal: bool,
     recovered_after_restart: bool,
@@ -131,12 +129,6 @@ struct Nip46SessionRemote {
     expires_in_secs: Option<u64>,
     #[serde(default)]
     signer_authority: Option<ActorWriteSignerAuthority>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct BridgePublishResponseRemote {
-    deduplicated: bool,
-    job: BridgeJobRemote,
 }
 
 #[derive(Debug, Clone)]
@@ -431,28 +423,31 @@ pub fn bridge_order_request(
     signer_session_id: Option<&str>,
     signer_authority: Option<&ActorWriteSignerAuthority>,
 ) -> Result<BridgeOrderRequestResult, DaemonRpcError> {
-    let target = actor_write_target(config)?;
-    let response: BridgePublishResponseRemote = call(
-        &target,
-        "bridge.order.request",
-        Some(serde_json::json!({
-            "order": order,
-            "idempotency_key": idempotency_key,
-            "signer_session_id": signer_session_id,
-            "signer_authority": signer_authority,
-        })),
-        RpcAuthMode::BridgeBearer,
-    )?;
-    Ok(BridgeOrderRequestResult {
-        deduplicated: response.deduplicated,
-        job_id: response.job.job_id,
-        idempotency_key: response.job.idempotency_key,
-        status: response.job.status,
-        signer_mode: response.job.signer_mode,
-        signer_session_id: response.job.signer_session_id,
-        event_id: response.job.event_id,
-        event_addr: response.job.event_addr,
-    })
+    let Some(signer_session_id) = signer_session_id else {
+        return Err(DaemonRpcError::Unconfigured(
+            "order publish requires a signer session id".to_owned(),
+        ));
+    };
+
+    let sdk = actor_write_sdk_client(config)?;
+    let session = SdkRadrootsdSignerSessionRef::from_session_id(signer_session_id.to_owned());
+    let mut options = radroots_sdk::SdkRadrootsdOrderRequestPublishOptions::from_signer_session_ref(
+        &session,
+    );
+    if let Some(idempotency_key) = idempotency_key {
+        options = options.with_idempotency_key(idempotency_key.to_owned());
+    }
+    if let Some(signer_authority) = signer_authority {
+        options = options.with_signer_authority(sdk_signer_authority(signer_authority));
+    }
+
+    let receipt = block_on_sdk(
+        sdk.trade()
+            .publish_order_request_via_radrootsd_with_options(order, &options),
+    )?
+    .map_err(map_sdk_publish_error)?;
+
+    map_order_request_receipt(receipt, idempotency_key)
 }
 
 fn bridge_status(config: &RuntimeConfig) -> Result<BridgeStatusRemote, DaemonRpcError> {
@@ -575,6 +570,42 @@ fn map_listing_publish_receipt(
         signer_mode,
         signer_session_id: transport_receipt.signer_session_id,
         event_kind: receipt.event_kind,
+        event_id: receipt.event_id,
+        event_addr: transport_receipt.event_addr,
+    })
+}
+
+fn map_order_request_receipt(
+    receipt: radroots_sdk::SdkPublishReceipt,
+    idempotency_key: Option<&str>,
+) -> Result<BridgeOrderRequestResult, DaemonRpcError> {
+    let radroots_sdk::SdkTransportReceipt::Radrootsd(transport_receipt) = receipt.transport_receipt else {
+        return Err(DaemonRpcError::InvalidResponse(
+            "sdk order publish returned a non-radrootsd transport receipt".to_owned(),
+        ));
+    };
+    let Some(job_id) = transport_receipt.job_id else {
+        return Err(DaemonRpcError::InvalidResponse(
+            "sdk order publish did not return a job id".to_owned(),
+        ));
+    };
+    let Some(status) = transport_receipt.status else {
+        return Err(DaemonRpcError::InvalidResponse(
+            "sdk order publish did not return a job status".to_owned(),
+        ));
+    };
+    let Some(signer_mode) = transport_receipt.signer_mode else {
+        return Err(DaemonRpcError::InvalidResponse(
+            "sdk order publish did not return a signer mode".to_owned(),
+        ));
+    };
+    Ok(BridgeOrderRequestResult {
+        deduplicated: transport_receipt.deduplicated,
+        job_id,
+        idempotency_key: idempotency_key.map(str::to_owned),
+        status,
+        signer_mode,
+        signer_session_id: transport_receipt.signer_session_id,
         event_id: receipt.event_id,
         event_addr: transport_receipt.event_addr,
     })
