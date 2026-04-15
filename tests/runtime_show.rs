@@ -683,8 +683,8 @@ target = "bin/hyfd-user"
     assert_eq!(workflow["target_kind"], "managed_instance");
     assert_eq!(workflow["target"], "workflow-default");
     assert_eq!(json["workflow"]["provider_runtime_id"], "rhi");
-    assert_eq!(json["workflow"]["state"], "unsupported");
-    assert_eq!(json["workflow"]["provenance"], "explicit_binding");
+    assert_eq!(json["workflow"]["state"], "unavailable");
+    assert_eq!(json["workflow"]["provenance"], "managed_default");
     assert_eq!(
         json["workflow"]["source"],
         "user config [[capability_binding]]"

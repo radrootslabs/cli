@@ -305,8 +305,8 @@ fn hyf_check(hyf: &crate::runtime::provider::HyfProviderView) -> EvaluatedCheck 
 fn workflow_check(workflow: &crate::runtime::provider::WorkflowProviderView) -> EvaluatedCheck {
     let severity = match workflow.state.as_str() {
         "ready" => DoctorSeverity::Ok,
-        "not_configured" => DoctorSeverity::Warn,
-        "unsupported" | "unavailable" | "incompatible" => DoctorSeverity::ExternalFail,
+        "not_configured" | "disabled" | "unavailable" => DoctorSeverity::Warn,
+        "unsupported" | "incompatible" => DoctorSeverity::ExternalFail,
         _ => DoctorSeverity::InternalFail,
     };
 

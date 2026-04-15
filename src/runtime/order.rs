@@ -45,7 +45,7 @@ const WORKFLOW_TARGET: &str = "workflow-default";
 const WORKFLOW_STATE_DIR_NAME: &str = "trade-listing";
 const WORKFLOW_STATE_FILE_NAME: &str = "state.json";
 const WORKFLOW_IDENTITY_FILE_NAME: &str = "identity.secret.json";
-const WORKFLOW_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+const WORKFLOW_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 const WORKFLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WORKFLOW_REPLAY_WINDOW_SECS: u64 = 24 * 60 * 60;
 const WORKFLOW_REPLAY_OVERLAP_SECS: u64 = 5 * 60;
@@ -1452,9 +1452,10 @@ fn wait_for_order_workflow_truth(
         })?;
 
     runtime.block_on(async move {
+        let replay_window_secs = workflow_replay_window_secs(document);
         let trade_listing_runtime = TradeListingRuntime::load(TradeListingRuntimeConfig {
             state_path: context.state_path.clone(),
-            replay_window_secs: WORKFLOW_REPLAY_WINDOW_SECS,
+            replay_window_secs,
             replay_overlap_secs: WORKFLOW_REPLAY_OVERLAP_SECS,
         })
         .await
@@ -1529,6 +1530,26 @@ fn wait_for_order_workflow_truth(
             tokio::time::sleep(WORKFLOW_POLL_INTERVAL).await;
         }
     })
+}
+
+fn workflow_replay_window_secs(document: &OrderDraftDocument) -> u64 {
+    let Some(submitted_at_unix) = document
+        .submission
+        .as_ref()
+        .and_then(|submission| submission.submitted_at_unix)
+    else {
+        return WORKFLOW_REPLAY_WINDOW_SECS;
+    };
+
+    let now = now_unix();
+    if submitted_at_unix >= now {
+        return WORKFLOW_REPLAY_OVERLAP_SECS.max(1);
+    }
+
+    let recent_window = now
+        .saturating_sub(submitted_at_unix)
+        .saturating_add(WORKFLOW_REPLAY_OVERLAP_SECS);
+    recent_window.clamp(1, WORKFLOW_REPLAY_WINDOW_SECS)
 }
 
 fn resolve_workflow_context(
@@ -1967,7 +1988,8 @@ impl From<OrderGetView> for OrderNewView {
 mod tests {
     use super::{
         ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, OrderDraftSubmission,
-        next_order_id,
+        WORKFLOW_REPLAY_OVERLAP_SECS, WORKFLOW_REPLAY_WINDOW_SECS, next_order_id, now_unix,
+        workflow_replay_window_secs,
     };
 
     #[test]
@@ -2010,5 +2032,79 @@ mod tests {
         assert!(rendered.contains("kind = \"order_draft_v1\""));
         assert!(rendered.contains("order_id = \"ord_AAAAAAAAAAAAAAAAAAAAAg\""));
         assert!(rendered.contains("job_id = \"job_01\""));
+    }
+
+    #[test]
+    fn workflow_replay_window_prefers_recent_submission_age_plus_overlap() {
+        let now = now_unix();
+        let document = OrderDraftDocument {
+            version: 1,
+            kind: ORDER_DRAFT_KIND.to_owned(),
+            order: OrderDraft {
+                order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                buyer_pubkey: "a".repeat(64),
+                seller_pubkey: "b".repeat(64),
+                items: vec![OrderDraftItem {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+            listing_lookup: Some("fresh-eggs".to_owned()),
+            buyer_account_id: Some("acct_demo".to_owned()),
+            submission: Some(OrderDraftSubmission {
+                job_id: "job_01".to_owned(),
+                state: Some("accepted".to_owned()),
+                signer_mode: Some("embedded_service_identity".to_owned()),
+                signer_session_id: None,
+                command: Some("order.submit".to_owned()),
+                event_id: None,
+                event_addr: None,
+                submitted_at_unix: Some(now.saturating_sub(42)),
+            }),
+        };
+
+        assert_eq!(
+            workflow_replay_window_secs(&document),
+            42 + WORKFLOW_REPLAY_OVERLAP_SECS
+        );
+    }
+
+    #[test]
+    fn workflow_replay_window_caps_at_default_window_for_old_orders() {
+        let now = now_unix();
+        let document = OrderDraftDocument {
+            version: 1,
+            kind: ORDER_DRAFT_KIND.to_owned(),
+            order: OrderDraft {
+                order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                buyer_pubkey: "a".repeat(64),
+                seller_pubkey: "b".repeat(64),
+                items: vec![OrderDraftItem {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+            listing_lookup: Some("fresh-eggs".to_owned()),
+            buyer_account_id: Some("acct_demo".to_owned()),
+            submission: Some(OrderDraftSubmission {
+                job_id: "job_01".to_owned(),
+                state: Some("accepted".to_owned()),
+                signer_mode: Some("embedded_service_identity".to_owned()),
+                signer_session_id: None,
+                command: Some("order.submit".to_owned()),
+                event_id: None,
+                event_addr: None,
+                submitted_at_unix: Some(
+                    now.saturating_sub(WORKFLOW_REPLAY_WINDOW_SECS + WORKFLOW_REPLAY_OVERLAP_SECS),
+                ),
+            }),
+        };
+
+        assert_eq!(
+            workflow_replay_window_secs(&document),
+            WORKFLOW_REPLAY_WINDOW_SECS
+        );
     }
 }
