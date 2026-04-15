@@ -7,14 +7,15 @@ use radroots_core::{
     RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreMoney, RadrootsCoreQuantity,
     RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
+use radroots_events::RadrootsNostrEvent;
+use radroots_events::farm::RadrootsFarmRef;
 use radroots_events::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
 use radroots_events::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingBin,
-    RadrootsListingDeliveryMethod, RadrootsListingFarmRef, RadrootsListingLocation,
-    RadrootsListingProduct, RadrootsListingStatus,
+    RadrootsListingDeliveryMethod, RadrootsListingLocation, RadrootsListingProduct,
+    RadrootsListingStatus,
 };
 use radroots_events::trade::RadrootsTradeListingValidationError;
-use radroots_events::RadrootsNostrEvent;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_replica_db::ReplicaSql;
@@ -29,13 +30,13 @@ use crate::domain::runtime::{
     ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
     ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
 };
+use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon;
 use crate::runtime::daemon::DaemonRpcError;
-use crate::runtime::signer::{resolve_actor_write_authority, ActorWriteBindingError};
+use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::freshness_from_executor;
-use crate::runtime::RuntimeError;
 
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
@@ -791,7 +792,7 @@ fn canonicalize_draft(
 
     let listing = RadrootsListing {
         d_tag: listing_id.clone(),
-        farm: RadrootsListingFarmRef {
+        farm: RadrootsFarmRef {
             pubkey: seller_pubkey.clone(),
             d_tag: farm_d_tag.clone(),
         },
@@ -1355,7 +1356,7 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_base64url_no_pad, generate_d_tag, ListingDraftDocument, DRAFT_KIND};
+    use super::{DRAFT_KIND, ListingDraftDocument, encode_base64url_no_pad, generate_d_tag};
     use radroots_events_codec::d_tag::is_d_tag_base64url;
 
     #[test]
