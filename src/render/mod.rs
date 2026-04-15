@@ -6,8 +6,9 @@ use crate::domain::runtime::{
     ListingNewView, ListingValidateView, LocalBackupView, LocalExportView, LocalInitView,
     LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView, OrderGetView,
     OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderWatchView,
-    RelayListView, RpcSessionsView, RpcStatusView, RuntimeActionView, RuntimeLogsView,
-    RuntimeManagedConfigView, RuntimeStatusView, SyncActionView, SyncStatusView, SyncWatchView,
+    OrderWorkflowView, RelayListView, RpcSessionsView, RpcStatusView, RuntimeActionView,
+    RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView, SyncActionView, SyncStatusView,
+    SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -1314,6 +1315,9 @@ fn render_order_get(stdout: &mut dyn Write, view: &OrderGetView) -> Result<(), R
     if let Some(job) = &view.job {
         render_order_job(stdout, job)?;
     }
+    if let Some(workflow) = &view.workflow {
+        render_order_workflow(stdout, workflow)?;
+    }
     render_order_issues(stdout, &view.issues)?;
     if let Some(reason) = &view.reason {
         writeln!(stdout, "reason: {reason}")?;
@@ -1479,6 +1483,9 @@ fn render_order_watch(stdout: &mut dyn Write, view: &OrderWatchView) -> Result<(
         render_table(stdout, &table)?;
         writeln!(stdout)?;
     }
+    if let Some(workflow) = &view.workflow {
+        render_order_workflow(stdout, workflow)?;
+    }
     if let Some(reason) = &view.reason {
         writeln!(stdout, "reason: {reason}")?;
     }
@@ -1623,6 +1630,37 @@ fn render_order_job(stdout: &mut dyn Write, job: &OrderJobView) -> Result<(), Ru
     if let Some(reason) = &job.reason {
         writeln!(stdout, "job reason: {reason}")?;
     }
+    Ok(())
+}
+
+fn render_order_workflow(
+    stdout: &mut dyn Write,
+    workflow: &OrderWorkflowView,
+) -> Result<(), RuntimeError> {
+    let mut rows = vec![
+        ("state", workflow.state.as_str()),
+        ("order id", workflow.order_id.as_str()),
+    ];
+    if let Some(listing_addr) = &workflow.listing_addr {
+        rows.push(("listing addr", listing_addr.as_str()));
+    }
+    if let Some(validated_listing_event_id) = &workflow.validated_listing_event_id {
+        rows.push((
+            "validated listing event",
+            validated_listing_event_id.as_str(),
+        ));
+    }
+    if let Some(root_event_id) = &workflow.root_event_id {
+        rows.push(("root event id", root_event_id.as_str()));
+    }
+    if let Some(last_event_id) = &workflow.last_event_id {
+        rows.push(("last event id", last_event_id.as_str()));
+    }
+    render_pairs(stdout, "workflow", rows.as_slice())?;
+    if let Some(reason) = &workflow.reason {
+        writeln!(stdout, "workflow reason: {reason}")?;
+    }
+    writeln!(stdout, "workflow source: {}", workflow.source)?;
     Ok(())
 }
 

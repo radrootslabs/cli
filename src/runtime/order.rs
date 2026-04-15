@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use radroots_events::kinds::KIND_LISTING;
 use radroots_events::trade::{
@@ -10,24 +10,45 @@ use radroots_events::trade::{
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
+use radroots_runtime::BackoffConfig;
+use radroots_runtime_paths::{
+    RadrootsPathOverrides, RadrootsPathProfile, RadrootsPathResolver, RadrootsRuntimeNamespace,
+};
+use radroots_sdk::config::RadrootsSdkConfig;
+use rhi::features::trade_listing::state::{TradeListingRuntime, TradeListingRuntimeConfig};
+use rhi::identity_storage::load_service_identity;
+use rhi::rhi::{Rhi, start_subscriber};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 use crate::cli::{OrderNewArgs, OrderSubmitArgs, OrderWatchArgs, RecordKeyArgs};
 use crate::domain::runtime::{
     OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView, OrderHistoryView,
     OrderIssueView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView,
-    OrderWatchFrameView, OrderWatchView,
+    OrderWatchFrameView, OrderWatchView, OrderWorkflowView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{
+    CapabilityBindingTargetKind, RuntimeConfig, WORKFLOW_TRADE_CAPABILITY,
+};
 use crate::runtime::daemon::{self, DaemonRpcError};
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
 const ORDER_LIFECYCLE_SOURCE: &str = "local order drafts · durable job lifecycle";
+const ORDER_WORKFLOW_SOURCE: &str = "local order drafts · substrate-authoritative workflow state";
 const ORDERS_DIR: &str = "orders/drafts";
+const WORKFLOW_PROVIDER_RUNTIME_ID: &str = "rhi";
+const WORKFLOW_TARGET: &str = "workflow-default";
+const WORKFLOW_STATE_DIR_NAME: &str = "trade-listing";
+const WORKFLOW_STATE_FILE_NAME: &str = "state.json";
+const WORKFLOW_IDENTITY_FILE_NAME: &str = "identity.secret.json";
+const WORKFLOW_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+const WORKFLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const WORKFLOW_REPLAY_WINDOW_SECS: u64 = 24 * 60 * 60;
+const WORKFLOW_REPLAY_OVERLAP_SECS: u64 = 5 * 60;
 
 static ORDER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -91,6 +112,36 @@ struct LoadedOrderDraft {
     file: PathBuf,
     updated_at_unix: u64,
     document: OrderDraftDocument,
+}
+
+#[derive(Debug, Clone)]
+struct WorkflowContext {
+    relay_url: String,
+    identity_path: PathBuf,
+    state_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+enum WorkflowResolutionError {
+    Unconfigured(String),
+    Unavailable(String),
+    Error(String),
+}
+
+impl WorkflowResolutionError {
+    fn state(&self) -> &'static str {
+        match self {
+            Self::Unconfigured(_) => "unconfigured",
+            Self::Unavailable(_) => "unavailable",
+            Self::Error(_) => "error",
+        }
+    }
+
+    fn reason(self) -> String {
+        match self {
+            Self::Unconfigured(reason) | Self::Unavailable(reason) | Self::Error(reason) => reason,
+        }
+    }
 }
 
 pub fn scaffold(config: &RuntimeConfig, args: &OrderNewArgs) -> Result<OrderNewView, RuntimeError> {
@@ -177,6 +228,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<OrderGetView,
             items: Vec::new(),
             updated_at_unix: None,
             job: None,
+            workflow: None,
             reason: Some(format!("order draft `{lookup}` was not found")),
             issues: Vec::new(),
             actions: vec![
@@ -203,6 +255,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<OrderGetView,
             items: Vec::new(),
             updated_at_unix: None,
             job: None,
+            workflow: None,
             reason: Some(reason),
             issues: Vec::new(),
             actions: Vec::new(),
@@ -537,6 +590,7 @@ pub fn watch(
             job_id: None,
             interval_ms: args.interval_ms,
             reason: Some(format!("order draft `{}` was not found", args.key)),
+            workflow: None,
             frames: Vec::new(),
             actions: vec!["radroots order ls".to_owned()],
         });
@@ -552,6 +606,7 @@ pub fn watch(
                 job_id: None,
                 interval_ms: args.interval_ms,
                 reason: Some(reason),
+                workflow: None,
                 frames: Vec::new(),
                 actions: Vec::new(),
             });
@@ -566,6 +621,7 @@ pub fn watch(
             job_id: None,
             interval_ms: args.interval_ms,
             reason: Some("order draft does not have a recorded submission job yet".to_owned()),
+            workflow: None,
             frames: Vec::new(),
             actions: vec![format!(
                 "radroots order submit {}",
@@ -590,17 +646,53 @@ pub fn watch(
                     summary: job.relay_outcome_summary.clone(),
                 });
                 if job.terminal || frames.len() >= max_frames {
+                    let workflow = if job.terminal
+                        && job_state_allows_workflow_verification(job.state.as_str())
+                    {
+                        match wait_for_order_workflow_truth(config, &loaded.document) {
+                            Ok(workflow) => workflow,
+                            Err(error) => {
+                                let state = error.state().to_owned();
+                                let reason = error.reason();
+                                let workflow = workflow_error_view(
+                                    &loaded.document,
+                                    state.as_str(),
+                                    reason.clone(),
+                                );
+                                return Ok(OrderWatchView {
+                                    state,
+                                    source: ORDER_WORKFLOW_SOURCE.to_owned(),
+                                    order_id: loaded.document.order.order_id.clone(),
+                                    job_id: Some(job_id.clone()),
+                                    interval_ms: args.interval_ms,
+                                    reason: Some(reason.clone()),
+                                    workflow: Some(workflow),
+                                    frames,
+                                    actions: vec!["radroots order history".to_owned()],
+                                });
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     return Ok(OrderWatchView {
-                        state: if job.terminal {
+                        state: if let Some(workflow) = workflow.as_ref() {
+                            workflow.state.clone()
+                        } else if job.terminal {
                             job.state
                         } else {
                             "watching".to_owned()
                         },
-                        source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+                        source: if workflow.is_some() {
+                            ORDER_WORKFLOW_SOURCE.to_owned()
+                        } else {
+                            ORDER_LIFECYCLE_SOURCE.to_owned()
+                        },
                         order_id: loaded.document.order.order_id.clone(),
                         job_id: Some(job_id.clone()),
                         interval_ms: args.interval_ms,
                         reason: None,
+                        workflow,
                         frames,
                         actions: vec!["radroots order history".to_owned()],
                     });
@@ -614,6 +706,7 @@ pub fn watch(
                     job_id: Some(job_id.clone()),
                     interval_ms: args.interval_ms,
                     reason: Some("recorded job id was not found in radrootsd".to_owned()),
+                    workflow: None,
                     frames,
                     actions: vec!["radroots order history".to_owned()],
                 });
@@ -796,6 +889,10 @@ fn view_from_loaded(
         issues,
         job,
     } = inspect_document(config, &loaded.document, enrich_job);
+    let workflow = resolve_order_workflow_snapshot(config, &loaded.document)
+        .ok()
+        .flatten();
+    let state = preferred_order_state(state, workflow.as_ref());
 
     let mut actions =
         actions_for_document(&loaded.document, loaded.file.as_path(), issues.as_slice());
@@ -828,6 +925,7 @@ fn view_from_loaded(
             .collect(),
         updated_at_unix: Some(loaded.updated_at_unix),
         job,
+        workflow,
         reason: None,
         issues,
         actions,
@@ -864,6 +962,9 @@ fn history_entry_from_loaded(
     loaded: &LoadedOrderDraft,
 ) -> OrderHistoryEntryView {
     let job = submission_job_view(config, &loaded.document, true);
+    let workflow = resolve_order_workflow_snapshot(config, &loaded.document)
+        .ok()
+        .flatten();
     let submitted_at_unix = loaded
         .document
         .submission
@@ -871,16 +972,19 @@ fn history_entry_from_loaded(
         .and_then(|submission| submission.submitted_at_unix);
     OrderHistoryEntryView {
         id: loaded.document.order.order_id.clone(),
-        state: job
-            .as_ref()
-            .map(|job| job.state.clone())
-            .unwrap_or_else(|| "recorded".to_owned()),
+        state: preferred_order_state(
+            job.as_ref()
+                .map(|job| job.state.clone())
+                .unwrap_or_else(|| "recorded".to_owned()),
+            workflow.as_ref(),
+        ),
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         submitted_at_unix,
         updated_at_unix: loaded.updated_at_unix,
         job,
+        workflow,
         issues: Vec::new(),
     }
 }
@@ -1287,12 +1391,390 @@ fn order_watch_error_view(
         job_id: Some(job_id),
         interval_ms: args.interval_ms,
         reason: Some(reason),
+        workflow: None,
         frames,
         actions: if actions.is_empty() {
             Vec::new()
         } else {
             actions
         },
+    }
+}
+
+fn resolve_order_workflow_snapshot(
+    config: &RuntimeConfig,
+    document: &OrderDraftDocument,
+) -> Result<Option<OrderWorkflowView>, WorkflowResolutionError> {
+    let Some(context) = resolve_workflow_context(config)? else {
+        return Ok(None);
+    };
+    load_order_workflow_view(
+        context.state_path.as_path(),
+        document.order.order_id.as_str(),
+    )
+    .map_err(WorkflowResolutionError::Error)
+}
+
+fn wait_for_order_workflow_truth(
+    config: &RuntimeConfig,
+    document: &OrderDraftDocument,
+) -> Result<Option<OrderWorkflowView>, WorkflowResolutionError> {
+    let Some(context) = resolve_workflow_context(config)? else {
+        return Ok(None);
+    };
+
+    if let Some(workflow) = load_order_workflow_view(
+        context.state_path.as_path(),
+        document.order.order_id.as_str(),
+    )
+    .map_err(WorkflowResolutionError::Error)?
+    {
+        if workflow_state_is_terminal(workflow.state.as_str()) {
+            return Ok(Some(workflow));
+        }
+    }
+
+    let identity =
+        load_service_identity(Some(context.identity_path.as_path()), false).map_err(|error| {
+            WorkflowResolutionError::Unconfigured(format!(
+                "workflow verification requires repo-local rhi identity at {}: {error}",
+                context.identity_path.display()
+            ))
+        })?;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            WorkflowResolutionError::Error(format!(
+                "build localhost workflow verifier runtime: {error}"
+            ))
+        })?;
+
+    runtime.block_on(async move {
+        let trade_listing_runtime = TradeListingRuntime::load(TradeListingRuntimeConfig {
+            state_path: context.state_path.clone(),
+            replay_window_secs: WORKFLOW_REPLAY_WINDOW_SECS,
+            replay_overlap_secs: WORKFLOW_REPLAY_OVERLAP_SECS,
+        })
+        .await
+        .map_err(|error| {
+            WorkflowResolutionError::Unavailable(format!(
+                "load repo-local rhi workflow state {}: {error}",
+                context.state_path.display()
+            ))
+        })?;
+
+        let rhi = Rhi::with_trade_listing_runtime(
+            identity.keys().clone(),
+            trade_listing_runtime.clone(),
+        );
+        rhi.client
+            .add_relay(context.relay_url.as_str())
+            .await
+            .map_err(|error| {
+                WorkflowResolutionError::Unavailable(format!(
+                    "attach localhost relay `{}` to workflow verifier: {error}",
+                    context.relay_url
+                ))
+            })?;
+
+        let handle = start_subscriber(
+            rhi.client.clone(),
+            identity.keys().clone(),
+            trade_listing_runtime,
+            BackoffConfig::default(),
+        )
+        .await;
+
+        let mut last_observed = load_order_workflow_view(
+            context.state_path.as_path(),
+            document.order.order_id.as_str(),
+        )
+        .map_err(WorkflowResolutionError::Error)?;
+        let deadline = Instant::now() + WORKFLOW_FETCH_TIMEOUT;
+
+        loop {
+            if let Some(workflow) = load_order_workflow_view(
+                context.state_path.as_path(),
+                document.order.order_id.as_str(),
+            )
+            .map_err(WorkflowResolutionError::Error)?
+            {
+                if workflow_state_is_terminal(workflow.state.as_str()) {
+                    handle.stop();
+                    handle.stopped().await;
+                    return Ok(Some(workflow));
+                }
+                last_observed = Some(workflow);
+            }
+
+            if Instant::now() >= deadline {
+                handle.stop();
+                handle.stopped().await;
+                let detail = match last_observed {
+                    Some(view) => format!(
+                        "workflow state did not reach a terminal value within {:?}; last observed workflow state was `{}`",
+                        WORKFLOW_FETCH_TIMEOUT, view.state
+                    ),
+                    None => format!(
+                        "workflow state did not appear within {:?} at {}",
+                        WORKFLOW_FETCH_TIMEOUT,
+                        context.state_path.display()
+                    ),
+                };
+                return Err(WorkflowResolutionError::Unavailable(detail));
+            }
+
+            tokio::time::sleep(WORKFLOW_POLL_INTERVAL).await;
+        }
+    })
+}
+
+fn resolve_workflow_context(
+    config: &RuntimeConfig,
+) -> Result<Option<WorkflowContext>, WorkflowResolutionError> {
+    let Some(binding) = config.capability_binding(WORKFLOW_TRADE_CAPABILITY) else {
+        return Ok(None);
+    };
+
+    if binding.provider_runtime_id != WORKFLOW_PROVIDER_RUNTIME_ID {
+        return Err(WorkflowResolutionError::Unconfigured(format!(
+            "workflow.trade binding must use provider `{WORKFLOW_PROVIDER_RUNTIME_ID}`, got `{}`",
+            binding.provider_runtime_id
+        )));
+    }
+    if binding.target_kind != CapabilityBindingTargetKind::ManagedInstance {
+        return Err(WorkflowResolutionError::Unconfigured(format!(
+            "workflow.trade binding must use target_kind `managed_instance`, got `{}`",
+            binding.target_kind.as_str()
+        )));
+    }
+    if binding.target != WORKFLOW_TARGET {
+        return Err(WorkflowResolutionError::Unconfigured(format!(
+            "workflow.trade binding must target `{WORKFLOW_TARGET}`, got `{}`",
+            binding.target
+        )));
+    }
+    if config.paths.profile != "repo_local" {
+        return Err(WorkflowResolutionError::Unconfigured(
+            "workflow.trade progression requires RADROOTS_CLI_PATHS_PROFILE=repo_local".to_owned(),
+        ));
+    }
+    let repo_local_root = config.paths.repo_local_root.as_ref().ok_or_else(|| {
+        WorkflowResolutionError::Unconfigured(
+            "workflow.trade progression requires a repo-local cli root".to_owned(),
+        )
+    })?;
+    let canonical_relay_url =
+        canonical_local_relay_url().map_err(WorkflowResolutionError::Error)?;
+    if !config
+        .relay
+        .urls
+        .iter()
+        .any(|configured| loopback_endpoint_matches(configured, canonical_relay_url.as_str()))
+    {
+        return Err(WorkflowResolutionError::Unconfigured(format!(
+            "workflow.trade progression requires canonical localhost relay `{canonical_relay_url}`"
+        )));
+    }
+
+    let base_paths = RadrootsPathResolver::current()
+        .resolve(
+            RadrootsPathProfile::RepoLocal,
+            &RadrootsPathOverrides::repo_local(repo_local_root),
+        )
+        .map_err(|error| {
+            WorkflowResolutionError::Error(format!(
+                "resolve repo-local workflow verifier roots from {}: {error}",
+                repo_local_root.display()
+            ))
+        })?;
+    let worker_namespace =
+        RadrootsRuntimeNamespace::worker(WORKFLOW_PROVIDER_RUNTIME_ID).map_err(|error| {
+            WorkflowResolutionError::Error(format!(
+                "resolve worker namespace `{WORKFLOW_PROVIDER_RUNTIME_ID}`: {error}"
+            ))
+        })?;
+    let worker_paths = base_paths.namespaced(&worker_namespace);
+
+    Ok(Some(WorkflowContext {
+        relay_url: canonical_relay_url,
+        identity_path: worker_paths.secrets.join(WORKFLOW_IDENTITY_FILE_NAME),
+        state_path: worker_paths
+            .data
+            .join(WORKFLOW_STATE_DIR_NAME)
+            .join(WORKFLOW_STATE_FILE_NAME),
+    }))
+}
+
+fn load_order_workflow_view(
+    state_path: &Path,
+    order_id: &str,
+) -> Result<Option<OrderWorkflowView>, String> {
+    if !state_path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(state_path)
+        .map_err(|error| format!("read workflow state {}: {error}", state_path.display()))?;
+    let snapshot: JsonValue = serde_json::from_str(raw.as_str())
+        .map_err(|error| format!("parse workflow state {}: {error}", state_path.display()))?;
+    let state = snapshot
+        .get("state")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| {
+            format!(
+                "workflow state {} did not include top-level `state` object",
+                state_path.display()
+            )
+        })?;
+    let orders = state
+        .get("orders")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| {
+            format!(
+                "workflow state {} did not include `state.orders`",
+                state_path.display()
+            )
+        })?;
+    let Some(order) = orders.get(order_id) else {
+        return Ok(None);
+    };
+    let order_object = order.as_object().ok_or_else(|| {
+        format!(
+            "workflow state {} stored `state.orders.{order_id}` as a non-object",
+            state_path.display()
+        )
+    })?;
+    let workflow_state = order_object
+        .get("status")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| {
+            format!(
+                "workflow state {} did not include `status` for order `{order_id}`",
+                state_path.display()
+            )
+        })?;
+    let listing_addr = order_object
+        .get("listing_addr")
+        .and_then(JsonValue::as_str)
+        .map(str::to_owned);
+    let validated_listing_event_id = listing_addr
+        .as_ref()
+        .and_then(|listing_addr| {
+            state
+                .get("validated_listing_events")
+                .and_then(JsonValue::as_object)
+                .and_then(|events| events.get(listing_addr))
+                .and_then(JsonValue::as_object)
+                .and_then(|entry| entry.get("event_id"))
+                .and_then(JsonValue::as_str)
+        })
+        .map(str::to_owned);
+
+    Ok(Some(OrderWorkflowView {
+        state: workflow_state.to_owned(),
+        source: ORDER_WORKFLOW_SOURCE.to_owned(),
+        order_id: order_id.to_owned(),
+        listing_addr,
+        validated_listing_event_id,
+        root_event_id: order_object
+            .get("root_event_id")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned),
+        last_event_id: order_object
+            .get("last_event_id")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned),
+        reason: None,
+    }))
+}
+
+fn preferred_order_state(base_state: String, workflow: Option<&OrderWorkflowView>) -> String {
+    match workflow {
+        Some(workflow) if workflow_state_is_business_truth(workflow.state.as_str()) => {
+            workflow.state.clone()
+        }
+        _ => base_state,
+    }
+}
+
+fn workflow_state_is_business_truth(state: &str) -> bool {
+    matches!(
+        state,
+        "draft"
+            | "validated"
+            | "requested"
+            | "questioned"
+            | "revised"
+            | "accepted"
+            | "declined"
+            | "cancelled"
+            | "fulfilled"
+            | "completed"
+    )
+}
+
+fn workflow_state_is_terminal(state: &str) -> bool {
+    matches!(state, "declined" | "cancelled" | "completed")
+}
+
+fn job_state_allows_workflow_verification(state: &str) -> bool {
+    !matches!(
+        state,
+        "failed" | "error" | "missing" | "unavailable" | "unconfigured"
+    )
+}
+
+fn workflow_error_view(
+    document: &OrderDraftDocument,
+    state: &str,
+    reason: String,
+) -> OrderWorkflowView {
+    OrderWorkflowView {
+        state: state.to_owned(),
+        source: ORDER_WORKFLOW_SOURCE.to_owned(),
+        order_id: document.order.order_id.clone(),
+        listing_addr: non_empty_string(document.order.listing_addr.clone()),
+        validated_listing_event_id: None,
+        root_event_id: None,
+        last_event_id: None,
+        reason: Some(reason),
+    }
+}
+
+fn canonical_local_relay_url() -> Result<String, String> {
+    let config = RadrootsSdkConfig::local();
+    config
+        .resolved_relay_urls()
+        .map_err(|error| format!("resolve canonical localhost relay url: {error}"))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "missing canonical localhost relay url".to_owned())
+}
+
+fn loopback_endpoint_matches(left: &str, right: &str) -> bool {
+    let Ok(left_url) = url::Url::parse(left) else {
+        return false;
+    };
+    let Ok(right_url) = url::Url::parse(right) else {
+        return false;
+    };
+
+    if left_url.scheme() != right_url.scheme()
+        || left_url.port_or_known_default() != right_url.port_or_known_default()
+    {
+        return false;
+    }
+
+    match (left_url.host_str(), right_url.host_str()) {
+        (Some(left_host), Some(right_host)) if left_host == right_host => true,
+        (Some(left_host), Some(right_host)) => matches!(
+            (left_host, right_host),
+            ("127.0.0.1", "localhost") | ("localhost", "127.0.0.1")
+        ),
+        _ => false,
     }
 }
 

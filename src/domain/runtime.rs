@@ -825,6 +825,8 @@ pub struct OrderGetView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<OrderJobView>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<OrderWorkflowView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<OrderIssueView>,
@@ -920,6 +922,8 @@ pub struct OrderWatchView {
     pub interval_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<OrderWorkflowView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<OrderWatchFrameView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -947,6 +951,23 @@ pub struct OrderWatchFrameView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_session_id: Option<String>,
     pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderWorkflowView {
+    pub state: String,
+    pub source: String,
+    pub order_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validated_listing_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -986,6 +1007,8 @@ pub struct OrderHistoryEntryView {
     pub updated_at_unix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<OrderJobView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<OrderWorkflowView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<OrderIssueView>,
 }
