@@ -122,6 +122,11 @@ pub enum CommandView {
     RuntimeConfigShow(RuntimeManagedConfigView),
     RuntimeLogs(RuntimeLogsView),
     RuntimeStatus(RuntimeStatusView),
+    SellAdd(SellAddView),
+    SellCheck(SellCheckView),
+    SellDraftMutation(SellDraftMutationView),
+    SellMutation(SellMutationView),
+    SellShow(SellShowView),
     Setup(SetupView),
     SignerStatus(SignerStatusView),
     Status(StatusView),
@@ -1465,6 +1470,164 @@ pub struct ListingValidationIssueView {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SellAddView {
+    pub state: String,
+    pub source: String,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stock: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub farm_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_primary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl SellAddView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SellShowView {
+    pub state: String,
+    pub source: String,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stock: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_primary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl SellShowView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SellCheckView {
+    pub state: String,
+    pub source: String,
+    pub file: String,
+    pub valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub farm_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<ListingValidationIssueView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl SellCheckView {
+    pub fn disposition(&self) -> CommandDisposition {
+        CommandDisposition::Success
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SellMutationView {
+    pub state: String,
+    pub operation: String,
+    pub source: String,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_key: Option<String>,
+    pub listing_addr: String,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub deduplicated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publish_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl SellMutationView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SellDraftMutationView {
+    pub state: String,
+    pub operation: String,
+    pub source: String,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product_key: Option<String>,
+    pub changed_label: String,
+    pub changed_value: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl SellDraftMutationView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

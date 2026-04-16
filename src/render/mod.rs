@@ -8,8 +8,9 @@ use crate::domain::runtime::{
     LocalInitView, LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView,
     OrderGetView, OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView,
     OrderWatchView, OrderWorkflowView, RelayListView, RpcSessionsView, RpcStatusView,
-    RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView, SetupView,
-    StatusView, SyncActionView, SyncStatusView, SyncWatchView,
+    RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView, SellAddView,
+    SellCheckView, SellDraftMutationView, SellMutationView, SellShowView, SetupView, StatusView,
+    SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -189,6 +190,21 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::RuntimeStatus(view) => {
             render_runtime_status(stdout, view)?;
+        }
+        CommandView::SellAdd(view) => {
+            render_sell_add(stdout, view)?;
+        }
+        CommandView::SellCheck(view) => {
+            render_sell_check(stdout, view)?;
+        }
+        CommandView::SellDraftMutation(view) => {
+            render_sell_draft_mutation(stdout, view)?;
+        }
+        CommandView::SellMutation(view) => {
+            render_sell_mutation(stdout, view)?;
+        }
+        CommandView::SellShow(view) => {
+            render_sell_show(stdout, view)?;
         }
         CommandView::Setup(view) => {
             render_setup(stdout, view)?;
@@ -418,6 +434,26 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::RuntimeStatus(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::SellAdd(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::SellCheck(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::SellDraftMutation(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::SellMutation(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::SellShow(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -2111,6 +2147,238 @@ fn render_market_view(stdout: &mut dyn Write, view: &ListingGetView) -> Result<(
     Ok(())
 }
 
+fn render_sell_add(stdout: &mut dyn Write, view: &SellAddView) -> Result<(), RuntimeError> {
+    writeln!(stdout, "Listing draft saved")?;
+    writeln!(stdout)?;
+    writeln!(stdout, "The draft is local until you publish it.")?;
+    writeln!(stdout)?;
+
+    let mut draft_rows = vec![("File", view.file.clone())];
+    push_row(&mut draft_rows, "Listing", view.product_key.clone());
+    push_row(&mut draft_rows, "Title", view.title.clone());
+    push_row(&mut draft_rows, "Offer", view.offer.clone());
+    push_row(&mut draft_rows, "Price", view.price.clone());
+    push_row(&mut draft_rows, "Stock", view.stock.clone());
+    render_owned_pairs(stdout, "Draft", draft_rows.as_slice())?;
+
+    let mut default_rows = Vec::<(&str, String)>::new();
+    push_row(&mut default_rows, "Farm", view.farm_name.clone());
+    push_row(
+        &mut default_rows,
+        "Delivery",
+        view.delivery_method
+            .as_deref()
+            .map(humanize_delivery_method),
+    );
+    push_row(&mut default_rows, "Place", view.location_primary.clone());
+    if !default_rows.is_empty() {
+        render_owned_pairs(stdout, "Defaults", default_rows.as_slice())?;
+    }
+
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "{reason}")?;
+        writeln!(stdout)?;
+    }
+    if !view.actions.is_empty() {
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
+    Ok(())
+}
+
+fn render_sell_show(stdout: &mut dyn Write, view: &SellShowView) -> Result<(), RuntimeError> {
+    writeln!(stdout, "Listing draft")?;
+    writeln!(stdout)?;
+
+    let mut draft_rows = vec![("File", view.file.clone())];
+    push_row(&mut draft_rows, "Listing", view.product_key.clone());
+    push_row(&mut draft_rows, "Title", view.title.clone());
+    push_row(&mut draft_rows, "Category", view.category.clone());
+    push_row(&mut draft_rows, "Offer", view.offer.clone());
+    push_row(&mut draft_rows, "Price", view.price.clone());
+    push_row(&mut draft_rows, "Stock", view.stock.clone());
+    push_row(
+        &mut draft_rows,
+        "Delivery",
+        view.delivery_method
+            .as_deref()
+            .map(humanize_delivery_method),
+    );
+    push_row(&mut draft_rows, "Place", view.location_primary.clone());
+    render_owned_pairs(stdout, "Draft", draft_rows.as_slice())?;
+
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "{reason}")?;
+        writeln!(stdout)?;
+    }
+    if !view.actions.is_empty() {
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
+    Ok(())
+}
+
+fn render_sell_check(stdout: &mut dyn Write, view: &SellCheckView) -> Result<(), RuntimeError> {
+    if view.valid {
+        writeln!(stdout, "Draft looks ready")?;
+        writeln!(stdout)?;
+        let mut draft_rows = vec![("File", view.file.clone())];
+        push_row(&mut draft_rows, "Listing", view.product_key.clone());
+        push_row(&mut draft_rows, "Seller", view.seller_pubkey.clone());
+        push_row(&mut draft_rows, "Farm", view.farm_ref.clone());
+        render_owned_pairs(stdout, "Draft", draft_rows.as_slice())?;
+    } else {
+        writeln!(stdout, "Draft needs changes")?;
+        writeln!(stdout)?;
+        let rows = view
+            .issues
+            .iter()
+            .map(|issue| (issue.field.as_str(), issue.message.clone()))
+            .collect::<Vec<_>>();
+        render_field_rows(stdout, rows.as_slice())?;
+    }
+
+    if !view.actions.is_empty() {
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
+    Ok(())
+}
+
+fn render_sell_mutation(
+    stdout: &mut dyn Write,
+    view: &SellMutationView,
+) -> Result<(), RuntimeError> {
+    match view.state.as_str() {
+        "dry_run" => {
+            writeln!(stdout, "Dry run only")?;
+            writeln!(stdout)?;
+            writeln!(
+                stdout,
+                "Listing would be {}.",
+                match view.operation.as_str() {
+                    "publish" => "published",
+                    "update" => "updated",
+                    "pause" => "paused",
+                    _ => "changed",
+                }
+            )?;
+            writeln!(stdout)?;
+            let mut rows = vec![("File", view.file.clone())];
+            push_row(&mut rows, "Listing", view.product_key.clone());
+            rows.push(("Address", view.listing_addr.clone()));
+            if view.operation == "publish" {
+                push_row(
+                    &mut rows,
+                    "Publish mode",
+                    view.publish_mode.as_deref().map(|mode| {
+                        if mode == "runtime_bridge" {
+                            "Runtime bridge".to_owned()
+                        } else {
+                            mode.to_owned()
+                        }
+                    }),
+                );
+            }
+            render_owned_pairs(stdout, "Listing", rows.as_slice())?;
+            writeln!(stdout, "Nothing was written.")?;
+        }
+        "unconfigured" => {
+            writeln!(stdout, "Not ready yet")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "unavailable" => {
+            writeln!(stdout, "Unavailable right now")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "error" => {
+            writeln!(stdout, "Something went wrong")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        _ => {
+            writeln!(
+                stdout,
+                "{}",
+                match view.operation.as_str() {
+                    "publish" => "Listing published",
+                    "update" => "Listing updated",
+                    "pause" => "Listing paused",
+                    _ => "Listing updated",
+                }
+            )?;
+            writeln!(stdout)?;
+            let mut listing_rows = vec![("File", view.file.clone())];
+            push_row(&mut listing_rows, "Listing", view.product_key.clone());
+            listing_rows.push(("Address", view.listing_addr.clone()));
+            if view.operation == "publish" {
+                push_row(
+                    &mut listing_rows,
+                    "Publish mode",
+                    view.publish_mode.as_deref().map(|mode| {
+                        if mode == "runtime_bridge" {
+                            "Runtime bridge".to_owned()
+                        } else {
+                            mode.to_owned()
+                        }
+                    }),
+                );
+            }
+            render_owned_pairs(stdout, "Listing", listing_rows.as_slice())?;
+
+            let mut job_rows = Vec::<(&str, String)>::new();
+            push_row(&mut job_rows, "State", view.job_status.clone());
+            push_row(&mut job_rows, "Job", view.job_id.clone());
+            push_row(&mut job_rows, "Event", view.event_id.clone());
+            if !job_rows.is_empty() {
+                render_owned_pairs(stdout, "Job", job_rows.as_slice())?;
+            }
+
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn render_sell_draft_mutation(
+    stdout: &mut dyn Write,
+    view: &SellDraftMutationView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "Draft updated")?;
+    writeln!(stdout)?;
+    render_owned_pairs(
+        stdout,
+        "Changed",
+        &[(view.changed_label.as_str(), view.changed_value.clone())],
+    )?;
+    let mut draft_rows = vec![("File", view.file.clone())];
+    push_row(&mut draft_rows, "Listing", view.product_key.clone());
+    render_owned_pairs(stdout, "Draft", draft_rows.as_slice())?;
+    if !view.actions.is_empty() {
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
+    Ok(())
+}
+
 fn render_listing_mutation(
     stdout: &mut dyn Write,
     view: &ListingMutationView,
@@ -3373,6 +3641,20 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::RuntimeConfigShow(_) => "runtime config show",
         CommandView::RuntimeLogs(_) => "runtime logs",
         CommandView::RuntimeStatus(_) => "runtime status",
+        CommandView::SellAdd(_) => "sell add",
+        CommandView::SellCheck(_) => "sell check",
+        CommandView::SellDraftMutation(view) => match view.operation.as_str() {
+            "reprice" => "sell reprice",
+            "restock" => "sell restock",
+            _ => "sell",
+        },
+        CommandView::SellMutation(view) => match view.operation.as_str() {
+            "publish" => "sell publish",
+            "update" => "sell update",
+            "pause" => "sell pause",
+            _ => "sell",
+        },
+        CommandView::SellShow(_) => "sell show",
         CommandView::Setup(_) => "setup",
         CommandView::SignerStatus(_) => "signer status",
         CommandView::Status(_) => "status",

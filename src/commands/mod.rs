@@ -12,6 +12,7 @@ pub mod order;
 pub mod relay;
 pub mod rpc;
 pub mod runtime;
+pub mod sell;
 pub mod signer;
 pub mod sync;
 pub mod workflow;
@@ -107,20 +108,14 @@ pub fn dispatch(
             RpcCommand::Sessions => Ok(rpc::sessions(config)),
         },
         Command::Sell(sell) => match &sell.command {
-            SellCommand::Add(args) => listing::new(config, args),
-            SellCommand::Show(_args) => planned_command(
-                "`sell show` will inspect local drafts in the next slice; use `listing validate <file>` for now",
-            ),
-            SellCommand::Check(args) => listing::validate(config, args),
-            SellCommand::Publish(args) => listing::publish(config, args),
-            SellCommand::Update(args) => listing::update(config, args),
-            SellCommand::Pause(args) => listing::archive(config, args),
-            SellCommand::Reprice(_args) => planned_command(
-                "`sell reprice` will land in the draft-mutation slice; edit the draft file directly for now",
-            ),
-            SellCommand::Restock(_args) => planned_command(
-                "`sell restock` will land in the draft-mutation slice; edit the draft file directly for now",
-            ),
+            SellCommand::Add(args) => sell::add(config, args),
+            SellCommand::Show(args) => sell::show(config, args),
+            SellCommand::Check(args) => sell::check(config, args),
+            SellCommand::Publish(args) => sell::publish(config, args),
+            SellCommand::Update(args) => sell::update(config, args),
+            SellCommand::Pause(args) => sell::pause(config, args),
+            SellCommand::Reprice(args) => sell::reprice(config, args),
+            SellCommand::Restock(args) => sell::restock(config, args),
         },
         Command::Setup(setup) => workflow::setup(config, setup),
         Command::Runtime(runtime_command) => match &runtime_command.command {
@@ -144,8 +139,4 @@ pub fn dispatch(
             SyncCommand::Watch(args) => sync::watch(config, args),
         },
     }
-}
-
-fn planned_command(message: &str) -> Result<CommandOutput, RuntimeError> {
-    Err(RuntimeError::Config(message.to_owned()))
 }

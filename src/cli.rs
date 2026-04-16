@@ -75,7 +75,7 @@ Global options
 Examples
   radroots setup seller
   radroots market search eggs
-  radroots sell check ./listing.toml
+  radroots sell add tomatoes
   radroots order create --listing sf-tomatoes --bin bin-1 --qty 2
 ";
 
@@ -129,7 +129,7 @@ Compatibility paths: `sync pull`, `find`, and `listing get` remain available.
 
 const SELL_HELP: &str = "\
 Examples:
-  radroots sell add --output ./listing.toml --title Tomatoes
+  radroots sell add tomatoes --pack \"1 kg\" --price \"10 USD/kg\" --stock 25
   radroots sell check ./listing.toml
   radroots sell publish ./listing.toml
 
@@ -1132,10 +1132,29 @@ pub struct SellArgs {
     pub command: SellCommand,
 }
 
+#[derive(Debug, Clone, Args)]
+pub struct SellAddArgs {
+    pub product: String,
+    #[arg(long)]
+    pub file: Option<PathBuf>,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub category: Option<String>,
+    #[arg(long)]
+    pub summary: Option<String>,
+    #[arg(long = "pack")]
+    pub pack: Option<String>,
+    #[arg(long = "price")]
+    pub price_expr: Option<String>,
+    #[arg(long = "stock")]
+    pub stock: Option<String>,
+}
+
 #[derive(Debug, Clone, Subcommand)]
 pub enum SellCommand {
     #[command(about = "Create a listing draft")]
-    Add(ListingNewArgs),
+    Add(SellAddArgs),
     #[command(about = "Show a local listing draft")]
     Show(SellShowArgs),
     #[command(about = "Check a listing draft")]
@@ -1154,7 +1173,7 @@ pub enum SellCommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct SellShowArgs {
-    pub target: String,
+    pub file: PathBuf,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1377,10 +1396,26 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
-        let sell = CliArgs::parse_from(["radroots", "sell", "check", "draft.toml"]);
+        let sell = CliArgs::parse_from([
+            "radroots",
+            "sell",
+            "add",
+            "eggs",
+            "--pack",
+            "dozen",
+            "--price",
+            "8 USD/dozen",
+            "--stock",
+            "10",
+        ]);
         match sell.command {
             Command::Sell(args) => match args.command {
-                SellCommand::Check(file) => assert_eq!(file.file.to_str(), Some("draft.toml")),
+                SellCommand::Add(add) => {
+                    assert_eq!(add.product, "eggs");
+                    assert_eq!(add.pack.as_deref(), Some("dozen"));
+                    assert_eq!(add.price_expr.as_deref(), Some("8 USD/dozen"));
+                    assert_eq!(add.stock.as_deref(), Some("10"));
+                }
                 _ => panic!("unexpected sell subcommand"),
             },
             _ => panic!("unexpected command variant"),
@@ -2154,7 +2189,7 @@ mod tests {
                 .supports_output_format(OutputFormat::Ndjson)
         );
 
-        let sell_add = CliArgs::parse_from(["radroots", "sell", "add"]);
+        let sell_add = CliArgs::parse_from(["radroots", "sell", "add", "tomatoes"]);
         assert_eq!(sell_add.command.display_name(), "sell add");
         assert!(!sell_add.command.supports_dry_run());
 
