@@ -13,70 +13,69 @@ use crate::domain::runtime::{
     StatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::config::{OutputConfig, OutputFormat};
+use crate::runtime::config::{OutputConfig, OutputFormat, Verbosity};
 
 const THIN_RULE: &str = "────────────────────────────────────────────────────";
 
 pub fn render_output(output: &CommandOutput, config: &OutputConfig) -> Result<(), RuntimeError> {
     match config.format {
-        OutputFormat::Human => render_human(output),
+        OutputFormat::Human => render_human(output, config),
         OutputFormat::Json => render_json(output),
         OutputFormat::Ndjson => render_ndjson(output),
     }
 }
 
-fn render_human(output: &CommandOutput) -> Result<(), RuntimeError> {
+fn render_human(output: &CommandOutput, config: &OutputConfig) -> Result<(), RuntimeError> {
     let mut stdout = io::stdout().lock();
-    render_human_to(&mut stdout, output)
+    render_human_with_config_to(&mut stdout, output, config)
 }
 
+#[cfg(test)]
 fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), RuntimeError> {
+    render_human_with_config_to(stdout, output, &default_human_output_config())
+}
+
+fn render_human_with_config_to(
+    stdout: &mut dyn Write,
+    output: &CommandOutput,
+    config: &OutputConfig,
+) -> Result<(), RuntimeError> {
+    if config.verbosity == Verbosity::Quiet {
+        if let Some(quiet) = render_quiet_output(output) {
+            writeln!(stdout, "{quiet}")?;
+            return Ok(());
+        }
+    }
+
+    let mut buffer = Vec::new();
+    render_human_view_to(&mut buffer, output)?;
+    let rendered = String::from_utf8(buffer).map_err(|error| {
+        RuntimeError::Config(format!("human render output was not utf8: {error}"))
+    })?;
+    let finalized = finalize_human_output(output, rendered, config)?;
+    write!(stdout, "{finalized}")?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn default_human_output_config() -> OutputConfig {
+    OutputConfig {
+        format: OutputFormat::Human,
+        verbosity: Verbosity::Normal,
+        color: true,
+        dry_run: false,
+    }
+}
+
+fn render_human_view_to(
+    stdout: &mut dyn Write,
+    output: &CommandOutput,
+) -> Result<(), RuntimeError> {
     match output.view() {
         CommandView::AccountList(view) => render_account_list(stdout, view)?,
-        CommandView::AccountNew(view) => {
-            write_context(stdout, format!("account · {}", view.state).as_str())?;
-            render_owned_pairs(
-                stdout,
-                "account",
-                account_pairs(&view.account, Some(&view.public_identity)).as_slice(),
-            )?;
-            writeln!(stdout, "source: {}", view.source)?;
-            render_actions(stdout, &view.actions)?;
-        }
-        CommandView::AccountUse(view) => {
-            write_context(stdout, "account · active")?;
-            render_owned_pairs(
-                stdout,
-                "account",
-                account_pairs(&view.account, None).as_slice(),
-            )?;
-            writeln!(stdout, "active account id: {}", view.active_account_id)?;
-            writeln!(stdout, "source: {}", view.source)?;
-        }
-        CommandView::AccountWhoami(view) => {
-            write_context(
-                stdout,
-                match view.state.as_str() {
-                    "ready" => "account · active",
-                    "unconfigured" => "account · unconfigured",
-                    _ => "account",
-                },
-            )?;
-            if let Some(account) = &view.account {
-                render_owned_pairs(
-                    stdout,
-                    "account",
-                    account_pairs(account, view.public_identity.as_ref()).as_slice(),
-                )?;
-            } else {
-                writeln!(stdout, "no local account selected")?;
-                writeln!(stdout)?;
-            }
-            if let Some(reason) = &view.reason {
-                writeln!(stdout, "reason: {reason}")?;
-            }
-            writeln!(stdout, "source: {}", view.source)?;
-        }
+        CommandView::AccountNew(view) => render_account_new(stdout, view)?,
+        CommandView::AccountUse(view) => render_account_use(stdout, view)?,
+        CommandView::AccountWhoami(view) => render_account_whoami(stdout, view)?,
         CommandView::MycStatus(view) => {
             render_myc_status(stdout, view, true)?;
         }
@@ -591,37 +590,355 @@ fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
+fn render_quiet_output(output: &CommandOutput) -> Option<String> {
+    match output.view() {
+        CommandView::AccountNew(view) => Some(format!(
+            "{}: {}",
+            match view.state.as_str() {
+                "migrated" => "Account migrated",
+                _ => "Account created",
+            },
+            view.account.id
+        )),
+        CommandView::Find(view) | CommandView::MarketSearch(view) => match view.state.as_str() {
+            "ready" if !view.results.is_empty() => Some(
+                view.results
+                    .iter()
+                    .map(|result| result.product_key.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            "empty" => Some("No listings found".to_owned()),
+            _ => None,
+        },
+        CommandView::OrderSubmit(view) => match view.state.as_str() {
+            "accepted" | "submitted" | "already_submitted" | "deduplicated" => {
+                Some(format!("Order submitted: {}", view.order_id))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn finalize_human_output(
+    output: &CommandOutput,
+    rendered: String,
+    config: &OutputConfig,
+) -> Result<String, RuntimeError> {
+    let mut cleaned_lines = Vec::new();
+    let mut fallback_details = Vec::<(&'static str, String)>::new();
+
+    for line in rendered.lines() {
+        let trimmed = line.trim_end();
+        if trimmed == THIN_RULE {
+            continue;
+        }
+        if let Some(value) = trimmed.trim_start().strip_prefix("workflow source: ") {
+            fallback_details.push(("Workflow source", value.to_owned()));
+            continue;
+        }
+        if let Some(value) = trimmed.trim_start().strip_prefix("source: ") {
+            fallback_details.push(("Source", value.to_owned()));
+            continue;
+        }
+        if let Some(value) = trimmed.trim_start().strip_prefix("provenance: ") {
+            fallback_details.push(("Provenance", value.to_owned()));
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("reason: ") {
+            cleaned_lines.push(value.to_owned());
+            continue;
+        }
+        if trimmed == "actions" {
+            cleaned_lines.push("Next".to_owned());
+            continue;
+        }
+        cleaned_lines.push(trimmed.to_owned());
+    }
+
+    let cleaned_lines = collapse_blank_lines(cleaned_lines);
+    let mut finalized = cleaned_lines.join("\n");
+    if !finalized.is_empty() && !finalized.ends_with('\n') {
+        finalized.push('\n');
+    }
+
+    if matches!(config.verbosity, Verbosity::Verbose | Verbosity::Trace) {
+        let mut details = verbose_details(output);
+        for fallback in fallback_details {
+            if !details.iter().any(|(label, _)| *label == fallback.0) {
+                details.push(fallback);
+            }
+        }
+        if !details.is_empty() {
+            if !finalized.is_empty() {
+                finalized.push('\n');
+            }
+            finalized.push_str("Details\n");
+            finalized.push_str(render_field_rows_string(details.as_slice()).as_str());
+        }
+    }
+
+    if config.verbosity == Verbosity::Trace {
+        let mut trace_buffer = Vec::new();
+        render_json_to(&mut trace_buffer, output)?;
+        let trace_json = String::from_utf8(trace_buffer).map_err(|error| {
+            RuntimeError::Config(format!("trace render output was not utf8: {error}"))
+        })?;
+        if !finalized.is_empty() {
+            finalized.push('\n');
+        }
+        finalized.push_str("Trace\n");
+        finalized.push_str(
+            render_field_rows_string(&[("Command", human_command_name(output.view()).to_owned())])
+                .as_str(),
+        );
+        for line in trace_json.trim_end().lines() {
+            finalized.push_str("  ");
+            finalized.push_str(line);
+            finalized.push('\n');
+        }
+    }
+
+    Ok(finalized)
+}
+
+fn collapse_blank_lines(lines: Vec<String>) -> Vec<String> {
+    let mut collapsed = Vec::new();
+    let mut previous_blank = true;
+    for line in lines {
+        let blank = line.trim().is_empty();
+        if blank {
+            if previous_blank {
+                continue;
+            }
+            collapsed.push(String::new());
+        } else {
+            collapsed.push(line);
+        }
+        previous_blank = blank;
+    }
+    while collapsed.last().is_some_and(|line| line.trim().is_empty()) {
+        collapsed.pop();
+    }
+    collapsed
+}
+
+fn render_field_rows_string(rows: &[(&str, String)]) -> String {
+    let label_width = rows
+        .iter()
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or_default();
+    let mut rendered = String::new();
+    for (label, value) in rows {
+        rendered.push_str(
+            format!(
+                "  {label:label_width$}  {value}\n",
+                label_width = label_width
+            )
+            .as_str(),
+        );
+    }
+    rendered
+}
+
+fn verbose_details(output: &CommandOutput) -> Vec<(&'static str, String)> {
+    match output.view() {
+        CommandView::AccountList(view) => vec![("Source", view.source.clone())],
+        CommandView::AccountNew(view) => vec![("Source", view.source.clone())],
+        CommandView::AccountUse(view) => vec![("Source", view.source.clone())],
+        CommandView::AccountWhoami(view) => vec![("Source", view.source.clone())],
+        CommandView::Doctor(view) => vec![("Source", view.source.clone())],
+        CommandView::Find(view) | CommandView::MarketSearch(view) => vec![
+            ("Source", view.source.clone()),
+            ("Freshness", view.freshness.display.clone()),
+            ("Relay count", view.relay_count.to_string()),
+        ],
+        CommandView::ListingGet(view) | CommandView::MarketView(view) => vec![
+            ("Source", view.source.clone()),
+            ("Freshness", view.provenance.freshness.clone()),
+            ("Relay count", view.provenance.relay_count.to_string()),
+        ],
+        CommandView::OrderSubmit(view) => {
+            let mut rows = vec![("Source", view.source.clone())];
+            push_row(
+                &mut rows,
+                "Signer mode",
+                view.signer_mode.as_deref().map(str::to_owned),
+            );
+            push_row(
+                &mut rows,
+                "Requested session",
+                view.requested_signer_session_id
+                    .as_deref()
+                    .map(str::to_owned),
+            );
+            push_row(
+                &mut rows,
+                "Idempotency key",
+                view.idempotency_key.as_deref().map(str::to_owned),
+            );
+            rows
+        }
+        CommandView::OrderSubmitWatch(view) => {
+            let mut rows = vec![("Source", view.submit.source.clone())];
+            push_row(
+                &mut rows,
+                "Signer mode",
+                view.submit.signer_mode.as_deref().map(str::to_owned),
+            );
+            push_row(
+                &mut rows,
+                "Requested session",
+                view.submit
+                    .requested_signer_session_id
+                    .as_deref()
+                    .map(str::to_owned),
+            );
+            rows
+        }
+        CommandView::RelayList(view) => vec![
+            ("Source", view.source.clone()),
+            ("Relay count", view.count.to_string()),
+            ("Publish policy", view.publish_policy.clone()),
+        ],
+        _ => Vec::new(),
+    }
+}
+
 fn present_absent(value: bool) -> &'static str {
     if value { "present" } else { "absent" }
 }
 
 fn render_account_list(stdout: &mut dyn Write, view: &AccountListView) -> Result<(), RuntimeError> {
-    write_context(stdout, format!("accounts · {} local", view.count).as_str())?;
     if view.accounts.is_empty() {
-        writeln!(stdout, "no accounts found")?;
-        writeln!(stdout)?;
-    } else {
-        let table = Table {
-            headers: &["account", "display name", "signer", "default"],
-            rows: view
-                .accounts
-                .iter()
-                .map(|account| {
-                    vec![
-                        account.id.clone(),
-                        account.display_name.clone().unwrap_or_default(),
-                        account.signer.clone(),
-                        yes_no(account.is_default).to_owned(),
-                    ]
-                })
-                .collect(),
-        };
-        render_table(stdout, &table)?;
-        writeln!(stdout)?;
+        writeln!(stdout, "No accounts yet")?;
+        if !view.actions.is_empty() {
+            writeln!(stdout)?;
+            render_item_section(stdout, "Next", &view.actions)?;
+        }
+        return Ok(());
     }
-    writeln!(stdout, "source: {}", view.source)?;
-    render_actions(stdout, &view.actions)?;
+
+    writeln!(
+        stdout,
+        "{} account{}",
+        view.count,
+        if view.count == 1 { "" } else { "s" }
+    )?;
+    writeln!(stdout)?;
+    for (index, account) in view.accounts.iter().enumerate() {
+        writeln!(
+            stdout,
+            "{}",
+            account
+                .display_name
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or(account.id.as_str())
+        )?;
+        let rows = vec![
+            ("Account", account.id.clone()),
+            ("Signer", humanize_machine_label(account.signer.as_str())),
+            (
+                "Selected",
+                if account.is_default {
+                    "Yes".to_owned()
+                } else {
+                    "No".to_owned()
+                },
+            ),
+        ];
+        render_field_rows(stdout, rows.as_slice())?;
+        if index + 1 < view.accounts.len() {
+            writeln!(stdout)?;
+        }
+    }
+    if !view.actions.is_empty() {
+        writeln!(stdout)?;
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
     Ok(())
+}
+
+fn render_account_new(
+    stdout: &mut dyn Write,
+    view: &crate::domain::runtime::AccountNewView,
+) -> Result<(), RuntimeError> {
+    writeln!(
+        stdout,
+        "{}",
+        match view.state.as_str() {
+            "migrated" => "Account migrated",
+            _ => "Account created",
+        }
+    )?;
+    writeln!(stdout)?;
+    render_account_section(stdout, &view.account)?;
+    writeln!(stdout)?;
+    writeln!(stdout, "Identity")?;
+    render_field_rows(
+        stdout,
+        &[("npub", view.public_identity.public_key_npub.clone())],
+    )?;
+    if !view.actions.is_empty() {
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
+    Ok(())
+}
+
+fn render_account_use(
+    stdout: &mut dyn Write,
+    view: &crate::domain::runtime::AccountUseView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "Account selected")?;
+    writeln!(stdout)?;
+    render_account_section(stdout, &view.account)
+}
+
+fn render_account_whoami(
+    stdout: &mut dyn Write,
+    view: &crate::domain::runtime::AccountWhoamiView,
+) -> Result<(), RuntimeError> {
+    match view.state.as_str() {
+        "ready" => {
+            writeln!(stdout, "Selected account")?;
+            writeln!(stdout)?;
+            if let Some(account) = &view.account {
+                render_account_section(stdout, account)?;
+            }
+            if let Some(identity) = &view.public_identity {
+                writeln!(stdout)?;
+                writeln!(stdout, "Identity")?;
+                render_field_rows(stdout, &[("npub", identity.public_key_npub.clone())])?;
+            }
+        }
+        _ => {
+            writeln!(stdout, "Not ready yet")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            writeln!(stdout)?;
+            render_item_section(stdout, "Missing", &["Selected account".to_owned()])?;
+            writeln!(stdout)?;
+            render_item_section(stdout, "Next", &["radroots account create".to_owned()])?;
+        }
+    }
+    Ok(())
+}
+
+fn render_account_section(
+    stdout: &mut dyn Write,
+    account: &AccountSummaryView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "Account")?;
+    let mut rows = Vec::<(&str, String)>::new();
+    push_row(&mut rows, "Name", account.display_name.clone());
+    rows.push(("Account", account.id.clone()));
+    rows.push(("Signer", humanize_machine_label(account.signer.as_str())));
+    render_field_rows(stdout, rows.as_slice())
 }
 
 fn render_config_show(
@@ -1131,95 +1448,46 @@ fn format_runtime_target(target_kind: Option<&str>, target: Option<&str>) -> Str
 }
 
 fn render_doctor(stdout: &mut dyn Write, view: &DoctorView) -> Result<(), RuntimeError> {
-    write_context(stdout, "system · checks")?;
-    let table = Table {
-        headers: &["check", "status", "detail"],
-        rows: view.checks.iter().map(doctor_row).collect(),
-    };
-    render_table(stdout, &table)?;
-    if !view.actions.is_empty() {
+    writeln!(stdout, "Readiness check")?;
+    let ready = view
+        .checks
+        .iter()
+        .filter(|check| matches!(check.status.as_str(), "ok" | "ready" | "healthy"))
+        .map(doctor_item)
+        .collect::<Vec<_>>();
+    let needs_attention = view
+        .checks
+        .iter()
+        .filter(|check| !matches!(check.status.as_str(), "ok" | "ready" | "healthy"))
+        .map(doctor_item)
+        .collect::<Vec<_>>();
+
+    if !ready.is_empty() || !needs_attention.is_empty() || !view.actions.is_empty() {
         writeln!(stdout)?;
-        writeln!(stdout, "actions")?;
-        for action in &view.actions {
-            writeln!(stdout, "  › {action}")?;
-        }
     }
-    writeln!(stdout)?;
-    writeln!(stdout, "source: {}", view.source)?;
+    let mut wrote_section = false;
+    if !ready.is_empty() {
+        render_item_section(stdout, "Ready", &ready)?;
+        wrote_section = true;
+    }
+    if !needs_attention.is_empty() {
+        if wrote_section {
+            writeln!(stdout)?;
+        }
+        render_item_section(stdout, "Needs attention", &needs_attention)?;
+        wrote_section = true;
+    }
+    if !view.actions.is_empty() {
+        if wrote_section {
+            writeln!(stdout)?;
+        }
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
     Ok(())
 }
 
 fn render_find(stdout: &mut dyn Write, view: &FindView) -> Result<(), RuntimeError> {
-    let context = match view.state.as_str() {
-        "unconfigured" => "market · local first · unconfigured".to_owned(),
-        _ => format!(
-            "market · local first · {} result{}",
-            view.count,
-            if view.count == 1 { "" } else { "s" }
-        ),
-    };
-    write_context(stdout, context.as_str())?;
-    writeln!(stdout, "query: {}", view.query)?;
-    if let Some(hyf) = &view.hyf {
-        writeln!(stdout, "hyf: query rewritten to {}", hyf.rewritten_query)?;
-    }
-
-    match view.state.as_str() {
-        "unconfigured" => {
-            if let Some(reason) = &view.reason {
-                writeln!(stdout, "reason: {reason}")?;
-            }
-        }
-        _ if view.results.is_empty() => {
-            if let Some(reason) = &view.reason {
-                writeln!(stdout, "{reason}")?;
-            }
-        }
-        _ => {
-            let table = Table {
-                headers: &["product", "category", "price", "available", "location"],
-                rows: view
-                    .results
-                    .iter()
-                    .map(|result| {
-                        vec![
-                            result.title.clone(),
-                            result.category.clone(),
-                            format_price(
-                                result.price.amount,
-                                &result.price.currency,
-                                result.price.per_amount,
-                                &result.price.per_unit,
-                            ),
-                            format_available(
-                                result
-                                    .available
-                                    .available_amount
-                                    .unwrap_or(result.available.total_amount),
-                                result
-                                    .available
-                                    .label
-                                    .as_deref()
-                                    .unwrap_or(result.available.total_unit.as_str()),
-                            ),
-                            result.location_primary.clone().unwrap_or_default(),
-                        ]
-                    })
-                    .collect(),
-            };
-            render_table(stdout, &table)?;
-        }
-    }
-
-    writeln!(stdout)?;
-    writeln!(
-        stdout,
-        "provenance: local replica · {} · {}",
-        view.freshness.display,
-        relay_count_text(view.relay_count)
-    )?;
-    render_actions(stdout, &view.actions)?;
-    Ok(())
+    render_market_search(stdout, view)
 }
 
 fn render_market_search(stdout: &mut dyn Write, view: &FindView) -> Result<(), RuntimeError> {
@@ -1610,69 +1878,121 @@ fn render_order_list(stdout: &mut dyn Write, view: &OrderListView) -> Result<(),
 }
 
 fn render_order_submit(stdout: &mut dyn Write, view: &OrderSubmitView) -> Result<(), RuntimeError> {
-    let context = match view.state.as_str() {
-        "missing" => format!("order · {} missing", view.order_id),
-        "already_submitted" => format!("order · {} already submitted", view.order_id),
-        "unconfigured" => format!("order · {} not ready", view.order_id),
-        "unavailable" => format!("order · {} submit unavailable", view.order_id),
-        "error" => format!("order · {} error", view.order_id),
-        "dry_run" => format!("order · {} dry run", view.order_id),
-        "deduplicated" => format!("order · {} deduplicated", view.order_id),
-        _ => format!("order · {} submitted", view.order_id),
-    };
-    write_context(stdout, context.as_str())?;
-
-    let mut rows = vec![
-        ("order id", view.order_id.as_str()),
-        ("file", view.file.as_str()),
-    ];
-    if let Some(listing_lookup) = &view.listing_lookup {
-        rows.push(("listing", listing_lookup.as_str()));
+    match view.state.as_str() {
+        "dry_run" => {
+            writeln!(stdout, "Dry run only")?;
+            writeln!(stdout)?;
+            writeln!(stdout, "Order would be submitted.")?;
+            writeln!(stdout)?;
+            render_order_submit_section(stdout, view)?;
+            writeln!(stdout, "Nothing was written.")?;
+        }
+        "missing" => {
+            writeln!(stdout, "Not found")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "unconfigured" => {
+            writeln!(stdout, "Not ready yet")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.issues.is_empty() {
+                writeln!(stdout)?;
+                writeln!(stdout, "Needs attention")?;
+                let rows = view
+                    .issues
+                    .iter()
+                    .map(|issue| (issue.field.as_str(), issue.message.clone()))
+                    .collect::<Vec<_>>();
+                render_field_rows(stdout, rows.as_slice())?;
+            }
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "unavailable" => {
+            writeln!(stdout, "Unavailable right now")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "error" => {
+            writeln!(stdout, "Could not complete the command")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        _ => {
+            writeln!(
+                stdout,
+                "{}",
+                match view.state.as_str() {
+                    "already_submitted" => "Order already submitted",
+                    "deduplicated" => "Order already in progress",
+                    _ => "Order submitted",
+                }
+            )?;
+            writeln!(stdout)?;
+            render_order_submit_section(stdout, view)?;
+            if let Some(job) = &view.job {
+                writeln!(stdout)?;
+                writeln!(stdout, "Job")?;
+                let mut rows = vec![
+                    ("Job", job.job_id.clone()),
+                    ("State", humanize_machine_label(job.state.as_str())),
+                ];
+                push_row(&mut rows, "Event", job.event_id.clone());
+                render_field_rows(stdout, rows.as_slice())?;
+            }
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
     }
-    if let Some(listing_addr) = &view.listing_addr {
-        rows.push(("listing addr", listing_addr.as_str()));
-    }
-    if let Some(account_id) = &view.buyer_account_id {
-        rows.push(("buyer account", account_id.as_str()));
-    }
-    if let Some(buyer_pubkey) = &view.buyer_pubkey {
-        rows.push(("buyer pubkey", buyer_pubkey.as_str()));
-    }
-    if let Some(seller_pubkey) = &view.seller_pubkey {
-        rows.push(("seller pubkey", seller_pubkey.as_str()));
-    }
-    if view.dry_run {
-        rows.push(("dry run", yes_no(true)));
-    }
-    if view.deduplicated {
-        rows.push(("deduplicated", yes_no(true)));
-    }
-    if let Some(idempotency_key) = &view.idempotency_key {
-        rows.push(("idempotency key", idempotency_key.as_str()));
-    }
-    if let Some(signer_mode) = &view.signer_mode {
-        rows.push(("signer mode", signer_mode.as_str()));
-    }
-    if let Some(signer_session_id) = &view.signer_session_id {
-        rows.push(("signer session", signer_session_id.as_str()));
-    }
-    if let Some(requested_signer_session_id) = &view.requested_signer_session_id {
-        rows.push((
-            "requested signer session",
-            requested_signer_session_id.as_str(),
-        ));
-    }
-    render_pairs(stdout, "order", rows.as_slice())?;
-    if let Some(job) = &view.job {
-        render_order_job(stdout, job)?;
-    }
-    render_order_issues(stdout, &view.issues)?;
-    if let Some(reason) = &view.reason {
-        writeln!(stdout, "reason: {reason}")?;
-    }
-    writeln!(stdout, "source: {}", view.source)?;
-    render_actions(stdout, &view.actions)?;
     Ok(())
+}
+
+fn render_order_submit_section(
+    stdout: &mut dyn Write,
+    view: &OrderSubmitView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "Order")?;
+    let mut rows = vec![("ID", view.order_id.clone())];
+    push_row(
+        &mut rows,
+        "Listing",
+        first_present([view.listing_lookup.as_deref(), view.listing_addr.as_deref()]),
+    );
+    push_row(
+        &mut rows,
+        "Buyer",
+        first_present([
+            view.buyer_account_id.as_deref(),
+            view.buyer_pubkey.as_deref(),
+        ]),
+    );
+    if !matches!(view.state.as_str(), "dry_run" | "missing" | "unconfigured") {
+        rows.push(("State", humanize_machine_label(view.state.as_str())));
+    }
+    render_field_rows(stdout, rows.as_slice())
 }
 
 fn render_order_submit_watch(
@@ -2066,93 +2386,28 @@ fn render_listing_validate(
 }
 
 fn render_listing_get(stdout: &mut dyn Write, view: &ListingGetView) -> Result<(), RuntimeError> {
-    let context = view
-        .listing_id
-        .clone()
-        .unwrap_or_else(|| view.lookup.clone());
-    write_context(stdout, format!("listing · {context}").as_str())?;
-
-    match view.state.as_str() {
-        "unconfigured" | "missing" => {
-            if let Some(reason) = &view.reason {
-                writeln!(stdout, "{reason}")?;
-            }
-        }
-        _ => {
-            if let Some(title) = &view.title {
-                writeln!(stdout, "{title}")?;
-                writeln!(stdout)?;
-            }
-            let mut rows = Vec::<(&str, String)>::new();
-            if let Some(product_key) = &view.product_key {
-                rows.push(("key", product_key.clone()));
-            }
-            if let Some(category) = &view.category {
-                rows.push(("category", category.clone()));
-            }
-            if let Some(price) = &view.price {
-                rows.push((
-                    "price",
-                    format_price(
-                        price.amount,
-                        &price.currency,
-                        price.per_amount,
-                        &price.per_unit,
-                    ),
-                ));
-            }
-            if let Some(available) = &view.available {
-                rows.push((
-                    "available",
-                    format_available(
-                        available.available_amount.unwrap_or(available.total_amount),
-                        available
-                            .label
-                            .as_deref()
-                            .unwrap_or(available.total_unit.as_str()),
-                    ),
-                ));
-            }
-            if let Some(location_primary) = &view.location_primary {
-                rows.push(("location", location_primary.clone()));
-            }
-            if let Some(listing_id) = &view.listing_id {
-                rows.push(("listing id", listing_id.clone()));
-            }
-            render_owned_pairs(stdout, "listing", rows.as_slice())?;
-            if let Some(description) = &view.description {
-                writeln!(stdout, "{description}")?;
-                writeln!(stdout)?;
-            }
-            writeln!(
-                stdout,
-                "provenance: local replica · {} · {}",
-                view.provenance.freshness,
-                relay_count_text(view.provenance.relay_count)
-            )?;
-            writeln!(stdout, "source: {}", view.source)?;
-        }
-    }
-
-    if view.state != "ready" {
-        writeln!(stdout)?;
-        writeln!(stdout, "source: {}", view.source)?;
-    }
-    render_actions(stdout, &view.actions)?;
-    Ok(())
+    render_market_view(stdout, view)
 }
 
 fn render_market_view(stdout: &mut dyn Write, view: &ListingGetView) -> Result<(), RuntimeError> {
     match view.state.as_str() {
         "unconfigured" => {
             writeln!(stdout, "Not ready yet")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
             if !view.actions.is_empty() {
                 writeln!(stdout)?;
                 render_item_section(stdout, "Next", &view.actions)?;
             }
         }
         "missing" => {
-            writeln!(stdout, "Listing not found")?;
+            writeln!(stdout, "Not found")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
             if !view.actions.is_empty() {
                 writeln!(stdout)?;
                 render_item_section(stdout, "Next", &view.actions)?;
@@ -2212,10 +2467,15 @@ fn render_market_view(stdout: &mut dyn Write, view: &ListingGetView) -> Result<(
                 ));
             }
             render_owned_pairs(stdout, "Listing", rows.as_slice())?;
+            let mut wrote_about = false;
             if let Some(description) = &view.description {
-                render_owned_pairs(stdout, "About", &[("Summary", description.clone())])?;
+                render_item_section(stdout, "About", &[description.clone()])?;
+                wrote_about = true;
             }
             if !view.actions.is_empty() {
+                if wrote_about {
+                    writeln!(stdout)?;
+                }
                 render_item_section(stdout, "Next", &view.actions)?;
             }
         }
@@ -2523,39 +2783,57 @@ fn render_listing_mutation(
 }
 
 fn render_relay_list(stdout: &mut dyn Write, view: &RelayListView) -> Result<(), RuntimeError> {
-    write_context(
-        stdout,
-        match view.state.as_str() {
-            "configured" => "relays · configured",
-            _ => "relays · unconfigured",
-        },
-    )?;
     if view.relays.is_empty() {
+        writeln!(stdout, "Not ready yet")?;
         if let Some(reason) = &view.reason {
+            writeln!(stdout)?;
             writeln!(stdout, "{reason}")?;
+        }
+        writeln!(stdout)?;
+        render_item_section(stdout, "Missing", &["Relay configuration".to_owned()])?;
+        if !view.actions.is_empty() {
+            writeln!(stdout)?;
+            render_item_section(stdout, "Next", &view.actions)?;
+        }
+        return Ok(());
+    }
+
+    writeln!(
+        stdout,
+        "{} relay{}",
+        view.count,
+        if view.count == 1 { "" } else { "s" }
+    )?;
+    writeln!(stdout)?;
+    for (index, relay) in view.relays.iter().enumerate() {
+        writeln!(stdout, "{}", relay.url)?;
+        let rows = vec![
+            (
+                "Read",
+                if relay.read {
+                    "Yes".to_owned()
+                } else {
+                    "No".to_owned()
+                },
+            ),
+            (
+                "Write",
+                if relay.write {
+                    "Yes".to_owned()
+                } else {
+                    "No".to_owned()
+                },
+            ),
+        ];
+        render_field_rows(stdout, rows.as_slice())?;
+        if index + 1 < view.relays.len() {
             writeln!(stdout)?;
         }
-    } else {
-        let table = Table {
-            headers: &["relay", "read", "write"],
-            rows: view
-                .relays
-                .iter()
-                .map(|relay| {
-                    vec![
-                        relay.url.clone(),
-                        yes_no(relay.read).to_owned(),
-                        yes_no(relay.write).to_owned(),
-                    ]
-                })
-                .collect(),
-        };
-        render_table(stdout, &table)?;
-        writeln!(stdout)?;
     }
-    writeln!(stdout, "publish policy: {}", view.publish_policy)?;
-    writeln!(stdout, "source: {}", view.source)?;
-    render_actions(stdout, &view.actions)?;
+    if !view.actions.is_empty() {
+        writeln!(stdout)?;
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
     Ok(())
 }
 
@@ -3363,17 +3641,17 @@ fn render_local_export(stdout: &mut dyn Write, view: &LocalExportView) -> Result
     Ok(())
 }
 
-fn doctor_row(check: &DoctorCheckView) -> Vec<String> {
-    vec![
-        check.name.clone(),
-        check.status.clone(),
-        check.detail.clone(),
-    ]
+fn doctor_item(check: &DoctorCheckView) -> String {
+    let name = humanize_machine_label(check.name.as_str());
+    match non_empty_str(check.detail.as_str()) {
+        Some(detail) => format!("{name}: {detail}"),
+        None => name,
+    }
 }
 
 fn write_context(stdout: &mut dyn Write, line: &str) -> Result<(), RuntimeError> {
     writeln!(stdout, "{line}")?;
-    writeln!(stdout, "{THIN_RULE}")?;
+    writeln!(stdout)?;
     Ok(())
 }
 
@@ -3382,9 +3660,9 @@ fn render_actions(stdout: &mut dyn Write, actions: &[String]) -> Result<(), Runt
         return Ok(());
     }
     writeln!(stdout)?;
-    writeln!(stdout, "actions")?;
+    writeln!(stdout, "Next")?;
     for action in actions {
-        writeln!(stdout, "  › {action}")?;
+        writeln!(stdout, "  {action}")?;
     }
     Ok(())
 }
@@ -3430,25 +3708,6 @@ fn render_owned_pairs(
         .map(|(label, value)| (*label, value.as_str()))
         .collect::<Vec<_>>();
     render_pairs(stdout, heading, borrowed.as_slice())
-}
-
-fn account_pairs(
-    account: &AccountSummaryView,
-    public_identity: Option<&crate::domain::runtime::IdentityPublicView>,
-) -> Vec<(&'static str, String)> {
-    let mut rows = vec![
-        ("account id", account.id.clone()),
-        ("signer", account.signer.clone()),
-        ("default", yes_no(account.is_default).to_owned()),
-    ];
-    if let Some(display_name) = &account.display_name {
-        rows.insert(1, ("display name", display_name.clone()));
-    }
-    if let Some(public_identity) = public_identity {
-        rows.push(("public key npub", public_identity.public_key_npub.clone()));
-        rows.push(("public key hex", public_identity.public_key_hex.clone()));
-    }
-    rows
 }
 
 fn render_local_signer(
@@ -3634,14 +3893,6 @@ fn render_table(stdout: &mut dyn Write, table: &Table) -> Result<(), RuntimeErro
     Ok(())
 }
 
-fn relay_count_text(count: usize) -> String {
-    if count == 1 {
-        "1 relay configured".to_owned()
-    } else {
-        format!("{count} relays configured")
-    }
-}
-
 fn format_price(amount: f64, currency: &str, per_amount: u32, per_unit: &str) -> String {
     format!(
         "{} {currency}/{} {per_unit}",
@@ -3766,7 +4017,9 @@ fn human_command_name(view: &CommandView) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Table, render_human_to, render_ndjson_to, render_table};
+    use super::{
+        Table, render_human_to, render_human_with_config_to, render_ndjson_to, render_table,
+    };
     use crate::commands::runtime;
     use crate::domain::runtime::{
         AccountListView, CommandOutput, CommandView, DoctorCheckView, DoctorView, MycStatusView,
@@ -4117,7 +4370,7 @@ mod tests {
     }
 
     #[test]
-    fn human_render_doctor_uses_check_table_and_actions() {
+    fn human_render_doctor_uses_readiness_sections() {
         let output = CommandOutput::unconfigured(CommandView::Doctor(DoctorView {
             ok: false,
             state: "warn".to_owned(),
@@ -4139,12 +4392,63 @@ mod tests {
         let mut buffer = Vec::new();
         render_human_to(&mut buffer, &output).expect("render human");
         let rendered = String::from_utf8(buffer).expect("utf8");
-        assert!(rendered.contains("system · checks"));
-        assert!(rendered.contains("check"));
-        assert!(rendered.contains("account  warn"));
-        assert!(rendered.contains("actions"));
-        assert!(rendered.contains("› radroots account new"));
-        assert!(rendered.contains("source: local diagnostics"));
+        assert!(rendered.contains("Readiness check"));
+        assert!(rendered.contains("Ready"));
+        assert!(rendered.contains("Config: defaults active"));
+        assert!(rendered.contains("Needs attention"));
+        assert!(rendered.contains("Account: no local account in store"));
+        assert!(rendered.contains("Next"));
+        assert!(rendered.contains("radroots account new"));
+        assert!(!rendered.contains("source: local diagnostics"));
+    }
+
+    #[test]
+    fn human_render_verbose_and_trace_append_diagnostics() {
+        let output = CommandOutput::success(CommandView::Doctor(DoctorView {
+            ok: true,
+            state: "ok".to_owned(),
+            checks: vec![DoctorCheckView {
+                name: "config".to_owned(),
+                status: "ok".to_owned(),
+                detail: "defaults active".to_owned(),
+            }],
+            source: "local diagnostics".to_owned(),
+            actions: Vec::new(),
+        }));
+
+        let mut verbose_buffer = Vec::new();
+        render_human_with_config_to(
+            &mut verbose_buffer,
+            &output,
+            &OutputConfig {
+                format: OutputFormat::Human,
+                verbosity: Verbosity::Verbose,
+                color: false,
+                dry_run: false,
+            },
+        )
+        .expect("render verbose");
+        let verbose_rendered = String::from_utf8(verbose_buffer).expect("utf8");
+        assert!(verbose_rendered.contains("Details"));
+        assert!(verbose_rendered.contains("Source"));
+        assert!(!verbose_rendered.contains("Trace"));
+
+        let mut trace_buffer = Vec::new();
+        render_human_with_config_to(
+            &mut trace_buffer,
+            &output,
+            &OutputConfig {
+                format: OutputFormat::Human,
+                verbosity: Verbosity::Trace,
+                color: false,
+                dry_run: false,
+            },
+        )
+        .expect("render trace");
+        let trace_rendered = String::from_utf8(trace_buffer).expect("utf8");
+        assert!(trace_rendered.contains("Details"));
+        assert!(trace_rendered.contains("Trace"));
+        assert!(trace_rendered.contains("\"source\": \"local diagnostics\""));
     }
 
     #[test]

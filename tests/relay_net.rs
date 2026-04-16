@@ -100,7 +100,9 @@ fn relay_ls_without_relays_exits_unconfigured() {
 
     assert_eq!(output.status.code(), Some(3));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-    assert!(stdout.contains("relays · unconfigured"));
+    assert!(stdout.contains("Not ready yet"));
+    assert!(stdout.contains("Missing"));
+    assert!(stdout.contains("Relay configuration"));
     assert!(stdout.contains("no relays are configured"));
 }
 

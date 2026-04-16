@@ -82,6 +82,22 @@ fn account_new_json_creates_local_account_store_entry() {
 }
 
 #[test]
+fn account_create_quiet_reports_created_account_id() {
+    let dir = tempdir().expect("tempdir");
+
+    let output = cli_command_in(dir.path())
+        .args(["--quiet", "account", "create"])
+        .output()
+        .expect("run quiet account create");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let line = stdout.trim();
+    assert!(line.starts_with("Account created: "));
+    assert!(line.len() > "Account created: ".len());
+}
+
+#[test]
 fn account_new_encrypts_file_backed_secret_fallback_by_default() {
     let dir = tempdir().expect("tempdir");
 

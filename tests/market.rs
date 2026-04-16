@@ -290,6 +290,14 @@ fn market_search_preserves_machine_shape_and_renders_card_list() {
     assert!(stdout.contains("radroots market view sf-tomatoes"));
     assert!(stdout.contains("radroots order create --listing sf-tomatoes"));
     assert!(!stdout.contains("market · local first"));
+
+    let quiet_output = cli_command_in(dir.path())
+        .args(["--quiet", "market", "search", "tomatoes"])
+        .output()
+        .expect("run quiet market search");
+    assert!(quiet_output.status.success());
+    let quiet_stdout = String::from_utf8(quiet_output.stdout).expect("utf8 stdout");
+    assert_eq!(quiet_stdout.trim(), "sf-tomatoes");
 }
 
 #[test]

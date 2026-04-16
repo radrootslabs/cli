@@ -394,9 +394,13 @@ fn listing_get_reads_real_local_rows_and_reports_missing() {
         .expect("run human listing get");
     assert!(human_output.status.success());
     let stdout = String::from_utf8(human_output.stdout).expect("utf8 stdout");
-    assert!(stdout.contains("listing ·"));
     assert!(stdout.contains("Pasture Eggs"));
-    assert!(stdout.contains("provenance: local replica"));
+    assert!(stdout.contains("Listing"));
+    assert!(stdout.contains("Key"));
+    assert!(stdout.contains("Place"));
+    assert!(stdout.contains("About"));
+    assert!(!stdout.contains("listing ·"));
+    assert!(!stdout.contains("provenance:"));
 
     let missing_output = cli_command_in(dir.path())
         .args(["--json", "listing", "get", "missing-listing"])

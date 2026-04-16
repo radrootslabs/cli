@@ -123,7 +123,7 @@ fn find_returns_json_and_ndjson_from_local_market_rows() {
 }
 
 #[test]
-fn find_human_output_uses_market_table_and_provenance_footer() {
+fn find_human_output_uses_market_cards_without_internal_footer() {
     let dir = tempdir().expect("tempdir");
     let init = cli_command_in(dir.path())
         .args(["local", "init"])
@@ -150,10 +150,12 @@ fn find_human_output_uses_market_table_and_provenance_footer() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-    assert!(stdout.contains("market · local first · 1 result"));
-    assert!(stdout.contains("product"));
+    assert!(stdout.contains("1 listing for eggs"));
     assert!(stdout.contains("Fresh Eggs"));
-    assert!(stdout.contains("provenance: local replica"));
+    assert!(stdout.contains("Key"));
+    assert!(stdout.contains("Price"));
+    assert!(!stdout.contains("provenance:"));
+    assert!(!stdout.contains("source:"));
 }
 
 #[test]
@@ -233,7 +235,9 @@ fn find_uses_hyf_query_rewrite_when_available() {
         .expect("run hyf human find");
     assert!(human_output.status.success());
     let stdout = String::from_utf8(human_output.stdout).expect("utf8 stdout");
-    assert!(stdout.contains("hyf: query rewritten to eggs"));
+    assert!(stdout.contains("1 listing for eggs"));
+    assert!(stdout.contains("Also searched for"));
+    assert!(stdout.contains("henhouse"));
 
     let ndjson_output = cli_command_in(dir.path())
         .env("RADROOTS_HYF_ENABLED", "true")
@@ -247,6 +251,71 @@ fn find_uses_hyf_query_rewrite_when_available() {
     assert_eq!(lines.len(), 1);
     assert!(lines[0].contains("\"title\":\"Fresh Eggs\""));
     assert!(lines[0].contains("\"rewritten_query\":\"eggs\""));
+}
+
+#[test]
+fn find_human_output_tiers_change_information_budget() {
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+
+    seed_trade_product(
+        dir.path(),
+        "00000000-0000-0000-0000-000000000105",
+        "fresh-eggs",
+        "protein",
+        "Fresh Eggs",
+        "Pasture-raised eggs",
+        36,
+        24,
+        Some("Marshall"),
+    );
+
+    let quiet_output = cli_command_in(dir.path())
+        .args(["--quiet", "find", "eggs"])
+        .output()
+        .expect("run quiet find");
+    assert!(quiet_output.status.success());
+    let quiet_stdout = String::from_utf8(quiet_output.stdout).expect("utf8 stdout");
+    assert_eq!(quiet_stdout.trim(), "fresh-eggs");
+
+    let default_output = cli_command_in(dir.path())
+        .args(["find", "eggs"])
+        .output()
+        .expect("run default find");
+    assert!(default_output.status.success());
+    let default_stdout = String::from_utf8(default_output.stdout).expect("utf8 stdout");
+    assert!(default_stdout.contains("1 listing for eggs"));
+    assert!(!default_stdout.contains("Details"));
+    assert!(!default_stdout.contains("Trace"));
+    assert!(!default_stdout.contains("Source"));
+
+    let verbose_output = cli_command_in(dir.path())
+        .args(["--verbose", "find", "eggs"])
+        .output()
+        .expect("run verbose find");
+    assert!(verbose_output.status.success());
+    let verbose_stdout = String::from_utf8(verbose_output.stdout).expect("utf8 stdout");
+    assert!(verbose_stdout.contains("1 listing for eggs"));
+    assert!(verbose_stdout.contains("Details"));
+    assert!(verbose_stdout.contains("Source"));
+    assert!(verbose_stdout.contains("Freshness"));
+    assert!(verbose_stdout.contains("Relay count"));
+    assert!(!verbose_stdout.contains("Trace"));
+
+    let trace_output = cli_command_in(dir.path())
+        .args(["--trace", "find", "eggs"])
+        .output()
+        .expect("run trace find");
+    assert!(trace_output.status.success());
+    let trace_stdout = String::from_utf8(trace_output.stdout).expect("utf8 stdout");
+    assert!(trace_stdout.contains("Details"));
+    assert!(trace_stdout.contains("Trace"));
+    assert!(trace_stdout.contains("Command"));
+    assert!(trace_stdout.contains("\"source\""));
 }
 
 #[test]

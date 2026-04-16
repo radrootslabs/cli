@@ -726,6 +726,81 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
 }
 
 #[test]
+fn order_submit_quiet_reports_submitted_order_id() {
+    let _guard = order_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let account_output = order_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+
+    let new_output = order_command_in(dir.path())
+        .args([
+            "--json",
+            "order",
+            "new",
+            "--listing",
+            "pasture-eggs",
+            "--listing-addr",
+            "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+            "--bin",
+            "bin-1",
+        ])
+        .output()
+        .expect("run order new");
+    assert!(new_output.status.success());
+    let new_json: Value = serde_json::from_slice(new_output.stdout.as_slice()).expect("new json");
+    let order_id = new_json["order_id"].as_str().expect("order id");
+    let buyer_pubkey = new_json["buyer_pubkey"]
+        .as_str()
+        .expect("buyer pubkey")
+        .to_owned();
+
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session(
+                "sess_order_quiet_01",
+                buyer_pubkey.as_str(),
+                &["sign_event"],
+                true
+            )])),
+            "bridge.order.request" => MockRpcResponse::success(serde_json::json!({
+                "deduplicated": false,
+                "job": sample_bridge_job("job_order_quiet_01", "accepted", false, "sess_order_quiet_01"),
+            })),
+            "bridge.job.status" => MockRpcResponse::success(sample_bridge_job(
+                "job_order_quiet_01",
+                "accepted",
+                false,
+                "sess_order_quiet_01",
+            )),
+            other => panic!("unexpected mock rpc method {other}"),
+        }
+    });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+    );
+
+    let submit_output = order_command_in(dir.path())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "quiet-token")
+        .args([
+            "--quiet",
+            "order",
+            "submit",
+            order_id,
+            "--signer-session-id",
+            "sess_order_quiet_01",
+        ])
+        .output()
+        .expect("run quiet order submit");
+    assert!(submit_output.status.success());
+    let stdout = String::from_utf8(submit_output.stdout).expect("utf8 stdout");
+    assert_eq!(stdout.trim(), format!("Order submitted: {order_id}"));
+}
+
+#[test]
 fn order_submit_watch_rejects_json_output() {
     let _guard = order_test_guard();
     let dir = tempdir().expect("tempdir");
@@ -1034,7 +1109,13 @@ managed_account_ref = "{account_id}"
         .output()
         .expect("run order submit");
 
-    assert!(submit_output.status.success());
+    let stdout = String::from_utf8(submit_output.stdout.clone()).expect("stdout utf8");
+    let stderr = String::from_utf8(submit_output.stderr.clone()).expect("stderr utf8");
+    assert!(
+        submit_output.status.success(),
+        "status: {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        submit_output.status.code()
+    );
     let submit_json: Value =
         serde_json::from_slice(submit_output.stdout.as_slice()).expect("submit json");
     assert_eq!(submit_json["state"], "accepted");
