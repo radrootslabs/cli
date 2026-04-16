@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use crate::cli::CliArgs;
 use crate::commands::dispatch;
 use crate::render::render_output;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{OutputFormat, RuntimeConfig};
 use crate::runtime::logging::initialize_logging;
 
 fn main() -> ExitCode {
@@ -39,6 +39,16 @@ fn validate_command_contracts(
     command: &crate::cli::Command,
     config: &RuntimeConfig,
 ) -> Result<(), runtime::RuntimeError> {
+    if let crate::cli::Command::Order(order) = command {
+        if let crate::cli::OrderCommand::Submit(args) = &order.command {
+            if args.watch && config.output.format != OutputFormat::Human {
+                return Err(runtime::RuntimeError::Config(
+                    "`order submit --watch` only supports human output; use `order submit` and `order watch` for machine output".to_owned(),
+                ));
+            }
+        }
+    }
+
     if !command.supports_output_format(config.output.format) {
         return Err(runtime::RuntimeError::Config(format!(
             "`{}` does not support --{}",

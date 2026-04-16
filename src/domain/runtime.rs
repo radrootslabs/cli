@@ -114,6 +114,7 @@ pub enum CommandView {
     OrderList(OrderListView),
     OrderNew(OrderNewView),
     OrderSubmit(OrderSubmitView),
+    OrderSubmitWatch(OrderSubmitWatchView),
     OrderWatch(OrderWatchView),
     RpcSessions(RpcSessionsView),
     RpcStatus(RpcStatusView),
@@ -1232,6 +1233,22 @@ impl OrderSubmitView {
             "error" => CommandDisposition::InternalError,
             _ => CommandDisposition::Success,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderSubmitWatchView {
+    pub submit: OrderSubmitView,
+    pub watch: OrderWatchView,
+}
+
+impl OrderSubmitWatchView {
+    pub fn disposition(&self) -> CommandDisposition {
+        let submit = self.submit.disposition();
+        if submit != CommandDisposition::Success {
+            return submit;
+        }
+        self.watch.disposition()
     }
 }
 

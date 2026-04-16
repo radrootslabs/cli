@@ -122,5 +122,6 @@ fn order_help_prefers_create_view_and_list() {
     assert!(stdout.contains("watch"));
     assert!(stdout.contains("cancel"));
     assert!(stdout.contains("history"));
+    assert!(stdout.contains("radroots order submit ord_demo --watch"));
     assert!(stdout.contains("Compatibility aliases: new, get, ls."));
 }

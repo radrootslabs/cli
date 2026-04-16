@@ -1,134 +1,148 @@
 use crate::cli::{OrderNewArgs, OrderSubmitArgs, OrderWatchArgs, RecordKeyArgs};
-use crate::domain::runtime::{CommandDisposition, CommandOutput, CommandView};
+use crate::domain::runtime::{
+    CommandDisposition, CommandOutput, CommandView, OrderSubmitView, OrderSubmitWatchView,
+};
 use crate::runtime::RuntimeError;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{
+    CapabilityBindingTargetKind, OutputFormat, RuntimeConfig, WRITE_PLANE_TRADE_JSONRPC_CAPABILITY,
+};
 
 pub fn new(config: &RuntimeConfig, args: &OrderNewArgs) -> Result<CommandOutput, RuntimeError> {
-    let view = crate::runtime::order::scaffold(config, args)?;
-    Ok(match view.disposition() {
-        CommandDisposition::Success => CommandOutput::success(CommandView::OrderNew(view)),
-        CommandDisposition::Unconfigured => {
-            CommandOutput::unconfigured(CommandView::OrderNew(view))
-        }
-        CommandDisposition::ExternalUnavailable => {
-            CommandOutput::external_unavailable(CommandView::OrderNew(view))
-        }
-        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::OrderNew(view)),
-        CommandDisposition::InternalError => {
-            CommandOutput::internal_error(CommandView::OrderNew(view))
-        }
-    })
+    let mut view = crate::runtime::order::scaffold(config, args)?;
+    rewrite_order_actions(&mut view.actions);
+    Ok(command_output(
+        view.disposition(),
+        CommandView::OrderNew(view),
+    ))
 }
 
 pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<CommandOutput, RuntimeError> {
-    let view = crate::runtime::order::get(config, args)?;
-    Ok(match view.disposition() {
-        CommandDisposition::Success => CommandOutput::success(CommandView::OrderGet(view)),
-        CommandDisposition::Unconfigured => {
-            CommandOutput::unconfigured(CommandView::OrderGet(view))
-        }
-        CommandDisposition::ExternalUnavailable => {
-            CommandOutput::external_unavailable(CommandView::OrderGet(view))
-        }
-        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::OrderGet(view)),
-        CommandDisposition::InternalError => {
-            CommandOutput::internal_error(CommandView::OrderGet(view))
-        }
-    })
+    let mut view = crate::runtime::order::get(config, args)?;
+    rewrite_order_actions(&mut view.actions);
+    Ok(command_output(
+        view.disposition(),
+        CommandView::OrderGet(view),
+    ))
 }
 
 pub fn list(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
-    let view = crate::runtime::order::list(config)?;
-    Ok(match view.disposition() {
-        CommandDisposition::Success => CommandOutput::success(CommandView::OrderList(view)),
-        CommandDisposition::Unconfigured => {
-            CommandOutput::unconfigured(CommandView::OrderList(view))
-        }
-        CommandDisposition::ExternalUnavailable => {
-            CommandOutput::external_unavailable(CommandView::OrderList(view))
-        }
-        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::OrderList(view)),
-        CommandDisposition::InternalError => {
-            CommandOutput::internal_error(CommandView::OrderList(view))
-        }
-    })
+    let mut view = crate::runtime::order::list(config)?;
+    rewrite_order_actions(&mut view.actions);
+    Ok(command_output(
+        view.disposition(),
+        CommandView::OrderList(view),
+    ))
 }
 
 pub fn submit(
     config: &RuntimeConfig,
     args: &OrderSubmitArgs,
 ) -> Result<CommandOutput, RuntimeError> {
-    let view = crate::runtime::order::submit(config, args)?;
-    Ok(match view.disposition() {
-        CommandDisposition::Success => CommandOutput::success(CommandView::OrderSubmit(view)),
-        CommandDisposition::Unconfigured => {
-            CommandOutput::unconfigured(CommandView::OrderSubmit(view))
-        }
-        CommandDisposition::ExternalUnavailable => {
-            CommandOutput::external_unavailable(CommandView::OrderSubmit(view))
-        }
-        CommandDisposition::Unsupported => {
-            CommandOutput::unsupported(CommandView::OrderSubmit(view))
-        }
-        CommandDisposition::InternalError => {
-            CommandOutput::internal_error(CommandView::OrderSubmit(view))
-        }
-    })
+    let mut view = crate::runtime::order::submit(config, args)?;
+    rewrite_order_actions(&mut view.actions);
+
+    if args.watch
+        && config.output.format == OutputFormat::Human
+        && should_watch_submitted_order(&view)
+    {
+        let watch_config = watch_runtime_config(config);
+        let mut watch = crate::runtime::order::watch(
+            &watch_config,
+            &OrderWatchArgs {
+                key: view.order_id.clone(),
+                frames: None,
+                interval_ms: 1_000,
+            },
+        )?;
+        rewrite_order_actions(&mut watch.actions);
+        let combined = OrderSubmitWatchView {
+            submit: view,
+            watch,
+        };
+        return Ok(command_output(
+            combined.disposition(),
+            CommandView::OrderSubmitWatch(combined),
+        ));
+    }
+
+    Ok(command_output(
+        view.disposition(),
+        CommandView::OrderSubmit(view),
+    ))
 }
 
 pub fn watch(config: &RuntimeConfig, args: &OrderWatchArgs) -> Result<CommandOutput, RuntimeError> {
-    let view = crate::runtime::order::watch(config, args)?;
-    Ok(match view.disposition() {
-        CommandDisposition::Success => CommandOutput::success(CommandView::OrderWatch(view)),
-        CommandDisposition::Unconfigured => {
-            CommandOutput::unconfigured(CommandView::OrderWatch(view))
-        }
-        CommandDisposition::ExternalUnavailable => {
-            CommandOutput::external_unavailable(CommandView::OrderWatch(view))
-        }
-        CommandDisposition::Unsupported => {
-            CommandOutput::unsupported(CommandView::OrderWatch(view))
-        }
-        CommandDisposition::InternalError => {
-            CommandOutput::internal_error(CommandView::OrderWatch(view))
-        }
-    })
+    let mut view = crate::runtime::order::watch(config, args)?;
+    rewrite_order_actions(&mut view.actions);
+    Ok(command_output(
+        view.disposition(),
+        CommandView::OrderWatch(view),
+    ))
 }
 
 pub fn cancel(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<CommandOutput, RuntimeError> {
-    let view = crate::runtime::order::cancel(config, args)?;
-    Ok(match view.disposition() {
-        CommandDisposition::Success => CommandOutput::success(CommandView::OrderCancel(view)),
-        CommandDisposition::Unconfigured => {
-            CommandOutput::unconfigured(CommandView::OrderCancel(view))
-        }
-        CommandDisposition::ExternalUnavailable => {
-            CommandOutput::external_unavailable(CommandView::OrderCancel(view))
-        }
-        CommandDisposition::Unsupported => {
-            CommandOutput::unsupported(CommandView::OrderCancel(view))
-        }
-        CommandDisposition::InternalError => {
-            CommandOutput::internal_error(CommandView::OrderCancel(view))
-        }
-    })
+    let mut view = crate::runtime::order::cancel(config, args)?;
+    rewrite_order_actions(&mut view.actions);
+    Ok(command_output(
+        view.disposition(),
+        CommandView::OrderCancel(view),
+    ))
 }
 
 pub fn history(config: &RuntimeConfig) -> Result<CommandOutput, RuntimeError> {
-    let view = crate::runtime::order::history(config)?;
-    Ok(match view.disposition() {
-        CommandDisposition::Success => CommandOutput::success(CommandView::OrderHistory(view)),
-        CommandDisposition::Unconfigured => {
-            CommandOutput::unconfigured(CommandView::OrderHistory(view))
+    let mut view = crate::runtime::order::history(config)?;
+    rewrite_order_actions(&mut view.actions);
+    Ok(command_output(
+        view.disposition(),
+        CommandView::OrderHistory(view),
+    ))
+}
+
+fn should_watch_submitted_order(view: &OrderSubmitView) -> bool {
+    !matches!(
+        view.state.as_str(),
+        "dry_run" | "error" | "missing" | "unavailable" | "unconfigured"
+    ) && view
+        .job
+        .as_ref()
+        .is_some_and(|job| job.job_id.as_str() != "not_submitted")
+}
+
+fn watch_runtime_config(config: &RuntimeConfig) -> RuntimeConfig {
+    let mut watch_config = config.clone();
+    if let Some(binding) = config.capability_binding(WRITE_PLANE_TRADE_JSONRPC_CAPABILITY) {
+        if binding.target_kind == CapabilityBindingTargetKind::ExplicitEndpoint {
+            watch_config.rpc.url = binding.target.clone();
         }
-        CommandDisposition::ExternalUnavailable => {
-            CommandOutput::external_unavailable(CommandView::OrderHistory(view))
-        }
-        CommandDisposition::Unsupported => {
-            CommandOutput::unsupported(CommandView::OrderHistory(view))
-        }
-        CommandDisposition::InternalError => {
-            CommandOutput::internal_error(CommandView::OrderHistory(view))
-        }
-    })
+    }
+    watch_config
+}
+
+fn rewrite_order_actions(actions: &mut Vec<String>) {
+    for action in actions {
+        *action = rewrite_order_action(action.as_str());
+    }
+}
+
+fn rewrite_order_action(action: &str) -> String {
+    if action == "radroots order new" {
+        return "radroots order create".to_owned();
+    }
+    if action == "radroots order ls" {
+        return "radroots order list".to_owned();
+    }
+    if let Some(key) = action.strip_prefix("radroots order get ") {
+        return format!("radroots order view {key}");
+    }
+    action.to_owned()
+}
+
+fn command_output(disposition: CommandDisposition, view: CommandView) -> CommandOutput {
+    match disposition {
+        CommandDisposition::Success => CommandOutput::success(view),
+        CommandDisposition::Unconfigured => CommandOutput::unconfigured(view),
+        CommandDisposition::ExternalUnavailable => CommandOutput::external_unavailable(view),
+        CommandDisposition::Unsupported => CommandOutput::unsupported(view),
+        CommandDisposition::InternalError => CommandOutput::internal_error(view),
+    }
 }

@@ -7,10 +7,10 @@ use crate::domain::runtime::{
     ListingMutationView, ListingNewView, ListingValidateView, LocalBackupView, LocalExportView,
     LocalInitView, LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView,
     OrderGetView, OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView,
-    OrderWatchView, OrderWorkflowView, RelayListView, RpcSessionsView, RpcStatusView,
-    RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView, SellAddView,
-    SellCheckView, SellDraftMutationView, SellMutationView, SellShowView, SetupView, StatusView,
-    SyncActionView, SyncStatusView, SyncWatchView,
+    OrderSubmitWatchView, OrderWatchView, OrderWorkflowView, RelayListView, RpcSessionsView,
+    RpcStatusView, RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView,
+    SellAddView, SellCheckView, SellDraftMutationView, SellMutationView, SellShowView, SetupView,
+    StatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -100,6 +100,9 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::OrderSubmit(view) => {
             render_order_submit(stdout, view)?;
+        }
+        CommandView::OrderSubmitWatch(view) => {
+            render_order_submit_watch(stdout, view)?;
         }
         CommandView::OrderWatch(view) => {
             render_order_watch(stdout, view)?;
@@ -314,6 +317,10 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::OrderSubmit(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::OrderSubmitWatch(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -1665,6 +1672,75 @@ fn render_order_submit(stdout: &mut dyn Write, view: &OrderSubmitView) -> Result
     }
     writeln!(stdout, "source: {}", view.source)?;
     render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_order_submit_watch(
+    stdout: &mut dyn Write,
+    view: &OrderSubmitWatchView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "{}", order_submit_watch_headline(&view.submit))?;
+    writeln!(stdout)?;
+
+    writeln!(stdout, "Order")?;
+    let mut order_rows = vec![
+        ("ID", view.submit.order_id.clone()),
+        ("State", humanize_machine_label(view.submit.state.as_str())),
+    ];
+    push_row(
+        &mut order_rows,
+        "Listing",
+        first_present([
+            view.submit.listing_lookup.as_deref(),
+            view.submit.listing_addr.as_deref(),
+        ]),
+    );
+    push_row(
+        &mut order_rows,
+        "Buyer",
+        first_present([
+            view.submit.buyer_account_id.as_deref(),
+            view.submit.buyer_pubkey.as_deref(),
+        ]),
+    );
+    render_field_rows(stdout, order_rows.as_slice())?;
+
+    if let Some(job) = &view.submit.job {
+        writeln!(stdout, "Job")?;
+        let mut job_rows = vec![
+            ("Job", job.job_id.clone()),
+            ("State", humanize_machine_label(job.state.as_str())),
+        ];
+        push_row(&mut job_rows, "Event", job.event_id.clone());
+        render_field_rows(stdout, job_rows.as_slice())?;
+    }
+
+    writeln!(stdout, "Watching order {}", view.watch.order_id)?;
+
+    if view.watch.frames.is_empty() {
+        if let Some(reason) = &view.watch.reason {
+            writeln!(stdout)?;
+            writeln!(stdout, "{reason}")?;
+        }
+    } else {
+        for frame in &view.watch.frames {
+            writeln!(stdout)?;
+            writeln!(
+                stdout,
+                "{}",
+                crate::runtime::job::format_clock(frame.observed_at_unix)
+            )?;
+            let rows = vec![
+                ("State", humanize_machine_label(frame.state.as_str())),
+                ("Summary", frame.summary.clone()),
+            ];
+            render_field_rows(stdout, rows.as_slice())?;
+        }
+    }
+
+    if !view.watch.actions.is_empty() {
+        render_item_section(stdout, "Next", &view.watch.actions)?;
+    }
     Ok(())
 }
 
@@ -3206,6 +3282,28 @@ fn non_empty_str(value: &str) -> Option<&str> {
     }
 }
 
+fn humanize_machine_label(value: &str) -> String {
+    value
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(capitalize_ascii_word)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn order_submit_watch_headline(view: &OrderSubmitView) -> &'static str {
+    match view.state.as_str() {
+        "already_submitted" => "Order already submitted",
+        "deduplicated" => "Order already in progress",
+        "dry_run" => "Dry run only",
+        "error" => "Order submit failed",
+        "missing" => "Order draft not found",
+        "unavailable" => "Order submit unavailable",
+        "unconfigured" => "Not ready yet",
+        _ => "Order submitted",
+    }
+}
+
 fn humanize_delivery_method(value: &str) -> String {
     value
         .split('_')
@@ -3620,11 +3718,12 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::MycStatus(_) => "myc status",
         CommandView::NetStatus(_) => "net status",
         CommandView::OrderCancel(_) => "order cancel",
-        CommandView::OrderGet(_) => "order get",
+        CommandView::OrderGet(_) => "order view",
         CommandView::OrderHistory(_) => "order history",
-        CommandView::OrderList(_) => "order ls",
-        CommandView::OrderNew(_) => "order new",
+        CommandView::OrderList(_) => "order list",
+        CommandView::OrderNew(_) => "order create",
         CommandView::OrderSubmit(_) => "order submit",
+        CommandView::OrderSubmitWatch(_) => "order submit --watch",
         CommandView::OrderWatch(_) => "order watch",
         CommandView::RpcSessions(_) => "rpc sessions",
         CommandView::RpcStatus(_) => "rpc status",

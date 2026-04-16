@@ -484,6 +484,79 @@ fn order_get_and_ls_read_local_drafts_and_report_missing() {
 }
 
 #[test]
+fn order_create_view_and_list_aliases_wrap_the_existing_draft_surfaces() {
+    let _guard = order_test_guard();
+    let dir = tempdir().expect("tempdir");
+
+    let account_output = order_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+
+    let create_output = order_command_in(dir.path())
+        .args([
+            "--json",
+            "order",
+            "create",
+            "--listing",
+            "pasture-eggs",
+            "--listing-addr",
+            "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+            "--bin",
+            "bin-1",
+            "--qty",
+            "2",
+        ])
+        .output()
+        .expect("run order create");
+    assert!(create_output.status.success());
+    let create_json: Value =
+        serde_json::from_slice(create_output.stdout.as_slice()).expect("create json");
+    let order_id = create_json["order_id"].as_str().expect("order id");
+    assert_eq!(create_json["state"], "draft_created");
+    assert_eq!(
+        create_json["actions"][0],
+        format!("radroots order view {order_id}")
+    );
+
+    let view_output = order_command_in(dir.path())
+        .args(["--json", "order", "view", order_id])
+        .output()
+        .expect("run order view");
+    assert!(view_output.status.success());
+    let view_json: Value =
+        serde_json::from_slice(view_output.stdout.as_slice()).expect("view json");
+    assert_eq!(view_json["state"], "ready");
+    assert_eq!(view_json["order_id"], order_id);
+
+    let list_output = order_command_in(dir.path())
+        .args(["--json", "order", "list"])
+        .output()
+        .expect("run order list");
+    assert!(list_output.status.success());
+    let list_json: Value =
+        serde_json::from_slice(list_output.stdout.as_slice()).expect("list json");
+    assert_eq!(list_json["count"], 1);
+    assert_eq!(list_json["orders"][0]["id"], order_id);
+}
+
+#[test]
+fn order_list_empty_prefers_the_create_follow_up() {
+    let _guard = order_test_guard();
+    let dir = tempdir().expect("tempdir");
+
+    let output = order_command_in(dir.path())
+        .args(["--json", "order", "list"])
+        .output()
+        .expect("run empty order list");
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("list json");
+    assert_eq!(json["state"], "empty");
+    assert_eq!(json["actions"][0], "radroots order create");
+}
+
+#[test]
 fn order_get_surfaces_recorded_job_metadata_from_the_local_draft_store() {
     let _guard = order_test_guard();
     let dir = tempdir().expect("tempdir");
@@ -650,6 +723,113 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
             .iter()
             .any(|request| { request.auth_header.as_deref() == Some("Bearer test-token") })
     );
+}
+
+#[test]
+fn order_submit_watch_rejects_json_output() {
+    let _guard = order_test_guard();
+    let dir = tempdir().expect("tempdir");
+
+    let output = order_command_in(dir.path())
+        .args(["--json", "order", "submit", "ord_demo", "--watch"])
+        .output()
+        .expect("run order submit watch json");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(stderr.contains("`order submit --watch` only supports human output"));
+}
+
+#[test]
+fn order_submit_watch_appends_human_watch_snapshots() {
+    let _guard = order_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let account_output = order_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let account_json: Value =
+        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
+    let buyer_pubkey = account_json["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("buyer pubkey")
+        .to_owned();
+
+    let create_output = order_command_in(dir.path())
+        .args([
+            "--json",
+            "order",
+            "create",
+            "--listing",
+            "pasture-eggs",
+            "--listing-addr",
+            "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
+            "--bin",
+            "bin-1",
+        ])
+        .output()
+        .expect("run order create");
+    assert!(create_output.status.success());
+    let create_json: Value =
+        serde_json::from_slice(create_output.stdout.as_slice()).expect("create json");
+    let order_id = create_json["order_id"].as_str().expect("order id");
+
+    let server = MockRpcServer::start(move |body, _auth_header| {
+        match body["method"].as_str().unwrap_or_default() {
+            "nip46.session.list" => MockRpcResponse::success(json!([sample_session(
+                "sess_order_watch_01",
+                buyer_pubkey.as_str(),
+                &["sign_event"],
+                true
+            )])),
+            "bridge.order.request" => MockRpcResponse::success(serde_json::json!({
+                "deduplicated": false,
+                "job": sample_bridge_job(
+                    "job_order_watch_01",
+                    "accepted",
+                    false,
+                    "sess_order_watch_01"
+                ),
+            })),
+            "bridge.job.status" => MockRpcResponse::success(sample_bridge_job(
+                "job_order_watch_01",
+                "completed",
+                true,
+                "sess_order_watch_01",
+            )),
+            other => panic!("unexpected mock rpc method {other}"),
+        }
+    });
+    write_workspace_config(
+        dir.path(),
+        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+    );
+
+    let output = order_command_in(dir.path())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "watch-token")
+        .args([
+            "order",
+            "submit",
+            order_id,
+            "--watch",
+            "--signer-session-id",
+            "sess_order_watch_01",
+        ])
+        .output()
+        .expect("run order submit watch");
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        output.status.success(),
+        "status: {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
+    );
+    assert!(stdout.contains("Order submitted"));
+    assert!(stdout.contains("Watching order"));
+    assert!(stdout.contains(order_id));
+    assert!(stdout.contains("Completed"));
+    assert!(stdout.contains("submitted to 2 relays"));
+    assert!(!stdout.contains("order ·"));
 }
 
 #[test]

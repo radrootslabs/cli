@@ -141,6 +141,7 @@ Examples:
   radroots order create --listing sf-tomatoes --bin bin-1 --qty 2
   radroots order view ord_demo
   radroots order list
+  radroots order submit ord_demo --watch
 
 Compatibility aliases: new, get, ls.
 ";
@@ -1106,6 +1107,8 @@ pub struct OrderNewArgs {
 #[derive(Debug, Clone, Args)]
 pub struct OrderSubmitArgs {
     pub key: String,
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub watch: bool,
     #[arg(long)]
     pub idempotency_key: Option<String>,
     #[arg(long = "signer-session-id")]
@@ -2047,8 +2050,26 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
+        let order_create = CliArgs::parse_from(["radroots", "order", "create"]);
+        match order_create.command {
+            Command::Order(args) => match args.command {
+                OrderCommand::New(_) => {}
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
         let order_get = CliArgs::parse_from(["radroots", "order", "get", "ord_demo"]);
         match order_get.command {
+            Command::Order(args) => match args.command {
+                OrderCommand::Get(key) => assert_eq!(key.key, "ord_demo"),
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let order_view = CliArgs::parse_from(["radroots", "order", "view", "ord_demo"]);
+        match order_view.command {
             Command::Order(args) => match args.command {
                 OrderCommand::Get(key) => assert_eq!(key.key, "ord_demo"),
                 _ => panic!("unexpected order subcommand"),
@@ -2065,11 +2086,21 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
+        let order_list = CliArgs::parse_from(["radroots", "order", "list"]);
+        match order_list.command {
+            Command::Order(args) => match args.command {
+                OrderCommand::Ls => {}
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
         let order_submit = CliArgs::parse_from([
             "radroots",
             "order",
             "submit",
             "ord_demo",
+            "--watch",
             "--idempotency-key",
             "submit-1",
             "--signer-session-id",
@@ -2079,6 +2110,7 @@ mod tests {
             Command::Order(args) => match args.command {
                 OrderCommand::Submit(submit) => {
                     assert_eq!(submit.key, "ord_demo");
+                    assert!(submit.watch);
                     assert_eq!(submit.idempotency_key.as_deref(), Some("submit-1"));
                     assert_eq!(submit.signer_session_id.as_deref(), Some("sess_456"));
                 }
@@ -2193,6 +2225,17 @@ mod tests {
         assert_eq!(sell_add.command.display_name(), "sell add");
         assert!(!sell_add.command.supports_dry_run());
 
+        let order_create = CliArgs::parse_from(["radroots", "order", "create"]);
+        assert_eq!(order_create.command.display_name(), "order create");
+        assert!(!order_create.command.supports_dry_run());
+
+        let order_view = CliArgs::parse_from(["radroots", "order", "view", "ord_demo"]);
+        assert_eq!(order_view.command.display_name(), "order view");
+        assert!(order_view.command.supports_dry_run());
+
+        let order_list = CliArgs::parse_from(["radroots", "order", "list"]);
+        assert_eq!(order_list.command.display_name(), "order list");
+        assert!(order_list.command.supports_dry_run());
         let order_watch = CliArgs::parse_from(["radroots", "order", "watch", "ord_demo"]);
         assert!(
             order_watch
