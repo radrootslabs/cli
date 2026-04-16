@@ -56,6 +56,7 @@ pub enum Command {
     Account(AccountArgs),
     Config(ConfigArgs),
     Doctor,
+    Farm(FarmArgs),
     Find(FindArgs),
     Job(JobArgs),
     Listing(ListingArgs),
@@ -83,6 +84,11 @@ impl Command {
                 ConfigCommand::Show => "config show",
             },
             Self::Doctor => "doctor",
+            Self::Farm(farm) => match farm.command {
+                FarmCommand::Setup(_) => "farm setup",
+                FarmCommand::Status(_) => "farm status",
+                FarmCommand::Get(_) => "farm get",
+            },
             Self::Find(_) => "find",
             Self::Job(job) => match job.command {
                 JobCommand::Ls => "job ls",
@@ -179,6 +185,8 @@ impl Command {
             self,
             Self::Account(AccountArgs {
                 command: AccountCommand::New | AccountCommand::Use(_),
+            }) | Self::Farm(FarmArgs {
+                command: FarmCommand::Setup(_),
             }) | Self::Local(LocalArgs {
                 command: LocalCommand::Init | LocalCommand::Export(_) | LocalCommand::Backup(_),
             }) | Self::Sync(SyncArgs {
@@ -253,6 +261,61 @@ pub struct RelayArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum RelayCommand {
     Ls,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmArgs {
+    #[command(subcommand)]
+    pub command: FarmCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum FarmCommand {
+    Setup(FarmSetupArgs),
+    Status(FarmScopedArgs),
+    Get(FarmScopedArgs),
+}
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct FarmScopedArgs {
+    #[arg(long, value_enum)]
+    pub scope: Option<FarmScopeArg>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmSetupArgs {
+    #[arg(long, value_enum)]
+    pub scope: Option<FarmScopeArg>,
+    #[arg(long = "farm-d-tag")]
+    pub farm_d_tag: Option<String>,
+    #[arg(long)]
+    pub name: String,
+    #[arg(long = "display-name")]
+    pub display_name: Option<String>,
+    #[arg(long)]
+    pub about: Option<String>,
+    #[arg(long)]
+    pub website: Option<String>,
+    #[arg(long)]
+    pub picture: Option<String>,
+    #[arg(long)]
+    pub banner: Option<String>,
+    #[arg(long)]
+    pub location: String,
+    #[arg(long)]
+    pub city: Option<String>,
+    #[arg(long)]
+    pub region: Option<String>,
+    #[arg(long)]
+    pub country: Option<String>,
+    #[arg(long = "delivery-method", default_value = "pickup")]
+    pub delivery_method: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum FarmScopeArg {
+    User,
+    Workspace,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -511,10 +574,10 @@ pub struct RecordKeyArgs {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountCommand, CliArgs, Command, ConfigCommand, JobCommand, JobWatchArgs, ListingCommand,
-        LocalCommand, LocalExportFormatArg, MycCommand, NetCommand, OrderCommand, OrderWatchArgs,
-        RelayCommand, RpcCommand, RuntimeCommand, RuntimeConfigCommand, SignerCommand, SyncCommand,
-        SyncWatchArgs,
+        AccountCommand, CliArgs, Command, ConfigCommand, FarmCommand, FarmScopeArg, JobCommand,
+        JobWatchArgs, ListingCommand, LocalCommand, LocalExportFormatArg, MycCommand, NetCommand,
+        OrderCommand, OrderWatchArgs, RelayCommand, RpcCommand, RuntimeCommand,
+        RuntimeConfigCommand, SignerCommand, SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     use clap::Parser;
@@ -679,6 +742,57 @@ mod tests {
         let find = CliArgs::parse_from(["radroots", "find", "tomatoes"]);
         match find.command {
             Command::Find(args) => assert_eq!(args.query, vec!["tomatoes"]),
+            _ => panic!("unexpected command variant"),
+        }
+
+        let farm_setup = CliArgs::parse_from([
+            "radroots",
+            "farm",
+            "setup",
+            "--scope",
+            "workspace",
+            "--name",
+            "La Huerta",
+            "--location",
+            "San Francisco, CA",
+            "--city",
+            "San Francisco",
+            "--region",
+            "CA",
+            "--country",
+            "US",
+            "--delivery-method",
+            "local_delivery",
+        ]);
+        match farm_setup.command {
+            Command::Farm(args) => match args.command {
+                FarmCommand::Setup(setup) => {
+                    assert_eq!(setup.scope, Some(FarmScopeArg::Workspace));
+                    assert_eq!(setup.name, "La Huerta");
+                    assert_eq!(setup.location, "San Francisco, CA");
+                    assert_eq!(setup.city.as_deref(), Some("San Francisco"));
+                    assert_eq!(setup.delivery_method, "local_delivery");
+                }
+                _ => panic!("unexpected farm subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let farm_status = CliArgs::parse_from(["radroots", "farm", "status", "--scope", "user"]);
+        match farm_status.command {
+            Command::Farm(args) => match args.command {
+                FarmCommand::Status(status) => assert_eq!(status.scope, Some(FarmScopeArg::User)),
+                _ => panic!("unexpected farm subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let farm_get = CliArgs::parse_from(["radroots", "farm", "get"]);
+        match farm_get.command {
+            Command::Farm(args) => match args.command {
+                FarmCommand::Get(get) => assert!(get.scope.is_none()),
+                _ => panic!("unexpected farm subcommand"),
+            },
             _ => panic!("unexpected command variant"),
         }
 
@@ -1084,6 +1198,27 @@ mod tests {
         let account_new = CliArgs::parse_from(["radroots", "account", "new"]);
         assert_eq!(account_new.command.display_name(), "account new");
         assert!(!account_new.command.supports_dry_run());
+
+        let farm_setup = CliArgs::parse_from([
+            "radroots",
+            "farm",
+            "setup",
+            "--name",
+            "La Huerta",
+            "--location",
+            "San Francisco, CA",
+        ]);
+        assert_eq!(farm_setup.command.display_name(), "farm setup");
+        assert!(!farm_setup.command.supports_dry_run());
+
+        let farm_status = CliArgs::parse_from(["radroots", "farm", "status"]);
+        assert_eq!(farm_status.command.display_name(), "farm status");
+        assert!(farm_status.command.supports_dry_run());
+        assert!(
+            !farm_status
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
 
         let find = CliArgs::parse_from(["radroots", "find", "eggs"]);
         assert!(find.command.supports_output_format(OutputFormat::Ndjson));

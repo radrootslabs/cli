@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod config;
 pub mod daemon;
+pub mod farm;
 #[allow(dead_code)]
 pub mod farm_config;
 pub mod find;

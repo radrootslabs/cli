@@ -1,5 +1,8 @@
 use std::process::ExitCode;
 
+use radroots_events::farm::RadrootsFarm;
+use radroots_events::listing::RadrootsListingLocation;
+use radroots_events::profile::RadrootsProfile;
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
 use serde::Serialize;
 
@@ -83,6 +86,9 @@ pub enum CommandView {
     AccountWhoami(AccountWhoamiView),
     ConfigShow(ConfigShowView),
     Doctor(DoctorView),
+    FarmGet(FarmGetView),
+    FarmSetup(FarmSetupView),
+    FarmStatus(FarmStatusView),
     Find(FindView),
     JobGet(JobGetView),
     JobList(JobListView),
@@ -629,6 +635,129 @@ pub struct LocalReplicaCountsView {
 pub struct LocalReplicaSyncView {
     pub expected_count: usize,
     pub pending_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmSetupView {
+    pub state: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<FarmConfigSummaryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl FarmSetupView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmStatusView {
+    pub state: String,
+    pub source: String,
+    pub scope: String,
+    pub path: String,
+    pub config_present: bool,
+    pub config_valid: bool,
+    pub account_state: String,
+    pub listing_defaults_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<FarmConfigSummaryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl FarmStatusView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmGetView {
+    pub state: String,
+    pub source: String,
+    pub scope: String,
+    pub path: String,
+    pub config_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document: Option<FarmConfigDocumentView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl FarmGetView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmConfigSummaryView {
+    pub scope: String,
+    pub path: String,
+    pub selected_account_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_account_pubkey: Option<String>,
+    pub farm_d_tag: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_primary: Option<String>,
+    pub delivery_method: String,
+    pub publication: FarmPublicationView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmConfigDocumentView {
+    pub selection: FarmSelectionView,
+    pub profile: RadrootsProfile,
+    pub farm: RadrootsFarm,
+    pub listing_defaults: FarmListingDefaultsView,
+    pub publication: FarmPublicationView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmSelectionView {
+    pub scope: String,
+    pub account: String,
+    pub farm_d_tag: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmListingDefaultsView {
+    pub delivery_method: String,
+    pub location: RadrootsListingLocation,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmPublicationView {
+    pub profile_state: String,
+    pub farm_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub farm_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_published_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub farm_published_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

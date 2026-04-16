@@ -1,4 +1,5 @@
 pub mod doctor;
+pub mod farm;
 pub mod find;
 pub mod identity;
 pub mod job;
@@ -14,9 +15,9 @@ pub mod signer;
 pub mod sync;
 
 use crate::cli::{
-    AccountCommand, Command, ConfigCommand, JobCommand, ListingCommand, LocalCommand, MycCommand,
-    NetCommand, OrderCommand, RelayCommand, RpcCommand, RuntimeCommand, RuntimeConfigCommand,
-    SignerCommand, SyncCommand,
+    AccountCommand, Command, ConfigCommand, FarmCommand, JobCommand, ListingCommand, LocalCommand,
+    MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand, RuntimeCommand,
+    RuntimeConfigCommand, SignerCommand, SyncCommand,
 };
 use crate::domain::runtime::{CommandOutput, CommandView};
 use crate::runtime::RuntimeError;
@@ -51,6 +52,11 @@ pub fn dispatch(
             SignerCommand::Status => Ok(signer::status(config)),
         },
         Command::Doctor => doctor::report(config, logging),
+        Command::Farm(farm_command) => match &farm_command.command {
+            FarmCommand::Setup(args) => farm::setup(config, args),
+            FarmCommand::Status(args) => farm::status(config, args),
+            FarmCommand::Get(args) => farm::get(config, args),
+        },
         Command::Find(find_args) => find::search(config, find_args),
         Command::Job(job) => match &job.command {
             JobCommand::Ls => Ok(job::list(config)),

@@ -2,13 +2,13 @@ use std::io::{self, Write};
 
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
-    FindView, JobGetView, JobListView, JobWatchView, ListingGetView, ListingMutationView,
-    ListingNewView, ListingValidateView, LocalBackupView, LocalExportView, LocalInitView,
-    LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView, OrderGetView,
-    OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderWatchView,
-    OrderWorkflowView, RelayListView, RpcSessionsView, RpcStatusView, RuntimeActionView,
-    RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView, SyncActionView, SyncStatusView,
-    SyncWatchView,
+    FarmConfigSummaryView, FarmGetView, FarmSetupView, FarmStatusView, FindView, JobGetView,
+    JobListView, JobWatchView, ListingGetView, ListingMutationView, ListingNewView,
+    ListingValidateView, LocalBackupView, LocalExportView, LocalInitView, LocalStatusView,
+    NetStatusView, OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryView,
+    OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderWatchView, OrderWorkflowView,
+    RelayListView, RpcSessionsView, RpcStatusView, RuntimeActionView, RuntimeLogsView,
+    RuntimeManagedConfigView, RuntimeStatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -113,6 +113,15 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::Doctor(view) => {
             render_doctor(stdout, view)?;
+        }
+        CommandView::FarmGet(view) => {
+            render_farm_get(stdout, view)?;
+        }
+        CommandView::FarmSetup(view) => {
+            render_farm_setup(stdout, view)?;
+        }
+        CommandView::FarmStatus(view) => {
+            render_farm_status(stdout, view)?;
         }
         CommandView::Find(view) => {
             render_find(stdout, view)?;
@@ -287,6 +296,18 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::Doctor(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::FarmGet(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::FarmSetup(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::FarmStatus(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -2149,6 +2170,126 @@ fn render_sync_watch(stdout: &mut dyn Write, view: &SyncWatchView) -> Result<(),
     Ok(())
 }
 
+fn render_farm_setup(stdout: &mut dyn Write, view: &FarmSetupView) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        match view.state.as_str() {
+            "configured" => "farm · configured",
+            "unconfigured" => "farm · unconfigured",
+            _ => "farm",
+        },
+    )?;
+    if let Some(config) = &view.config {
+        render_farm_summary(stdout, config)?;
+    }
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_farm_status(stdout: &mut dyn Write, view: &FarmStatusView) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        match view.state.as_str() {
+            "ready" => "farm · ready",
+            "unconfigured" => "farm · unconfigured",
+            _ => "farm",
+        },
+    )?;
+    let rows = vec![
+        ("scope", view.scope.clone()),
+        ("path", view.path.clone()),
+        ("config present", yes_no(view.config_present).to_owned()),
+        ("config valid", yes_no(view.config_valid).to_owned()),
+        ("account", view.account_state.clone()),
+        ("listing defaults", view.listing_defaults_state.clone()),
+    ];
+    render_owned_pairs(stdout, "status", rows.as_slice())?;
+    if let Some(config) = &view.config {
+        render_farm_summary(stdout, config)?;
+    }
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_farm_get(stdout: &mut dyn Write, view: &FarmGetView) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        match view.state.as_str() {
+            "ready" => "farm · selected",
+            "unconfigured" => "farm · unconfigured",
+            _ => "farm",
+        },
+    )?;
+    render_owned_pairs(
+        stdout,
+        "config",
+        &[
+            ("scope", view.scope.clone()),
+            ("path", view.path.clone()),
+            ("config present", yes_no(view.config_present).to_owned()),
+        ],
+    )?;
+    if let Some(document) = &view.document {
+        let mut rows = vec![
+            ("account id", document.selection.account.clone()),
+            ("farm d_tag", document.selection.farm_d_tag.clone()),
+            ("name", document.farm.name.clone()),
+            (
+                "delivery method",
+                document.listing_defaults.delivery_method.clone(),
+            ),
+            (
+                "profile publish",
+                document.publication.profile_state.clone(),
+            ),
+            ("farm publish", document.publication.farm_state.clone()),
+        ];
+        if let Some(location) = &document.farm.location {
+            if let Some(primary) = &location.primary {
+                rows.push(("location", primary.clone()));
+            }
+        }
+        render_owned_pairs(stdout, "farm", rows.as_slice())?;
+    }
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_farm_summary(
+    stdout: &mut dyn Write,
+    config: &FarmConfigSummaryView,
+) -> Result<(), RuntimeError> {
+    let mut rows = vec![
+        ("scope", config.scope.clone()),
+        ("path", config.path.clone()),
+        ("account id", config.selected_account_id.clone()),
+        ("farm d_tag", config.farm_d_tag.clone()),
+        ("name", config.name.clone()),
+        ("delivery method", config.delivery_method.clone()),
+        ("profile publish", config.publication.profile_state.clone()),
+        ("farm publish", config.publication.farm_state.clone()),
+    ];
+    if let Some(pubkey) = &config.selected_account_pubkey {
+        rows.insert(3, ("account pubkey", pubkey.clone()));
+    }
+    if let Some(location) = &config.location_primary {
+        rows.push(("location", location.clone()));
+    }
+    render_owned_pairs(stdout, "farm", rows.as_slice())
+}
+
 fn render_local_init(stdout: &mut dyn Write, view: &LocalInitView) -> Result<(), RuntimeError> {
     write_context(stdout, format!("local · {}", view.state).as_str())?;
     render_pairs(
@@ -2559,6 +2700,9 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::AccountWhoami(_) => "account whoami",
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
+        CommandView::FarmGet(_) => "farm get",
+        CommandView::FarmSetup(_) => "farm setup",
+        CommandView::FarmStatus(_) => "farm status",
         CommandView::Find(_) => "find",
         CommandView::JobGet(_) => "job get",
         CommandView::JobList(_) => "job ls",

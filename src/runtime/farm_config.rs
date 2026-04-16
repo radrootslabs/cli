@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use radroots_events::farm::RadrootsFarm;
 use radroots_events::listing::{RadrootsListingDeliveryMethod, RadrootsListingLocation};
 use radroots_events::profile::RadrootsProfile;
+use radroots_events_codec::d_tag::is_d_tag_base64url;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{PathsConfig, RuntimeConfig};
 
 const FARM_CONFIG_FILE_NAME: &str = "farm.toml";
-const SUPPORTED_FARM_CONFIG_VERSION: u32 = 1;
+pub const SUPPORTED_FARM_CONFIG_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -207,6 +208,12 @@ pub fn validate(
             "farm config selection.farm_d_tag must not be empty".to_owned(),
         ));
     }
+    if !is_d_tag_base64url(trimmed(document.selection.farm_d_tag.as_str())) {
+        return Err(RuntimeError::Config(
+            "farm config selection.farm_d_tag must be a 22-character base64url identifier"
+                .to_owned(),
+        ));
+    }
     if trimmed(document.profile.name.as_str()).is_empty() {
         return Err(RuntimeError::Config(
             "farm config profile.name must not be empty".to_owned(),
@@ -215,6 +222,11 @@ pub fn validate(
     if trimmed(document.farm.d_tag.as_str()).is_empty() {
         return Err(RuntimeError::Config(
             "farm config farm.d_tag must not be empty".to_owned(),
+        ));
+    }
+    if !is_d_tag_base64url(trimmed(document.farm.d_tag.as_str())) {
+        return Err(RuntimeError::Config(
+            "farm config farm.d_tag must be a 22-character base64url identifier".to_owned(),
         ));
     }
     if trimmed(document.farm.name.as_str()).is_empty() {
