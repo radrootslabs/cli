@@ -1,6 +1,6 @@
 use clap::{
-    error::ErrorKind, ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand,
-    ValueEnum,
+    ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum,
+    error::ErrorKind,
 };
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -339,10 +339,9 @@ fn parse_output_format_value(value: &OsStr) -> Result<OutputFormatArg, clap::Err
 
 fn long_option_name(arg: &OsStr) -> Option<&str> {
     let token = arg.to_str()?;
-    token.strip_prefix("--").map(|rest| {
-        rest.split_once('=')
-            .map_or(rest, |(flag, _value)| flag)
-    })
+    token
+        .strip_prefix("--")
+        .map(|rest| rest.split_once('=').map_or(rest, |(flag, _value)| flag))
 }
 
 fn split_long_option(arg: &OsStr) -> Option<(&str, &OsStr)> {
@@ -615,7 +614,11 @@ pub struct AccountArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AccountCommand {
-    #[command(name = "create", visible_alias = "new", about = "Create a local account")]
+    #[command(
+        name = "create",
+        visible_alias = "new",
+        about = "Create a local account"
+    )]
     New,
     #[command(
         name = "view",
@@ -625,7 +628,11 @@ pub enum AccountCommand {
     Whoami,
     #[command(name = "list", visible_alias = "ls", about = "List local accounts")]
     Ls,
-    #[command(name = "select", visible_alias = "use", about = "Select a local account")]
+    #[command(
+        name = "select",
+        visible_alias = "use",
+        about = "Select a local account"
+    )]
     Use(AccountUseArgs),
 }
 
@@ -680,7 +687,11 @@ pub enum FarmCommand {
     Publish(FarmPublishArgs),
     #[command(about = "Create or update a farm draft in one command")]
     Setup(FarmSetupArgs),
-    #[command(name = "check", visible_alias = "status", about = "Check farm readiness")]
+    #[command(
+        name = "check",
+        visible_alias = "status",
+        about = "Check farm readiness"
+    )]
     Status(FarmScopedArgs),
     #[command(name = "show", visible_alias = "get", about = "Show the farm draft")]
     Get(FarmScopedArgs),
@@ -996,7 +1007,11 @@ pub struct OrderArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum OrderCommand {
-    #[command(name = "create", visible_alias = "new", about = "Create a local order draft")]
+    #[command(
+        name = "create",
+        visible_alias = "new",
+        about = "Create a local order draft"
+    )]
     New(OrderNewArgs),
     #[command(name = "view", visible_alias = "get", about = "Show one order")]
     Get(RecordKeyArgs),
@@ -1096,8 +1111,8 @@ mod tests {
         AccountCommand, CliArgs, Command, ConfigCommand, FarmCommand, FarmScopeArg, JobCommand,
         JobWatchArgs, ListingCommand, LocalCommand, LocalExportFormatArg, MarketCommand,
         MycCommand, NetCommand, OrderCommand, OrderWatchArgs, OutputFormatArg, RelayCommand,
-        RpcCommand, RuntimeCommand, RuntimeConfigCommand, SellCommand, SetupRoleArg,
-        SignerCommand, SyncCommand, SyncWatchArgs,
+        RpcCommand, RuntimeCommand, RuntimeConfigCommand, SellCommand, SetupRoleArg, SignerCommand,
+        SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     #[test]
@@ -1358,7 +1373,8 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
-        let order_create = CliArgs::parse_from(["radroots", "order", "create", "--listing", "eggs"]);
+        let order_create =
+            CliArgs::parse_from(["radroots", "order", "create", "--listing", "eggs"]);
         match order_create.command {
             Command::Order(order) => match order.command {
                 OrderCommand::New(args) => assert_eq!(args.listing.as_deref(), Some("eggs")),
@@ -1953,15 +1969,21 @@ mod tests {
     #[test]
     fn command_contract_helpers_report_supported_modes() {
         let config_show = CliArgs::parse_from(["radroots", "config", "show"]);
-        assert!(config_show
-            .command
-            .supports_output_format(OutputFormat::Human));
-        assert!(config_show
-            .command
-            .supports_output_format(OutputFormat::Json));
-        assert!(!config_show
-            .command
-            .supports_output_format(OutputFormat::Ndjson));
+        assert!(
+            config_show
+                .command
+                .supports_output_format(OutputFormat::Human)
+        );
+        assert!(
+            config_show
+                .command
+                .supports_output_format(OutputFormat::Json)
+        );
+        assert!(
+            !config_show
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
         assert!(config_show.command.supports_dry_run());
 
         let account_create = CliArgs::parse_from(["radroots", "account", "create"]);
@@ -1983,9 +2005,11 @@ mod tests {
         let farm_check = CliArgs::parse_from(["radroots", "farm", "check"]);
         assert_eq!(farm_check.command.display_name(), "farm check");
         assert!(farm_check.command.supports_dry_run());
-        assert!(!farm_check
-            .command
-            .supports_output_format(OutputFormat::Ndjson));
+        assert!(
+            !farm_check
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
 
         let farm_publish = CliArgs::parse_from(["radroots", "farm", "publish"]);
         assert_eq!(farm_publish.command.display_name(), "farm publish");
@@ -1996,23 +2020,29 @@ mod tests {
 
         let market_search = CliArgs::parse_from(["radroots", "market", "search", "eggs"]);
         assert_eq!(market_search.command.display_name(), "market search");
-        assert!(market_search
-            .command
-            .supports_output_format(OutputFormat::Ndjson));
+        assert!(
+            market_search
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
 
         let sync_watch = CliArgs::parse_from(["radroots", "sync", "watch", "--frames", "1"]);
-        assert!(sync_watch
-            .command
-            .supports_output_format(OutputFormat::Ndjson));
+        assert!(
+            sync_watch
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
 
         let sell_add = CliArgs::parse_from(["radroots", "sell", "add"]);
         assert_eq!(sell_add.command.display_name(), "sell add");
         assert!(!sell_add.command.supports_dry_run());
 
         let order_watch = CliArgs::parse_from(["radroots", "order", "watch", "ord_demo"]);
-        assert!(order_watch
-            .command
-            .supports_output_format(OutputFormat::Ndjson));
+        assert!(
+            order_watch
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
 
         let order_submit = CliArgs::parse_from(["radroots", "order", "submit", "ord_demo"]);
         assert_eq!(order_submit.command.display_name(), "order submit");
@@ -2029,8 +2059,10 @@ mod tests {
         let runtime_status = CliArgs::parse_from(["radroots", "runtime", "status", "radrootsd"]);
         assert_eq!(runtime_status.command.display_name(), "runtime status");
         assert!(runtime_status.command.supports_dry_run());
-        assert!(!runtime_status
-            .command
-            .supports_output_format(OutputFormat::Ndjson));
+        assert!(
+            !runtime_status
+                .command
+                .supports_output_format(OutputFormat::Ndjson)
+        );
     }
 }

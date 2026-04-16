@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use assert_cmd::prelude::*;
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tempfile::tempdir;
 
 fn data_root(workdir: &Path) -> std::path::PathBuf {
@@ -1227,10 +1227,12 @@ fn listing_publish_without_matching_signer_session_exits_unconfigured() {
     let publish_json: Value =
         serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
     assert_eq!(publish_json["state"], "unconfigured");
-    assert!(publish_json["reason"]
-        .as_str()
-        .expect("reason")
-        .contains("no authorized signer session matched seller pubkey"));
+    assert!(
+        publish_json["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("no authorized signer session matched seller pubkey")
+    );
 
     let recorded = requests.lock().expect("requests");
     assert_eq!(recorded.len(), 1);
@@ -1324,10 +1326,12 @@ fn listing_publish_rejects_requested_session_that_mismatches_seller_pubkey() {
     let publish_json: Value =
         serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
     assert_eq!(publish_json["state"], "unconfigured");
-    assert!(publish_json["reason"]
-        .as_str()
-        .expect("reason")
-        .contains("does not match seller pubkey"));
+    assert!(
+        publish_json["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("does not match seller pubkey")
+    );
 
     let recorded = requests.lock().expect("requests");
     assert_eq!(recorded.len(), 1);
@@ -1408,10 +1412,11 @@ fn listing_publish_requires_authoritative_write_plane_binding() {
     let publish_json: Value =
         serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
     assert_eq!(publish_json["state"], "unconfigured");
-    assert!(publish_json["reason"]
-        .as_str()
-        .expect("reason")
-        .contains("explicit write-plane capability binding or managed radrootsd instance `local`"));
+    assert!(
+        publish_json["reason"].as_str().expect("reason").contains(
+            "explicit write-plane capability binding or managed radrootsd instance `local`"
+        )
+    );
     assert!(requests.lock().expect("requests").is_empty());
 }
 

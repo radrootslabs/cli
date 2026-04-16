@@ -18,6 +18,7 @@ pub mod paths;
 pub mod provider;
 pub mod signer;
 pub mod sync;
+pub mod workflow;
 
 use std::process::ExitCode;
 

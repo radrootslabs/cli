@@ -8,11 +8,11 @@ use crate::domain::runtime::{
     LocalInitView, LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView,
     OrderGetView, OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView,
     OrderWatchView, OrderWorkflowView, RelayListView, RpcSessionsView, RpcStatusView,
-    RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView,
-    SyncActionView, SyncStatusView, SyncWatchView,
+    RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView, SetupView,
+    StatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
-use crate::runtime::config::{OutputConfig, OutputFormat};
 use crate::runtime::RuntimeError;
+use crate::runtime::config::{OutputConfig, OutputFormat};
 
 const THIN_RULE: &str = "────────────────────────────────────────────────────";
 
@@ -178,6 +178,9 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         CommandView::RuntimeStatus(view) => {
             render_runtime_status(stdout, view)?;
         }
+        CommandView::Setup(view) => {
+            render_setup(stdout, view)?;
+        }
         CommandView::SignerStatus(view) => {
             write_context(
                 stdout,
@@ -211,6 +214,9 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
                 writeln!(stdout)?;
                 render_myc_status(stdout, myc, false)?;
             }
+        }
+        CommandView::Status(view) => {
+            render_status_summary(stdout, view)?;
         }
         CommandView::SyncPull(view) => {
             render_sync_action(stdout, view)?;
@@ -387,7 +393,15 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
+        CommandView::Setup(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandView::SignerStatus(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::Status(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -496,19 +510,11 @@ fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<()
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value {
-        "yes"
-    } else {
-        "no"
-    }
+    if value { "yes" } else { "no" }
 }
 
 fn present_absent(value: bool) -> &'static str {
-    if value {
-        "present"
-    } else {
-        "absent"
-    }
+    if value { "present" } else { "absent" }
 }
 
 fn render_account_list(stdout: &mut dyn Write, view: &AccountListView) -> Result<(), RuntimeError> {
@@ -2454,6 +2460,81 @@ fn render_local_status(stdout: &mut dyn Write, view: &LocalStatusView) -> Result
     Ok(())
 }
 
+fn render_setup(stdout: &mut dyn Write, view: &SetupView) -> Result<(), RuntimeError> {
+    render_checklist_summary(
+        stdout,
+        match view.state.as_str() {
+            "unconfigured" => "Not ready yet",
+            _ => "Setup saved",
+        },
+        &view.ready,
+        &view.needs_attention,
+        &view.next,
+    )
+}
+
+fn render_status_summary(stdout: &mut dyn Write, view: &StatusView) -> Result<(), RuntimeError> {
+    render_checklist_summary(
+        stdout,
+        match view.state.as_str() {
+            "unconfigured" => "Not ready yet",
+            _ => "Status",
+        },
+        &view.ready,
+        &view.needs_attention,
+        &view.next,
+    )
+}
+
+fn render_checklist_summary(
+    stdout: &mut dyn Write,
+    headline: &str,
+    ready: &[String],
+    needs_attention: &[String],
+    next: &[String],
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "{headline}")?;
+
+    let mut wrote_section = false;
+    if !ready.is_empty() || !needs_attention.is_empty() || !next.is_empty() {
+        writeln!(stdout)?;
+    }
+
+    if !ready.is_empty() {
+        render_item_section(stdout, "Ready", ready)?;
+        wrote_section = true;
+    }
+
+    if !needs_attention.is_empty() {
+        if wrote_section {
+            writeln!(stdout)?;
+        }
+        render_item_section(stdout, "Needs attention", needs_attention)?;
+        wrote_section = true;
+    }
+
+    if !next.is_empty() {
+        if wrote_section {
+            writeln!(stdout)?;
+        }
+        render_item_section(stdout, "Next", next)?;
+    }
+
+    Ok(())
+}
+
+fn render_item_section(
+    stdout: &mut dyn Write,
+    title: &str,
+    items: &[String],
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "{title}")?;
+    for item in items {
+        writeln!(stdout, "  {item}")?;
+    }
+    Ok(())
+}
+
 fn render_local_backup(stdout: &mut dyn Write, view: &LocalBackupView) -> Result<(), RuntimeError> {
     write_context(stdout, format!("local · {}", view.state).as_str())?;
     let size_bytes = view.size_bytes.to_string();
@@ -2837,7 +2918,9 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::RuntimeConfigShow(_) => "runtime config show",
         CommandView::RuntimeLogs(_) => "runtime logs",
         CommandView::RuntimeStatus(_) => "runtime status",
+        CommandView::Setup(_) => "setup",
         CommandView::SignerStatus(_) => "signer status",
+        CommandView::Status(_) => "status",
         CommandView::SyncPull(_) => "sync pull",
         CommandView::SyncPush(_) => "sync push",
         CommandView::SyncStatus(_) => "sync status",
@@ -2847,15 +2930,15 @@ fn human_command_name(view: &CommandView) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_human_to, render_ndjson_to, render_table, Table};
+    use super::{Table, render_human_to, render_ndjson_to, render_table};
     use crate::commands::runtime;
     use crate::domain::runtime::{
         AccountListView, CommandOutput, CommandView, DoctorCheckView, DoctorView, MycStatusView,
         RelayEntryView, RelayListView,
     };
     use crate::runtime::config::{
-        AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, LocalConfig,
-        InteractionConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
+        AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
+        LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
         PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
         SignerBackend, SignerConfig, Verbosity,
     };
@@ -2976,10 +3059,11 @@ mod tests {
             "/workspace/.radroots/config.toml"
         );
         assert_eq!(view.account.selector.as_deref(), Some("acct_demo"));
-        assert!(view
-            .account
-            .store_path
-            .ends_with(".radroots/data/shared/accounts/store.json"));
+        assert!(
+            view.account
+                .store_path
+                .ends_with(".radroots/data/shared/accounts/store.json")
+        );
         assert_eq!(view.relay.count, 2);
         assert_eq!(view.relay.publish_policy, "any");
         assert!(!view.hyf.enabled);
@@ -2989,10 +3073,11 @@ mod tests {
             view.account.secret_backend.contract_default_backend,
             "host_vault"
         );
-        assert!(view
-            .local
-            .replica_db_path
-            .ends_with(".radroots/data/apps/cli/replica/replica.sqlite"));
+        assert!(
+            view.local
+                .replica_db_path
+                .ends_with(".radroots/data/apps/cli/replica/replica.sqlite")
+        );
     }
 
     #[test]
@@ -3127,9 +3212,11 @@ mod tests {
         ));
         let mut buffer = Vec::new();
         let error = render_ndjson_to(&mut buffer, &output).expect_err("unsupported ndjson");
-        assert!(error
-            .to_string()
-            .contains("`config show` does not support --ndjson"));
+        assert!(
+            error
+                .to_string()
+                .contains("`config show` does not support --ndjson")
+        );
     }
 
     #[test]

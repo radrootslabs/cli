@@ -1,7 +1,7 @@
 use crate::cli::{ListingFileArgs, ListingMutationArgs, ListingNewArgs, RecordKeyArgs};
 use crate::domain::runtime::{CommandOutput, CommandView};
-use crate::runtime::config::RuntimeConfig;
 use crate::runtime::RuntimeError;
+use crate::runtime::config::RuntimeConfig;
 
 pub fn new(config: &RuntimeConfig, args: &ListingNewArgs) -> Result<CommandOutput, RuntimeError> {
     let view = crate::runtime::listing::scaffold(config, args)?;

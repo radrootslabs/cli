@@ -1699,22 +1699,15 @@ mod tests {
                 .contains("--quiet, --verbose, and --trace")
         );
 
-        let conflicting_aliases = CliArgs::parse_from([
-            "radroots",
-            "--output",
-            "json",
-            "--json",
-            "config",
-            "show",
-        ]);
-        let error =
-            RuntimeConfig::resolve_with_env_file(&conflicting_aliases, &env, &EnvFileValues::default())
-                .expect_err("conflicting output aliases");
-        assert!(
-            error
-                .to_string()
-                .contains("--output, --json, and --ndjson")
-        );
+        let conflicting_aliases =
+            CliArgs::parse_from(["radroots", "--output", "json", "--json", "config", "show"]);
+        let error = RuntimeConfig::resolve_with_env_file(
+            &conflicting_aliases,
+            &env,
+            &EnvFileValues::default(),
+        )
+        .expect_err("conflicting output aliases");
+        assert!(error.to_string().contains("--output, --json, and --ndjson"));
     }
 
     #[test]

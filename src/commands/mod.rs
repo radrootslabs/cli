@@ -13,6 +13,7 @@ pub mod rpc;
 pub mod runtime;
 pub mod signer;
 pub mod sync;
+pub mod workflow;
 
 use crate::cli::{
     AccountCommand, Command, ConfigCommand, FarmCommand, JobCommand, ListingCommand, LocalCommand,
@@ -118,9 +119,7 @@ pub fn dispatch(
                 "`sell restock` will land in the draft-mutation slice; edit the draft file directly for now",
             ),
         },
-        Command::Setup(_setup) => planned_command(
-            "`setup` will land in the workflow slice; use `account`, `local`, and `farm` directly for now",
-        ),
+        Command::Setup(setup) => workflow::setup(config, setup),
         Command::Runtime(runtime_command) => match &runtime_command.command {
             RuntimeCommand::Install(args) => runtime::install(config, args),
             RuntimeCommand::Uninstall(args) => runtime::uninstall(config, args),
@@ -134,9 +133,7 @@ pub fn dispatch(
                 RuntimeConfigCommand::Set(args) => runtime::config_set(config, args),
             },
         },
-        Command::Status => planned_command(
-            "`status` will land in the workflow slice; use `doctor` for readiness details right now",
-        ),
+        Command::Status => workflow::status(config),
         Command::Sync(sync) => match &sync.command {
             SyncCommand::Status => sync::status(config),
             SyncCommand::Pull => sync::pull(config),

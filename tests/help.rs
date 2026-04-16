@@ -71,7 +71,11 @@ fn market_help_is_example_first() {
     assert!(stdout.contains("search"));
     assert!(stdout.contains("view"));
     assert!(stdout.contains("radroots market search tomatoes"));
-    assert!(stdout.contains("Compatibility paths: `sync pull`, `find`, and `listing get` remain available."));
+    assert!(
+        stdout.contains(
+            "Compatibility paths: `sync pull`, `find`, and `listing get` remain available."
+        )
+    );
 }
 
 #[test]
@@ -91,7 +95,11 @@ fn sell_help_mentions_listing_compatibility() {
     assert!(stdout.contains("pause"));
     assert!(stdout.contains("reprice"));
     assert!(stdout.contains("restock"));
-    assert!(stdout.contains("Compatibility path: the advanced `listing` command family remains available."));
+    assert!(
+        stdout.contains(
+            "Compatibility path: the advanced `listing` command family remains available."
+        )
+    );
 }
 
 #[test]

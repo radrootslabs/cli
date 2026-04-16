@@ -118,7 +118,9 @@ pub enum CommandView {
     RuntimeConfigShow(RuntimeManagedConfigView),
     RuntimeLogs(RuntimeLogsView),
     RuntimeStatus(RuntimeStatusView),
+    Setup(SetupView),
     SignerStatus(SignerStatusView),
+    Status(StatusView),
     SyncPull(SyncActionView),
     SyncPush(SyncActionView),
     SyncStatus(SyncStatusView),
@@ -647,6 +649,62 @@ pub struct LocalReplicaCountsView {
 pub struct LocalReplicaSyncView {
     pub expected_count: usize,
     pub pending_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SetupView {
+    pub state: String,
+    pub source: String,
+    pub role: String,
+    pub selected_account_id: String,
+    pub local_state: String,
+    pub local_root: String,
+    pub relay_state: String,
+    pub relay_count: usize,
+    pub farm_state: String,
+    #[serde(default)]
+    pub ready: Vec<String>,
+    #[serde(default)]
+    pub needs_attention: Vec<String>,
+    #[serde(default)]
+    pub next: Vec<String>,
+}
+
+impl SetupView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusView {
+    pub state: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_account_id: Option<String>,
+    pub local_state: String,
+    pub local_root: String,
+    pub relay_state: String,
+    pub relay_count: usize,
+    pub farm_state: String,
+    #[serde(default)]
+    pub ready: Vec<String>,
+    #[serde(default)]
+    pub needs_attention: Vec<String>,
+    #[serde(default)]
+    pub next: Vec<String>,
+}
+
+impl StatusView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
