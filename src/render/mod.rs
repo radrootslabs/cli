@@ -1688,43 +1688,72 @@ fn render_job_get(stdout: &mut dyn Write, view: &JobGetView) -> Result<(), Runti
 }
 
 fn render_job_watch(stdout: &mut dyn Write, view: &JobWatchView) -> Result<(), RuntimeError> {
-    write_context(stdout, format!("activity · watch {}", view.job_id).as_str())?;
-    if view.frames.is_empty() {
-        if let Some(reason) = &view.reason {
-            writeln!(stdout, "{reason}")?;
-            writeln!(stdout)?;
-        } else {
-            writeln!(stdout, "no frames collected")?;
-            writeln!(stdout)?;
+    match view.state.as_str() {
+        "unconfigured" => {
+            writeln!(stdout, "Not ready yet")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
         }
-    } else {
-        let table = Table {
-            headers: &[
-                "frame", "time", "state", "signer", "session", "terminal", "summary",
-            ],
-            rows: view
-                .frames
-                .iter()
-                .map(|frame| {
-                    vec![
-                        frame.sequence.to_string(),
-                        crate::runtime::job::format_clock(frame.observed_at_unix),
-                        frame.state.clone(),
-                        frame.signer.clone(),
-                        frame.signer_session_id.clone().unwrap_or_default(),
-                        yes_no(frame.terminal).to_owned(),
-                        frame.summary.clone(),
-                    ]
-                })
-                .collect(),
-        };
-        render_table(stdout, &table)?;
-        writeln!(stdout)?;
+        "unavailable" => {
+            writeln!(stdout, "Unavailable right now")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "error" => {
+            writeln!(stdout, "Could not complete the command")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        _ => {
+            writeln!(stdout, "Watching job {}", view.job_id)?;
+            if view.frames.is_empty() {
+                if let Some(reason) = &view.reason {
+                    writeln!(stdout)?;
+                    writeln!(stdout, "{reason}")?;
+                }
+            } else {
+                for frame in &view.frames {
+                    writeln!(stdout)?;
+                    writeln!(
+                        stdout,
+                        "{}",
+                        crate::runtime::job::format_clock(frame.observed_at_unix)
+                    )?;
+                    let mut rows = vec![
+                        ("State", humanize_machine_label(frame.state.as_str())),
+                        ("Summary", frame.summary.clone()),
+                        ("Signer", humanize_machine_label(frame.signer.as_str())),
+                    ];
+                    push_row(&mut rows, "Session", frame.signer_session_id.clone());
+                    if frame.terminal {
+                        rows.push(("Terminal", "Yes".to_owned()));
+                    }
+                    render_field_rows(stdout, rows.as_slice())?;
+                }
+            }
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
     }
-    writeln!(stdout, "interval ms: {}", view.interval_ms)?;
-    writeln!(stdout, "rpc url: {}", view.rpc_url)?;
-    writeln!(stdout, "source: {}", view.source)?;
-    render_actions(stdout, &view.actions)?;
     Ok(())
 }
 
@@ -2065,55 +2094,87 @@ fn render_order_submit_watch(
 }
 
 fn render_order_watch(stdout: &mut dyn Write, view: &OrderWatchView) -> Result<(), RuntimeError> {
-    let context = match view.state.as_str() {
-        "missing" => format!("order · {} watch missing", view.order_id),
-        "not_submitted" => format!("order · {} not submitted", view.order_id),
-        "unconfigured" => format!("order · {} watch unconfigured", view.order_id),
-        "unavailable" => format!("order · {} watch unavailable", view.order_id),
-        "error" => format!("order · {} watch error", view.order_id),
-        "watching" => format!("order · {} watching", view.order_id),
-        _ => format!("order · {} {}", view.order_id, view.state),
-    };
-    write_context(stdout, context.as_str())?;
-
-    let interval = format!("{} ms", view.interval_ms);
-    let mut rows = vec![("order id", view.order_id.clone()), ("interval", interval)];
-    if let Some(job_id) = &view.job_id {
-        rows.push(("job id", job_id.clone()));
+    match view.state.as_str() {
+        "missing" => {
+            writeln!(stdout, "Not found")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "not_submitted" | "unconfigured" => {
+            writeln!(stdout, "Not ready yet")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "unavailable" => {
+            writeln!(stdout, "Unavailable right now")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "error" => {
+            writeln!(stdout, "Could not complete the command")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        _ => {
+            writeln!(stdout, "Watching order {}", view.order_id)?;
+            if view.frames.is_empty() {
+                if let Some(reason) = &view.reason {
+                    writeln!(stdout)?;
+                    writeln!(stdout, "{reason}")?;
+                }
+            } else {
+                for frame in &view.frames {
+                    writeln!(stdout)?;
+                    writeln!(
+                        stdout,
+                        "{}",
+                        crate::runtime::job::format_clock(frame.observed_at_unix)
+                    )?;
+                    let mut rows = vec![
+                        ("State", humanize_machine_label(frame.state.as_str())),
+                        ("Summary", frame.summary.clone()),
+                    ];
+                    push_row(
+                        &mut rows,
+                        "Signer",
+                        Some(humanize_machine_label(frame.signer_mode.as_str())),
+                    );
+                    push_row(&mut rows, "Session", frame.signer_session_id.clone());
+                    if frame.terminal {
+                        rows.push(("Terminal", "Yes".to_owned()));
+                    }
+                    render_field_rows(stdout, rows.as_slice())?;
+                }
+            }
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
     }
-    render_owned_pairs(stdout, "watch", rows.as_slice())?;
-    if !view.frames.is_empty() {
-        let table = Table {
-            headers: &[
-                "frame", "time", "state", "signer", "session", "terminal", "summary",
-            ],
-            rows: view
-                .frames
-                .iter()
-                .map(|frame| {
-                    vec![
-                        frame.sequence.to_string(),
-                        crate::runtime::job::format_clock(frame.observed_at_unix),
-                        frame.state.clone(),
-                        frame.signer_mode.clone(),
-                        frame.signer_session_id.clone().unwrap_or_default(),
-                        yes_no(frame.terminal).to_owned(),
-                        frame.summary.clone(),
-                    ]
-                })
-                .collect(),
-        };
-        render_table(stdout, &table)?;
-        writeln!(stdout)?;
-    }
-    if let Some(workflow) = &view.workflow {
-        render_order_workflow(stdout, workflow)?;
-    }
-    if let Some(reason) = &view.reason {
-        writeln!(stdout, "reason: {reason}")?;
-    }
-    writeln!(stdout, "source: {}", view.source)?;
-    render_actions(stdout, &view.actions)?;
     Ok(())
 }
 
@@ -3070,36 +3131,69 @@ fn render_market_update(stdout: &mut dyn Write, view: &SyncActionView) -> Result
 }
 
 fn render_sync_watch(stdout: &mut dyn Write, view: &SyncWatchView) -> Result<(), RuntimeError> {
-    write_context(stdout, "activity · sync watch")?;
-    if view.frames.is_empty() {
-        writeln!(stdout, "no sync frames collected")?;
-        writeln!(stdout)?;
-    } else {
-        let table = Table {
-            headers: &["frame", "status", "freshness", "pending", "relays"],
-            rows: view
-                .frames
-                .iter()
-                .map(|frame| {
-                    vec![
-                        frame.sequence.to_string(),
-                        frame.state.clone(),
-                        frame.freshness.display.clone(),
-                        frame.queue.pending_count.to_string(),
-                        frame.relay_count.to_string(),
-                    ]
-                })
-                .collect(),
-        };
-        render_table(stdout, &table)?;
-        writeln!(stdout)?;
+    match view.state.as_str() {
+        "unconfigured" => {
+            writeln!(stdout, "Not ready yet")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "unavailable" => {
+            writeln!(stdout, "Unavailable right now")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "error" => {
+            writeln!(stdout, "Could not complete the command")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        _ => {
+            writeln!(stdout, "Watching market sync")?;
+            if view.frames.is_empty() {
+                if let Some(reason) = &view.reason {
+                    writeln!(stdout)?;
+                    writeln!(stdout, "{reason}")?;
+                }
+            } else {
+                for frame in &view.frames {
+                    writeln!(stdout)?;
+                    writeln!(
+                        stdout,
+                        "{}",
+                        crate::runtime::job::format_clock(frame.observed_at)
+                    )?;
+                    let rows = vec![
+                        ("State", humanize_machine_label(frame.state.as_str())),
+                        ("Relays", frame.relay_count.to_string()),
+                        ("Updated", frame.freshness.display.clone()),
+                        ("Queue", format!("{} pending", frame.queue.pending_count)),
+                    ];
+                    render_field_rows(stdout, rows.as_slice())?;
+                }
+            }
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
     }
-    writeln!(stdout, "interval ms: {}", view.interval_ms)?;
-    if let Some(reason) = &view.reason {
-        writeln!(stdout, "reason: {reason}")?;
-    }
-    writeln!(stdout, "source: {}", view.source)?;
-    render_actions(stdout, &view.actions)?;
     Ok(())
 }
 

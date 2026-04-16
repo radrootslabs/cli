@@ -165,3 +165,35 @@ fn sync_watch_ndjson_emits_one_frame_per_poll() {
     assert!(lines[1].contains("\"sequence\":2"));
     assert!(lines[1].contains("\"relay_count\":2"));
 }
+
+#[test]
+fn sync_watch_human_appends_readable_snapshots_without_screen_clear() {
+    let dir = tempdir().expect("tempdir");
+    let init = cli_command_in(dir.path())
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+    let config_dir = dir.path().join(".radroots");
+    fs::create_dir_all(&config_dir).expect("workspace config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        "[relay]\nurls = [\"wss://relay.one\", \"wss://relay.two\"]\npublish_policy = \"any\"\n",
+    )
+    .expect("write workspace config");
+
+    let output = cli_command_in(dir.path())
+        .args(["sync", "watch", "--frames", "2", "--interval-ms", "1"])
+        .output()
+        .expect("run human sync watch");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("Watching market sync"));
+    assert!(stdout.contains("State"));
+    assert!(stdout.contains("Ready"));
+    assert!(stdout.contains("Relays"));
+    assert!(stdout.contains("Queue"));
+    assert!(!stdout.contains("activity ·"));
+    assert!(!stdout.contains("\u{1b}"));
+}

@@ -988,6 +988,56 @@ job_id = "job_watch_01"
     assert_eq!(json["frames"][0]["signer_session_id"], "sess_order_01");
     assert_eq!(json["frames"][1]["signer_mode"], "nip46_session");
     assert_eq!(json["frames"][1]["signer_session_id"], "sess_order_01");
+
+    let human_polls = Arc::new(Mutex::new(0usize));
+    let human_watch_polls = Arc::clone(&human_polls);
+    let human_server = MockRpcServer::start(move |body, _auth_header| {
+        match body["method"].as_str().unwrap_or_default() {
+            "bridge.job.status" => {
+                let mut count = human_watch_polls.lock().expect("watch polls lock");
+                *count += 1;
+                if *count == 1 {
+                    MockRpcResponse::success(sample_bridge_job(
+                        "job_watch_01",
+                        "accepted",
+                        false,
+                        "sess_order_01",
+                    ))
+                } else {
+                    MockRpcResponse::success(sample_bridge_job(
+                        "job_watch_01",
+                        "completed",
+                        true,
+                        "sess_order_01",
+                    ))
+                }
+            }
+            other => panic!("unexpected mock rpc method {other}"),
+        }
+    });
+
+    let human_output = order_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", human_server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "watch-token")
+        .args([
+            "order",
+            "watch",
+            "ord_AAAAAAAAAAAAAAAAAAAAAg",
+            "--frames",
+            "2",
+            "--interval-ms",
+            "1",
+        ])
+        .output()
+        .expect("run human order watch");
+    assert!(human_output.status.success());
+    let stdout = String::from_utf8(human_output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("Watching order ord_AAAAAAAAAAAAAAAAAAAAAg"));
+    assert!(stdout.contains("Accepted"));
+    assert!(stdout.contains("Completed"));
+    assert!(stdout.contains("Summary"));
+    assert!(!stdout.contains("order ·"));
+    assert!(!stdout.contains("\u{1b}"));
 }
 
 #[test]

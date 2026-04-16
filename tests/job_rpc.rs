@@ -582,3 +582,64 @@ fn job_watch_ndjson_emits_one_frame_per_poll_until_terminal() {
     assert!(lines[1].contains("\"terminal\":true"));
     assert!(lines[1].contains("\"signer_session_id\":\"session-1\""));
 }
+
+#[test]
+fn job_watch_human_appends_snapshots_without_screen_clear() {
+    let _guard = job_rpc_test_guard();
+    let sequence = Arc::new(Mutex::new(0_usize));
+    let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
+    let observed = Arc::clone(&requests);
+    let counter = Arc::clone(&sequence);
+    let server = MockRpcServer::start(move |method, auth_header| {
+        observed
+            .lock()
+            .expect("record requests")
+            .push(MockRpcRequest {
+                method: method.clone(),
+                auth_header,
+            });
+        match method.as_str() {
+            "bridge.job.status" => {
+                let mut count = counter.lock().expect("watch count");
+                *count += 1;
+                if *count == 1 {
+                    MockRpcResponse::success(sample_job("job-123", "publishing", false, None))
+                } else {
+                    MockRpcResponse::success(sample_job(
+                        "job-123",
+                        "published",
+                        true,
+                        Some(1_712_720_030),
+                    ))
+                }
+            }
+            _ => MockRpcResponse::rpc_error(-32601, "method not found"),
+        }
+    });
+
+    let dir = tempdir().expect("tempdir");
+    let output = job_rpc_command_in(dir.path())
+        .env("RADROOTS_RPC_URL", server.url())
+        .env("RADROOTS_RPC_BEARER_TOKEN", "secret")
+        .args([
+            "job",
+            "watch",
+            "job-123",
+            "--frames",
+            "3",
+            "--interval-ms",
+            "5",
+        ])
+        .output()
+        .expect("run human job watch");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("Watching job job-123"));
+    assert!(stdout.contains("Publishing"));
+    assert!(stdout.contains("Published"));
+    assert!(stdout.contains("Summary"));
+    assert!(stdout.contains("Signer"));
+    assert!(!stdout.contains("activity ·"));
+    assert!(!stdout.contains("\u{1b}"));
+}
