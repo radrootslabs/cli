@@ -16,8 +16,8 @@ pub mod sync;
 
 use crate::cli::{
     AccountCommand, Command, ConfigCommand, FarmCommand, JobCommand, ListingCommand, LocalCommand,
-    MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand, RuntimeCommand,
-    RuntimeConfigCommand, SignerCommand, SyncCommand,
+    MarketCommand, MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand, RuntimeCommand,
+    RuntimeConfigCommand, SellCommand, SignerCommand, SyncCommand,
 };
 use crate::domain::runtime::{CommandOutput, CommandView};
 use crate::runtime::RuntimeError;
@@ -78,6 +78,11 @@ pub fn dispatch(
             LocalCommand::Export(args) => local::export(config, args),
             LocalCommand::Backup(args) => local::backup(config, args),
         },
+        Command::Market(market) => match &market.command {
+            MarketCommand::Update => sync::pull(config),
+            MarketCommand::Search(args) => find::search(config, args),
+            MarketCommand::View(args) => listing::get(config, args),
+        },
         Command::Net(net) => match &net.command {
             NetCommand::Status => net::status(config),
         },
@@ -97,6 +102,25 @@ pub fn dispatch(
             RpcCommand::Status => Ok(rpc::status(config)),
             RpcCommand::Sessions => Ok(rpc::sessions(config)),
         },
+        Command::Sell(sell) => match &sell.command {
+            SellCommand::Add(args) => listing::new(config, args),
+            SellCommand::Show(_args) => planned_command(
+                "`sell show` will inspect local drafts in the next slice; use `listing validate <file>` for now",
+            ),
+            SellCommand::Check(args) => listing::validate(config, args),
+            SellCommand::Publish(args) => listing::publish(config, args),
+            SellCommand::Update(args) => listing::update(config, args),
+            SellCommand::Pause(args) => listing::archive(config, args),
+            SellCommand::Reprice(_args) => planned_command(
+                "`sell reprice` will land in the draft-mutation slice; edit the draft file directly for now",
+            ),
+            SellCommand::Restock(_args) => planned_command(
+                "`sell restock` will land in the draft-mutation slice; edit the draft file directly for now",
+            ),
+        },
+        Command::Setup(_setup) => planned_command(
+            "`setup` will land in the workflow slice; use `account`, `local`, and `farm` directly for now",
+        ),
         Command::Runtime(runtime_command) => match &runtime_command.command {
             RuntimeCommand::Install(args) => runtime::install(config, args),
             RuntimeCommand::Uninstall(args) => runtime::uninstall(config, args),
@@ -110,6 +134,9 @@ pub fn dispatch(
                 RuntimeConfigCommand::Set(args) => runtime::config_set(config, args),
             },
         },
+        Command::Status => planned_command(
+            "`status` will land in the workflow slice; use `doctor` for readiness details right now",
+        ),
         Command::Sync(sync) => match &sync.command {
             SyncCommand::Status => sync::status(config),
             SyncCommand::Pull => sync::pull(config),
@@ -117,4 +144,8 @@ pub fn dispatch(
             SyncCommand::Watch(args) => sync::watch(config, args),
         },
     }
+}
+
+fn planned_command(message: &str) -> Result<CommandOutput, RuntimeError> {
+    Err(RuntimeError::Config(message.to_owned()))
 }

@@ -125,7 +125,7 @@ fn account_new_rejects_dry_run_without_creating_store_state() {
     assert!(!store_path.exists());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
-    assert!(stderr.contains("`account new` does not support --dry-run yet"));
+    assert!(stderr.contains("`account create` does not support --dry-run yet"));
 }
 
 #[test]

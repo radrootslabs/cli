@@ -1,4 +1,7 @@
-use clap::{error::ErrorKind, ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{
+    error::ErrorKind, ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand,
+    ValueEnum,
+};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
@@ -20,6 +23,125 @@ impl OutputFormatArg {
         }
     }
 }
+
+const ROOT_HELP: &str = "\
+radroots - local food trade on Nostr
+
+Start here
+  setup                 Guided first-time setup for sellers and buyers
+  status                Show what is ready and what needs attention
+
+Sell from your farm
+  farm                  Set up and publish your farm
+  sell                  Create, check, and publish listings
+
+Buy from the market
+  market                Update local market data and search listings
+  order                 Create and manage order requests
+
+Accounts and settings
+  account               Create and select local accounts
+  config                Show effective configuration
+
+Advanced and troubleshooting
+  doctor                Check readiness and suggest next steps
+  local                 Manage local market data storage
+  sync                  Inspect sync status and watch updates
+  relay                 Show relay configuration
+  net                   Show network posture
+  signer                Show signer readiness
+  rpc                   Show runtime bridge status
+  myc                   Show myc status
+  runtime               Manage runtimes
+  job                   Inspect background jobs
+  listing               Advanced listing commands
+  find                  Advanced search command
+
+Global options
+  --output <human|json|ndjson>
+  --json
+  --ndjson
+  --dry-run
+  --no-input
+  --yes
+  --quiet
+  --verbose
+  --trace
+  --no-color
+  --account <ACCOUNT>
+  --signer <SIGNER>
+  --relay <RELAY>
+
+Examples
+  radroots setup seller
+  radroots market search eggs
+  radroots sell check ./listing.toml
+  radroots order create --listing sf-tomatoes --bin bin-1 --qty 2
+";
+
+const SETUP_HELP: &str = "\
+Examples:
+  radroots setup seller
+  radroots setup buyer
+  radroots setup both
+
+This workflow layer is being added over the existing account, local, and farm commands.
+";
+
+const STATUS_HELP: &str = "\
+Examples:
+  radroots status
+  radroots doctor
+  radroots config show
+
+This workflow summary is being added over the existing readiness and configuration surfaces.
+";
+
+const ACCOUNT_HELP: &str = "\
+Examples:
+  radroots account create
+  radroots account view
+  radroots account list
+  radroots account select market-main
+
+Compatibility aliases: new, whoami, ls, use.
+";
+
+const FARM_HELP: &str = "\
+Examples:
+  radroots farm check
+  radroots farm show --scope workspace
+  radroots farm publish
+
+Compatibility aliases: status, get. The all-at-once `farm setup` surface remains available.
+";
+
+const MARKET_HELP: &str = "\
+Examples:
+  radroots market update
+  radroots market search tomatoes
+  radroots market view sf-tomatoes
+
+Compatibility paths: `sync pull`, `find`, and `listing get` remain available.
+";
+
+const SELL_HELP: &str = "\
+Examples:
+  radroots sell add --output ./listing.toml --title Tomatoes
+  radroots sell check ./listing.toml
+  radroots sell publish ./listing.toml
+
+Compatibility path: the advanced `listing` command family remains available.
+";
+
+const ORDER_HELP: &str = "\
+Examples:
+  radroots order create --listing sf-tomatoes --bin bin-1 --qty 2
+  radroots order view ord_demo
+  radroots order list
+
+Compatibility aliases: new, get, ls.
+";
 
 #[derive(Debug, Parser, Clone)]
 #[command(name = "radroots")]
@@ -108,13 +230,27 @@ impl CliArgs {
     {
         let args = itr.into_iter().map(Into::into).collect::<Vec<_>>();
         let (filtered_args, output_format) = extract_global_output_format(args)?;
-        let mut parsed = <Self as Parser>::try_parse_from(filtered_args)?;
+        let mut command = Self::build_command();
+        let matches = command.try_get_matches_from_mut(filtered_args)?;
+        let mut parsed = <Self as FromArgMatches>::from_arg_matches(&matches)?;
         parsed.output_format = output_format;
         Ok(parsed)
     }
 
+    pub fn build_command() -> clap::Command {
+        <Self as CommandFactory>::command()
+            .override_help(ROOT_HELP)
+            .mut_subcommand("setup", |command| command.after_help(SETUP_HELP))
+            .mut_subcommand("status", |command| command.after_help(STATUS_HELP))
+            .mut_subcommand("account", |command| command.after_help(ACCOUNT_HELP))
+            .mut_subcommand("farm", |command| command.after_help(FARM_HELP))
+            .mut_subcommand("market", |command| command.after_help(MARKET_HELP))
+            .mut_subcommand("sell", |command| command.after_help(SELL_HELP))
+            .mut_subcommand("order", |command| command.after_help(ORDER_HELP))
+    }
+
     fn command_error(message: impl Into<String>, kind: ErrorKind) -> clap::Error {
-        let mut command = Self::command();
+        let mut command = Self::build_command();
         command.error(kind, message.into())
     }
 }
@@ -240,26 +376,52 @@ fn matches_local_output_context(command_tokens: &[String]) -> bool {
     ) || matches!(
         command_tokens,
         [listing, new, ..] if listing == "listing" && new == "new"
+    ) || matches!(
+        command_tokens,
+        [sell, add, ..] if sell == "sell" && add == "add"
     )
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
+    #[command(about = "Create and select local accounts")]
     Account(AccountArgs),
+    #[command(about = "Show effective configuration")]
     Config(ConfigArgs),
+    #[command(about = "Check readiness and suggest next steps")]
     Doctor,
+    #[command(about = "Set up and publish your farm")]
     Farm(FarmArgs),
+    #[command(about = "Advanced search command")]
     Find(FindArgs),
+    #[command(about = "Inspect background jobs")]
     Job(JobArgs),
+    #[command(about = "Advanced listing commands")]
     Listing(ListingArgs),
+    #[command(about = "Manage local market data storage")]
     Local(LocalArgs),
+    #[command(about = "Update local market data and search listings")]
+    Market(MarketArgs),
+    #[command(about = "Show myc status")]
     Myc(MycArgs),
+    #[command(about = "Show network posture")]
     Net(NetArgs),
+    #[command(about = "Create and manage order requests")]
     Order(OrderArgs),
+    #[command(about = "Show relay configuration")]
     Relay(RelayArgs),
+    #[command(about = "Show runtime bridge status")]
     Rpc(RpcArgs),
+    #[command(about = "Create, check, and publish listings")]
+    Sell(SellArgs),
+    #[command(about = "Guided first-time setup for sellers and buyers")]
+    Setup(SetupArgs),
     Runtime(RuntimeArgs),
+    #[command(about = "Show signer readiness")]
     Signer(SignerArgs),
+    #[command(about = "Show what is ready and what needs attention")]
+    Status,
+    #[command(about = "Inspect sync status and watch updates")]
     Sync(SyncArgs),
 }
 
@@ -267,10 +429,10 @@ impl Command {
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Account(account) => match account.command {
-                AccountCommand::New => "account new",
-                AccountCommand::Whoami => "account whoami",
-                AccountCommand::Ls => "account ls",
-                AccountCommand::Use(_) => "account use",
+                AccountCommand::New => "account create",
+                AccountCommand::Whoami => "account view",
+                AccountCommand::Ls => "account list",
+                AccountCommand::Use(_) => "account select",
             },
             Self::Config(config) => match config.command {
                 ConfigCommand::Show => "config show",
@@ -279,12 +441,12 @@ impl Command {
             Self::Farm(farm) => match farm.command {
                 FarmCommand::Publish(_) => "farm publish",
                 FarmCommand::Setup(_) => "farm setup",
-                FarmCommand::Status(_) => "farm status",
-                FarmCommand::Get(_) => "farm get",
+                FarmCommand::Status(_) => "farm check",
+                FarmCommand::Get(_) => "farm show",
             },
             Self::Find(_) => "find",
             Self::Job(job) => match job.command {
-                JobCommand::Ls => "job ls",
+                JobCommand::Ls => "job list",
                 JobCommand::Get(_) => "job get",
                 JobCommand::Watch(_) => "job watch",
             },
@@ -302,6 +464,11 @@ impl Command {
                 LocalCommand::Export(_) => "local export",
                 LocalCommand::Backup(_) => "local backup",
             },
+            Self::Market(market) => match market.command {
+                MarketCommand::Update => "market update",
+                MarketCommand::Search(_) => "market search",
+                MarketCommand::View(_) => "market view",
+            },
             Self::Myc(myc) => match myc.command {
                 MycCommand::Status => "myc status",
             },
@@ -309,20 +476,35 @@ impl Command {
                 NetCommand::Status => "net status",
             },
             Self::Order(order) => match order.command {
-                OrderCommand::New(_) => "order new",
-                OrderCommand::Get(_) => "order get",
-                OrderCommand::Ls => "order ls",
+                OrderCommand::New(_) => "order create",
+                OrderCommand::Get(_) => "order view",
+                OrderCommand::Ls => "order list",
                 OrderCommand::Submit(_) => "order submit",
                 OrderCommand::Watch(_) => "order watch",
                 OrderCommand::Cancel(_) => "order cancel",
                 OrderCommand::History => "order history",
             },
             Self::Relay(relay) => match relay.command {
-                RelayCommand::Ls => "relay ls",
+                RelayCommand::Ls => "relay list",
             },
             Self::Rpc(rpc) => match rpc.command {
                 RpcCommand::Status => "rpc status",
                 RpcCommand::Sessions => "rpc sessions",
+            },
+            Self::Sell(sell) => match sell.command {
+                SellCommand::Add(_) => "sell add",
+                SellCommand::Show(_) => "sell show",
+                SellCommand::Check(_) => "sell check",
+                SellCommand::Publish(_) => "sell publish",
+                SellCommand::Update(_) => "sell update",
+                SellCommand::Pause(_) => "sell pause",
+                SellCommand::Reprice(_) => "sell reprice",
+                SellCommand::Restock(_) => "sell restock",
+            },
+            Self::Setup(args) => match args.role {
+                SetupRoleArg::Seller => "setup seller",
+                SetupRoleArg::Buyer => "setup buyer",
+                SetupRoleArg::Both => "setup both",
             },
             Self::Runtime(runtime) => match &runtime.command {
                 RuntimeCommand::Install(_) => "runtime install",
@@ -340,6 +522,7 @@ impl Command {
             Self::Signer(signer) => match signer.command {
                 SignerCommand::Status => "signer status",
             },
+            Self::Status => "status",
             Self::Sync(sync) => match sync.command {
                 SyncCommand::Status => "sync status",
                 SyncCommand::Pull => "sync pull",
@@ -369,6 +552,9 @@ impl Command {
                 }) | Self::Sync(SyncArgs {
                     command: SyncCommand::Watch(_),
                 }) | Self::Find(_)
+                    | Self::Market(MarketArgs {
+                        command: MarketCommand::Search(_),
+                    })
             ),
         }
     }
@@ -386,11 +572,28 @@ impl Command {
                 command: SyncCommand::Pull | SyncCommand::Push,
             }) | Self::Listing(ListingArgs {
                 command: ListingCommand::New(_),
+            }) | Self::Market(MarketArgs {
+                command: MarketCommand::Update,
             }) | Self::Order(OrderArgs {
                 command: OrderCommand::New(_) | OrderCommand::Cancel(_),
-            })
+            }) | Self::Sell(SellArgs {
+                command: SellCommand::Add(_),
+            }) | Self::Setup(_)
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SetupRoleArg {
+    Seller,
+    Buyer,
+    Both,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SetupArgs {
+    #[arg(value_enum, default_value = "both")]
+    pub role: SetupRoleArg,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -412,9 +615,17 @@ pub struct AccountArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AccountCommand {
+    #[command(name = "create", visible_alias = "new", about = "Create a local account")]
     New,
+    #[command(
+        name = "view",
+        visible_alias = "whoami",
+        about = "Show the selected local account"
+    )]
     Whoami,
+    #[command(name = "list", visible_alias = "ls", about = "List local accounts")]
     Ls,
+    #[command(name = "select", visible_alias = "use", about = "Select a local account")]
     Use(AccountUseArgs),
 }
 
@@ -453,6 +664,7 @@ pub struct RelayArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum RelayCommand {
+    #[command(name = "list", visible_alias = "ls", about = "List configured relays")]
     Ls,
 }
 
@@ -464,9 +676,13 @@ pub struct FarmArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum FarmCommand {
+    #[command(about = "Publish the current farm draft")]
     Publish(FarmPublishArgs),
+    #[command(about = "Create or update a farm draft in one command")]
     Setup(FarmSetupArgs),
+    #[command(name = "check", visible_alias = "status", about = "Check farm readiness")]
     Status(FarmScopedArgs),
+    #[command(name = "show", visible_alias = "get", about = "Show the farm draft")]
     Get(FarmScopedArgs),
 }
 
@@ -609,6 +825,22 @@ pub struct FindArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct MarketArgs {
+    #[command(subcommand)]
+    pub command: MarketCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum MarketCommand {
+    #[command(about = "Update local market data")]
+    Update,
+    #[command(about = "Search listings in local market data")]
+    Search(FindArgs),
+    #[command(about = "View one published listing")]
+    View(RecordKeyArgs),
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct ListingArgs {
     #[command(subcommand)]
     pub command: ListingCommand,
@@ -682,8 +914,11 @@ pub struct JobArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum JobCommand {
+    #[command(name = "list", visible_alias = "ls", about = "List background jobs")]
     Ls,
+    #[command(about = "Show one background job")]
     Get(RecordKeyArgs),
+    #[command(about = "Watch a background job")]
     Watch(JobWatchArgs),
 }
 
@@ -761,12 +996,19 @@ pub struct OrderArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum OrderCommand {
+    #[command(name = "create", visible_alias = "new", about = "Create a local order draft")]
     New(OrderNewArgs),
+    #[command(name = "view", visible_alias = "get", about = "Show one order")]
     Get(RecordKeyArgs),
+    #[command(name = "list", visible_alias = "ls", about = "List local orders")]
     Ls,
+    #[command(about = "Submit a local order draft")]
     Submit(OrderSubmitArgs),
+    #[command(about = "Watch a submitted order")]
     Watch(OrderWatchArgs),
+    #[command(about = "Cancel a submitted order")]
     Cancel(RecordKeyArgs),
+    #[command(about = "Show submitted order history")]
     History,
 }
 
@@ -805,13 +1047,57 @@ pub struct RecordKeyArgs {
     pub key: String,
 }
 
+#[derive(Debug, Clone, Args)]
+pub struct SellArgs {
+    #[command(subcommand)]
+    pub command: SellCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SellCommand {
+    #[command(about = "Create a listing draft")]
+    Add(ListingNewArgs),
+    #[command(about = "Show a local listing draft")]
+    Show(SellShowArgs),
+    #[command(about = "Check a listing draft")]
+    Check(ListingFileArgs),
+    #[command(about = "Publish a listing draft")]
+    Publish(ListingMutationArgs),
+    #[command(about = "Update a published listing from a draft")]
+    Update(ListingMutationArgs),
+    #[command(about = "Pause a published listing")]
+    Pause(ListingMutationArgs),
+    #[command(about = "Change the price in a local listing draft")]
+    Reprice(SellRepriceArgs),
+    #[command(about = "Change the available stock in a local listing draft")]
+    Restock(SellRestockArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SellShowArgs {
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SellRepriceArgs {
+    pub file: PathBuf,
+    pub price_expr: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SellRestockArgs {
+    pub file: PathBuf,
+    pub available: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AccountCommand, CliArgs, Command, ConfigCommand, FarmCommand, FarmScopeArg, JobCommand,
-        JobWatchArgs, ListingCommand, LocalCommand, LocalExportFormatArg, MycCommand, NetCommand,
-        OrderCommand, OrderWatchArgs, OutputFormatArg, RelayCommand, RpcCommand, RuntimeCommand,
-        RuntimeConfigCommand, SignerCommand, SyncCommand, SyncWatchArgs,
+        JobWatchArgs, ListingCommand, LocalCommand, LocalExportFormatArg, MarketCommand,
+        MycCommand, NetCommand, OrderCommand, OrderWatchArgs, OutputFormatArg, RelayCommand,
+        RpcCommand, RuntimeCommand, RuntimeConfigCommand, SellCommand, SetupRoleArg,
+        SignerCommand, SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     #[test]
@@ -988,6 +1274,111 @@ mod tests {
                 }
                 _ => panic!("unexpected listing subcommand"),
             },
+            _ => panic!("unexpected command variant"),
+        }
+    }
+
+    #[test]
+    fn parses_human_first_top_level_commands() {
+        let setup = CliArgs::parse_from(["radroots", "setup", "seller"]);
+        match setup.command {
+            Command::Setup(args) => assert_eq!(args.role, SetupRoleArg::Seller),
+            _ => panic!("unexpected command variant"),
+        }
+
+        let status = CliArgs::parse_from(["radroots", "status"]);
+        assert!(matches!(status.command, Command::Status));
+
+        let market = CliArgs::parse_from(["radroots", "market", "search", "eggs"]);
+        match market.command {
+            Command::Market(args) => match args.command {
+                MarketCommand::Search(find) => assert_eq!(find.query, vec!["eggs"]),
+                _ => panic!("unexpected market subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let sell = CliArgs::parse_from(["radroots", "sell", "check", "draft.toml"]);
+        match sell.command {
+            Command::Sell(args) => match args.command {
+                SellCommand::Check(file) => assert_eq!(file.file.to_str(), Some("draft.toml")),
+                _ => panic!("unexpected sell subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+    }
+
+    #[test]
+    fn parses_human_first_aliases() {
+        let account_create = CliArgs::parse_from(["radroots", "account", "create"]);
+        match account_create.command {
+            Command::Account(account) => assert!(matches!(account.command, AccountCommand::New)),
+            _ => panic!("unexpected command variant"),
+        }
+
+        let account_view = CliArgs::parse_from(["radroots", "account", "view"]);
+        match account_view.command {
+            Command::Account(account) => assert!(matches!(account.command, AccountCommand::Whoami)),
+            _ => panic!("unexpected command variant"),
+        }
+
+        let account_list = CliArgs::parse_from(["radroots", "account", "list"]);
+        match account_list.command {
+            Command::Account(account) => assert!(matches!(account.command, AccountCommand::Ls)),
+            _ => panic!("unexpected command variant"),
+        }
+
+        let account_select = CliArgs::parse_from(["radroots", "account", "select", "market-main"]);
+        match account_select.command {
+            Command::Account(account) => match account.command {
+                AccountCommand::Use(args) => assert_eq!(args.selector, "market-main"),
+                _ => panic!("unexpected account subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let farm_check = CliArgs::parse_from(["radroots", "farm", "check"]);
+        match farm_check.command {
+            Command::Farm(farm) => assert!(matches!(farm.command, FarmCommand::Status(_))),
+            _ => panic!("unexpected command variant"),
+        }
+
+        let farm_show = CliArgs::parse_from(["radroots", "farm", "show"]);
+        match farm_show.command {
+            Command::Farm(farm) => assert!(matches!(farm.command, FarmCommand::Get(_))),
+            _ => panic!("unexpected command variant"),
+        }
+
+        let market_view = CliArgs::parse_from(["radroots", "market", "view", "lst_123"]);
+        match market_view.command {
+            Command::Market(market) => match market.command {
+                MarketCommand::View(args) => assert_eq!(args.key, "lst_123"),
+                _ => panic!("unexpected market subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let order_create = CliArgs::parse_from(["radroots", "order", "create", "--listing", "eggs"]);
+        match order_create.command {
+            Command::Order(order) => match order.command {
+                OrderCommand::New(args) => assert_eq!(args.listing.as_deref(), Some("eggs")),
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let order_view = CliArgs::parse_from(["radroots", "order", "view", "ord_demo"]);
+        match order_view.command {
+            Command::Order(order) => match order.command {
+                OrderCommand::Get(args) => assert_eq!(args.key, "ord_demo"),
+                _ => panic!("unexpected order subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let order_list = CliArgs::parse_from(["radroots", "order", "list"]);
+        match order_list.command {
+            Command::Order(order) => assert!(matches!(order.command, OrderCommand::Ls)),
             _ => panic!("unexpected command variant"),
         }
     }
@@ -1573,9 +1964,9 @@ mod tests {
             .supports_output_format(OutputFormat::Ndjson));
         assert!(config_show.command.supports_dry_run());
 
-        let account_new = CliArgs::parse_from(["radroots", "account", "new"]);
-        assert_eq!(account_new.command.display_name(), "account new");
-        assert!(!account_new.command.supports_dry_run());
+        let account_create = CliArgs::parse_from(["radroots", "account", "create"]);
+        assert_eq!(account_create.command.display_name(), "account create");
+        assert!(!account_create.command.supports_dry_run());
 
         let farm_setup = CliArgs::parse_from([
             "radroots",
@@ -1589,10 +1980,10 @@ mod tests {
         assert_eq!(farm_setup.command.display_name(), "farm setup");
         assert!(!farm_setup.command.supports_dry_run());
 
-        let farm_status = CliArgs::parse_from(["radroots", "farm", "status"]);
-        assert_eq!(farm_status.command.display_name(), "farm status");
-        assert!(farm_status.command.supports_dry_run());
-        assert!(!farm_status
+        let farm_check = CliArgs::parse_from(["radroots", "farm", "check"]);
+        assert_eq!(farm_check.command.display_name(), "farm check");
+        assert!(farm_check.command.supports_dry_run());
+        assert!(!farm_check
             .command
             .supports_output_format(OutputFormat::Ndjson));
 
@@ -1603,10 +1994,20 @@ mod tests {
         let find = CliArgs::parse_from(["radroots", "find", "eggs"]);
         assert!(find.command.supports_output_format(OutputFormat::Ndjson));
 
+        let market_search = CliArgs::parse_from(["radroots", "market", "search", "eggs"]);
+        assert_eq!(market_search.command.display_name(), "market search");
+        assert!(market_search
+            .command
+            .supports_output_format(OutputFormat::Ndjson));
+
         let sync_watch = CliArgs::parse_from(["radroots", "sync", "watch", "--frames", "1"]);
         assert!(sync_watch
             .command
             .supports_output_format(OutputFormat::Ndjson));
+
+        let sell_add = CliArgs::parse_from(["radroots", "sell", "add"]);
+        assert_eq!(sell_add.command.display_name(), "sell add");
+        assert!(!sell_add.command.supports_dry_run());
 
         let order_watch = CliArgs::parse_from(["radroots", "order", "watch", "ord_demo"]);
         assert!(order_watch
@@ -1616,6 +2017,14 @@ mod tests {
         let order_submit = CliArgs::parse_from(["radroots", "order", "submit", "ord_demo"]);
         assert_eq!(order_submit.command.display_name(), "order submit");
         assert!(order_submit.command.supports_dry_run());
+
+        let setup = CliArgs::parse_from(["radroots", "setup", "buyer"]);
+        assert_eq!(setup.command.display_name(), "setup buyer");
+        assert!(!setup.command.supports_dry_run());
+
+        let status = CliArgs::parse_from(["radroots", "status"]);
+        assert_eq!(status.command.display_name(), "status");
+        assert!(status.command.supports_dry_run());
 
         let runtime_status = CliArgs::parse_from(["radroots", "runtime", "status", "radrootsd"]);
         assert_eq!(runtime_status.command.display_name(), "runtime status");
