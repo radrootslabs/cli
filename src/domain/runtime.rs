@@ -88,6 +88,7 @@ pub enum CommandView {
     Doctor(DoctorView),
     FarmGet(FarmGetView),
     FarmPublish(FarmPublishView),
+    FarmSet(FarmSetView),
     FarmSetup(FarmSetupView),
     FarmStatus(FarmStatusView),
     Find(FindView),
@@ -729,6 +730,29 @@ impl FarmSetupView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct FarmSetView {
+    pub state: String,
+    pub source: String,
+    pub field: String,
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<FarmConfigSummaryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl FarmSetView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct FarmStatusView {
     pub state: String,
     pub source: String,
@@ -740,6 +764,8 @@ pub struct FarmStatusView {
     pub listing_defaults_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<FarmConfigSummaryView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -773,7 +799,7 @@ pub struct FarmGetView {
 impl FarmGetView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
-            "unconfigured" => CommandDisposition::Unconfigured,
+            "unconfigured" | "missing" => CommandDisposition::Unconfigured,
             _ => CommandDisposition::Success,
         }
     }
@@ -794,6 +820,8 @@ pub struct FarmPublishView {
     pub requested_signer_session_id: Option<String>,
     pub profile: FarmPublishComponentView,
     pub farm: FarmPublishComponentView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

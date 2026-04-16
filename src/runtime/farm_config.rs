@@ -82,6 +82,25 @@ pub struct ResolvedFarmConfig {
     pub document: FarmConfigDocument,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FarmMissingField {
+    Name,
+    Location,
+    Delivery,
+    Country,
+}
+
+impl FarmMissingField {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Farm name",
+            Self::Location => "Location",
+            Self::Delivery => "Delivery method",
+            Self::Country => "Country",
+        }
+    }
+}
+
 pub fn resolve_scope(
     paths: &PathsConfig,
     explicit_scope: Option<FarmConfigScope>,
@@ -214,11 +233,6 @@ pub fn validate(
                 .to_owned(),
         ));
     }
-    if trimmed(document.profile.name.as_str()).is_empty() {
-        return Err(RuntimeError::Config(
-            "farm config profile.name must not be empty".to_owned(),
-        ));
-    }
     if trimmed(document.farm.d_tag.as_str()).is_empty() {
         return Err(RuntimeError::Config(
             "farm config farm.d_tag must not be empty".to_owned(),
@@ -229,23 +243,71 @@ pub fn validate(
             "farm config farm.d_tag must be a 22-character base64url identifier".to_owned(),
         ));
     }
-    if trimmed(document.farm.name.as_str()).is_empty() {
-        return Err(RuntimeError::Config(
-            "farm config farm.name must not be empty".to_owned(),
-        ));
-    }
     if trimmed(document.selection.farm_d_tag.as_str()) != trimmed(document.farm.d_tag.as_str()) {
         return Err(RuntimeError::Config(
             "farm config selection.farm_d_tag must match farm.d_tag".to_owned(),
         ));
     }
-    let _ = document.listing_defaults.delivery_method_model()?;
-    if trimmed(document.listing_defaults.location.primary.as_str()).is_empty() {
-        return Err(RuntimeError::Config(
-            "farm config listing_defaults.location.primary must not be empty".to_owned(),
-        ));
+    if !trimmed(document.listing_defaults.delivery_method.as_str()).is_empty() {
+        let _ = document.listing_defaults.delivery_method_model()?;
     }
     Ok(())
+}
+
+pub fn missing_fields(document: &FarmConfigDocument) -> Vec<FarmMissingField> {
+    let mut missing = Vec::new();
+
+    if farm_name(document).is_none() {
+        missing.push(FarmMissingField::Name);
+    }
+
+    let location_present = location_primary(document).is_some();
+    if !location_present {
+        missing.push(FarmMissingField::Location);
+    }
+
+    if trimmed(document.listing_defaults.delivery_method.as_str()).is_empty() {
+        missing.push(FarmMissingField::Delivery);
+    }
+
+    if location_present && location_country(document).is_none() {
+        missing.push(FarmMissingField::Country);
+    }
+
+    missing
+}
+
+fn farm_name(document: &FarmConfigDocument) -> Option<&str> {
+    non_empty_ref(document.profile.name.as_str())
+        .or_else(|| non_empty_ref(document.farm.name.as_str()))
+}
+
+fn location_primary(document: &FarmConfigDocument) -> Option<&str> {
+    non_empty_ref(document.listing_defaults.location.primary.as_str()).or_else(|| {
+        document
+            .farm
+            .location
+            .as_ref()
+            .and_then(|location| location.primary.as_deref())
+            .and_then(non_empty_ref)
+    })
+}
+
+fn location_country(document: &FarmConfigDocument) -> Option<&str> {
+    document
+        .listing_defaults
+        .location
+        .country
+        .as_deref()
+        .and_then(non_empty_ref)
+        .or_else(|| {
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| location.country.as_deref())
+                .and_then(non_empty_ref)
+        })
 }
 
 fn parse_delivery_method(value: &str) -> Result<RadrootsListingDeliveryMethod, RuntimeError> {
@@ -267,6 +329,15 @@ fn parse_delivery_method(value: &str) -> Result<RadrootsListingDeliveryMethod, R
 
 fn trimmed(value: &str) -> &str {
     value.trim()
+}
+
+fn non_empty_ref(value: &str) -> Option<&str> {
+    let trimmed = trimmed(value);
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 #[cfg(test)]

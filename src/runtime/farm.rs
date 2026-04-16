@@ -9,11 +9,14 @@ use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::farm::encode::to_wire_parts_with_kind;
 use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
 
-use crate::cli::{FarmPublishArgs, FarmScopeArg, FarmScopedArgs, FarmSetupArgs};
+use crate::cli::{
+    FarmFieldArg, FarmInitArgs, FarmPublishArgs, FarmScopeArg, FarmScopedArgs, FarmSetArgs,
+    FarmSetupArgs,
+};
 use crate::domain::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
     FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishJobView,
-    FarmPublishView, FarmSelectionView, FarmSetupView, FarmStatusView,
+    FarmPublishView, FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{self, AccountRecordView};
@@ -21,7 +24,7 @@ use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon::{self, BridgeEventPublishResult, DaemonRpcError};
 use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
-    FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
+    FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
 };
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 
@@ -29,49 +32,82 @@ const FARM_CONFIG_SOURCE: &str = "farm config · local first";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+pub fn init(config: &RuntimeConfig, args: &FarmInitArgs) -> Result<FarmSetupView, RuntimeError> {
+    let scope = scope_from_arg(args.scope);
+    let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
+    let Some(selected_account) = selected_account_for_draft(config)? else {
+        return Ok(missing_selected_account_setup_view());
+    };
+    let existing = farm_config::load(config, Some(resolved_scope))?;
+    let document = init_document(resolved_scope, &selected_account, existing.as_ref(), args)?;
+    save_draft_view(
+        "saved",
+        resolved_scope,
+        &selected_account,
+        &document,
+        Some("The farm draft is local until you publish it.".to_owned()),
+        farm_setup_actions(&document),
+        config,
+    )
+}
+
 pub fn setup(config: &RuntimeConfig, args: &FarmSetupArgs) -> Result<FarmSetupView, RuntimeError> {
     let scope = scope_from_arg(args.scope);
     let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
-    let selected_account = match accounts::resolve_account(config)? {
-        Some(account) => account,
-        None => {
-            return Ok(FarmSetupView {
-                state: "unconfigured".to_owned(),
-                source: FARM_CONFIG_SOURCE.to_owned(),
-                config: None,
-                reason: Some("farm setup requires a selected local account".to_owned()),
-                actions: vec![
-                    "radroots account new".to_owned(),
-                    "radroots account whoami".to_owned(),
-                ],
-            });
-        }
+    let Some(selected_account) = selected_account_for_draft(config)? else {
+        return Ok(missing_selected_account_setup_view());
     };
     let existing = farm_config::load(config, Some(resolved_scope))?;
     let document = setup_document(args, resolved_scope, &selected_account, existing.as_ref())?;
-    let path = farm_config::write(&config.paths, resolved_scope, &document)?;
-    let summary = summary_view(
+    save_draft_view(
+        "configured",
         resolved_scope,
-        path.display().to_string(),
+        &selected_account,
         &document,
-        Some(
-            selected_account
-                .record
-                .public_identity
-                .public_key_hex
-                .as_str(),
-        ),
-    );
+        None,
+        farm_setup_actions(&document),
+        config,
+    )
+}
 
-    Ok(FarmSetupView {
-        state: "configured".to_owned(),
+pub fn set(config: &RuntimeConfig, args: &FarmSetArgs) -> Result<FarmSetView, RuntimeError> {
+    let scope = scope_from_arg(args.scope);
+    let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
+    let path = farm_config::config_path(&config.paths, resolved_scope)?;
+    let Some(mut resolved) = farm_config::load(config, Some(resolved_scope))? else {
+        return Ok(FarmSetView {
+            state: "unconfigured".to_owned(),
+            source: FARM_CONFIG_SOURCE.to_owned(),
+            field: human_field_name(args.field).to_owned(),
+            value: human_field_value(args.field, args.value.join(" ").trim()).to_owned(),
+            config: None,
+            reason: Some(format!("no farm draft found at {}", path.display())),
+            actions: vec!["radroots farm init".to_owned()],
+        });
+    };
+
+    let raw_value = args.value.join(" ");
+    let field_value = required_text(raw_value.as_str(), "farm set value")?;
+    apply_field_update(&mut resolved.document, args.field, field_value.as_str())?;
+    let written_path = farm_config::write(&config.paths, resolved.scope, &resolved.document)?;
+    let configured_account = configured_account(config, &resolved.document.selection.account)?;
+    let account_pubkey = configured_account
+        .as_ref()
+        .map(|account| account.record.public_identity.public_key_hex.as_str());
+
+    Ok(FarmSetView {
+        state: "updated".to_owned(),
         source: FARM_CONFIG_SOURCE.to_owned(),
-        config: Some(summary),
+        field: human_field_name(args.field).to_owned(),
+        value: human_field_value(args.field, field_value.as_str()).to_owned(),
+        config: Some(summary_view(
+            resolved.scope,
+            written_path.display().to_string(),
+            &resolved.document,
+            account_pubkey,
+        )),
         reason: None,
-        actions: vec![
-            "radroots farm status".to_owned(),
-            "radroots farm get".to_owned(),
-        ],
+        actions: vec!["radroots farm check".to_owned()],
     })
 }
 
@@ -93,34 +129,46 @@ pub fn status(
             account_state: "not_checked".to_owned(),
             listing_defaults_state: "missing".to_owned(),
             config: None,
+            missing: vec!["Farm draft".to_owned()],
             reason: Some(format!("no farm config found at {}", path.display())),
-            actions: vec![setup_action(resolved_scope)],
+            actions: vec!["radroots farm init".to_owned()],
         });
     };
 
     let account = configured_account(config, &resolved.document.selection.account)?;
+    let draft_missing = farm_config::missing_fields(&resolved.document);
     let account_state = if account.is_some() {
         "ready"
     } else {
         "missing"
     };
-    let state = if account.is_some() {
+    let listing_defaults_state = if missing_blocks_listing_defaults(draft_missing.as_slice()) {
+        "missing"
+    } else {
+        "ready"
+    };
+    let state = if account.is_some() && draft_missing.is_empty() {
         "ready"
     } else {
         "unconfigured"
     };
-    let reason = if account.is_some() {
-        None
-    } else {
+    let reason = if account.is_none() {
         Some(format!(
             "farm config account `{}` is not present in the local account store",
             resolved.document.selection.account
         ))
+    } else if !draft_missing.is_empty() {
+        Some("farm draft is missing required fields".to_owned())
+    } else {
+        None
     };
     let mut actions = Vec::new();
     if account.is_none() {
-        actions.push("radroots account new".to_owned());
-        actions.push(setup_action(resolved.scope));
+        actions.push("radroots account create".to_owned());
+    } else if draft_missing.is_empty() {
+        actions.push("radroots farm publish".to_owned());
+    } else {
+        actions.extend(missing_field_actions(draft_missing.as_slice()));
     }
     let account_pubkey = account
         .as_ref()
@@ -134,13 +182,18 @@ pub fn status(
         config_present: true,
         config_valid: true,
         account_state: account_state.to_owned(),
-        listing_defaults_state: "ready".to_owned(),
+        listing_defaults_state: listing_defaults_state.to_owned(),
         config: Some(summary_view(
             resolved.scope,
             resolved.path.display().to_string(),
             &resolved.document,
             account_pubkey,
         )),
+        missing: if account.is_none() {
+            vec!["Selected account".to_owned()]
+        } else {
+            missing_field_labels(draft_missing.as_slice())
+        },
         reason,
         actions,
     })
@@ -159,7 +212,7 @@ pub fn get(config: &RuntimeConfig, args: &FarmScopedArgs) -> Result<FarmGetView,
             config_present: false,
             document: None,
             reason: Some(format!("no farm config found at {}", path.display())),
-            actions: vec![setup_action(resolved_scope)],
+            actions: vec!["radroots farm init".to_owned()],
         });
     };
 
@@ -188,6 +241,12 @@ pub fn publish(
             path.display().to_string(),
             args,
             format!("no farm config found at {}", path.display()),
+            vec!["Farm draft".to_owned()],
+            vec!["radroots farm init".to_owned()],
+            false,
+            String::new(),
+            String::new(),
+            String::new(),
         ));
     };
 
@@ -200,8 +259,29 @@ pub fn publish(
                 "farm config account `{}` is not present in the local account store",
                 resolved.document.selection.account
             ),
+            vec!["Selected account".to_owned()],
+            vec!["radroots account create".to_owned()],
+            true,
+            resolved.document.selection.account.clone(),
+            String::new(),
+            resolved.document.selection.farm_d_tag.clone(),
         ));
     };
+    let draft_missing = farm_config::missing_fields(&resolved.document);
+    if !draft_missing.is_empty() {
+        return Ok(missing_publish_view(
+            resolved.scope,
+            resolved.path.display().to_string(),
+            args,
+            "farm draft is missing required fields".to_owned(),
+            missing_field_labels(draft_missing.as_slice()),
+            missing_field_actions(draft_missing.as_slice()),
+            true,
+            resolved.document.selection.account.clone(),
+            account.record.public_identity.public_key_hex.clone(),
+            resolved.document.selection.farm_d_tag.clone(),
+        ));
+    }
     let account_pubkey = account.record.public_identity.public_key_hex.clone();
     let previews = build_publish_previews(&resolved.document, account_pubkey.as_str())?;
     let profile_idempotency_key = component_idempotency_key(args, "profile")?;
@@ -408,22 +488,29 @@ fn missing_publish_view(
     path: String,
     args: &FarmPublishArgs,
     reason: String,
+    missing: Vec<String>,
+    actions: Vec<String>,
+    config_present: bool,
+    selected_account_id: String,
+    selected_account_pubkey: String,
+    farm_d_tag: String,
 ) -> FarmPublishView {
     FarmPublishView {
         state: "unconfigured".to_owned(),
         source: daemon::bridge_source().to_owned(),
         scope: scope.as_str().to_owned(),
         path,
-        config_present: false,
+        config_present,
         dry_run: false,
-        selected_account_id: String::new(),
-        selected_account_pubkey: String::new(),
-        farm_d_tag: String::new(),
+        selected_account_id,
+        selected_account_pubkey,
+        farm_d_tag,
         requested_signer_session_id: args.signer_session_id.clone(),
         profile: not_submitted_component("bridge.profile.publish", KIND_PROFILE, args, None, None),
         farm: not_submitted_component("bridge.farm.publish", KIND_FARM, args, None, None),
+        missing,
         reason: Some(reason),
-        actions: vec![setup_action(scope), "radroots account whoami".to_owned()],
+        actions,
     }
 }
 
@@ -451,6 +538,7 @@ fn base_publish_view(
         requested_signer_session_id: args.signer_session_id.clone(),
         profile,
         farm,
+        missing: Vec::new(),
         reason,
         actions,
     }
@@ -887,6 +975,312 @@ fn daemon_error_actions(state: &str) -> Vec<String> {
     }
 }
 
+fn selected_account_for_draft(
+    config: &RuntimeConfig,
+) -> Result<Option<AccountRecordView>, RuntimeError> {
+    accounts::resolve_account(config)
+}
+
+fn missing_selected_account_setup_view() -> FarmSetupView {
+    FarmSetupView {
+        state: "unconfigured".to_owned(),
+        source: FARM_CONFIG_SOURCE.to_owned(),
+        config: None,
+        reason: Some("choose or create an account before setting up your farm".to_owned()),
+        actions: vec!["radroots account create".to_owned()],
+    }
+}
+
+fn init_document(
+    scope: FarmConfigScope,
+    account: &AccountRecordView,
+    existing: Option<&ResolvedFarmConfig>,
+    args: &FarmInitArgs,
+) -> Result<FarmConfigDocument, RuntimeError> {
+    let existing_document = existing.map(|resolved| &resolved.document);
+    let farm_d_tag = match args.farm_d_tag.as_deref() {
+        Some(value) => required_d_tag(value, "farm_d_tag")?,
+        None => existing_document
+            .map(|document| document.farm.d_tag.clone())
+            .unwrap_or_else(generate_d_tag),
+    };
+    let existing_name = existing_name(existing_document);
+    let existing_location = existing_location_primary(existing_document);
+    let existing_city = existing_city(existing_document);
+    let existing_region = existing_region(existing_document);
+    let existing_country = existing_country(existing_document);
+    let existing_delivery = existing_delivery_method(existing_document);
+    let name = optional_arg_or_existing(args.name.as_ref(), existing_name.as_ref())
+        .or_else(|| draft_name_from_account(account))
+        .unwrap_or_default();
+    let display_name = optional_arg_or_existing(
+        args.display_name.as_ref(),
+        existing_document.and_then(|document| document.profile.display_name.as_ref()),
+    )
+    .or_else(|| non_empty(name.as_str()));
+    let about = optional_arg_or_existing(
+        args.about.as_ref(),
+        existing_document.and_then(|document| document.profile.about.as_ref()),
+    );
+    let website = optional_arg_or_existing(
+        args.website.as_ref(),
+        existing_document.and_then(|document| document.profile.website.as_ref()),
+    );
+    let picture = optional_arg_or_existing(
+        args.picture.as_ref(),
+        existing_document.and_then(|document| document.profile.picture.as_ref()),
+    );
+    let banner = optional_arg_or_existing(
+        args.banner.as_ref(),
+        existing_document.and_then(|document| document.profile.banner.as_ref()),
+    );
+    let location_primary =
+        optional_arg_or_existing(args.location.as_ref(), existing_location.as_ref())
+            .unwrap_or_default();
+    let city = optional_arg_or_existing(args.city.as_ref(), existing_city.as_ref());
+    let region = optional_arg_or_existing(args.region.as_ref(), existing_region.as_ref());
+    let country = optional_arg_or_existing(args.country.as_ref(), existing_country.as_ref());
+    let delivery_method =
+        optional_arg_or_existing(args.delivery_method.as_ref(), existing_delivery.as_ref())
+            .unwrap_or_default();
+    let publication = publication_for_document(existing_document, account, farm_d_tag.as_str());
+
+    Ok(FarmConfigDocument {
+        version: SUPPORTED_FARM_CONFIG_VERSION,
+        selection: FarmConfigSelection {
+            scope,
+            account: account.record.account_id.to_string(),
+            farm_d_tag: farm_d_tag.clone(),
+        },
+        profile: RadrootsProfile {
+            name: name.clone(),
+            display_name,
+            nip05: None,
+            about: about.clone(),
+            website: website.clone(),
+            picture: picture.clone(),
+            banner: banner.clone(),
+            lud06: None,
+            lud16: None,
+            bot: None,
+        },
+        farm: RadrootsFarm {
+            d_tag: farm_d_tag,
+            name,
+            about,
+            website,
+            picture,
+            banner,
+            location: Some(RadrootsFarmLocation {
+                primary: non_empty(location_primary.as_str()),
+                city: city.clone(),
+                region: region.clone(),
+                country: country.clone(),
+                gcs: None,
+            }),
+            tags: None,
+        },
+        listing_defaults: FarmListingDefaults {
+            delivery_method,
+            location: RadrootsListingLocation {
+                primary: location_primary,
+                city,
+                region,
+                country,
+                lat: None,
+                lng: None,
+                geohash: None,
+            },
+        },
+        publication,
+    })
+}
+
+fn save_draft_view(
+    state: &str,
+    scope: FarmConfigScope,
+    account: &AccountRecordView,
+    document: &FarmConfigDocument,
+    reason: Option<String>,
+    actions: Vec<String>,
+    config: &RuntimeConfig,
+) -> Result<FarmSetupView, RuntimeError> {
+    let written_path = farm_config::write(&config.paths, scope, document)?;
+    Ok(FarmSetupView {
+        state: state.to_owned(),
+        source: FARM_CONFIG_SOURCE.to_owned(),
+        config: Some(summary_view(
+            scope,
+            written_path.display().to_string(),
+            document,
+            Some(account.record.public_identity.public_key_hex.as_str()),
+        )),
+        reason,
+        actions,
+    })
+}
+
+fn farm_setup_actions(document: &FarmConfigDocument) -> Vec<String> {
+    let mut actions = vec!["radroots farm check".to_owned()];
+    if farm_config::missing_fields(document).is_empty() {
+        actions.push("radroots farm publish".to_owned());
+    }
+    actions
+}
+
+fn missing_blocks_listing_defaults(missing: &[FarmMissingField]) -> bool {
+    missing.iter().any(|field| {
+        matches!(
+            field,
+            FarmMissingField::Location | FarmMissingField::Delivery
+        )
+    })
+}
+
+fn missing_field_labels(missing: &[FarmMissingField]) -> Vec<String> {
+    missing
+        .iter()
+        .map(|field| field.label().to_owned())
+        .collect()
+}
+
+fn missing_field_actions(missing: &[FarmMissingField]) -> Vec<String> {
+    let mut actions = Vec::new();
+    for field in missing {
+        match field {
+            FarmMissingField::Name => {
+                push_action(&mut actions, "radroots farm set name \"La Huerta Farm\"");
+            }
+            FarmMissingField::Location => {
+                push_action(
+                    &mut actions,
+                    "radroots farm set location \"San Francisco, CA\"",
+                );
+            }
+            FarmMissingField::Delivery => {
+                push_action(&mut actions, "radroots farm set delivery pickup");
+            }
+            FarmMissingField::Country => {
+                push_action(&mut actions, "radroots farm set country US");
+            }
+        }
+    }
+    actions
+}
+
+fn push_action(actions: &mut Vec<String>, action: &str) {
+    if !actions.iter().any(|existing| existing == action) {
+        actions.push(action.to_owned());
+    }
+}
+
+fn human_field_name(field: FarmFieldArg) -> &'static str {
+    match field {
+        FarmFieldArg::Name => "Name",
+        FarmFieldArg::DisplayName => "Display name",
+        FarmFieldArg::About => "About",
+        FarmFieldArg::Website => "Website",
+        FarmFieldArg::Picture => "Picture",
+        FarmFieldArg::Banner => "Banner",
+        FarmFieldArg::Location => "Location",
+        FarmFieldArg::City => "City",
+        FarmFieldArg::Region => "Region",
+        FarmFieldArg::Country => "Country",
+        FarmFieldArg::Delivery => "Delivery",
+    }
+}
+
+fn human_field_value(field: FarmFieldArg, value: &str) -> String {
+    match field {
+        FarmFieldArg::Delivery => humanize_delivery_method(value),
+        _ => value.to_owned(),
+    }
+}
+
+fn apply_field_update(
+    document: &mut FarmConfigDocument,
+    field: FarmFieldArg,
+    value: &str,
+) -> Result<(), RuntimeError> {
+    let value = required_text(value, "farm set value")?;
+    match field {
+        FarmFieldArg::Name => {
+            document.profile.name = value.clone();
+            document.farm.name = value;
+        }
+        FarmFieldArg::DisplayName => {
+            document.profile.display_name = Some(value);
+        }
+        FarmFieldArg::About => {
+            document.profile.about = Some(value.clone());
+            document.farm.about = Some(value);
+        }
+        FarmFieldArg::Website => {
+            document.profile.website = Some(value.clone());
+            document.farm.website = Some(value);
+        }
+        FarmFieldArg::Picture => {
+            document.profile.picture = Some(value.clone());
+            document.farm.picture = Some(value);
+        }
+        FarmFieldArg::Banner => {
+            document.profile.banner = Some(value.clone());
+            document.farm.banner = Some(value);
+        }
+        FarmFieldArg::Location => {
+            document.listing_defaults.location.primary = value.clone();
+            ensure_farm_location(document).primary = Some(value);
+        }
+        FarmFieldArg::City => {
+            document.listing_defaults.location.city = Some(value.clone());
+            ensure_farm_location(document).city = Some(value);
+        }
+        FarmFieldArg::Region => {
+            document.listing_defaults.location.region = Some(value.clone());
+            ensure_farm_location(document).region = Some(value);
+        }
+        FarmFieldArg::Country => {
+            document.listing_defaults.location.country = Some(value.clone());
+            ensure_farm_location(document).country = Some(value);
+        }
+        FarmFieldArg::Delivery => {
+            document.listing_defaults.delivery_method = value;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_farm_location(document: &mut FarmConfigDocument) -> &mut RadrootsFarmLocation {
+    let primary = non_empty(document.listing_defaults.location.primary.as_str());
+    let city = document.listing_defaults.location.city.clone();
+    let region = document.listing_defaults.location.region.clone();
+    let country = document.listing_defaults.location.country.clone();
+    document
+        .farm
+        .location
+        .get_or_insert_with(|| RadrootsFarmLocation {
+            primary,
+            city,
+            region,
+            country,
+            gcs: None,
+        })
+}
+
+fn publication_for_document(
+    existing_document: Option<&FarmConfigDocument>,
+    account: &AccountRecordView,
+    farm_d_tag: &str,
+) -> FarmPublicationStatus {
+    existing_document
+        .filter(|document| {
+            document.farm.d_tag == farm_d_tag
+                && document.selection.account == account.record.account_id.as_str()
+        })
+        .map(|document| document.publication.clone())
+        .unwrap_or_default()
+}
+
 fn setup_document(
     args: &FarmSetupArgs,
     scope: FarmConfigScope,
@@ -951,10 +1345,7 @@ fn setup_document(
             .and_then(|document| document.farm.location.as_ref())
             .and_then(|location| location.country.as_ref()),
     );
-    let publication = existing_document
-        .filter(|document| document.farm.d_tag == farm_d_tag)
-        .map(|document| document.publication.clone())
-        .unwrap_or_default();
+    let publication = publication_for_document(existing_document, account, farm_d_tag.as_str());
 
     Ok(FarmConfigDocument {
         version: SUPPORTED_FARM_CONFIG_VERSION,
@@ -1030,13 +1421,9 @@ fn summary_view(
         selected_account_id: document.selection.account.clone(),
         selected_account_pubkey: account_pubkey.map(str::to_owned),
         farm_d_tag: document.selection.farm_d_tag.clone(),
-        name: document.farm.name.clone(),
-        location_primary: document
-            .farm
-            .location
-            .as_ref()
-            .and_then(|location| location.primary.clone()),
-        delivery_method: document.listing_defaults.delivery_method.clone(),
+        name: resolved_name(document).unwrap_or_default(),
+        location_primary: resolved_location_primary(document),
+        delivery_method: resolved_delivery_method(document).unwrap_or_default(),
         publication: publication_view(&document.publication),
     }
 }
@@ -1085,13 +1472,6 @@ fn publish_state(event_id: Option<&str>, published_at: Option<u64>) -> &'static 
     }
 }
 
-fn setup_action(scope: FarmConfigScope) -> String {
-    format!(
-        "radroots farm setup --scope {} --name <farm-name> --location <place>",
-        scope.as_str()
-    )
-}
-
 fn scope_from_arg(scope: Option<FarmScopeArg>) -> Option<FarmConfigScope> {
     scope.map(|scope| match scope {
         FarmScopeArg::User => FarmConfigScope::User,
@@ -1120,6 +1500,118 @@ fn required_text(value: &str, field: &str) -> Result<String, RuntimeError> {
 fn optional_arg_or_existing(arg: Option<&String>, existing: Option<&String>) -> Option<String> {
     arg.and_then(|value| non_empty(value.as_str()))
         .or_else(|| existing.and_then(|value| non_empty(value.as_str())))
+}
+
+fn draft_name_from_account(account: &AccountRecordView) -> Option<String> {
+    account
+        .record
+        .label
+        .as_deref()
+        .and_then(non_empty)
+        .or_else(|| non_empty(account.record.account_id.as_str()))
+}
+
+fn existing_name(existing_document: Option<&FarmConfigDocument>) -> Option<String> {
+    existing_document.and_then(resolved_name)
+}
+
+fn existing_location_primary(existing_document: Option<&FarmConfigDocument>) -> Option<String> {
+    existing_document.and_then(resolved_location_primary)
+}
+
+fn existing_city(existing_document: Option<&FarmConfigDocument>) -> Option<String> {
+    existing_document
+        .and_then(|document| {
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| location.city.as_ref())
+        })
+        .and_then(|value| non_empty(value.as_str()))
+        .or_else(|| {
+            existing_document
+                .and_then(|document| document.listing_defaults.location.city.as_ref())
+                .and_then(|value| non_empty(value.as_str()))
+        })
+}
+
+fn existing_region(existing_document: Option<&FarmConfigDocument>) -> Option<String> {
+    existing_document
+        .and_then(|document| {
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| location.region.as_ref())
+        })
+        .and_then(|value| non_empty(value.as_str()))
+        .or_else(|| {
+            existing_document
+                .and_then(|document| document.listing_defaults.location.region.as_ref())
+                .and_then(|value| non_empty(value.as_str()))
+        })
+}
+
+fn existing_country(existing_document: Option<&FarmConfigDocument>) -> Option<String> {
+    existing_document
+        .and_then(|document| {
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| location.country.as_ref())
+        })
+        .and_then(|value| non_empty(value.as_str()))
+        .or_else(|| {
+            existing_document
+                .and_then(|document| document.listing_defaults.location.country.as_ref())
+                .and_then(|value| non_empty(value.as_str()))
+        })
+}
+
+fn existing_delivery_method(existing_document: Option<&FarmConfigDocument>) -> Option<String> {
+    existing_document
+        .and_then(|document| non_empty(document.listing_defaults.delivery_method.as_str()))
+}
+
+fn resolved_name(document: &FarmConfigDocument) -> Option<String> {
+    non_empty(document.profile.name.as_str()).or_else(|| non_empty(document.farm.name.as_str()))
+}
+
+fn resolved_location_primary(document: &FarmConfigDocument) -> Option<String> {
+    non_empty(document.listing_defaults.location.primary.as_str()).or_else(|| {
+        document
+            .farm
+            .location
+            .as_ref()
+            .and_then(|location| location.primary.as_deref())
+            .and_then(non_empty)
+    })
+}
+
+fn resolved_delivery_method(document: &FarmConfigDocument) -> Option<String> {
+    non_empty(document.listing_defaults.delivery_method.as_str())
+}
+
+fn humanize_delivery_method(value: &str) -> String {
+    value
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(capitalize_ascii_word)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn capitalize_ascii_word(word: &str) -> String {
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    let mut rendered = String::new();
+    rendered.push(first.to_ascii_uppercase());
+    rendered.push_str(chars.as_str());
+    rendered
 }
 
 fn non_empty(value: &str) -> Option<String> {

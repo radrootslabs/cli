@@ -109,11 +109,13 @@ Compatibility aliases: new, whoami, ls, use.
 
 const FARM_HELP: &str = "\
 Examples:
+  radroots farm init
+  radroots farm set delivery pickup
   radroots farm check
   radroots farm show --scope workspace
   radroots farm publish
 
-Compatibility aliases: status, get. The all-at-once `farm setup` surface remains available.
+Compatibility paths: `farm setup`, `farm status`, and `farm get` remain available.
 ";
 
 const MARKET_HELP: &str = "\
@@ -438,6 +440,8 @@ impl Command {
             },
             Self::Doctor => "doctor",
             Self::Farm(farm) => match farm.command {
+                FarmCommand::Init(_) => "farm init",
+                FarmCommand::Set(_) => "farm set",
                 FarmCommand::Publish(_) => "farm publish",
                 FarmCommand::Setup(_) => "farm setup",
                 FarmCommand::Status(_) => "farm check",
@@ -564,7 +568,7 @@ impl Command {
             Self::Account(AccountArgs {
                 command: AccountCommand::New | AccountCommand::Use(_),
             }) | Self::Farm(FarmArgs {
-                command: FarmCommand::Setup(_),
+                command: FarmCommand::Init(_) | FarmCommand::Set(_) | FarmCommand::Setup(_),
             }) | Self::Local(LocalArgs {
                 command: LocalCommand::Init | LocalCommand::Export(_) | LocalCommand::Backup(_),
             }) | Self::Sync(SyncArgs {
@@ -683,6 +687,10 @@ pub struct FarmArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum FarmCommand {
+    #[command(about = "Create or refresh a farm draft progressively")]
+    Init(FarmInitArgs),
+    #[command(about = "Set one farm draft field")]
+    Set(FarmSetArgs),
     #[command(about = "Publish the current farm draft")]
     Publish(FarmPublishArgs),
     #[command(about = "Create or update a farm draft in one command")]
@@ -715,6 +723,62 @@ pub struct FarmPublishArgs {
 pub struct FarmScopedArgs {
     #[arg(long, value_enum)]
     pub scope: Option<FarmScopeArg>,
+}
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct FarmInitArgs {
+    #[arg(long, value_enum)]
+    pub scope: Option<FarmScopeArg>,
+    #[arg(long = "farm-d-tag")]
+    pub farm_d_tag: Option<String>,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long = "display-name")]
+    pub display_name: Option<String>,
+    #[arg(long)]
+    pub about: Option<String>,
+    #[arg(long)]
+    pub website: Option<String>,
+    #[arg(long)]
+    pub picture: Option<String>,
+    #[arg(long)]
+    pub banner: Option<String>,
+    #[arg(long)]
+    pub location: Option<String>,
+    #[arg(long)]
+    pub city: Option<String>,
+    #[arg(long)]
+    pub region: Option<String>,
+    #[arg(long)]
+    pub country: Option<String>,
+    #[arg(long = "delivery", visible_alias = "delivery-method")]
+    pub delivery_method: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FarmFieldArg {
+    Name,
+    #[value(name = "display_name", alias = "display-name")]
+    DisplayName,
+    About,
+    Website,
+    Picture,
+    Banner,
+    Location,
+    City,
+    Region,
+    Country,
+    Delivery,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmSetArgs {
+    #[arg(long, value_enum)]
+    pub scope: Option<FarmScopeArg>,
+    #[arg(value_enum)]
+    pub field: FarmFieldArg,
+    #[arg(value_name = "value", num_args = 1..)]
+    pub value: Vec<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1108,11 +1172,11 @@ pub struct SellRestockArgs {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccountCommand, CliArgs, Command, ConfigCommand, FarmCommand, FarmScopeArg, JobCommand,
-        JobWatchArgs, ListingCommand, LocalCommand, LocalExportFormatArg, MarketCommand,
-        MycCommand, NetCommand, OrderCommand, OrderWatchArgs, OutputFormatArg, RelayCommand,
-        RpcCommand, RuntimeCommand, RuntimeConfigCommand, SellCommand, SetupRoleArg, SignerCommand,
-        SyncCommand, SyncWatchArgs,
+        AccountCommand, CliArgs, Command, ConfigCommand, FarmCommand, FarmFieldArg, FarmScopeArg,
+        JobCommand, JobWatchArgs, ListingCommand, LocalCommand, LocalExportFormatArg,
+        MarketCommand, MycCommand, NetCommand, OrderCommand, OrderWatchArgs, OutputFormatArg,
+        RelayCommand, RpcCommand, RuntimeCommand, RuntimeConfigCommand, SellCommand, SetupRoleArg,
+        SignerCommand, SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     #[test]
@@ -1498,6 +1562,55 @@ mod tests {
                     assert_eq!(setup.location, "San Francisco, CA");
                     assert_eq!(setup.city.as_deref(), Some("San Francisco"));
                     assert_eq!(setup.delivery_method, "local_delivery");
+                }
+                _ => panic!("unexpected farm subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let farm_init = CliArgs::parse_from([
+            "radroots",
+            "farm",
+            "init",
+            "--scope",
+            "workspace",
+            "--name",
+            "La Huerta",
+            "--location",
+            "San Francisco, CA",
+            "--delivery",
+            "pickup",
+        ]);
+        match farm_init.command {
+            Command::Farm(args) => match args.command {
+                FarmCommand::Init(init) => {
+                    assert_eq!(init.scope, Some(FarmScopeArg::Workspace));
+                    assert_eq!(init.name.as_deref(), Some("La Huerta"));
+                    assert_eq!(init.location.as_deref(), Some("San Francisco, CA"));
+                    assert_eq!(init.delivery_method.as_deref(), Some("pickup"));
+                }
+                _ => panic!("unexpected farm subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let farm_set = CliArgs::parse_from([
+            "radroots",
+            "farm",
+            "set",
+            "--scope",
+            "user",
+            "display-name",
+            "La",
+            "Huerta",
+            "Farm",
+        ]);
+        match farm_set.command {
+            Command::Farm(args) => match args.command {
+                FarmCommand::Set(set) => {
+                    assert_eq!(set.scope, Some(FarmScopeArg::User));
+                    assert_eq!(set.field, FarmFieldArg::DisplayName);
+                    assert_eq!(set.value, vec!["La", "Huerta", "Farm"]);
                 }
                 _ => panic!("unexpected farm subcommand"),
             },
@@ -1989,6 +2102,14 @@ mod tests {
         let account_create = CliArgs::parse_from(["radroots", "account", "create"]);
         assert_eq!(account_create.command.display_name(), "account create");
         assert!(!account_create.command.supports_dry_run());
+
+        let farm_init = CliArgs::parse_from(["radroots", "farm", "init"]);
+        assert_eq!(farm_init.command.display_name(), "farm init");
+        assert!(!farm_init.command.supports_dry_run());
+
+        let farm_set = CliArgs::parse_from(["radroots", "farm", "set", "name", "La Huerta"]);
+        assert_eq!(farm_set.command.display_name(), "farm set");
+        assert!(!farm_set.command.supports_dry_run());
 
         let farm_setup = CliArgs::parse_from([
             "radroots",

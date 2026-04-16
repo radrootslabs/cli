@@ -52,10 +52,14 @@ fn farm_help_mentions_human_first_subcommands() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("init"));
+    assert!(stdout.contains("set"));
     assert!(stdout.contains("check"));
     assert!(stdout.contains("show"));
     assert!(stdout.contains("publish"));
-    assert!(stdout.contains("Compatibility aliases: status, get."));
+    assert!(stdout.contains(
+        "Compatibility paths: `farm setup`, `farm status`, and `farm get` remain available."
+    ));
 }
 
 #[test]

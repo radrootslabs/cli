@@ -1,7 +1,7 @@
-use crate::cli::{FarmPublishArgs, FarmScopedArgs, FarmSetupArgs};
+use crate::cli::{FarmInitArgs, FarmPublishArgs, FarmScopedArgs, FarmSetArgs, FarmSetupArgs};
 use crate::domain::runtime::{
-    CommandDisposition, CommandOutput, CommandView, FarmGetView, FarmPublishView, FarmSetupView,
-    FarmStatusView,
+    CommandDisposition, CommandOutput, CommandView, FarmGetView, FarmPublishView, FarmSetView,
+    FarmSetupView, FarmStatusView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -9,6 +9,16 @@ use crate::runtime::config::RuntimeConfig;
 pub fn setup(config: &RuntimeConfig, args: &FarmSetupArgs) -> Result<CommandOutput, RuntimeError> {
     let view = crate::runtime::farm::setup(config, args)?;
     Ok(farm_setup_output(view))
+}
+
+pub fn init(config: &RuntimeConfig, args: &FarmInitArgs) -> Result<CommandOutput, RuntimeError> {
+    let view = crate::runtime::farm::init(config, args)?;
+    Ok(farm_setup_output(view))
+}
+
+pub fn set(config: &RuntimeConfig, args: &FarmSetArgs) -> Result<CommandOutput, RuntimeError> {
+    let view = crate::runtime::farm::set(config, args)?;
+    Ok(farm_set_output(view))
 }
 
 pub fn publish(
@@ -62,6 +72,20 @@ fn farm_setup_output(view: FarmSetupView) -> CommandOutput {
         CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::FarmSetup(view)),
         CommandDisposition::InternalError => {
             CommandOutput::internal_error(CommandView::FarmSetup(view))
+        }
+    }
+}
+
+fn farm_set_output(view: FarmSetView) -> CommandOutput {
+    match view.disposition() {
+        CommandDisposition::Success => CommandOutput::success(CommandView::FarmSet(view)),
+        CommandDisposition::Unconfigured => CommandOutput::unconfigured(CommandView::FarmSet(view)),
+        CommandDisposition::ExternalUnavailable => {
+            CommandOutput::external_unavailable(CommandView::FarmSet(view))
+        }
+        CommandDisposition::Unsupported => CommandOutput::unsupported(CommandView::FarmSet(view)),
+        CommandDisposition::InternalError => {
+            CommandOutput::internal_error(CommandView::FarmSet(view))
         }
     }
 }

@@ -64,7 +64,7 @@ fn setup_seller_creates_local_state_and_reports_farm_attention() {
     assert!(stdout.contains("Needs attention"));
     assert!(stdout.contains("Relay configuration"));
     assert!(stdout.contains("Farm draft"));
-    assert!(stdout.contains("radroots farm setup"));
+    assert!(stdout.contains("radroots farm init"));
     assert!(stdout.contains("radroots status"));
 
     let account_output = cli_command_in(dir.path())

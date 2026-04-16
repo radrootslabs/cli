@@ -139,6 +139,9 @@ struct ListingValidationContext {
 #[derive(Debug, Clone)]
 struct ListingAuthoringDefaults {
     farm_config_present: bool,
+    farm_defaults_ready: bool,
+    farm_next_action: Option<String>,
+    farm_reason: Option<String>,
     selected_account_id: Option<String>,
     selected_account_pubkey: Option<String>,
     selected_farm_d_tag: Option<String>,
@@ -259,8 +262,8 @@ pub fn scaffold(
     if defaults.selected_account_pubkey.is_none() {
         actions.push("radroots account new".to_owned());
     }
-    if !defaults.farm_config_present {
-        actions.push(farm_setup_action(config)?);
+    if let Some(action) = &defaults.farm_next_action {
+        actions.push(action.clone());
     }
 
     Ok(ListingNewView {
@@ -273,10 +276,7 @@ pub fn scaffold(
         farm_d_tag: defaults.selected_farm_d_tag,
         delivery_method: non_empty(draft.delivery.method.clone()),
         location_primary: non_empty(draft.location.primary.clone()),
-        reason: (!defaults.farm_config_present).then(|| {
-            "selected farm config not found; delivery, location, and farm defaults were left blank"
-                .to_owned()
-        }),
+        reason: defaults.farm_reason,
         actions,
     })
 }
@@ -1231,6 +1231,12 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
     let selected_account = accounts::resolve_account(config)?;
     let mut defaults = ListingAuthoringDefaults {
         farm_config_present: false,
+        farm_defaults_ready: false,
+        farm_next_action: Some(farm_setup_action(config)?),
+        farm_reason: Some(
+            "selected farm draft not found; delivery, location, and farm defaults were left blank"
+                .to_owned(),
+        ),
         selected_account_id: selected_account
             .as_ref()
             .map(|account| account.record.account_id.to_string()),
@@ -1256,10 +1262,27 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
     defaults.selected_account_id = Some(resolved.document.selection.account.clone());
     defaults.selected_account_pubkey = Some(account.record.public_identity.public_key_hex.clone());
     defaults.selected_farm_d_tag = Some(resolved.document.selection.farm_d_tag.clone());
-    defaults.delivery_method = Some(resolved.document.listing_defaults.delivery_method.clone());
-    defaults.location = Some(draft_location_from_model(
-        &resolved.document.listing_defaults.location,
-    ));
+    let draft_missing = farm_config::missing_fields(&resolved.document);
+    defaults.farm_defaults_ready = !draft_missing.iter().any(|field| {
+        matches!(
+            field,
+            farm_config::FarmMissingField::Location | farm_config::FarmMissingField::Delivery
+        )
+    });
+    if defaults.farm_defaults_ready {
+        defaults.delivery_method = Some(resolved.document.listing_defaults.delivery_method.clone());
+        defaults.location = Some(draft_location_from_model(
+            &resolved.document.listing_defaults.location,
+        ));
+        defaults.farm_next_action = None;
+        defaults.farm_reason = None;
+    } else {
+        defaults.farm_next_action = Some("radroots farm check".to_owned());
+        defaults.farm_reason = Some(
+            "selected farm draft is missing delivery or location defaults; those fields were left blank"
+                .to_owned(),
+        );
+    }
     Ok(defaults)
 }
 
@@ -1284,12 +1307,8 @@ fn draft_location_from_model(location: &RadrootsListingLocation) -> ListingDraft
     }
 }
 
-fn farm_setup_action(config: &RuntimeConfig) -> Result<String, RuntimeError> {
-    let scope = farm_config::resolve_scope(&config.paths, None)?;
-    Ok(format!(
-        "radroots farm setup --scope {} --name <farm-name> --location <place>",
-        scope.as_str()
-    ))
+fn farm_setup_action(_config: &RuntimeConfig) -> Result<String, RuntimeError> {
+    Ok("radroots farm init".to_owned())
 }
 
 fn configured_account(

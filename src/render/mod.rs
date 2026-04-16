@@ -2,8 +2,8 @@ use std::io::{self, Write};
 
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
-    FarmConfigSummaryView, FarmGetView, FarmPublishComponentView, FarmPublishView, FarmSetupView,
-    FarmStatusView, FindView, JobGetView, JobListView, JobWatchView, ListingGetView,
+    FarmConfigSummaryView, FarmGetView, FarmPublishComponentView, FarmPublishView, FarmSetView,
+    FarmSetupView, FarmStatusView, FindView, JobGetView, JobListView, JobWatchView, ListingGetView,
     ListingMutationView, ListingNewView, ListingValidateView, LocalBackupView, LocalExportView,
     LocalInitView, LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView,
     OrderGetView, OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView,
@@ -120,6 +120,9 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::FarmPublish(view) => {
             render_farm_publish(stdout, view)?;
+        }
+        CommandView::FarmSet(view) => {
+            render_farm_set(stdout, view)?;
         }
         CommandView::FarmSetup(view) => {
             render_farm_setup(stdout, view)?;
@@ -314,6 +317,10 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::FarmPublish(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::FarmSet(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -2217,103 +2224,121 @@ fn render_sync_watch(stdout: &mut dyn Write, view: &SyncWatchView) -> Result<(),
 }
 
 fn render_farm_setup(stdout: &mut dyn Write, view: &FarmSetupView) -> Result<(), RuntimeError> {
-    write_context(
-        stdout,
-        match view.state.as_str() {
-            "configured" => "farm · configured",
-            "unconfigured" => "farm · unconfigured",
-            _ => "farm",
-        },
-    )?;
-    if let Some(config) = &view.config {
-        render_farm_summary(stdout, config)?;
+    match view.state.as_str() {
+        "unconfigured" => {
+            writeln!(stdout, "Not ready yet")?;
+            writeln!(stdout)?;
+            render_item_section(stdout, "Missing", &["Selected account".to_owned()])?;
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+            Ok(())
+        }
+        _ => {
+            writeln!(stdout, "Farm draft saved")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if let Some(config) = &view.config {
+                writeln!(stdout)?;
+                render_farm_summary(stdout, config)?;
+            }
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+            Ok(())
+        }
     }
-    if let Some(reason) = &view.reason {
-        writeln!(stdout, "reason: {reason}")?;
+}
+
+fn render_farm_set(stdout: &mut dyn Write, view: &FarmSetView) -> Result<(), RuntimeError> {
+    match view.state.as_str() {
+        "unconfigured" => {
+            writeln!(stdout, "Farm draft not found")?;
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+            Ok(())
+        }
+        _ => {
+            writeln!(stdout, "Farm updated")?;
+            writeln!(stdout)?;
+            render_owned_pairs(
+                stdout,
+                "Changed",
+                &[("Field", view.field.clone()), ("Value", view.value.clone())],
+            )?;
+            if let Some(config) = &view.config {
+                render_farm_summary(stdout, config)?;
+            }
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+            Ok(())
+        }
     }
-    writeln!(stdout, "source: {}", view.source)?;
-    render_actions(stdout, &view.actions)?;
-    Ok(())
 }
 
 fn render_farm_status(stdout: &mut dyn Write, view: &FarmStatusView) -> Result<(), RuntimeError> {
-    write_context(
-        stdout,
-        match view.state.as_str() {
-            "ready" => "farm · ready",
-            "unconfigured" => "farm · unconfigured",
-            _ => "farm",
-        },
-    )?;
-    let rows = vec![
-        ("scope", view.scope.clone()),
-        ("path", view.path.clone()),
-        ("config present", yes_no(view.config_present).to_owned()),
-        ("config valid", yes_no(view.config_valid).to_owned()),
-        ("account", view.account_state.clone()),
-        ("listing defaults", view.listing_defaults_state.clone()),
-    ];
-    render_owned_pairs(stdout, "status", rows.as_slice())?;
-    if let Some(config) = &view.config {
-        render_farm_summary(stdout, config)?;
+    match view.state.as_str() {
+        "ready" => {
+            writeln!(stdout, "Farm ready to publish")?;
+            if let Some(config) = &view.config {
+                writeln!(stdout)?;
+                render_farm_summary(stdout, config)?;
+            }
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+            Ok(())
+        }
+        _ => {
+            writeln!(stdout, "Farm not ready yet")?;
+            if !view.missing.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Missing", &view.missing)?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+            Ok(())
+        }
     }
-    if let Some(reason) = &view.reason {
-        writeln!(stdout, "reason: {reason}")?;
-    }
-    writeln!(stdout, "source: {}", view.source)?;
-    render_actions(stdout, &view.actions)?;
-    Ok(())
 }
 
 fn render_farm_get(stdout: &mut dyn Write, view: &FarmGetView) -> Result<(), RuntimeError> {
-    write_context(
-        stdout,
-        match view.state.as_str() {
-            "ready" => "farm · selected",
-            "unconfigured" => "farm · unconfigured",
-            _ => "farm",
-        },
-    )?;
-    render_owned_pairs(
-        stdout,
-        "config",
-        &[
-            ("scope", view.scope.clone()),
-            ("path", view.path.clone()),
-            ("config present", yes_no(view.config_present).to_owned()),
-        ],
-    )?;
     if let Some(document) = &view.document {
-        let mut rows = vec![
-            ("account id", document.selection.account.clone()),
-            ("farm d_tag", document.selection.farm_d_tag.clone()),
-            ("name", document.farm.name.clone()),
-            (
-                "delivery method",
-                document.listing_defaults.delivery_method.clone(),
-            ),
-            (
-                "profile publish",
-                document.publication.profile_state.clone(),
-            ),
-            ("farm publish", document.publication.farm_state.clone()),
-        ];
-        if let Some(location) = &document.farm.location {
-            if let Some(primary) = &location.primary {
-                rows.push(("location", primary.clone()));
-            }
+        writeln!(stdout, "Farm draft")?;
+        writeln!(stdout)?;
+        render_farm_document(stdout, document)?;
+    } else {
+        writeln!(stdout, "Farm draft not found")?;
+        if !view.actions.is_empty() {
+            writeln!(stdout)?;
+            render_item_section(stdout, "Next", &view.actions)?;
         }
-        render_owned_pairs(stdout, "farm", rows.as_slice())?;
     }
-    if let Some(reason) = &view.reason {
-        writeln!(stdout, "reason: {reason}")?;
-    }
-    writeln!(stdout, "source: {}", view.source)?;
-    render_actions(stdout, &view.actions)?;
     Ok(())
 }
 
 fn render_farm_publish(stdout: &mut dyn Write, view: &FarmPublishView) -> Result<(), RuntimeError> {
+    if view.state == "unconfigured" {
+        writeln!(stdout, "Not ready yet")?;
+        if !view.missing.is_empty() {
+            writeln!(stdout)?;
+            render_item_section(stdout, "Missing", &view.missing)?;
+        }
+        if !view.actions.is_empty() {
+            writeln!(stdout)?;
+            render_item_section(stdout, "Next", &view.actions)?;
+        }
+        return Ok(());
+    }
+
     write_context(stdout, format!("farm publish · {}", view.state).as_str())?;
     render_owned_pairs(
         stdout,
@@ -2335,6 +2360,99 @@ fn render_farm_publish(stdout: &mut dyn Write, view: &FarmPublishView) -> Result
     writeln!(stdout, "source: {}", view.source)?;
     render_actions(stdout, &view.actions)?;
     Ok(())
+}
+
+fn render_farm_document(
+    stdout: &mut dyn Write,
+    document: &crate::domain::runtime::FarmConfigDocumentView,
+) -> Result<(), RuntimeError> {
+    let mut rows = Vec::new();
+    push_row(
+        &mut rows,
+        "Name",
+        first_present([
+            Some(document.profile.name.as_str()),
+            Some(document.farm.name.as_str()),
+        ]),
+    );
+    push_row(
+        &mut rows,
+        "Display name",
+        document.profile.display_name.as_deref().map(str::to_owned),
+    );
+    push_row(
+        &mut rows,
+        "About",
+        first_present([
+            document.profile.about.as_deref(),
+            document.farm.about.as_deref(),
+        ]),
+    );
+    push_row(
+        &mut rows,
+        "Website",
+        first_present([
+            document.profile.website.as_deref(),
+            document.farm.website.as_deref(),
+        ]),
+    );
+    push_row(
+        &mut rows,
+        "Place",
+        first_present([
+            Some(document.listing_defaults.location.primary.as_str()),
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| location.primary.as_deref()),
+        ]),
+    );
+    push_row(
+        &mut rows,
+        "City",
+        first_present([
+            document.listing_defaults.location.city.as_deref(),
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| location.city.as_deref()),
+        ]),
+    );
+    push_row(
+        &mut rows,
+        "Region",
+        first_present([
+            document.listing_defaults.location.region.as_deref(),
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| location.region.as_deref()),
+        ]),
+    );
+    push_row(
+        &mut rows,
+        "Country",
+        first_present([
+            document.listing_defaults.location.country.as_deref(),
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| location.country.as_deref()),
+        ]),
+    );
+    push_row(
+        &mut rows,
+        "Delivery",
+        non_empty_str(document.listing_defaults.delivery_method.as_str())
+            .map(humanize_delivery_method),
+    );
+    rows.push(("Scope", document.selection.scope.clone()));
+    rows.push(("Farm tag", document.selection.farm_d_tag.clone()));
+    render_owned_pairs(stdout, "Farm", rows.as_slice())
 }
 
 fn render_farm_publish_component(
@@ -2369,23 +2487,28 @@ fn render_farm_summary(
     stdout: &mut dyn Write,
     config: &FarmConfigSummaryView,
 ) -> Result<(), RuntimeError> {
-    let mut rows = vec![
-        ("scope", config.scope.clone()),
-        ("path", config.path.clone()),
-        ("account id", config.selected_account_id.clone()),
-        ("farm d_tag", config.farm_d_tag.clone()),
-        ("name", config.name.clone()),
-        ("delivery method", config.delivery_method.clone()),
-        ("profile publish", config.publication.profile_state.clone()),
-        ("farm publish", config.publication.farm_state.clone()),
-    ];
-    if let Some(pubkey) = &config.selected_account_pubkey {
-        rows.insert(3, ("account pubkey", pubkey.clone()));
-    }
-    if let Some(location) = &config.location_primary {
-        rows.push(("location", location.clone()));
-    }
-    render_owned_pairs(stdout, "farm", rows.as_slice())
+    let mut rows = Vec::new();
+    push_row(
+        &mut rows,
+        "Name",
+        non_empty_str(config.name.as_str()).map(str::to_owned),
+    );
+    rows.push(("Scope", config.scope.clone()));
+    push_row(
+        &mut rows,
+        "Place",
+        config
+            .location_primary
+            .as_deref()
+            .and_then(non_empty_str)
+            .map(str::to_owned),
+    );
+    push_row(
+        &mut rows,
+        "Delivery",
+        non_empty_str(config.delivery_method.as_str()).map(humanize_delivery_method),
+    );
+    render_owned_pairs(stdout, "Farm", rows.as_slice())
 }
 
 fn render_local_init(stdout: &mut dyn Write, view: &LocalInitView) -> Result<(), RuntimeError> {
@@ -2533,6 +2656,48 @@ fn render_item_section(
         writeln!(stdout, "  {item}")?;
     }
     Ok(())
+}
+
+fn push_row(rows: &mut Vec<(&'static str, String)>, label: &'static str, value: Option<String>) {
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        rows.push((label, value));
+    }
+}
+
+fn first_present<const N: usize>(values: [Option<&str>; N]) -> Option<String> {
+    values
+        .into_iter()
+        .flatten()
+        .find_map(|value| non_empty_str(value).map(str::to_owned))
+}
+
+fn non_empty_str(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn humanize_delivery_method(value: &str) -> String {
+    value
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(capitalize_ascii_word)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn capitalize_ascii_word(word: &str) -> String {
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    let mut rendered = String::new();
+    rendered.push(first.to_ascii_uppercase());
+    rendered.push_str(chars.as_str());
+    rendered
 }
 
 fn render_local_backup(stdout: &mut dyn Write, view: &LocalBackupView) -> Result<(), RuntimeError> {
@@ -2873,10 +3038,17 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::AccountWhoami(_) => "account whoami",
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
-        CommandView::FarmGet(_) => "farm get",
+        CommandView::FarmGet(_) => "farm show",
         CommandView::FarmPublish(_) => "farm publish",
-        CommandView::FarmSetup(_) => "farm setup",
-        CommandView::FarmStatus(_) => "farm status",
+        CommandView::FarmSet(_) => "farm set",
+        CommandView::FarmSetup(view) => {
+            if view.state == "saved" {
+                "farm init"
+            } else {
+                "farm setup"
+            }
+        }
+        CommandView::FarmStatus(_) => "farm check",
         CommandView::Find(_) => "find",
         CommandView::JobGet(_) => "job get",
         CommandView::JobList(_) => "job ls",
