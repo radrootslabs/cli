@@ -6,10 +6,10 @@ use crate::domain::runtime::{
     FindHyfView, FindPriceView, FindQuantityView, FindResultHyfView, FindResultProvenanceView,
     FindResultView, FindView, SyncFreshnessView,
 };
+use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::hyf::{self, HyfQueryRewriteRequest, HyfRequestContext};
 use crate::runtime::sync::freshness_from_executor;
-use crate::runtime::RuntimeError;
 
 const FIND_SOURCE: &str = "local replica · local first";
 const FIND_HYF_SOURCE: &str = "hyf query_rewrite · local first";

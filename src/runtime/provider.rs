@@ -616,8 +616,10 @@ fn workflow_identity_path(repo_local_root: &Path) -> Result<PathBuf, String> {
                 repo_local_root.display()
             )
         })?;
-    let worker_namespace = RadrootsRuntimeNamespace::worker(WORKFLOW_PROVIDER_RUNTIME_ID)
-        .map_err(|error| format!("resolve worker namespace `{WORKFLOW_PROVIDER_RUNTIME_ID}`: {error}"))?;
+    let worker_namespace =
+        RadrootsRuntimeNamespace::worker(WORKFLOW_PROVIDER_RUNTIME_ID).map_err(|error| {
+            format!("resolve worker namespace `{WORKFLOW_PROVIDER_RUNTIME_ID}`: {error}")
+        })?;
     Ok(base_paths
         .namespaced(&worker_namespace)
         .secrets
@@ -638,7 +640,9 @@ fn loopback_endpoint_matches(configured: &str, canonical: &str) -> bool {
 
 fn loopback_host_matches(left: Option<&str>, right: Option<&str>) -> bool {
     match (left, right) {
-        (Some(left), Some(right)) => normalize_loopback_host(left) == normalize_loopback_host(right),
+        (Some(left), Some(right)) => {
+            normalize_loopback_host(left) == normalize_loopback_host(right)
+        }
         _ => false,
     }
 }
@@ -843,10 +847,7 @@ mod tests {
         let binding = sample_workflow_binding();
         let view = resolve_workflow_provider(&sample_config(vec![binding], false));
         assert_eq!(view.state, "unavailable");
-        assert_eq!(
-            view.provenance,
-            ProviderProvenance::ManagedDefault.as_str()
-        );
+        assert_eq!(view.provenance, ProviderProvenance::ManagedDefault.as_str());
         assert!(
             view.detail()
                 .contains("RADROOTS_CLI_PATHS_PROFILE=repo_local")
@@ -879,11 +880,11 @@ mod tests {
 
         let view = resolve_workflow_provider(&config);
         assert_eq!(view.state, "ready");
-        assert_eq!(
-            view.provenance,
-            ProviderProvenance::ManagedDefault.as_str()
+        assert_eq!(view.provenance, ProviderProvenance::ManagedDefault.as_str());
+        assert!(
+            view.detail()
+                .contains("canonical repo-local localhost workflow progression")
         );
-        assert!(view.detail().contains("canonical repo-local localhost workflow progression"));
     }
 
     #[test]

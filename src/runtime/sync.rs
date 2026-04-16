@@ -10,8 +10,8 @@ use crate::domain::runtime::{
     SyncActionView, SyncFreshnessView, SyncQueueView, SyncStatusView, SyncWatchFrameView,
     SyncWatchView,
 };
-use crate::runtime::config::RuntimeConfig;
 use crate::runtime::RuntimeError;
+use crate::runtime::config::RuntimeConfig;
 
 const SYNC_SOURCE: &str = "local replica · local first";
 const RELAY_SETUP_ACTION: &str = "radroots relay ls --relay wss://relay.example.com";

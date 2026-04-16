@@ -423,10 +423,10 @@ pub fn bridge_listing_publish(
         options = options.with_signer_authority(sdk_signer_authority(signer_authority));
     }
 
-    let receipt = block_on_sdk(sdk.listing().publish_listing_via_radrootsd_with_options(
-        listing,
-        &options,
-    ))?
+    let receipt = block_on_sdk(
+        sdk.listing()
+            .publish_listing_via_radrootsd_with_options(listing, &options),
+    )?
     .map_err(map_sdk_publish_error)?;
 
     map_listing_publish_receipt(receipt, idempotency_key)
@@ -513,9 +513,8 @@ pub fn bridge_order_request(
 
     let sdk = actor_write_sdk_client(config)?;
     let session = SdkRadrootsdSignerSessionRef::from_session_id(signer_session_id.to_owned());
-    let mut options = radroots_sdk::SdkRadrootsdOrderRequestPublishOptions::from_signer_session_ref(
-        &session,
-    );
+    let mut options =
+        radroots_sdk::SdkRadrootsdOrderRequestPublishOptions::from_signer_session_ref(&session);
     if let Some(idempotency_key) = idempotency_key {
         options = options.with_idempotency_key(idempotency_key.to_owned());
     }
@@ -588,7 +587,9 @@ fn default_target(config: &RuntimeConfig) -> RpcTarget {
     }
 }
 
-fn actor_write_sdk_client(config: &RuntimeConfig) -> Result<radroots_sdk::RadrootsSdkClient, DaemonRpcError> {
+fn actor_write_sdk_client(
+    config: &RuntimeConfig,
+) -> Result<radroots_sdk::RadrootsSdkClient, DaemonRpcError> {
     let target = actor_write_target(config)?;
     let mut sdk_config = RadrootsSdkConfig::custom();
     sdk_config.transport = SdkTransportMode::Radrootsd;
@@ -624,7 +625,8 @@ fn map_listing_publish_receipt(
     receipt: radroots_sdk::SdkPublishReceipt,
     idempotency_key: Option<&str>,
 ) -> Result<BridgeListingPublishResult, DaemonRpcError> {
-    let radroots_sdk::SdkTransportReceipt::Radrootsd(transport_receipt) = receipt.transport_receipt else {
+    let radroots_sdk::SdkTransportReceipt::Radrootsd(transport_receipt) = receipt.transport_receipt
+    else {
         return Err(DaemonRpcError::InvalidResponse(
             "sdk listing publish returned a non-radrootsd transport receipt".to_owned(),
         ));
@@ -700,7 +702,8 @@ fn map_order_request_receipt(
     receipt: radroots_sdk::SdkPublishReceipt,
     idempotency_key: Option<&str>,
 ) -> Result<BridgeOrderRequestResult, DaemonRpcError> {
-    let radroots_sdk::SdkTransportReceipt::Radrootsd(transport_receipt) = receipt.transport_receipt else {
+    let radroots_sdk::SdkTransportReceipt::Radrootsd(transport_receipt) = receipt.transport_receipt
+    else {
         return Err(DaemonRpcError::InvalidResponse(
             "sdk order publish returned a non-radrootsd transport receipt".to_owned(),
         ));
