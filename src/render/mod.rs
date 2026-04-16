@@ -166,6 +166,15 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         CommandView::LocalStatus(view) => {
             render_local_status(stdout, view)?;
         }
+        CommandView::MarketSearch(view) => {
+            render_market_search(stdout, view)?;
+        }
+        CommandView::MarketUpdate(view) => {
+            render_market_update(stdout, view)?;
+        }
+        CommandView::MarketView(view) => {
+            render_market_view(stdout, view)?;
+        }
         CommandView::RelayList(view) => {
             render_relay_list(stdout, view)?;
         }
@@ -380,6 +389,18 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
+        CommandView::MarketSearch(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::MarketUpdate(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::MarketView(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandView::RelayList(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
@@ -454,6 +475,13 @@ fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<()
             Ok(())
         }
         CommandView::Find(view) => {
+            for result in &view.results {
+                serde_json::to_writer(&mut *stdout, result)?;
+                writeln!(stdout)?;
+            }
+            Ok(())
+        }
+        CommandView::MarketSearch(view) => {
             for result in &view.results {
                 serde_json::to_writer(&mut *stdout, result)?;
                 writeln!(stdout)?;
@@ -1149,6 +1177,104 @@ fn render_find(stdout: &mut dyn Write, view: &FindView) -> Result<(), RuntimeErr
     )?;
     render_actions(stdout, &view.actions)?;
     Ok(())
+}
+
+fn render_market_search(stdout: &mut dyn Write, view: &FindView) -> Result<(), RuntimeError> {
+    match view.state.as_str() {
+        "unconfigured" => {
+            writeln!(stdout, "Not ready yet")?;
+            writeln!(stdout)?;
+            render_item_section(stdout, "Missing", &["Local market data".to_owned()])?;
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "empty" => {
+            writeln!(stdout, "No listings found")?;
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        _ => {
+            writeln!(stdout, "{}", market_search_headline(view))?;
+            writeln!(stdout)?;
+            for (index, result) in view.results.iter().enumerate() {
+                render_market_search_card(stdout, result)?;
+                if index + 1 < view.results.len() {
+                    writeln!(stdout)?;
+                }
+            }
+            if let Some(hyf) = &view.hyf {
+                if hyf.rewritten_query.trim() != view.query.trim() {
+                    writeln!(stdout)?;
+                    render_item_section(stdout, "Also searched for", &[view.query.clone()])?;
+                }
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn render_market_search_card(
+    stdout: &mut dyn Write,
+    result: &crate::domain::runtime::FindResultView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "{}", result.title)?;
+    let mut rows = vec![("Key", result.product_key.clone())];
+    push_row(
+        &mut rows,
+        "Place",
+        result
+            .location_primary
+            .as_deref()
+            .and_then(non_empty_str)
+            .map(str::to_owned),
+    );
+    push_row(&mut rows, "Offer", quantity_offer_text(&result.available));
+    rows.push((
+        "Price",
+        format_price(
+            result.price.amount,
+            &result.price.currency,
+            result.price.per_amount,
+            &result.price.per_unit,
+        ),
+    ));
+    rows.push((
+        "Stock",
+        format_available(
+            result
+                .available
+                .available_amount
+                .unwrap_or(result.available.total_amount),
+            result
+                .available
+                .label
+                .as_deref()
+                .unwrap_or(result.available.total_unit.as_str()),
+        ),
+    ));
+    render_field_rows(stdout, rows.as_slice())
+}
+
+fn market_search_headline(view: &FindView) -> String {
+    let query = view
+        .hyf
+        .as_ref()
+        .map(|hyf| hyf.rewritten_query.as_str())
+        .unwrap_or(view.query.as_str());
+    format!(
+        "{} listing{} for {}",
+        view.count,
+        if view.count == 1 { "" } else { "s" },
+        query
+    )
 }
 
 fn render_job_list(stdout: &mut dyn Write, view: &JobListView) -> Result<(), RuntimeError> {
@@ -1904,6 +2030,87 @@ fn render_listing_get(stdout: &mut dyn Write, view: &ListingGetView) -> Result<(
     Ok(())
 }
 
+fn render_market_view(stdout: &mut dyn Write, view: &ListingGetView) -> Result<(), RuntimeError> {
+    match view.state.as_str() {
+        "unconfigured" => {
+            writeln!(stdout, "Not ready yet")?;
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "missing" => {
+            writeln!(stdout, "Listing not found")?;
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        _ => {
+            let headline = view.title.as_deref().unwrap_or("Listing");
+            writeln!(stdout, "{headline}")?;
+            writeln!(stdout)?;
+            let mut rows = Vec::<(&str, String)>::new();
+            push_row(
+                &mut rows,
+                "Key",
+                view.product_key
+                    .as_deref()
+                    .and_then(non_empty_str)
+                    .map(str::to_owned),
+            );
+            push_row(
+                &mut rows,
+                "Category",
+                view.category
+                    .as_deref()
+                    .and_then(non_empty_str)
+                    .map(str::to_owned),
+            );
+            push_row(
+                &mut rows,
+                "Place",
+                view.location_primary
+                    .as_deref()
+                    .and_then(non_empty_str)
+                    .map(str::to_owned),
+            );
+            if let Some(available) = &view.available {
+                push_row(&mut rows, "Offer", quantity_offer_text(available));
+                rows.push((
+                    "Stock",
+                    format_available(
+                        available.available_amount.unwrap_or(available.total_amount),
+                        available
+                            .label
+                            .as_deref()
+                            .unwrap_or(available.total_unit.as_str()),
+                    ),
+                ));
+            }
+            if let Some(price) = &view.price {
+                rows.push((
+                    "Price",
+                    format_price(
+                        price.amount,
+                        &price.currency,
+                        price.per_amount,
+                        &price.per_unit,
+                    ),
+                ));
+            }
+            render_owned_pairs(stdout, "Listing", rows.as_slice())?;
+            if let Some(description) = &view.description {
+                render_owned_pairs(stdout, "About", &[("Summary", description.clone())])?;
+            }
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn render_listing_mutation(
     stdout: &mut dyn Write,
     view: &ListingMutationView,
@@ -2186,6 +2393,57 @@ fn render_sync_action(stdout: &mut dyn Write, view: &SyncActionView) -> Result<(
     }
     writeln!(stdout, "source: {}", view.source)?;
     render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_market_update(stdout: &mut dyn Write, view: &SyncActionView) -> Result<(), RuntimeError> {
+    match view.state.as_str() {
+        "unconfigured" => {
+            writeln!(stdout, "Not ready yet")?;
+            let mut missing = Vec::new();
+            if view.replica_db == "missing" {
+                missing.push("Local market data".to_owned());
+            }
+            if view.relay_count == 0 {
+                missing.push("Relay configuration".to_owned());
+            }
+            if !missing.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Missing", &missing)?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        "unavailable" => {
+            writeln!(stdout, "Unavailable right now")?;
+            if let Some(reason) = &view.reason {
+                writeln!(stdout)?;
+                writeln!(stdout, "{reason}")?;
+            }
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+        _ => {
+            writeln!(stdout, "Market data updated")?;
+            writeln!(stdout)?;
+            render_owned_pairs(
+                stdout,
+                "Local data",
+                &[
+                    ("State", view.state.clone()),
+                    ("Updated", view.freshness.display.clone()),
+                    ("Relays", view.relay_count.to_string()),
+                ],
+            )?;
+            if !view.actions.is_empty() {
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2783,6 +3041,19 @@ fn render_pairs(
     Ok(())
 }
 
+fn render_field_rows(stdout: &mut dyn Write, rows: &[(&str, String)]) -> Result<(), RuntimeError> {
+    let label_width = rows
+        .iter()
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or_default();
+    for (label, value) in rows {
+        writeln!(stdout, "  {label:label_width$}  {value}")?;
+    }
+    writeln!(stdout)?;
+    Ok(())
+}
+
 fn render_owned_pairs(
     stdout: &mut dyn Write,
     heading: &str,
@@ -3013,6 +3284,15 @@ fn format_price(amount: f64, currency: &str, per_amount: u32, per_unit: &str) ->
     )
 }
 
+fn quantity_offer_text(quantity: &crate::domain::runtime::FindQuantityView) -> Option<String> {
+    quantity
+        .label
+        .as_deref()
+        .and_then(non_empty_str)
+        .map(str::to_owned)
+        .or_else(|| Some(format!("{} {}", quantity.total_amount, quantity.total_unit)))
+}
+
 fn format_available(amount: i64, unit: &str) -> String {
     format!("{amount} {unit}")
 }
@@ -3066,6 +3346,9 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::LocalExport(_) => "local export",
         CommandView::LocalInit(_) => "local init",
         CommandView::LocalStatus(_) => "local status",
+        CommandView::MarketSearch(_) => "market search",
+        CommandView::MarketUpdate(_) => "market update",
+        CommandView::MarketView(_) => "market view",
         CommandView::MycStatus(_) => "myc status",
         CommandView::NetStatus(_) => "net status",
         CommandView::OrderCancel(_) => "order cancel",

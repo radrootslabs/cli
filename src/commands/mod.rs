@@ -5,6 +5,7 @@ pub mod identity;
 pub mod job;
 pub mod listing;
 pub mod local;
+pub mod market;
 pub mod myc;
 pub mod net;
 pub mod order;
@@ -82,9 +83,9 @@ pub fn dispatch(
             LocalCommand::Backup(args) => local::backup(config, args),
         },
         Command::Market(market) => match &market.command {
-            MarketCommand::Update => sync::pull(config),
-            MarketCommand::Search(args) => find::search(config, args),
-            MarketCommand::View(args) => listing::get(config, args),
+            MarketCommand::Update => market::update(config),
+            MarketCommand::Search(args) => market::search(config, args),
+            MarketCommand::View(args) => market::view(config, args),
         },
         Command::Net(net) => match &net.command {
             NetCommand::Status => net::status(config),
