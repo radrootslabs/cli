@@ -2,13 +2,14 @@ use std::io::{self, Write};
 
 use crate::domain::runtime::{
     AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
-    FarmConfigSummaryView, FarmGetView, FarmSetupView, FarmStatusView, FindView, JobGetView,
-    JobListView, JobWatchView, ListingGetView, ListingMutationView, ListingNewView,
-    ListingValidateView, LocalBackupView, LocalExportView, LocalInitView, LocalStatusView,
-    NetStatusView, OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryView,
-    OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderWatchView, OrderWorkflowView,
-    RelayListView, RpcSessionsView, RpcStatusView, RuntimeActionView, RuntimeLogsView,
-    RuntimeManagedConfigView, RuntimeStatusView, SyncActionView, SyncStatusView, SyncWatchView,
+    FarmConfigSummaryView, FarmGetView, FarmPublishComponentView, FarmPublishView, FarmSetupView,
+    FarmStatusView, FindView, JobGetView, JobListView, JobWatchView, ListingGetView,
+    ListingMutationView, ListingNewView, ListingValidateView, LocalBackupView, LocalExportView,
+    LocalInitView, LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView,
+    OrderGetView, OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView,
+    OrderWatchView, OrderWorkflowView, RelayListView, RpcSessionsView, RpcStatusView,
+    RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView,
+    SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
@@ -116,6 +117,9 @@ fn render_human_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(),
         }
         CommandView::FarmGet(view) => {
             render_farm_get(stdout, view)?;
+        }
+        CommandView::FarmPublish(view) => {
+            render_farm_publish(stdout, view)?;
         }
         CommandView::FarmSetup(view) => {
             render_farm_setup(stdout, view)?;
@@ -300,6 +304,10 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::FarmGet(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::FarmPublish(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -2267,6 +2275,58 @@ fn render_farm_get(stdout: &mut dyn Write, view: &FarmGetView) -> Result<(), Run
     Ok(())
 }
 
+fn render_farm_publish(stdout: &mut dyn Write, view: &FarmPublishView) -> Result<(), RuntimeError> {
+    write_context(stdout, format!("farm publish · {}", view.state).as_str())?;
+    render_owned_pairs(
+        stdout,
+        "farm",
+        &[
+            ("scope", view.scope.clone()),
+            ("path", view.path.clone()),
+            ("account id", view.selected_account_id.clone()),
+            ("account pubkey", view.selected_account_pubkey.clone()),
+            ("farm d_tag", view.farm_d_tag.clone()),
+            ("dry run", yes_no(view.dry_run).to_owned()),
+        ],
+    )?;
+    render_farm_publish_component(stdout, "profile", &view.profile)?;
+    render_farm_publish_component(stdout, "farm record", &view.farm)?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
+    render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_farm_publish_component(
+    stdout: &mut dyn Write,
+    label: &str,
+    component: &FarmPublishComponentView,
+) -> Result<(), RuntimeError> {
+    let mut rows = vec![
+        ("state", component.state.clone()),
+        ("rpc method", component.rpc_method.clone()),
+        ("event kind", component.event_kind.to_string()),
+    ];
+    if let Some(job_id) = &component.job_id {
+        rows.push(("job id", job_id.clone()));
+    }
+    if let Some(job_status) = &component.job_status {
+        rows.push(("job status", job_status.clone()));
+    }
+    if let Some(event_id) = &component.event_id {
+        rows.push(("event id", event_id.clone()));
+    }
+    if let Some(event_addr) = &component.event_addr {
+        rows.push(("event addr", event_addr.clone()));
+    }
+    if let Some(reason) = &component.reason {
+        rows.push(("reason", reason.clone()));
+    }
+    render_owned_pairs(stdout, label, rows.as_slice())
+}
+
 fn render_farm_summary(
     stdout: &mut dyn Write,
     config: &FarmConfigSummaryView,
@@ -2701,6 +2761,7 @@ fn human_command_name(view: &CommandView) -> &'static str {
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
         CommandView::FarmGet(_) => "farm get",
+        CommandView::FarmPublish(_) => "farm publish",
         CommandView::FarmSetup(_) => "farm setup",
         CommandView::FarmStatus(_) => "farm status",
         CommandView::Find(_) => "find",

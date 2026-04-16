@@ -87,6 +87,7 @@ pub enum CommandView {
     ConfigShow(ConfigShowView),
     Doctor(DoctorView),
     FarmGet(FarmGetView),
+    FarmPublish(FarmPublishView),
     FarmSetup(FarmSetupView),
     FarmStatus(FarmStatusView),
     Find(FindView),
@@ -707,6 +708,94 @@ impl FarmGetView {
             _ => CommandDisposition::Success,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmPublishView {
+    pub state: String,
+    pub source: String,
+    pub scope: String,
+    pub path: String,
+    pub config_present: bool,
+    pub dry_run: bool,
+    pub selected_account_id: String,
+    pub selected_account_pubkey: String,
+    pub farm_d_tag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_signer_session_id: Option<String>,
+    pub profile: FarmPublishComponentView,
+    pub farm: FarmPublishComponentView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl FarmPublishView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "partial" | "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmPublishComponentView {
+    pub state: String,
+    pub rpc_method: String,
+    pub event_kind: u32,
+    pub deduplicated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<FarmPublishJobView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event: Option<FarmPublishEventView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmPublishJobView {
+    pub rpc_method: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_signer_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmPublishEventView {
+    pub kind: u32,
+    pub author: String,
+    pub content: String,
+    pub tags: Vec<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_addr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

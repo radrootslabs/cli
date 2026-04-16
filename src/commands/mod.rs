@@ -53,6 +53,7 @@ pub fn dispatch(
         },
         Command::Doctor => doctor::report(config, logging),
         Command::Farm(farm_command) => match &farm_command.command {
+            FarmCommand::Publish(args) => farm::publish(config, args),
             FarmCommand::Setup(args) => farm::setup(config, args),
             FarmCommand::Status(args) => farm::status(config, args),
             FarmCommand::Get(args) => farm::get(config, args),

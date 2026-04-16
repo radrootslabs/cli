@@ -1,6 +1,7 @@
-use crate::cli::{FarmScopedArgs, FarmSetupArgs};
+use crate::cli::{FarmPublishArgs, FarmScopedArgs, FarmSetupArgs};
 use crate::domain::runtime::{
-    CommandDisposition, CommandOutput, CommandView, FarmGetView, FarmSetupView, FarmStatusView,
+    CommandDisposition, CommandOutput, CommandView, FarmGetView, FarmPublishView, FarmSetupView,
+    FarmStatusView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -8,6 +9,14 @@ use crate::runtime::config::RuntimeConfig;
 pub fn setup(config: &RuntimeConfig, args: &FarmSetupArgs) -> Result<CommandOutput, RuntimeError> {
     let view = crate::runtime::farm::setup(config, args)?;
     Ok(farm_setup_output(view))
+}
+
+pub fn publish(
+    config: &RuntimeConfig,
+    args: &FarmPublishArgs,
+) -> Result<CommandOutput, RuntimeError> {
+    let view = crate::runtime::farm::publish(config, args)?;
+    Ok(farm_publish_output(view))
 }
 
 pub fn status(
@@ -21,6 +30,24 @@ pub fn status(
 pub fn get(config: &RuntimeConfig, args: &FarmScopedArgs) -> Result<CommandOutput, RuntimeError> {
     let view = crate::runtime::farm::get(config, args)?;
     Ok(farm_get_output(view))
+}
+
+fn farm_publish_output(view: FarmPublishView) -> CommandOutput {
+    match view.disposition() {
+        CommandDisposition::Success => CommandOutput::success(CommandView::FarmPublish(view)),
+        CommandDisposition::Unconfigured => {
+            CommandOutput::unconfigured(CommandView::FarmPublish(view))
+        }
+        CommandDisposition::ExternalUnavailable => {
+            CommandOutput::external_unavailable(CommandView::FarmPublish(view))
+        }
+        CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::FarmPublish(view))
+        }
+        CommandDisposition::InternalError => {
+            CommandOutput::internal_error(CommandView::FarmPublish(view))
+        }
+    }
 }
 
 fn farm_setup_output(view: FarmSetupView) -> CommandOutput {

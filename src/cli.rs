@@ -85,6 +85,7 @@ impl Command {
             },
             Self::Doctor => "doctor",
             Self::Farm(farm) => match farm.command {
+                FarmCommand::Publish(_) => "farm publish",
                 FarmCommand::Setup(_) => "farm setup",
                 FarmCommand::Status(_) => "farm status",
                 FarmCommand::Get(_) => "farm get",
@@ -271,9 +272,24 @@ pub struct FarmArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum FarmCommand {
+    Publish(FarmPublishArgs),
     Setup(FarmSetupArgs),
     Status(FarmScopedArgs),
     Get(FarmScopedArgs),
+}
+
+#[derive(Debug, Clone, Args, Default)]
+pub struct FarmPublishArgs {
+    #[arg(long, value_enum)]
+    pub scope: Option<FarmScopeArg>,
+    #[arg(long = "idempotency-key")]
+    pub idempotency_key: Option<String>,
+    #[arg(long = "signer-session-id")]
+    pub signer_session_id: Option<String>,
+    #[arg(long = "print-job", action = ArgAction::SetTrue)]
+    pub print_job: bool,
+    #[arg(long = "print-event", action = ArgAction::SetTrue)]
+    pub print_event: bool,
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -796,6 +812,33 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
+        let farm_publish = CliArgs::parse_from([
+            "radroots",
+            "farm",
+            "publish",
+            "--scope",
+            "workspace",
+            "--idempotency-key",
+            "farm-publish-1",
+            "--signer-session-id",
+            "session-1",
+            "--print-job",
+            "--print-event",
+        ]);
+        match farm_publish.command {
+            Command::Farm(args) => match args.command {
+                FarmCommand::Publish(publish) => {
+                    assert_eq!(publish.scope, Some(FarmScopeArg::Workspace));
+                    assert_eq!(publish.idempotency_key.as_deref(), Some("farm-publish-1"));
+                    assert_eq!(publish.signer_session_id.as_deref(), Some("session-1"));
+                    assert!(publish.print_job);
+                    assert!(publish.print_event);
+                }
+                _ => panic!("unexpected farm subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
         let relay = CliArgs::parse_from(["radroots", "relay", "ls"]);
         match relay.command {
             Command::Relay(args) => match args.command {
@@ -1219,6 +1262,10 @@ mod tests {
                 .command
                 .supports_output_format(OutputFormat::Ndjson)
         );
+
+        let farm_publish = CliArgs::parse_from(["radroots", "farm", "publish"]);
+        assert_eq!(farm_publish.command.display_name(), "farm publish");
+        assert!(farm_publish.command.supports_dry_run());
 
         let find = CliArgs::parse_from(["radroots", "find", "eggs"]);
         assert!(find.command.supports_output_format(OutputFormat::Ndjson));

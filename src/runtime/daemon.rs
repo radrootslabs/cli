@@ -1,9 +1,12 @@
 use std::time::Duration;
 
+use radroots_events::farm::RadrootsFarm;
 use radroots_events::listing::RadrootsListing;
+use radroots_events::profile::{RadrootsProfile, RadrootsProfileType};
 use radroots_events::trade::RadrootsTradeOrder;
 use radroots_sdk::{
-    RadrootsSdkConfig, RadrootsdAuth, SdkPublishError, SdkRadrootsdListingPublishOptions,
+    RadrootsSdkConfig, RadrootsdAuth, SdkPublishError, SdkRadrootsdFarmPublishOptions,
+    SdkRadrootsdListingPublishOptions, SdkRadrootsdProfilePublishOptions,
     SdkRadrootsdSignerAuthority, SdkRadrootsdSignerSessionRef, SdkTransportMode, SignerConfig,
 };
 use reqwest::blocking::Client;
@@ -133,6 +136,19 @@ struct Nip46SessionRemote {
 
 #[derive(Debug, Clone)]
 pub struct BridgeListingPublishResult {
+    pub deduplicated: bool,
+    pub job_id: String,
+    pub idempotency_key: Option<String>,
+    pub status: String,
+    pub signer_mode: String,
+    pub signer_session_id: Option<String>,
+    pub event_kind: Option<u32>,
+    pub event_id: Option<String>,
+    pub event_addr: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BridgeEventPublishResult {
     pub deduplicated: bool,
     pub job_id: String,
     pub idempotency_key: Option<String>,
@@ -416,6 +432,72 @@ pub fn bridge_listing_publish(
     map_listing_publish_receipt(receipt, idempotency_key)
 }
 
+pub fn bridge_profile_publish(
+    config: &RuntimeConfig,
+    profile: &RadrootsProfile,
+    profile_type: Option<RadrootsProfileType>,
+    idempotency_key: Option<&str>,
+    signer_session_id: Option<&str>,
+    signer_authority: Option<&ActorWriteSignerAuthority>,
+) -> Result<BridgeEventPublishResult, DaemonRpcError> {
+    let Some(signer_session_id) = signer_session_id else {
+        return Err(DaemonRpcError::Unconfigured(
+            "profile publish requires a signer session id".to_owned(),
+        ));
+    };
+
+    let sdk = actor_write_sdk_client(config)?;
+    let session = SdkRadrootsdSignerSessionRef::from_session_id(signer_session_id.to_owned());
+    let mut options = SdkRadrootsdProfilePublishOptions::from_signer_session_ref(&session);
+    if let Some(idempotency_key) = idempotency_key {
+        options = options.with_idempotency_key(idempotency_key.to_owned());
+    }
+    if let Some(signer_authority) = signer_authority {
+        options = options.with_signer_authority(sdk_signer_authority(signer_authority));
+    }
+
+    let receipt = block_on_sdk(sdk.profile().publish_profile_via_radrootsd_with_options(
+        profile,
+        profile_type,
+        &options,
+    ))?
+    .map_err(map_sdk_publish_error)?;
+
+    map_event_publish_receipt(receipt, idempotency_key, "profile")
+}
+
+pub fn bridge_farm_publish(
+    config: &RuntimeConfig,
+    farm: &RadrootsFarm,
+    idempotency_key: Option<&str>,
+    signer_session_id: Option<&str>,
+    signer_authority: Option<&ActorWriteSignerAuthority>,
+) -> Result<BridgeEventPublishResult, DaemonRpcError> {
+    let Some(signer_session_id) = signer_session_id else {
+        return Err(DaemonRpcError::Unconfigured(
+            "farm publish requires a signer session id".to_owned(),
+        ));
+    };
+
+    let sdk = actor_write_sdk_client(config)?;
+    let session = SdkRadrootsdSignerSessionRef::from_session_id(signer_session_id.to_owned());
+    let mut options = SdkRadrootsdFarmPublishOptions::from_signer_session_ref(&session);
+    if let Some(idempotency_key) = idempotency_key {
+        options = options.with_idempotency_key(idempotency_key.to_owned());
+    }
+    if let Some(signer_authority) = signer_authority {
+        options = options.with_signer_authority(sdk_signer_authority(signer_authority));
+    }
+
+    let receipt = block_on_sdk(
+        sdk.farm()
+            .publish_farm_via_radrootsd_with_options(farm, &options),
+    )?
+    .map_err(map_sdk_publish_error)?;
+
+    map_event_publish_receipt(receipt, idempotency_key, "farm")
+}
+
 pub fn bridge_order_request(
     config: &RuntimeConfig,
     order: &RadrootsTradeOrder,
@@ -563,6 +645,45 @@ fn map_listing_publish_receipt(
         ));
     };
     Ok(BridgeListingPublishResult {
+        deduplicated: transport_receipt.deduplicated,
+        job_id,
+        idempotency_key: idempotency_key.map(str::to_owned),
+        status,
+        signer_mode,
+        signer_session_id: transport_receipt.signer_session_id,
+        event_kind: receipt.event_kind,
+        event_id: receipt.event_id,
+        event_addr: transport_receipt.event_addr,
+    })
+}
+
+fn map_event_publish_receipt(
+    receipt: radroots_sdk::SdkPublishReceipt,
+    idempotency_key: Option<&str>,
+    label: &str,
+) -> Result<BridgeEventPublishResult, DaemonRpcError> {
+    let radroots_sdk::SdkTransportReceipt::Radrootsd(transport_receipt) = receipt.transport_receipt
+    else {
+        return Err(DaemonRpcError::InvalidResponse(format!(
+            "sdk {label} publish returned a non-radrootsd transport receipt"
+        )));
+    };
+    let Some(job_id) = transport_receipt.job_id else {
+        return Err(DaemonRpcError::InvalidResponse(format!(
+            "sdk {label} publish did not return a job id"
+        )));
+    };
+    let Some(status) = transport_receipt.status else {
+        return Err(DaemonRpcError::InvalidResponse(format!(
+            "sdk {label} publish did not return a job status"
+        )));
+    };
+    let Some(signer_mode) = transport_receipt.signer_mode else {
+        return Err(DaemonRpcError::InvalidResponse(format!(
+            "sdk {label} publish did not return a signer mode"
+        )));
+    };
+    Ok(BridgeEventPublishResult {
         deduplicated: transport_receipt.deduplicated,
         job_id,
         idempotency_key: idempotency_key.map(str::to_owned),
@@ -846,6 +967,8 @@ fn map_rpc_error(method: &str, error: JsonRpcResponseError) -> DaemonRpcError {
 
 fn map_job_command(command: String) -> String {
     match command.as_str() {
+        "bridge.profile.publish" => "profile.publish".to_owned(),
+        "bridge.farm.publish" => "farm.publish".to_owned(),
         "bridge.listing.publish" => "listing.publish".to_owned(),
         "bridge.order.request" => "order.submit".to_owned(),
         other => other.to_owned(),
