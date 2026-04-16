@@ -1,11 +1,27 @@
 use crate::cli::{ListingFileArgs, ListingMutationArgs, ListingNewArgs, RecordKeyArgs};
 use crate::domain::runtime::{CommandOutput, CommandView};
-use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime::RuntimeError;
 
 pub fn new(config: &RuntimeConfig, args: &ListingNewArgs) -> Result<CommandOutput, RuntimeError> {
     let view = crate::runtime::listing::scaffold(config, args)?;
-    Ok(CommandOutput::success(CommandView::ListingNew(view)))
+    Ok(match view.disposition() {
+        crate::domain::runtime::CommandDisposition::Success => {
+            CommandOutput::success(CommandView::ListingNew(view))
+        }
+        crate::domain::runtime::CommandDisposition::Unconfigured => {
+            CommandOutput::unconfigured(CommandView::ListingNew(view))
+        }
+        crate::domain::runtime::CommandDisposition::ExternalUnavailable => {
+            CommandOutput::external_unavailable(CommandView::ListingNew(view))
+        }
+        crate::domain::runtime::CommandDisposition::Unsupported => {
+            CommandOutput::unsupported(CommandView::ListingNew(view))
+        }
+        crate::domain::runtime::CommandDisposition::InternalError => {
+            CommandOutput::internal_error(CommandView::ListingNew(view))
+        }
+    })
 }
 
 pub fn validate(

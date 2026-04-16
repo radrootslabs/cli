@@ -436,6 +436,32 @@ pub enum ListingCommand {
 pub struct ListingNewArgs {
     #[arg(long)]
     pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub key: Option<String>,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub category: Option<String>,
+    #[arg(long)]
+    pub summary: Option<String>,
+    #[arg(long = "bin-id")]
+    pub bin_id: Option<String>,
+    #[arg(long = "quantity-amount")]
+    pub quantity_amount: Option<String>,
+    #[arg(long = "quantity-unit")]
+    pub quantity_unit: Option<String>,
+    #[arg(long = "price-amount")]
+    pub price_amount: Option<String>,
+    #[arg(long = "price-currency")]
+    pub price_currency: Option<String>,
+    #[arg(long = "price-per-amount")]
+    pub price_per_amount: Option<String>,
+    #[arg(long = "price-per-unit")]
+    pub price_per_unit: Option<String>,
+    #[arg(long)]
+    pub available: Option<String>,
+    #[arg(long)]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -916,10 +942,48 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
-        let listing_new = CliArgs::parse_from(["radroots", "listing", "new"]);
+        let listing_new = CliArgs::parse_from([
+            "radroots",
+            "listing",
+            "new",
+            "--output",
+            "draft.toml",
+            "--key",
+            "sf-tomatoes",
+            "--title",
+            "San Francisco Tomatoes",
+            "--category",
+            "produce.vegetables.tomatoes",
+            "--summary",
+            "Fresh tomatoes",
+            "--quantity-amount",
+            "1000",
+            "--quantity-unit",
+            "g",
+            "--price-amount",
+            "0.01",
+            "--available",
+            "25",
+        ]);
         match listing_new.command {
             Command::Listing(args) => match args.command {
-                ListingCommand::New(new) => assert!(new.output.is_none()),
+                ListingCommand::New(new) => {
+                    assert_eq!(
+                        new.output.as_deref().and_then(|path| path.to_str()),
+                        Some("draft.toml")
+                    );
+                    assert_eq!(new.key.as_deref(), Some("sf-tomatoes"));
+                    assert_eq!(new.title.as_deref(), Some("San Francisco Tomatoes"));
+                    assert_eq!(new.category.as_deref(), Some("produce.vegetables.tomatoes"));
+                    assert_eq!(new.summary.as_deref(), Some("Fresh tomatoes"));
+                    assert_eq!(new.quantity_amount.as_deref(), Some("1000"));
+                    assert_eq!(new.quantity_unit.as_deref(), Some("g"));
+                    assert_eq!(new.price_amount.as_deref(), Some("0.01"));
+                    assert_eq!(new.available.as_deref(), Some("25"));
+                    assert!(new.price_currency.is_none());
+                    assert!(new.price_per_amount.is_none());
+                    assert!(new.price_per_unit.is_none());
+                }
                 _ => panic!("unexpected listing subcommand"),
             },
             _ => panic!("unexpected command variant"),
@@ -1221,21 +1285,15 @@ mod tests {
     #[test]
     fn command_contract_helpers_report_supported_modes() {
         let config_show = CliArgs::parse_from(["radroots", "config", "show"]);
-        assert!(
-            config_show
-                .command
-                .supports_output_format(OutputFormat::Human)
-        );
-        assert!(
-            config_show
-                .command
-                .supports_output_format(OutputFormat::Json)
-        );
-        assert!(
-            !config_show
-                .command
-                .supports_output_format(OutputFormat::Ndjson)
-        );
+        assert!(config_show
+            .command
+            .supports_output_format(OutputFormat::Human));
+        assert!(config_show
+            .command
+            .supports_output_format(OutputFormat::Json));
+        assert!(!config_show
+            .command
+            .supports_output_format(OutputFormat::Ndjson));
         assert!(config_show.command.supports_dry_run());
 
         let account_new = CliArgs::parse_from(["radroots", "account", "new"]);
@@ -1257,11 +1315,9 @@ mod tests {
         let farm_status = CliArgs::parse_from(["radroots", "farm", "status"]);
         assert_eq!(farm_status.command.display_name(), "farm status");
         assert!(farm_status.command.supports_dry_run());
-        assert!(
-            !farm_status
-                .command
-                .supports_output_format(OutputFormat::Ndjson)
-        );
+        assert!(!farm_status
+            .command
+            .supports_output_format(OutputFormat::Ndjson));
 
         let farm_publish = CliArgs::parse_from(["radroots", "farm", "publish"]);
         assert_eq!(farm_publish.command.display_name(), "farm publish");
@@ -1271,18 +1327,14 @@ mod tests {
         assert!(find.command.supports_output_format(OutputFormat::Ndjson));
 
         let sync_watch = CliArgs::parse_from(["radroots", "sync", "watch", "--frames", "1"]);
-        assert!(
-            sync_watch
-                .command
-                .supports_output_format(OutputFormat::Ndjson)
-        );
+        assert!(sync_watch
+            .command
+            .supports_output_format(OutputFormat::Ndjson));
 
         let order_watch = CliArgs::parse_from(["radroots", "order", "watch", "ord_demo"]);
-        assert!(
-            order_watch
-                .command
-                .supports_output_format(OutputFormat::Ndjson)
-        );
+        assert!(order_watch
+            .command
+            .supports_output_format(OutputFormat::Ndjson));
 
         let order_submit = CliArgs::parse_from(["radroots", "order", "submit", "ord_demo"]);
         assert_eq!(order_submit.command.display_name(), "order submit");
@@ -1291,10 +1343,8 @@ mod tests {
         let runtime_status = CliArgs::parse_from(["radroots", "runtime", "status", "radrootsd"]);
         assert_eq!(runtime_status.command.display_name(), "runtime status");
         assert!(runtime_status.command.supports_dry_run());
-        assert!(
-            !runtime_status
-                .command
-                .supports_output_format(OutputFormat::Ndjson)
-        );
+        assert!(!runtime_status
+            .command
+            .supports_output_format(OutputFormat::Ndjson));
     }
 }

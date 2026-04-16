@@ -7,7 +7,6 @@ use radroots_core::{
     RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreMoney, RadrootsCoreQuantity,
     RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
-use radroots_events::RadrootsNostrEvent;
 use radroots_events::farm::RadrootsFarmRef;
 use radroots_events::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
 use radroots_events::listing::{
@@ -16,6 +15,7 @@ use radroots_events::listing::{
     RadrootsListingStatus,
 };
 use radroots_events::trade::RadrootsTradeListingValidationError;
+use radroots_events::RadrootsNostrEvent;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_replica_db::ReplicaSql;
@@ -30,13 +30,14 @@ use crate::domain::runtime::{
     ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
     ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::daemon;
 use crate::runtime::daemon::DaemonRpcError;
-use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
+use crate::runtime::farm_config;
+use crate::runtime::signer::{resolve_actor_write_authority, ActorWriteBindingError};
 use crate::runtime::sync::freshness_from_executor;
+use crate::runtime::RuntimeError;
 
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
@@ -132,6 +133,17 @@ struct ListingValidationContext {
     selected_account_id: Option<String>,
     selected_account_pubkey: Option<String>,
     selected_farm_d_tag: Option<String>,
+    farm_setup_action: String,
+}
+
+#[derive(Debug, Clone)]
+struct ListingAuthoringDefaults {
+    farm_config_present: bool,
+    selected_account_id: Option<String>,
+    selected_account_pubkey: Option<String>,
+    selected_farm_d_tag: Option<String>,
+    delivery_method: Option<String>,
+    location: Option<ListingDraftLocation>,
 }
 
 #[derive(Debug, Clone)]
@@ -163,41 +175,50 @@ pub fn scaffold(
     config: &RuntimeConfig,
     args: &ListingNewArgs,
 ) -> Result<ListingNewView, RuntimeError> {
-    let selected_account = accounts::resolve_account(config)?;
-    let seller_pubkey = selected_account
-        .as_ref()
-        .map(|account| account.record.public_identity.public_key_hex.clone());
-    let farm_d_tag = match seller_pubkey.as_deref() {
-        Some(pubkey) => resolve_selected_farm_d_tag(config, pubkey)?,
-        None => None,
-    };
+    let defaults = authoring_defaults(config)?;
+    let quantity_unit = args.quantity_unit.clone().unwrap_or_else(|| "g".to_owned());
 
     let draft = ListingDraftDocument {
         version: 1,
         kind: DRAFT_KIND.to_owned(),
         listing: ListingDraftMeta {
             d_tag: generate_d_tag(),
-            farm_d_tag: farm_d_tag.clone().unwrap_or_default(),
-            seller_pubkey: seller_pubkey.clone().unwrap_or_default(),
+            farm_d_tag: defaults.selected_farm_d_tag.clone().unwrap_or_default(),
+            seller_pubkey: defaults.selected_account_pubkey.clone().unwrap_or_default(),
         },
         product: ListingDraftProduct {
-            key: String::new(),
-            title: String::new(),
-            category: String::new(),
-            summary: String::new(),
+            key: args.key.clone().unwrap_or_default(),
+            title: args.title.clone().unwrap_or_default(),
+            category: args.category.clone().unwrap_or_default(),
+            summary: args.summary.clone().unwrap_or_default(),
         },
         primary_bin: ListingDraftPrimaryBin {
-            bin_id: "bin-1".to_owned(),
-            quantity_amount: "1000".to_owned(),
-            quantity_unit: "g".to_owned(),
-            price_amount: "0.01".to_owned(),
-            price_currency: "USD".to_owned(),
-            price_per_amount: "1".to_owned(),
-            price_per_unit: "g".to_owned(),
-            label: String::new(),
+            bin_id: args.bin_id.clone().unwrap_or_else(|| "bin-1".to_owned()),
+            quantity_amount: args
+                .quantity_amount
+                .clone()
+                .unwrap_or_else(|| "1000".to_owned()),
+            quantity_unit: quantity_unit.clone(),
+            price_amount: args
+                .price_amount
+                .clone()
+                .unwrap_or_else(|| "0.01".to_owned()),
+            price_currency: args
+                .price_currency
+                .clone()
+                .unwrap_or_else(|| "USD".to_owned()),
+            price_per_amount: args
+                .price_per_amount
+                .clone()
+                .unwrap_or_else(|| "1".to_owned()),
+            price_per_unit: args
+                .price_per_unit
+                .clone()
+                .unwrap_or_else(|| quantity_unit.clone()),
+            label: args.label.clone().unwrap_or_default(),
         },
         inventory: ListingDraftInventory {
-            available: "1".to_owned(),
+            available: args.available.clone().unwrap_or_else(|| "1".to_owned()),
         },
         availability: ListingDraftAvailability {
             kind: "status".to_owned(),
@@ -206,14 +227,14 @@ pub fn scaffold(
             end: None,
         },
         delivery: ListingDraftDelivery {
-            method: "pickup".to_owned(),
+            method: defaults.delivery_method.clone().unwrap_or_default(),
         },
-        location: ListingDraftLocation {
+        location: defaults.location.clone().unwrap_or(ListingDraftLocation {
             primary: String::new(),
             city: None,
             region: None,
             country: None,
-        },
+        }),
     };
 
     let output_path = match &args.output {
@@ -235,11 +256,11 @@ pub fn scaffold(
         "radroots listing validate {}",
         output_path.display()
     )];
-    if seller_pubkey.is_none() {
+    if defaults.selected_account_pubkey.is_none() {
         actions.push("radroots account new".to_owned());
     }
-    if farm_d_tag.is_none() {
-        actions.push("radroots sync status".to_owned());
+    if !defaults.farm_config_present {
+        actions.push(farm_setup_action(config)?);
     }
 
     Ok(ListingNewView {
@@ -247,9 +268,15 @@ pub fn scaffold(
         source: LISTING_SOURCE.to_owned(),
         file: output_path.display().to_string(),
         listing_id: draft.listing.d_tag,
-        selected_account_id: selected_account.map(|account| account.record.account_id.to_string()),
-        seller_pubkey,
-        farm_d_tag,
+        selected_account_id: defaults.selected_account_id,
+        seller_pubkey: defaults.selected_account_pubkey,
+        farm_d_tag: defaults.selected_farm_d_tag,
+        delivery_method: non_empty(draft.delivery.method.clone()),
+        location_primary: non_empty(draft.location.primary.clone()),
+        reason: (!defaults.farm_config_present).then(|| {
+            "selected farm config not found; delivery, location, and farm defaults were left blank"
+                .to_owned()
+        }),
         actions,
     })
 }
@@ -647,23 +674,27 @@ fn scaffold_contents(draft: &ListingDraftDocument) -> Result<String, RuntimeErro
         RuntimeError::Config(format!("failed to render listing draft: {error}"))
     })?;
     Ok(format!(
-        "# radroots listing draft v1\n# fill the empty fields, then run `radroots listing validate <file>`\n\n{toml}"
+        "# radroots listing draft v1\n# this scaffold applies selected farm defaults and provided product inputs when available\n# review any remaining empty fields, then run `radroots listing validate <file>`\n\n{toml}"
     ))
 }
 
 fn validation_context(config: &RuntimeConfig) -> Result<ListingValidationContext, RuntimeError> {
-    let selected_account = accounts::resolve_account(config)?;
-    let selected_account_pubkey = selected_account
-        .as_ref()
-        .map(|account| account.record.public_identity.public_key_hex.clone());
-    let selected_farm_d_tag = match selected_account_pubkey.as_deref() {
-        Some(pubkey) => resolve_selected_farm_d_tag(config, pubkey)?,
-        None => None,
+    let defaults = authoring_defaults(config)?;
+    let selected_farm_d_tag = match (
+        defaults.farm_config_present,
+        defaults.selected_farm_d_tag,
+        defaults.selected_account_pubkey.clone(),
+    ) {
+        (true, d_tag, _) => d_tag,
+        (false, Some(d_tag), _) => Some(d_tag),
+        (false, None, Some(pubkey)) => resolve_selected_farm_d_tag(config, pubkey.as_str())?,
+        (false, None, None) => None,
     };
     Ok(ListingValidationContext {
-        selected_account_id: selected_account.map(|account| account.record.account_id.to_string()),
-        selected_account_pubkey,
+        selected_account_id: defaults.selected_account_id,
+        selected_account_pubkey: defaults.selected_account_pubkey,
         selected_farm_d_tag,
+        farm_setup_action: farm_setup_action(config)?,
     })
 }
 
@@ -716,7 +747,7 @@ fn canonicalize_draft(
         return Err(issue_for_field(
             contents,
             "listing.farm_d_tag",
-            "missing farm_d_tag and no matching local farm was found for the selected account",
+            "missing farm_d_tag and no selected farm config is available",
         ));
     };
     if !is_d_tag_base64url(&farm_d_tag) {
@@ -928,7 +959,7 @@ fn invalid_validation_view(
         actions.push("radroots account new".to_owned());
     }
     if context.selected_farm_d_tag.is_none() {
-        actions.push("radroots sync status".to_owned());
+        actions.push(context.farm_setup_action.clone());
     }
 
     ListingValidateView {
@@ -1196,6 +1227,42 @@ fn issue_from_trade_validation(
     }
 }
 
+fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults, RuntimeError> {
+    let selected_account = accounts::resolve_account(config)?;
+    let mut defaults = ListingAuthoringDefaults {
+        farm_config_present: false,
+        selected_account_id: selected_account
+            .as_ref()
+            .map(|account| account.record.account_id.to_string()),
+        selected_account_pubkey: selected_account
+            .as_ref()
+            .map(|account| account.record.public_identity.public_key_hex.clone()),
+        selected_farm_d_tag: None,
+        delivery_method: None,
+        location: None,
+    };
+
+    let Some(resolved) = farm_config::load(config, None)? else {
+        return Ok(defaults);
+    };
+    let Some(account) = configured_account(config, &resolved.document.selection.account)? else {
+        return Err(RuntimeError::Config(format!(
+            "farm config account `{}` is not present in the local account store",
+            resolved.document.selection.account
+        )));
+    };
+
+    defaults.farm_config_present = true;
+    defaults.selected_account_id = Some(resolved.document.selection.account.clone());
+    defaults.selected_account_pubkey = Some(account.record.public_identity.public_key_hex.clone());
+    defaults.selected_farm_d_tag = Some(resolved.document.selection.farm_d_tag.clone());
+    defaults.delivery_method = Some(resolved.document.listing_defaults.delivery_method.clone());
+    defaults.location = Some(draft_location_from_model(
+        &resolved.document.listing_defaults.location,
+    ));
+    Ok(defaults)
+}
+
 fn resolve_selected_farm_d_tag(
     config: &RuntimeConfig,
     seller_pubkey: &str,
@@ -1206,6 +1273,34 @@ fn resolve_selected_farm_d_tag(
     let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
     db.farm_unique_d_tag_by_pubkey(seller_pubkey)
         .map_err(RuntimeError::from)
+}
+
+fn draft_location_from_model(location: &RadrootsListingLocation) -> ListingDraftLocation {
+    ListingDraftLocation {
+        primary: location.primary.clone(),
+        city: location.city.clone(),
+        region: location.region.clone(),
+        country: location.country.clone(),
+    }
+}
+
+fn farm_setup_action(config: &RuntimeConfig) -> Result<String, RuntimeError> {
+    let scope = farm_config::resolve_scope(&config.paths, None)?;
+    Ok(format!(
+        "radroots farm setup --scope {} --name <farm-name> --location <place>",
+        scope.as_str()
+    ))
+}
+
+fn configured_account(
+    config: &RuntimeConfig,
+    account_id: &str,
+) -> Result<Option<accounts::AccountRecordView>, RuntimeError> {
+    let snapshot = accounts::snapshot(config)?;
+    Ok(snapshot
+        .accounts
+        .into_iter()
+        .find(|account| account.record.account_id.as_str() == account_id))
 }
 
 fn parse_decimal_field(
@@ -1356,7 +1451,7 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DRAFT_KIND, ListingDraftDocument, encode_base64url_no_pad, generate_d_tag};
+    use super::{encode_base64url_no_pad, generate_d_tag, ListingDraftDocument, DRAFT_KIND};
     use radroots_events_codec::d_tag::is_d_tag_base64url;
 
     #[test]

@@ -1321,8 +1321,24 @@ pub struct ListingNewView {
     pub seller_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub farm_d_tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_primary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
+}
+
+impl ListingNewView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use assert_cmd::prelude::*;
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tempfile::tempdir;
 
 fn data_root(workdir: &Path) -> std::path::PathBuf {
@@ -134,14 +134,9 @@ fn listing_test_guard() -> MutexGuard<'static, ()> {
 }
 
 #[test]
-fn listing_new_scaffolds_a_toml_draft_with_account_and_farm_defaults() {
+fn listing_new_uses_selected_farm_config_and_product_inputs() {
     let _guard = listing_test_guard();
     let dir = tempdir().expect("tempdir");
-    let init = cli_command_in(dir.path())
-        .args(["local", "init"])
-        .output()
-        .expect("run local init");
-    assert!(init.status.success());
 
     let account_output = cli_command_in(dir.path())
         .args(["--json", "account", "new"])
@@ -153,12 +148,63 @@ fn listing_new_scaffolds_a_toml_draft_with_account_and_farm_defaults() {
     let seller_pubkey = account_json["public_identity"]["public_key_hex"]
         .as_str()
         .expect("seller pubkey");
-    let account_id = account_json["account"]["id"].as_str().expect("account id");
-    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
-    seed_farm(dir.path(), seller_pubkey, farm_d_tag, "La Huerta");
+    let account_id = account_json["account"]["id"]
+        .as_str()
+        .expect("account id")
+        .to_owned();
+
+    let setup_output = cli_command_in(dir.path())
+        .args([
+            "--json",
+            "farm",
+            "setup",
+            "--name",
+            "La Huerta",
+            "--location",
+            "San Francisco, CA",
+            "--city",
+            "San Francisco",
+            "--region",
+            "CA",
+            "--country",
+            "US",
+            "--delivery-method",
+            "pickup",
+        ])
+        .output()
+        .expect("run farm setup");
+    assert!(setup_output.status.success());
+    let setup_json: Value =
+        serde_json::from_slice(setup_output.stdout.as_slice()).expect("setup json");
+    let farm_d_tag = setup_json["config"]["farm_d_tag"]
+        .as_str()
+        .expect("farm d_tag")
+        .to_owned();
 
     let output = cli_command_in(dir.path())
-        .args(["--json", "listing", "new"])
+        .args([
+            "--json",
+            "listing",
+            "new",
+            "--key",
+            "sf-tomatoes",
+            "--title",
+            "San Francisco Early Girl Tomatoes",
+            "--category",
+            "produce.vegetables.tomatoes",
+            "--summary",
+            "Fresh local tomatoes packed for pickup from the seller's standard market location.",
+            "--quantity-amount",
+            "1000",
+            "--quantity-unit",
+            "g",
+            "--price-amount",
+            "0.01",
+            "--available",
+            "25",
+            "--label",
+            "1 kg tomato lot",
+        ])
         .output()
         .expect("run listing new");
     assert!(output.status.success());
@@ -167,22 +213,27 @@ fn listing_new_scaffolds_a_toml_draft_with_account_and_farm_defaults() {
     assert_eq!(json["selected_account_id"], account_id);
     assert_eq!(json["seller_pubkey"], seller_pubkey);
     assert_eq!(json["farm_d_tag"], farm_d_tag);
+    assert_eq!(json["delivery_method"], "pickup");
+    assert_eq!(json["location_primary"], "San Francisco, CA");
     let file = json["file"].as_str().expect("draft file");
     let contents = fs::read_to_string(file).expect("draft contents");
     assert!(contents.contains("kind = \"listing_draft_v1\""));
     assert!(contents.contains(&format!("seller_pubkey = \"{seller_pubkey}\"")));
     assert!(contents.contains(&format!("farm_d_tag = \"{farm_d_tag}\"")));
+    assert!(contents.contains("key = \"sf-tomatoes\""));
+    assert!(contents.contains("title = \"San Francisco Early Girl Tomatoes\""));
+    assert!(contents.contains("category = \"produce.vegetables.tomatoes\""));
+    assert!(contents.contains("method = \"pickup\""));
+    assert!(contents.contains("primary = \"San Francisco, CA\""));
+    assert!(contents.contains("price_currency = \"USD\""));
+    assert!(contents.contains("price_per_amount = \"1\""));
+    assert!(contents.contains("price_per_unit = \"g\""));
 }
 
 #[test]
-fn listing_validate_resolves_selected_account_and_matching_farm() {
+fn listing_validate_resolves_selected_farm_config_defaults() {
     let _guard = listing_test_guard();
     let dir = tempdir().expect("tempdir");
-    let init = cli_command_in(dir.path())
-        .args(["local", "init"])
-        .output()
-        .expect("run local init");
-    assert!(init.status.success());
 
     let account_output = cli_command_in(dir.path())
         .args(["--json", "account", "new"])
@@ -195,8 +246,27 @@ fn listing_validate_resolves_selected_account_and_matching_farm() {
         .as_str()
         .expect("seller pubkey")
         .to_owned();
-    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
-    seed_farm(dir.path(), seller_pubkey.as_str(), farm_d_tag, "La Huerta");
+    let setup_output = cli_command_in(dir.path())
+        .args([
+            "--json",
+            "farm",
+            "setup",
+            "--name",
+            "La Huerta",
+            "--location",
+            "San Francisco, CA",
+            "--delivery-method",
+            "pickup",
+        ])
+        .output()
+        .expect("run farm setup");
+    assert!(setup_output.status.success());
+    let setup_json: Value =
+        serde_json::from_slice(setup_output.stdout.as_slice()).expect("setup json");
+    let farm_d_tag = setup_json["config"]["farm_d_tag"]
+        .as_str()
+        .expect("farm d_tag")
+        .to_owned();
 
     let draft_path = dir.path().join("eggs.toml");
     fs::write(
@@ -1157,12 +1227,10 @@ fn listing_publish_without_matching_signer_session_exits_unconfigured() {
     let publish_json: Value =
         serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
     assert_eq!(publish_json["state"], "unconfigured");
-    assert!(
-        publish_json["reason"]
-            .as_str()
-            .expect("reason")
-            .contains("no authorized signer session matched seller pubkey")
-    );
+    assert!(publish_json["reason"]
+        .as_str()
+        .expect("reason")
+        .contains("no authorized signer session matched seller pubkey"));
 
     let recorded = requests.lock().expect("requests");
     assert_eq!(recorded.len(), 1);
@@ -1256,12 +1324,10 @@ fn listing_publish_rejects_requested_session_that_mismatches_seller_pubkey() {
     let publish_json: Value =
         serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
     assert_eq!(publish_json["state"], "unconfigured");
-    assert!(
-        publish_json["reason"]
-            .as_str()
-            .expect("reason")
-            .contains("does not match seller pubkey")
-    );
+    assert!(publish_json["reason"]
+        .as_str()
+        .expect("reason")
+        .contains("does not match seller pubkey"));
 
     let recorded = requests.lock().expect("requests");
     assert_eq!(recorded.len(), 1);
@@ -1342,11 +1408,10 @@ fn listing_publish_requires_authoritative_write_plane_binding() {
     let publish_json: Value =
         serde_json::from_slice(publish_output.stdout.as_slice()).expect("publish json");
     assert_eq!(publish_json["state"], "unconfigured");
-    assert!(
-        publish_json["reason"].as_str().expect("reason").contains(
-            "explicit write-plane capability binding or managed radrootsd instance `local`"
-        )
-    );
+    assert!(publish_json["reason"]
+        .as_str()
+        .expect("reason")
+        .contains("explicit write-plane capability binding or managed radrootsd instance `local`"));
     assert!(requests.lock().expect("requests").is_empty());
 }
 

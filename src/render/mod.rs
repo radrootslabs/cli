@@ -11,8 +11,8 @@ use crate::domain::runtime::{
     RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView,
     SyncActionView, SyncStatusView, SyncWatchView,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat};
+use crate::runtime::RuntimeError;
 
 const THIN_RULE: &str = "────────────────────────────────────────────────────";
 
@@ -496,11 +496,19 @@ fn render_ndjson_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<()
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value { "yes" } else { "no" }
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
 }
 
 fn present_absent(value: bool) -> &'static str {
-    if value { "present" } else { "absent" }
+    if value {
+        "present"
+    } else {
+        "absent"
+    }
 }
 
 fn render_account_list(stdout: &mut dyn Write, view: &AccountListView) -> Result<(), RuntimeError> {
@@ -1724,7 +1732,16 @@ fn render_listing_new(stdout: &mut dyn Write, view: &ListingNewView) -> Result<(
     if let Some(farm_d_tag) = &view.farm_d_tag {
         rows.push(("farm d_tag", farm_d_tag.as_str()));
     }
+    if let Some(delivery_method) = &view.delivery_method {
+        rows.push(("delivery", delivery_method.as_str()));
+    }
+    if let Some(location_primary) = &view.location_primary {
+        rows.push(("location", location_primary.as_str()));
+    }
     render_pairs(stdout, "draft", rows.as_slice())?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
     writeln!(stdout, "source: {}", view.source)?;
     render_actions(stdout, &view.actions)?;
     Ok(())
@@ -2815,7 +2832,7 @@ fn human_command_name(view: &CommandView) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Table, render_human_to, render_ndjson_to, render_table};
+    use super::{render_human_to, render_ndjson_to, render_table, Table};
     use crate::commands::runtime;
     use crate::domain::runtime::{
         AccountListView, CommandOutput, CommandView, DoctorCheckView, DoctorView, MycStatusView,
@@ -2934,11 +2951,10 @@ mod tests {
             "/workspace/.radroots/config.toml"
         );
         assert_eq!(view.account.selector.as_deref(), Some("acct_demo"));
-        assert!(
-            view.account
-                .store_path
-                .ends_with(".radroots/data/shared/accounts/store.json")
-        );
+        assert!(view
+            .account
+            .store_path
+            .ends_with(".radroots/data/shared/accounts/store.json"));
         assert_eq!(view.relay.count, 2);
         assert_eq!(view.relay.publish_policy, "any");
         assert!(!view.hyf.enabled);
@@ -2948,11 +2964,10 @@ mod tests {
             view.account.secret_backend.contract_default_backend,
             "host_vault"
         );
-        assert!(
-            view.local
-                .replica_db_path
-                .ends_with(".radroots/data/apps/cli/replica/replica.sqlite")
-        );
+        assert!(view
+            .local
+            .replica_db_path
+            .ends_with(".radroots/data/apps/cli/replica/replica.sqlite"));
     }
 
     #[test]
@@ -3079,11 +3094,9 @@ mod tests {
         ));
         let mut buffer = Vec::new();
         let error = render_ndjson_to(&mut buffer, &output).expect_err("unsupported ndjson");
-        assert!(
-            error
-                .to_string()
-                .contains("`config show` does not support --ndjson")
-        );
+        assert!(error
+            .to_string()
+            .contains("`config show` does not support --ndjson"));
     }
 
     #[test]
