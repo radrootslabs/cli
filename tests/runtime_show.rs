@@ -118,6 +118,8 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(json["output"]["verbosity"], "normal");
     assert_eq!(json["output"]["color"], true);
     assert_eq!(json["output"]["dry_run"], false);
+    assert_eq!(json["interaction"]["input_enabled"], true);
+    assert_eq!(json["interaction"]["assume_yes"], false);
     assert_eq!(json["paths"]["profile"], "interactive_user");
     assert_eq!(json["paths"]["profile_source"], "default");
     assert_eq!(json["paths"]["root_source"], "host_defaults");
@@ -508,10 +510,13 @@ fn config_show_json_reflects_global_output_flags() {
     let dir = tempdir().expect("tempdir");
     let output = runtime_show_command_in(dir.path())
         .args([
-            "--json",
+            "--output",
+            "json",
             "--trace",
             "--dry-run",
             "--no-color",
+            "--no-input",
+            "--yes",
             "config",
             "show",
         ])
@@ -525,6 +530,8 @@ fn config_show_json_reflects_global_output_flags() {
     assert_eq!(json["output"]["verbosity"], "trace");
     assert_eq!(json["output"]["color"], false);
     assert_eq!(json["output"]["dry_run"], true);
+    assert_eq!(json["interaction"]["input_enabled"], false);
+    assert_eq!(json["interaction"]["assume_yes"], true);
 }
 
 #[test]

@@ -2,8 +2,8 @@ use crate::cli::{RuntimeConfigSetArgs, RuntimeTargetArgs};
 use crate::domain::runtime::{
     AccountRuntimeView, AccountSecretRuntimeView, CapabilityBindingRuntimeView, CommandOutput,
     CommandView, ConfigFilesRuntimeView, ConfigShowView, HyfProviderRuntimeView, HyfRuntimeView,
-    LegacyPathRuntimeView, LocalRuntimeView, LoggingRuntimeView, MigrationRuntimeView,
-    MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
+    InteractionRuntimeView, LegacyPathRuntimeView, LocalRuntimeView, LoggingRuntimeView,
+    MigrationRuntimeView, MycRuntimeView, OutputRuntimeView, PathsRuntimeView, RelayRuntimeView,
     ResolvedProviderRuntimeView, RpcRuntimeView, SignerRuntimeView, WorkflowRuntimeView,
     WritePlaneRuntimeView,
 };
@@ -35,6 +35,14 @@ pub fn show(
             verbosity: config.output.verbosity.as_str().to_owned(),
             color: config.output.color,
             dry_run: config.output.dry_run,
+        },
+        interaction: InteractionRuntimeView {
+            input_enabled: config.interaction.input_enabled,
+            assume_yes: config.interaction.assume_yes,
+            stdin_tty: config.interaction.stdin_tty,
+            stdout_tty: config.interaction.stdout_tty,
+            prompts_allowed: config.interaction.prompts_allowed,
+            confirmations_allowed: config.interaction.confirmations_allowed,
         },
         config_files: ConfigFilesRuntimeView {
             user_present: config.paths.app_config_path.exists(),

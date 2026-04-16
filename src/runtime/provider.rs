@@ -735,9 +735,9 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
         CapabilityBindingSource, CapabilityBindingTargetKind, HyfConfig, IdentityConfig,
-        LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
-        SignerBackend, SignerConfig, Verbosity,
+        InteractionConfig, LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig,
+        OutputFormat, PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig,
+        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
 
     fn sample_config(bindings: Vec<CapabilityBindingConfig>, hyf_enabled: bool) -> RuntimeConfig {
@@ -747,6 +747,14 @@ mod tests {
                 verbosity: Verbosity::Normal,
                 color: true,
                 dry_run: false,
+            },
+            interaction: InteractionConfig {
+                input_enabled: true,
+                assume_yes: false,
+                stdin_tty: true,
+                stdout_tty: true,
+                prompts_allowed: true,
+                confirmations_allowed: true,
             },
             paths: PathsConfig {
                 profile: "interactive_user".into(),

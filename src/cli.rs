@@ -1,12 +1,35 @@
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{error::ErrorKind, ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 use crate::runtime::config::OutputFormat;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OutputFormatArg {
+    Human,
+    Json,
+    Ndjson,
+}
+
+impl OutputFormatArg {
+    pub fn as_output_format(self) -> OutputFormat {
+        match self {
+            Self::Human => OutputFormat::Human,
+            Self::Json => OutputFormat::Json,
+            Self::Ndjson => OutputFormat::Ndjson,
+        }
+    }
+}
+
 #[derive(Debug, Parser, Clone)]
 #[command(name = "radroots")]
 #[command(version)]
+#[command(
+    after_help = "Global output: use --output <human|json|ndjson>. Existing --json and --ndjson aliases remain supported."
+)]
 pub struct CliArgs {
+    #[arg(skip)]
+    pub output_format: Option<OutputFormatArg>,
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub json: bool,
     #[arg(long, global = true, action = ArgAction::SetTrue)]
@@ -23,6 +46,15 @@ pub struct CliArgs {
     pub dry_run: bool,
     #[arg(long = "no-color", global = true, action = ArgAction::SetTrue)]
     pub no_color: bool,
+    #[arg(
+        long = "no-input",
+        global = true,
+        visible_alias = "non-interactive",
+        action = ArgAction::SetTrue
+    )]
+    pub no_input: bool,
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    pub yes: bool,
     #[arg(long, global = true)]
     pub log_filter: Option<String>,
     #[arg(long, global = true)]
@@ -49,6 +81,166 @@ pub struct CliArgs {
     pub hyf_executable: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Command,
+}
+
+impl CliArgs {
+    pub fn parse() -> Self {
+        Self::try_parse().unwrap_or_else(|error| error.exit())
+    }
+
+    pub fn try_parse() -> Result<Self, clap::Error> {
+        Self::try_parse_from(std::env::args_os())
+    }
+
+    #[cfg(test)]
+    pub fn parse_from<I, T>(itr: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        Self::try_parse_from(itr).unwrap_or_else(|error| error.exit())
+    }
+
+    pub fn try_parse_from<I, T>(itr: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let args = itr.into_iter().map(Into::into).collect::<Vec<_>>();
+        let (filtered_args, output_format) = extract_global_output_format(args)?;
+        let mut parsed = <Self as Parser>::try_parse_from(filtered_args)?;
+        parsed.output_format = output_format;
+        Ok(parsed)
+    }
+
+    fn command_error(message: impl Into<String>, kind: ErrorKind) -> clap::Error {
+        let mut command = Self::command();
+        command.error(kind, message.into())
+    }
+}
+
+fn extract_global_output_format(
+    args: Vec<OsString>,
+) -> Result<(Vec<OsString>, Option<OutputFormatArg>), clap::Error> {
+    let mut iter = args.into_iter();
+    let Some(program) = iter.next() else {
+        return Ok((Vec::new(), None));
+    };
+
+    let mut filtered_args = vec![program];
+    let mut output_format = None;
+    let mut command_tokens = Vec::new();
+    let mut skip_known_global_value = false;
+
+    while let Some(arg) = iter.next() {
+        if skip_known_global_value {
+            filtered_args.push(arg);
+            skip_known_global_value = false;
+            continue;
+        }
+
+        if let Some((flag, value)) = split_long_option(arg.as_os_str()) {
+            if flag == "output" && !matches_local_output_context(command_tokens.as_slice()) {
+                output_format = Some(parse_output_format_value(value)?);
+                continue;
+            }
+
+            if matches_known_global_value_option(flag) {
+                filtered_args.push(arg);
+                continue;
+            }
+        }
+
+        if arg == OsStr::new("--output") {
+            if matches_local_output_context(command_tokens.as_slice()) {
+                filtered_args.push(arg);
+                continue;
+            }
+
+            let Some(value) = iter.next() else {
+                return Err(CliArgs::command_error(
+                    "`--output` requires a value",
+                    ErrorKind::InvalidValue,
+                ));
+            };
+            output_format = Some(parse_output_format_value(value.as_os_str())?);
+            continue;
+        }
+
+        if let Some(flag) = long_option_name(arg.as_os_str()) {
+            if matches_known_global_value_option(flag) {
+                skip_known_global_value = true;
+            }
+        }
+
+        if let Some(token) = arg.to_str() {
+            if !token.starts_with('-') {
+                command_tokens.push(token.to_owned());
+            }
+        }
+
+        filtered_args.push(arg);
+    }
+
+    Ok((filtered_args, output_format))
+}
+
+fn parse_output_format_value(value: &OsStr) -> Result<OutputFormatArg, clap::Error> {
+    let Some(value) = value.to_str() else {
+        return Err(CliArgs::command_error(
+            "`--output` must be one of: human, json, ndjson",
+            ErrorKind::InvalidUtf8,
+        ));
+    };
+
+    OutputFormatArg::from_str(value, false).map_err(|_| {
+        CliArgs::command_error(
+            format!("invalid value `{value}` for `--output`; expected one of: human, json, ndjson"),
+            ErrorKind::InvalidValue,
+        )
+    })
+}
+
+fn long_option_name(arg: &OsStr) -> Option<&str> {
+    let token = arg.to_str()?;
+    token.strip_prefix("--").map(|rest| {
+        rest.split_once('=')
+            .map_or(rest, |(flag, _value)| flag)
+    })
+}
+
+fn split_long_option(arg: &OsStr) -> Option<(&str, &OsStr)> {
+    let token = arg.to_str()?;
+    let (flag, value) = token.strip_prefix("--")?.split_once('=')?;
+    Some((flag, OsStr::new(value)))
+}
+
+fn matches_known_global_value_option(flag: &str) -> bool {
+    matches!(
+        flag,
+        "env-file"
+            | "log-filter"
+            | "log-dir"
+            | "account"
+            | "identity-path"
+            | "signer"
+            | "relay"
+            | "myc-executable"
+            | "hyf-executable"
+    )
+}
+
+fn matches_local_output_context(command_tokens: &[String]) -> bool {
+    matches!(
+        command_tokens,
+        [local, export, ..] if local == "local" && export == "export"
+    ) || matches!(
+        command_tokens,
+        [local, backup, ..] if local == "local" && backup == "backup"
+    ) || matches!(
+        command_tokens,
+        [listing, new, ..] if listing == "listing" && new == "new"
+    )
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -618,12 +810,10 @@ mod tests {
     use super::{
         AccountCommand, CliArgs, Command, ConfigCommand, FarmCommand, FarmScopeArg, JobCommand,
         JobWatchArgs, ListingCommand, LocalCommand, LocalExportFormatArg, MycCommand, NetCommand,
-        OrderCommand, OrderWatchArgs, RelayCommand, RpcCommand, RuntimeCommand,
+        OrderCommand, OrderWatchArgs, OutputFormatArg, RelayCommand, RpcCommand, RuntimeCommand,
         RuntimeConfigCommand, SignerCommand, SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
-    use clap::Parser;
-
     #[test]
     fn parses_config_show_command() {
         let parsed = CliArgs::parse_from(["radroots", "config", "show"]);
@@ -639,10 +829,14 @@ mod tests {
     fn parses_global_runtime_flags() {
         let parsed = CliArgs::parse_from([
             "radroots",
+            "--output",
+            "json",
             "--json",
             "--verbose",
             "--dry-run",
             "--no-color",
+            "--no-input",
+            "--yes",
             "--env-file",
             ".env.local",
             "--account",
@@ -668,10 +862,13 @@ mod tests {
             "config",
             "show",
         ]);
+        assert_eq!(parsed.output_format, Some(OutputFormatArg::Json));
         assert!(parsed.json);
         assert!(parsed.verbose);
         assert!(parsed.dry_run);
         assert!(parsed.no_color);
+        assert!(parsed.no_input);
+        assert!(parsed.yes);
         assert_eq!(
             parsed.env_file.as_deref().and_then(|path| path.to_str()),
             Some(".env.local")
@@ -713,6 +910,86 @@ mod tests {
                 .and_then(|path| path.to_str()),
             Some("bin/hyfd")
         );
+    }
+
+    #[test]
+    fn parses_output_format_and_interaction_flags() {
+        let parsed = CliArgs::parse_from([
+            "radroots",
+            "--output",
+            "ndjson",
+            "--non-interactive",
+            "--yes",
+            "config",
+            "show",
+        ]);
+        assert_eq!(parsed.output_format, Some(OutputFormatArg::Ndjson));
+        assert!(parsed.no_input);
+        assert!(parsed.yes);
+    }
+
+    #[test]
+    fn parses_output_format_after_non_conflicting_subcommand() {
+        let parsed = CliArgs::parse_from(["radroots", "config", "show", "--output", "json"]);
+        assert_eq!(parsed.output_format, Some(OutputFormatArg::Json));
+        match parsed.command {
+            Command::Config(config) => match config.command {
+                ConfigCommand::Show => {}
+            },
+            _ => panic!("unexpected command variant"),
+        }
+    }
+
+    #[test]
+    fn low_level_output_flags_remain_command_local() {
+        let parsed = CliArgs::parse_from([
+            "radroots",
+            "--output",
+            "json",
+            "listing",
+            "new",
+            "--output",
+            "listing.toml",
+        ]);
+        assert_eq!(parsed.output_format, Some(OutputFormatArg::Json));
+        match parsed.command {
+            Command::Listing(listing) => match listing.command {
+                ListingCommand::New(args) => {
+                    assert_eq!(
+                        args.output.as_deref().and_then(|path| path.to_str()),
+                        Some("listing.toml")
+                    );
+                }
+                _ => panic!("unexpected listing subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+    }
+
+    #[test]
+    fn command_group_output_flag_can_still_target_global_format() {
+        let parsed = CliArgs::parse_from([
+            "radroots",
+            "listing",
+            "--output",
+            "json",
+            "new",
+            "--output",
+            "listing.toml",
+        ]);
+        assert_eq!(parsed.output_format, Some(OutputFormatArg::Json));
+        match parsed.command {
+            Command::Listing(listing) => match listing.command {
+                ListingCommand::New(args) => {
+                    assert_eq!(
+                        args.output.as_deref().and_then(|path| path.to_str()),
+                        Some("listing.toml")
+                    );
+                }
+                _ => panic!("unexpected listing subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
     }
 
     #[test]

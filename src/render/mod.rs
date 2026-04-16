@@ -555,6 +555,21 @@ fn render_config_show(
             ("dry run", yes_no(view.output.dry_run)),
         ],
     )?;
+    render_pairs(
+        stdout,
+        "interaction",
+        &[
+            ("input enabled", yes_no(view.interaction.input_enabled)),
+            ("assume yes", yes_no(view.interaction.assume_yes)),
+            ("stdin tty", yes_no(view.interaction.stdin_tty)),
+            ("stdout tty", yes_no(view.interaction.stdout_tty)),
+            ("prompts allowed", yes_no(view.interaction.prompts_allowed)),
+            (
+                "confirmations allowed",
+                yes_no(view.interaction.confirmations_allowed),
+            ),
+        ],
+    )?;
     let user_config = format!(
         "{} · {}",
         present_absent(view.config_files.user_present),
@@ -2840,8 +2855,8 @@ mod tests {
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, LocalConfig,
-        LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
+        InteractionConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
+        PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
         SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
@@ -2857,6 +2872,14 @@ mod tests {
                     verbosity: Verbosity::Normal,
                     color: true,
                     dry_run: false,
+                },
+                interaction: InteractionConfig {
+                    input_enabled: true,
+                    assume_yes: false,
+                    stdin_tty: true,
+                    stdout_tty: true,
+                    prompts_allowed: true,
+                    confirmations_allowed: true,
                 },
                 paths: PathsConfig {
                     profile: "interactive_user".into(),
@@ -2943,6 +2966,8 @@ mod tests {
         )
         .expect("runtime show");
         assert_eq!(view.output.format, "human");
+        assert!(view.interaction.input_enabled);
+        assert!(view.interaction.prompts_allowed);
         assert_eq!(view.paths.profile, "interactive_user");
         assert_eq!(view.paths.app_namespace, "apps/cli");
         assert_eq!(view.paths.shared_accounts_namespace, "shared/accounts");
@@ -3003,6 +3028,14 @@ mod tests {
                         verbosity: Verbosity::Trace,
                         color: false,
                         dry_run: true,
+                    },
+                    interaction: InteractionConfig {
+                        input_enabled: true,
+                        assume_yes: false,
+                        stdin_tty: true,
+                        stdout_tty: true,
+                        prompts_allowed: true,
+                        confirmations_allowed: true,
                     },
                     paths: PathsConfig {
                         profile: "interactive_user".into(),

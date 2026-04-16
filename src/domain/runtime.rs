@@ -129,6 +129,7 @@ pub enum CommandView {
 pub struct ConfigShowView {
     pub source: String,
     pub output: OutputRuntimeView,
+    pub interaction: InteractionRuntimeView,
     pub config_files: ConfigFilesRuntimeView,
     pub paths: PathsRuntimeView,
     pub migration: MigrationRuntimeView,
@@ -290,6 +291,16 @@ pub struct OutputRuntimeView {
     pub verbosity: String,
     pub color: bool,
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InteractionRuntimeView {
+    pub input_enabled: bool,
+    pub assume_yes: bool,
+    pub stdin_tty: bool,
+    pub stdout_tty: bool,
+    pub prompts_allowed: bool,
+    pub confirmations_allowed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

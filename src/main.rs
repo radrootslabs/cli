@@ -6,7 +6,6 @@ mod domain;
 mod render;
 mod runtime;
 
-use clap::Parser;
 use std::io::Write;
 use std::process::ExitCode;
 

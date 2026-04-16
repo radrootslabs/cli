@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -114,6 +115,16 @@ pub struct OutputConfig {
     pub verbosity: Verbosity,
     pub color: bool,
     pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractionConfig {
+    pub input_enabled: bool,
+    pub assume_yes: bool,
+    pub stdin_tty: bool,
+    pub stdout_tty: bool,
+    pub prompts_allowed: bool,
+    pub confirmations_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,6 +318,7 @@ pub struct RpcConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeConfig {
     pub output: OutputConfig,
+    pub interaction: InteractionConfig,
     pub paths: PathsConfig,
     pub migration: MigrationConfig,
     pub logging: LoggingConfig,
@@ -410,6 +422,8 @@ pub(crate) trait Environment {
     fn var(&self, key: &str) -> Option<String>;
     fn current_dir(&self) -> Result<PathBuf, RuntimeError>;
     fn path_resolver(&self) -> RadrootsPathResolver;
+    fn stdin_is_tty(&self) -> bool;
+    fn stdout_is_tty(&self) -> bool;
 }
 
 pub struct SystemEnvironment;
@@ -427,6 +441,14 @@ impl Environment for SystemEnvironment {
 
     fn path_resolver(&self) -> RadrootsPathResolver {
         RadrootsPathResolver::current()
+    }
+
+    fn stdin_is_tty(&self) -> bool {
+        std::io::stdin().is_terminal()
+    }
+
+    fn stdout_is_tty(&self) -> bool {
+        std::io::stdout().is_terminal()
     }
 }
 
@@ -467,6 +489,7 @@ impl RuntimeConfig {
                 color: !args.no_color,
                 dry_run: args.dry_run,
             },
+            interaction: resolve_interaction_config(args, env),
             paths: paths.clone(),
             migration,
             logging: LoggingConfig {
@@ -1083,15 +1106,23 @@ fn resolve_output_format(
     env: &dyn Environment,
     env_file: &EnvFileValues,
 ) -> Result<OutputFormat, RuntimeError> {
-    match (args.json, args.ndjson) {
-        (true, true) => {
+    if args.output_format.is_some() && (args.json || args.ndjson) {
+        return Err(RuntimeError::Config(
+            "flags --output, --json, and --ndjson cannot be used together".to_owned(),
+        ));
+    }
+
+    match (args.output_format, args.json, args.ndjson) {
+        (_, true, true) => {
             return Err(RuntimeError::Config(
                 "flags --json and --ndjson cannot be used together".to_owned(),
             ));
         }
-        (true, false) => return Ok(OutputFormat::Json),
-        (false, true) => return Ok(OutputFormat::Ndjson),
-        (false, false) => {}
+        (Some(format), false, false) => return Ok(format.as_output_format()),
+        (None, true, false) => return Ok(OutputFormat::Json),
+        (None, false, true) => return Ok(OutputFormat::Ndjson),
+        (None, false, false) => {}
+        (Some(_), true, false) | (Some(_), false, true) => unreachable!(),
     }
     match env_value(env, env_file, &[ENV_OUTPUT]) {
         Some(value) => parse_output_format(value.as_str()),
@@ -1118,6 +1149,22 @@ fn resolve_verbosity(args: &CliArgs) -> Result<Verbosity, RuntimeError> {
         Ok(Verbosity::Verbose)
     } else {
         Ok(Verbosity::Normal)
+    }
+}
+
+fn resolve_interaction_config(args: &CliArgs, env: &dyn Environment) -> InteractionConfig {
+    let stdin_tty = env.stdin_is_tty();
+    let stdout_tty = env.stdout_is_tty();
+    let input_enabled = !args.no_input;
+    let prompts_allowed = input_enabled && stdin_tty && stdout_tty;
+    let confirmations_allowed = prompts_allowed && !args.yes;
+    InteractionConfig {
+        input_enabled,
+        assume_yes: args.yes,
+        stdin_tty,
+        stdout_tty,
+        prompts_allowed,
+        confirmations_allowed,
     }
 }
 
@@ -1306,12 +1353,11 @@ mod tests {
     use super::{
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
         CapabilityBindingSource, CapabilityBindingTargetKind, EnvFileValues, Environment,
-        HyfConfig, INFERENCE_HYF_STDIO_CAPABILITY, OutputConfig, OutputFormat, PathsConfig,
-        RelayConfigSource, RelayPublishPolicy, RuntimeConfig, SignerBackend, Verbosity,
-        parse_env_file_values,
+        HyfConfig, INFERENCE_HYF_STDIO_CAPABILITY, InteractionConfig, OutputConfig, OutputFormat,
+        PathsConfig, RelayConfigSource, RelayPublishPolicy, RuntimeConfig, SignerBackend,
+        Verbosity, parse_env_file_values,
     };
     use crate::cli::CliArgs;
-    use clap::Parser;
     use radroots_runtime_paths::{RadrootsHostEnvironment, RadrootsPathResolver, RadrootsPlatform};
     use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
     use std::collections::BTreeMap;
@@ -1323,6 +1369,8 @@ mod tests {
         values: BTreeMap<String, String>,
         current_dir: PathBuf,
         path_resolver: RadrootsPathResolver,
+        stdin_tty: bool,
+        stdout_tty: bool,
     }
 
     impl MapEnvironment {
@@ -1337,7 +1385,15 @@ mod tests {
                         ..RadrootsHostEnvironment::default()
                     },
                 ),
+                stdin_tty: false,
+                stdout_tty: false,
             }
+        }
+
+        fn with_tty(mut self, stdin_tty: bool, stdout_tty: bool) -> Self {
+            self.stdin_tty = stdin_tty;
+            self.stdout_tty = stdout_tty;
+            self
         }
     }
 
@@ -1352,6 +1408,14 @@ mod tests {
 
         fn path_resolver(&self) -> RadrootsPathResolver {
             self.path_resolver.clone()
+        }
+
+        fn stdin_is_tty(&self) -> bool {
+            self.stdin_tty
+        }
+
+        fn stdout_is_tty(&self) -> bool {
+            self.stdout_tty
         }
     }
 
@@ -1406,6 +1470,17 @@ mod tests {
                 verbosity: Verbosity::Verbose,
                 color: false,
                 dry_run: true,
+            }
+        );
+        assert_eq!(
+            resolved.interaction,
+            InteractionConfig {
+                input_enabled: true,
+                assume_yes: false,
+                stdin_tty: false,
+                stdout_tty: false,
+                prompts_allowed: false,
+                confirmations_allowed: false,
             }
         );
         assert_eq!(
@@ -1526,6 +1601,17 @@ mod tests {
                 dry_run: false,
             }
         );
+        assert_eq!(
+            resolved.interaction,
+            InteractionConfig {
+                input_enabled: true,
+                assume_yes: false,
+                stdin_tty: false,
+                stdout_tty: false,
+                prompts_allowed: false,
+                confirmations_allowed: false,
+            }
+        );
         assert_eq!(resolved.logging.filter, "debug,cli=trace");
         assert_eq!(
             resolved.logging.directory,
@@ -1612,6 +1698,23 @@ mod tests {
                 .to_string()
                 .contains("--quiet, --verbose, and --trace")
         );
+
+        let conflicting_aliases = CliArgs::parse_from([
+            "radroots",
+            "--output",
+            "json",
+            "--json",
+            "config",
+            "show",
+        ]);
+        let error =
+            RuntimeConfig::resolve_with_env_file(&conflicting_aliases, &env, &EnvFileValues::default())
+                .expect_err("conflicting output aliases");
+        assert!(
+            error
+                .to_string()
+                .contains("--output, --json, and --ndjson")
+        );
     }
 
     #[test]
@@ -1673,6 +1776,58 @@ RADROOTS_HYF_EXECUTABLE=bin/hyfd
     }
 
     #[test]
+    fn explicit_output_flag_overrides_environment_output() {
+        let args = CliArgs::parse_from(["radroots", "--output", "ndjson", "find", "eggs"]);
+        let env = MapEnvironment::new(BTreeMap::from([(
+            "RADROOTS_OUTPUT".to_owned(),
+            "json".to_owned(),
+        )]));
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve runtime config");
+        assert_eq!(resolved.output.format, OutputFormat::Ndjson);
+    }
+
+    #[test]
+    fn interaction_config_reflects_tty_and_flags() {
+        let args = CliArgs::parse_from(["radroots", "--no-input", "--yes", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::new()).with_tty(true, true);
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve runtime config");
+        assert_eq!(
+            resolved.interaction,
+            InteractionConfig {
+                input_enabled: false,
+                assume_yes: true,
+                stdin_tty: true,
+                stdout_tty: true,
+                prompts_allowed: false,
+                confirmations_allowed: false,
+            }
+        );
+
+        let interactive_args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let interactive = RuntimeConfig::resolve_with_env_file(
+            &interactive_args,
+            &env,
+            &EnvFileValues::default(),
+        )
+        .expect("resolve interactive runtime config");
+        assert_eq!(
+            interactive.interaction,
+            InteractionConfig {
+                input_enabled: true,
+                assume_yes: false,
+                stdin_tty: true,
+                stdout_tty: true,
+                prompts_allowed: true,
+                confirmations_allowed: true,
+            }
+        );
+    }
+
+    #[test]
     fn process_environment_overrides_env_file_values() {
         let args = CliArgs::parse_from(["radroots", "config", "show"]);
         let env = MapEnvironment::new(BTreeMap::from([
@@ -1723,6 +1878,8 @@ RADROOTS_CLI_LOGGING_STDOUT=false
                     ..RadrootsHostEnvironment::default()
                 },
             ),
+            stdin_tty: false,
+            stdout_tty: false,
         };
         let args = CliArgs::parse_from(["radroots", "config", "show"]);
 
@@ -1767,6 +1924,8 @@ RADROOTS_CLI_LOGGING_STDOUT=false
                     ..RadrootsHostEnvironment::default()
                 },
             ),
+            stdin_tty: false,
+            stdout_tty: false,
         };
         let args = CliArgs::parse_from(["radroots", "config", "show"]);
 
@@ -1821,6 +1980,8 @@ target = "bin/user-hyfd"
                     ..RadrootsHostEnvironment::default()
                 },
             ),
+            stdin_tty: false,
+            stdout_tty: false,
         };
         let args = CliArgs::parse_from(["radroots", "config", "show"]);
 
@@ -1871,6 +2032,8 @@ target = "https://rpc.workspace.test/jsonrpc"
                     ..RadrootsHostEnvironment::default()
                 },
             ),
+            stdin_tty: false,
+            stdout_tty: false,
         };
         let args = CliArgs::parse_from(["radroots", "config", "show"]);
 
@@ -1951,6 +2114,8 @@ target = "https://rpc.workspace.test/jsonrpc"
                     ..RadrootsHostEnvironment::default()
                 },
             ),
+            stdin_tty: false,
+            stdout_tty: false,
         };
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
