@@ -28,6 +28,36 @@ fn root_help_is_workflow_grouped() {
 }
 
 #[test]
+fn setup_help_describes_the_landed_workflow_layer() {
+    let output = help_command()
+        .args(["setup", "--help"])
+        .output()
+        .expect("run setup help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains(
+        "This workflow layer sits on top of the existing account, local, and farm commands."
+    ));
+    assert!(!stdout.contains("being added"));
+}
+
+#[test]
+fn status_help_describes_current_readiness_surfaces() {
+    let output = help_command()
+        .args(["status", "--help"])
+        .output()
+        .expect("run status help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains(
+        "This workflow summary reflects the current readiness and configuration surfaces."
+    ));
+    assert!(!stdout.contains("being added"));
+}
+
+#[test]
 fn account_help_prefers_human_first_aliases() {
     let output = help_command()
         .args(["account", "--help"])
@@ -124,4 +154,5 @@ fn order_help_prefers_create_view_and_list() {
     assert!(stdout.contains("history"));
     assert!(stdout.contains("radroots order submit ord_demo --watch"));
     assert!(stdout.contains("Compatibility aliases: new, get, ls."));
+    assert!(stdout.contains("durable order cancel availability"));
 }

@@ -85,7 +85,7 @@ Examples:
   radroots setup buyer
   radroots setup both
 
-This workflow layer is being added over the existing account, local, and farm commands.
+This workflow layer sits on top of the existing account, local, and farm commands.
 ";
 
 const STATUS_HELP: &str = "\
@@ -94,7 +94,7 @@ Examples:
   radroots doctor
   radroots config show
 
-This workflow summary is being added over the existing readiness and configuration surfaces.
+This workflow summary reflects the current readiness and configuration surfaces.
 ";
 
 const ACCOUNT_HELP: &str = "\
@@ -1086,7 +1086,7 @@ pub enum OrderCommand {
     Submit(OrderSubmitArgs),
     #[command(about = "Watch a submitted order")]
     Watch(OrderWatchArgs),
-    #[command(about = "Cancel a submitted order")]
+    #[command(about = "Explain durable order cancel availability")]
     Cancel(RecordKeyArgs),
     #[command(about = "Show submitted order history")]
     History,
