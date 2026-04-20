@@ -37,10 +37,19 @@ pub fn dispatch(
             AccountCommand::New => Ok(CommandOutput::success(CommandView::AccountNew(
                 identity::init(config)?,
             ))),
+            AccountCommand::Import(args) => Ok(CommandOutput::success(CommandView::AccountImport(
+                identity::import(config, args)?,
+            ))),
             AccountCommand::Whoami => identity::show(config),
             AccountCommand::Ls => identity::list(config),
             AccountCommand::Use(args) => Ok(CommandOutput::success(CommandView::AccountUse(
                 identity::use_account(config, args.selector.as_str())?,
+            ))),
+            AccountCommand::ClearDefault => Ok(CommandOutput::success(
+                CommandView::AccountClearDefault(identity::clear_default(config)?),
+            )),
+            AccountCommand::Remove(args) => Ok(CommandOutput::success(CommandView::AccountRemove(
+                identity::remove(config, args.selector.as_str())?,
             ))),
         },
         Command::Myc(myc) => match &myc.command {

@@ -1,16 +1,17 @@
 use std::io::{self, Write};
 
 use crate::domain::runtime::{
-    AccountListView, AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
+    AccountClearDefaultView, AccountImportView, AccountListView, AccountRemoveView,
+    AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
     FarmConfigSummaryView, FarmGetView, FarmPublishComponentView, FarmPublishView, FarmSetView,
-    FarmSetupView, FarmStatusView, FindView, JobGetView, JobListView, JobWatchView, ListingGetView,
-    ListingMutationView, ListingNewView, ListingValidateView, LocalBackupView, LocalExportView,
-    LocalInitView, LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView,
-    OrderGetView, OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView,
-    OrderSubmitWatchView, OrderWatchView, OrderWorkflowView, RelayListView, RpcSessionsView,
-    RpcStatusView, RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView,
-    SellAddView, SellCheckView, SellDraftMutationView, SellMutationView, SellShowView, SetupView,
-    StatusView, SyncActionView, SyncStatusView, SyncWatchView,
+    FarmSetupView, FarmStatusView, FindView, JobGetView, JobListView, JobWatchView,
+    ListingGetView, ListingMutationView, ListingNewView, ListingValidateView, LocalBackupView,
+    LocalExportView, LocalInitView, LocalStatusView, NetStatusView, OrderCancelView,
+    OrderDraftItemView, OrderGetView, OrderHistoryView, OrderJobView, OrderListView, OrderNewView,
+    OrderSubmitView, OrderSubmitWatchView, OrderWatchView, OrderWorkflowView, RelayListView,
+    RpcSessionsView, RpcStatusView, RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView,
+    RuntimeStatusView, SellAddView, SellCheckView, SellDraftMutationView, SellMutationView,
+    SellShowView, SetupView, StatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat, Verbosity};
@@ -72,8 +73,11 @@ fn render_human_view_to(
     output: &CommandOutput,
 ) -> Result<(), RuntimeError> {
     match output.view() {
+        CommandView::AccountClearDefault(view) => render_account_clear_default(stdout, view)?,
+        CommandView::AccountImport(view) => render_account_import(stdout, view)?,
         CommandView::AccountList(view) => render_account_list(stdout, view)?,
         CommandView::AccountNew(view) => render_account_new(stdout, view)?,
+        CommandView::AccountRemove(view) => render_account_remove(stdout, view)?,
         CommandView::AccountUse(view) => render_account_use(stdout, view)?,
         CommandView::AccountWhoami(view) => render_account_whoami(stdout, view)?,
         CommandView::MycStatus(view) => {
@@ -273,11 +277,23 @@ fn render_json(output: &CommandOutput) -> Result<(), RuntimeError> {
 
 fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), RuntimeError> {
     match output.view() {
+        CommandView::AccountClearDefault(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::AccountImport(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
         CommandView::AccountList(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
         CommandView::AccountNew(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::AccountRemove(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -594,6 +610,11 @@ fn yes_no(value: bool) -> &'static str {
 
 fn render_quiet_output(output: &CommandOutput) -> Option<String> {
     match output.view() {
+        CommandView::AccountClearDefault(view) => Some(match &view.cleared_account {
+            Some(account) => format!("Default account cleared: {}", account.id),
+            None => "No default account configured".to_owned(),
+        }),
+        CommandView::AccountImport(view) => Some(format!("Account imported: {}", view.account.id)),
         CommandView::AccountNew(view) => Some(format!(
             "{}: {}",
             match view.state.as_str() {
@@ -602,6 +623,9 @@ fn render_quiet_output(output: &CommandOutput) -> Option<String> {
             },
             view.account.id
         )),
+        CommandView::AccountRemove(view) => {
+            Some(format!("Account removed: {}", view.removed_account.id))
+        }
         CommandView::Find(view) | CommandView::MarketSearch(view) => match view.state.as_str() {
             "ready" if !view.results.is_empty() => Some(
                 view.results
@@ -747,8 +771,17 @@ fn render_field_rows_string(rows: &[(&str, String)]) -> String {
 
 fn verbose_details(output: &CommandOutput) -> Vec<(&'static str, String)> {
     match output.view() {
+        CommandView::AccountClearDefault(view) => vec![
+            ("Source", view.source.clone()),
+            ("Remaining accounts", view.remaining_account_count.to_string()),
+        ],
+        CommandView::AccountImport(view) => vec![("Source", view.source.clone())],
         CommandView::AccountList(view) => vec![("Source", view.source.clone())],
         CommandView::AccountNew(view) => vec![("Source", view.source.clone())],
+        CommandView::AccountRemove(view) => vec![
+            ("Source", view.source.clone()),
+            ("Remaining accounts", view.remaining_account_count.to_string()),
+        ],
         CommandView::AccountUse(view) => vec![("Source", view.source.clone())],
         CommandView::AccountWhoami(view) => vec![("Source", view.source.clone())],
         CommandView::Doctor(view) => vec![("Source", view.source.clone())],
@@ -864,6 +897,25 @@ fn render_account_list(stdout: &mut dyn Write, view: &AccountListView) -> Result
     Ok(())
 }
 
+fn render_account_import(
+    stdout: &mut dyn Write,
+    view: &AccountImportView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "Watch-only account imported")?;
+    writeln!(stdout)?;
+    render_account_section(stdout, &view.account)?;
+    writeln!(stdout)?;
+    writeln!(stdout, "Identity")?;
+    render_field_rows(
+        stdout,
+        &[("npub", view.public_identity.public_key_npub.clone())],
+    )?;
+    if !view.actions.is_empty() {
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
+    Ok(())
+}
+
 fn render_account_new(
     stdout: &mut dyn Write,
     view: &crate::domain::runtime::AccountNewView,
@@ -894,9 +946,64 @@ fn render_account_use(
     stdout: &mut dyn Write,
     view: &crate::domain::runtime::AccountUseView,
 ) -> Result<(), RuntimeError> {
-    writeln!(stdout, "Default account updated")?;
+    writeln!(stdout, "Default account selected")?;
     writeln!(stdout)?;
     render_account_section(stdout, &view.account)
+}
+
+fn render_account_clear_default(
+    stdout: &mut dyn Write,
+    view: &AccountClearDefaultView,
+) -> Result<(), RuntimeError> {
+    writeln!(
+        stdout,
+        "{}",
+        match view.state.as_str() {
+            "cleared" => "Default account cleared",
+            _ => "No default account configured",
+        }
+    )?;
+    if let Some(account) = &view.cleared_account {
+        writeln!(stdout)?;
+        render_account_section(stdout, account)?;
+    }
+    writeln!(stdout)?;
+    render_field_rows(
+        stdout,
+        &[("Remaining accounts", view.remaining_account_count.to_string())],
+    )?;
+    if !view.actions.is_empty() {
+        writeln!(stdout)?;
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
+    Ok(())
+}
+
+fn render_account_remove(
+    stdout: &mut dyn Write,
+    view: &AccountRemoveView,
+) -> Result<(), RuntimeError> {
+    writeln!(
+        stdout,
+        "{}",
+        if view.default_cleared {
+            "Default account removed"
+        } else {
+            "Account removed"
+        }
+    )?;
+    writeln!(stdout)?;
+    render_account_section(stdout, &view.removed_account)?;
+    writeln!(stdout)?;
+    render_field_rows(
+        stdout,
+        &[("Remaining accounts", view.remaining_account_count.to_string())],
+    )?;
+    if !view.actions.is_empty() {
+        writeln!(stdout)?;
+        render_item_section(stdout, "Next", &view.actions)?;
+    }
+    Ok(())
 }
 
 fn render_account_whoami(
@@ -928,8 +1035,10 @@ fn render_account_whoami(
             render_account_resolution(stdout, &view.account_resolution)?;
             writeln!(stdout)?;
             render_item_section(stdout, "Missing", &["Resolved account".to_owned()])?;
-            writeln!(stdout)?;
-            render_item_section(stdout, "Next", &["radroots account create".to_owned()])?;
+            if !view.actions.is_empty() {
+                writeln!(stdout)?;
+                render_item_section(stdout, "Next", &view.actions)?;
+            }
         }
     }
     Ok(())
@@ -4057,10 +4166,13 @@ struct Table {
 
 fn human_command_name(view: &CommandView) -> &'static str {
     match view {
-        CommandView::AccountList(_) => "account ls",
-        CommandView::AccountNew(_) => "account new",
-        CommandView::AccountUse(_) => "account use",
-        CommandView::AccountWhoami(_) => "account whoami",
+        CommandView::AccountClearDefault(_) => "account clear-default",
+        CommandView::AccountImport(_) => "account import",
+        CommandView::AccountList(_) => "account list",
+        CommandView::AccountNew(_) => "account create",
+        CommandView::AccountRemove(_) => "account remove",
+        CommandView::AccountUse(_) => "account select",
+        CommandView::AccountWhoami(_) => "account view",
         CommandView::ConfigShow(_) => "config show",
         CommandView::Doctor(_) => "doctor",
         CommandView::FarmGet(_) => "farm show",

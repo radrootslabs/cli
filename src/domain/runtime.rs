@@ -80,8 +80,11 @@ impl CommandDisposition {
 
 #[derive(Debug, Clone)]
 pub enum CommandView {
+    AccountClearDefault(AccountClearDefaultView),
+    AccountImport(AccountImportView),
     AccountList(AccountListView),
     AccountNew(AccountNewView),
+    AccountRemove(AccountRemoveView),
     AccountUse(AccountUseView),
     AccountWhoami(AccountWhoamiView),
     ConfigShow(ConfigShowView),
@@ -579,6 +582,8 @@ pub struct AccountWhoamiView {
     pub account_resolution: AccountResolutionView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_identity: Option<IdentityPublicView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
 }
 
 impl AccountWhoamiView {
@@ -601,11 +606,43 @@ pub struct AccountNewView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AccountImportView {
+    pub state: String,
+    pub source: String,
+    pub account: AccountSummaryView,
+    pub public_identity: IdentityPublicView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AccountUseView {
     pub state: String,
     pub source: String,
     pub default_account_id: String,
     pub account: AccountSummaryView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountClearDefaultView {
+    pub state: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleared_account: Option<AccountSummaryView>,
+    pub remaining_account_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountRemoveView {
+    pub state: String,
+    pub source: String,
+    pub removed_account: AccountSummaryView,
+    pub default_cleared: bool,
+    pub remaining_account_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

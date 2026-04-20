@@ -1,3 +1,6 @@
+use std::path::Path;
+
+use radroots_identity::{IdentityError, load_identity_profile};
 use radroots_nostr_accounts::prelude::{
     RadrootsNostrAccountRecord, RadrootsNostrAccountStatus, RadrootsNostrAccountsError,
     RadrootsNostrAccountsManager,
@@ -51,6 +54,19 @@ pub struct AccountCreateResult {
     pub account: AccountRecordView,
 }
 
+#[derive(Debug, Clone)]
+pub struct AccountClearDefaultResult {
+    pub cleared_account: Option<AccountRecordView>,
+    pub remaining_account_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountRemoveResult {
+    pub removed_account: AccountRecordView,
+    pub default_cleared: bool,
+    pub remaining_account_count: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountResolutionSource {
     InvocationOverride,
@@ -93,19 +109,35 @@ pub fn create_or_migrate_default_account(
     };
 
     let snapshot = snapshot(config)?;
-    let Some(account) = snapshot
-        .accounts
-        .into_iter()
-        .find(|account| account.record.account_id == created_account_id)
-    else {
-        return Err(RuntimeError::Accounts(
-            radroots_nostr_accounts::prelude::RadrootsNostrAccountsError::InvalidState(
-                "created account missing after account create".to_owned(),
-            ),
-        ));
-    };
+    let account = snapshot_account(
+        &snapshot,
+        &created_account_id,
+        "created account missing after account create",
+    )?;
 
     Ok(AccountCreateResult { mode, account })
+}
+
+pub fn import_public_identity(
+    config: &RuntimeConfig,
+    path: &Path,
+    make_default: bool,
+) -> Result<AccountRecordView, RuntimeError> {
+    let manager = account_manager(config)?;
+    let public_identity = load_identity_profile(path).map_err(|error| {
+        RuntimeError::Config(format!(
+            "failed to import account from {}: {}",
+            path.display(),
+            format_identity_error(error)
+        ))
+    })?;
+    let imported_account_id = manager.upsert_public_identity(public_identity, None, make_default)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    snapshot_account(
+        &snapshot,
+        &imported_account_id,
+        "imported account missing after account import",
+    )
 }
 
 pub fn snapshot(config: &RuntimeConfig) -> Result<AccountSnapshot, RuntimeError> {
@@ -168,6 +200,37 @@ pub fn select_account(
                 ),
             )
         })
+}
+
+pub fn clear_default_account(
+    config: &RuntimeConfig,
+) -> Result<AccountClearDefaultResult, RuntimeError> {
+    let manager = account_manager(config)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    let cleared_account = snapshot.accounts.iter().find(|account| account.is_default).cloned();
+    manager.clear_default_account()?;
+    let remaining_account_count = snapshot_from_manager(&manager)?.accounts.len();
+    Ok(AccountClearDefaultResult {
+        cleared_account,
+        remaining_account_count,
+    })
+}
+
+pub fn remove_account(
+    config: &RuntimeConfig,
+    selector: &str,
+) -> Result<AccountRemoveResult, RuntimeError> {
+    let manager = account_manager(config)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    let removed_account = resolve_selector_account(&manager, &snapshot, selector)?;
+    let default_cleared = removed_account.is_default;
+    manager.remove_account(&removed_account.record.account_id)?;
+    let remaining_account_count = snapshot_from_manager(&manager)?.accounts.len();
+    Ok(AccountRemoveResult {
+        removed_account,
+        default_cleared,
+        remaining_account_count,
+    })
 }
 
 pub fn resolved_account_signing_status(
@@ -271,19 +334,39 @@ fn snapshot_from_manager(
     manager: &RadrootsNostrAccountsManager,
 ) -> Result<AccountSnapshot, RuntimeError> {
     let default_account_id = manager.default_account_id()?.map(|id| id.to_string());
-    let accounts = manager
-        .list_accounts()?
-        .into_iter()
-        .map(|record| AccountRecordView {
-            is_default: default_account_id
-                .as_deref()
-                .is_some_and(|default| default == record.account_id.as_str()),
-            signer: "local",
+    let mut accounts = Vec::new();
+    for record in manager.list_accounts()? {
+        let is_default = default_account_id
+            .as_deref()
+            .is_some_and(|default| default == record.account_id.as_str());
+        let signer = account_signer(manager, &record)?;
+        accounts.push(AccountRecordView {
             record,
-        })
-        .collect();
+            is_default,
+            signer,
+        });
+    }
 
     Ok(AccountSnapshot { accounts })
+}
+
+fn snapshot_account(
+    snapshot: &AccountSnapshot,
+    account_id: &radroots_identity::RadrootsIdentityId,
+    missing_message: &str,
+) -> Result<AccountRecordView, RuntimeError> {
+    snapshot
+        .accounts
+        .iter()
+        .find(|account| account.record.account_id == *account_id)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeError::Accounts(
+                radroots_nostr_accounts::prelude::RadrootsNostrAccountsError::InvalidState(
+                    missing_message.to_owned(),
+                ),
+            )
+        })
 }
 
 fn resolve_selector_account(
@@ -317,6 +400,26 @@ fn selector_runtime_error(selector: &str, error: RadrootsNostrAccountsError) -> 
             "account selector `{normalized}` matched multiple local accounts; use account id or npub"
         )),
         other => RuntimeError::Accounts(other),
+    }
+}
+
+fn account_signer(
+    manager: &RadrootsNostrAccountsManager,
+    record: &RadrootsNostrAccountRecord,
+) -> Result<&'static str, RuntimeError> {
+    Ok(
+        if manager.get_signing_identity(&record.account_id)?.is_some() {
+            "local"
+        } else {
+            "watch_only"
+        },
+    )
+}
+
+fn format_identity_error(error: IdentityError) -> String {
+    match error {
+        IdentityError::NotFound(path) => format!("path not found: {}", path.display()),
+        other => other.to_string(),
     }
 }
 

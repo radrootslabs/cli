@@ -40,7 +40,7 @@ Buy from the market
   order                 Create and manage order requests
 
 Accounts and settings
-  account               Create and select local accounts
+  account               Create, import, and manage local accounts
   config                Show effective configuration
 
 Advanced and troubleshooting
@@ -102,9 +102,14 @@ When no actor is resolved, it points to explicit account commands instead of mut
 const ACCOUNT_HELP: &str = "\
 Examples:
   radroots account create
+  radroots account import ./identity.json
   radroots account view
   radroots account list
   radroots account select market-main
+  radroots account clear-default
+  radroots account remove market-main
+
+Select stores the default account. Clear-default removes the stored default without deleting accounts.
 
 Compatibility aliases: new, whoami, ls, use.
 ";
@@ -388,7 +393,7 @@ fn matches_local_output_context(command_tokens: &[String]) -> bool {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
-    #[command(about = "Create and select local accounts")]
+    #[command(about = "Create, import, and manage local accounts")]
     Account(AccountArgs),
     #[command(about = "Show effective configuration")]
     Config(ConfigArgs),
@@ -434,9 +439,12 @@ impl Command {
         match self {
             Self::Account(account) => match account.command {
                 AccountCommand::New => "account create",
+                AccountCommand::Import(_) => "account import",
                 AccountCommand::Whoami => "account view",
                 AccountCommand::Ls => "account list",
                 AccountCommand::Use(_) => "account select",
+                AccountCommand::ClearDefault => "account clear-default",
+                AccountCommand::Remove(_) => "account remove",
             },
             Self::Config(config) => match config.command {
                 ConfigCommand::Show => "config show",
@@ -569,7 +577,11 @@ impl Command {
         !matches!(
             self,
             Self::Account(AccountArgs {
-                command: AccountCommand::New | AccountCommand::Use(_),
+                command: AccountCommand::New
+                    | AccountCommand::Import(_)
+                    | AccountCommand::Use(_)
+                    | AccountCommand::ClearDefault
+                    | AccountCommand::Remove(_),
             }) | Self::Farm(FarmArgs {
                 command: FarmCommand::Init(_) | FarmCommand::Set(_) | FarmCommand::Setup(_),
             }) | Self::Local(LocalArgs {
@@ -627,6 +639,8 @@ pub enum AccountCommand {
         about = "Create a local account"
     )]
     New,
+    #[command(name = "import", about = "Import a watch-only local account")]
+    Import(AccountImportArgs),
     #[command(
         name = "view",
         visible_alias = "whoami",
@@ -641,10 +655,26 @@ pub enum AccountCommand {
         about = "Select a local account"
     )]
     Use(AccountUseArgs),
+    #[command(name = "clear-default", about = "Clear the stored default account")]
+    ClearDefault,
+    #[command(name = "remove", about = "Remove a local account")]
+    Remove(AccountRemoveArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountImportArgs {
+    pub path: PathBuf,
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub default: bool,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct AccountUseArgs {
+    pub selector: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountRemoveArgs {
     pub selector: String,
 }
 
@@ -1195,6 +1225,8 @@ pub struct SellRestockArgs {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{
         AccountCommand, CliArgs, Command, ConfigCommand, FarmCommand, FarmFieldArg, FarmScopeArg,
         JobCommand, JobWatchArgs, ListingCommand, LocalCommand, LocalExportFormatArg,
@@ -1532,10 +1564,41 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
+        let import =
+            CliArgs::parse_from(["radroots", "account", "import", "./identity.json", "--default"]);
+        match import.command {
+            Command::Account(account) => match account.command {
+                AccountCommand::Import(args) => {
+                    assert_eq!(args.path, PathBuf::from("./identity.json"));
+                    assert!(args.default);
+                }
+                _ => panic!("unexpected account subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
         let use_account = CliArgs::parse_from(["radroots", "account", "use", "market-main"]);
         match use_account.command {
             Command::Account(account) => match account.command {
                 AccountCommand::Use(args) => assert_eq!(args.selector, "market-main"),
+                _ => panic!("unexpected account subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let clear_default = CliArgs::parse_from(["radroots", "account", "clear-default"]);
+        match clear_default.command {
+            Command::Account(account) => match account.command {
+                AccountCommand::ClearDefault => {}
+                _ => panic!("unexpected account subcommand"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+
+        let remove = CliArgs::parse_from(["radroots", "account", "remove", "market-main"]);
+        match remove.command {
+            Command::Account(account) => match account.command {
+                AccountCommand::Remove(args) => assert_eq!(args.selector, "market-main"),
                 _ => panic!("unexpected account subcommand"),
             },
             _ => panic!("unexpected command variant"),
@@ -2171,6 +2234,24 @@ mod tests {
         let account_create = CliArgs::parse_from(["radroots", "account", "create"]);
         assert_eq!(account_create.command.display_name(), "account create");
         assert!(!account_create.command.supports_dry_run());
+
+        let account_import =
+            CliArgs::parse_from(["radroots", "account", "import", "./identity.json"]);
+        assert_eq!(account_import.command.display_name(), "account import");
+        assert!(!account_import.command.supports_dry_run());
+
+        let account_clear_default =
+            CliArgs::parse_from(["radroots", "account", "clear-default"]);
+        assert_eq!(
+            account_clear_default.command.display_name(),
+            "account clear-default"
+        );
+        assert!(!account_clear_default.command.supports_dry_run());
+
+        let account_remove =
+            CliArgs::parse_from(["radroots", "account", "remove", "market-main"]);
+        assert_eq!(account_remove.command.display_name(), "account remove");
+        assert!(!account_remove.command.supports_dry_run());
 
         let farm_init = CliArgs::parse_from(["radroots", "farm", "init"]);
         assert_eq!(farm_init.command.display_name(), "farm init");

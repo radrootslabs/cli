@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use assert_cmd::prelude::*;
+use radroots_identity::RadrootsIdentity;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -128,6 +129,56 @@ fn account_new_encrypts_file_backed_secret_fallback_by_default() {
 }
 
 #[test]
+fn account_import_json_creates_watch_only_account_without_secret_material() {
+    let dir = tempdir().expect("tempdir");
+    let identity = RadrootsIdentity::generate();
+    let import_path = dir.path().join("watch-only-identity.json");
+    fs::write(
+        &import_path,
+        serde_json::to_vec_pretty(&identity.to_public()).expect("serialize public identity"),
+    )
+    .expect("write import file");
+
+    let output = cli_command_in(dir.path())
+        .args([
+            "--json",
+            "account",
+            "import",
+            import_path.to_str().expect("utf8 path"),
+        ])
+        .output()
+        .expect("run account import");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+    let account_id = json["account"]["id"].as_str().expect("account id");
+    assert_eq!(json["state"], "imported");
+    assert_eq!(json["source"], "shared account store · watch-only import");
+    assert_eq!(json["account"]["signer"], "watch_only");
+    assert_eq!(json["account"]["is_default"], true);
+
+    let secrets_dir = secrets_root(dir.path()).join("shared/accounts");
+    assert!(!secrets_dir.join(format!("{account_id}.secret")).exists());
+    assert!(!secrets_dir.join(format!("{account_id}.secret.json")).exists());
+
+    let whoami = cli_command_in(dir.path())
+        .args(["--json", "account", "whoami"])
+        .output()
+        .expect("run account whoami");
+    assert!(whoami.status.success());
+    let whoami_json: Value =
+        serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
+    assert_eq!(
+        whoami_json["account_resolution"]["resolved_account"]["id"],
+        account_id
+    );
+    assert_eq!(
+        whoami_json["account_resolution"]["resolved_account"]["signer"],
+        "watch_only"
+    );
+}
+
+#[test]
 fn account_new_rejects_dry_run_without_creating_store_state() {
     let dir = tempdir().expect("tempdir");
     let store_path = data_root(dir.path()).join("shared/accounts/store.json");
@@ -242,6 +293,62 @@ fn account_new_does_not_replace_existing_default_account() {
 }
 
 #[test]
+fn account_clear_default_json_clears_stored_default_without_removing_accounts() {
+    let dir = tempdir().expect("tempdir");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
+
+    let first = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run first account new");
+    assert!(first.status.success());
+    let first_json: Value = serde_json::from_slice(first.stdout.as_slice()).expect("first json");
+    let first_id = first_json["account"]["id"]
+        .as_str()
+        .expect("first account id")
+        .to_owned();
+
+    let second = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run second account new");
+    assert!(second.status.success());
+
+    let output = cli_command_in(dir.path())
+        .args(["--json", "account", "clear-default"])
+        .output()
+        .expect("run clear-default");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("clear-default json");
+    assert_eq!(json["state"], "cleared");
+    assert_eq!(json["cleared_account"]["id"], first_id);
+    assert_eq!(json["remaining_account_count"], 2);
+
+    let store_json: Value =
+        serde_json::from_slice(fs::read(&store_path).expect("read store").as_slice())
+            .expect("parse store");
+    assert_eq!(store_json["default_account_id"], Value::Null);
+    assert_eq!(
+        store_json["accounts"]
+            .as_array()
+            .expect("accounts array")
+            .len(),
+        2
+    );
+
+    let whoami = cli_command_in(dir.path())
+        .args(["--json", "account", "whoami"])
+        .output()
+        .expect("run account whoami");
+    assert_eq!(whoami.status.code(), Some(3));
+    let whoami_json: Value =
+        serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
+    assert_eq!(whoami_json["account_resolution"]["source"], "none");
+    assert_eq!(whoami_json["account_resolution"]["default_account"], Value::Null);
+}
+
+#[test]
 fn account_whoami_json_reports_unconfigured_without_accounts() {
     let dir = tempdir().expect("tempdir");
 
@@ -348,6 +455,63 @@ fn account_use_selects_existing_account() {
         whoami_json["account_resolution"]["resolved_account"]["is_default"],
         true
     );
+}
+
+#[test]
+fn account_remove_json_clears_default_when_removing_default_account() {
+    let dir = tempdir().expect("tempdir");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
+
+    let first = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run first account new");
+    assert!(first.status.success());
+    let first_json: Value = serde_json::from_slice(first.stdout.as_slice()).expect("first json");
+    let first_id = first_json["account"]["id"]
+        .as_str()
+        .expect("first account id")
+        .to_owned();
+
+    let second = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run second account new");
+    assert!(second.status.success());
+
+    let output = cli_command_in(dir.path())
+        .args(["--json", "account", "remove", first_id.as_str()])
+        .output()
+        .expect("run account remove");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("remove json");
+    assert_eq!(json["state"], "removed");
+    assert_eq!(json["removed_account"]["id"], first_id);
+    assert_eq!(json["default_cleared"], true);
+    assert_eq!(json["remaining_account_count"], 1);
+
+    let store_json: Value =
+        serde_json::from_slice(fs::read(&store_path).expect("read store").as_slice())
+            .expect("parse store");
+    assert_eq!(store_json["default_account_id"], Value::Null);
+    assert_eq!(
+        store_json["accounts"]
+            .as_array()
+            .expect("accounts array")
+            .len(),
+        1
+    );
+
+    let whoami = cli_command_in(dir.path())
+        .args(["--json", "account", "whoami"])
+        .output()
+        .expect("run account whoami");
+    assert_eq!(whoami.status.code(), Some(3));
+    let whoami_json: Value =
+        serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
+    assert_eq!(whoami_json["account_resolution"]["source"], "none");
+    assert_eq!(whoami_json["account_resolution"]["default_account"], Value::Null);
 }
 
 #[test]
