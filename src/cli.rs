@@ -86,6 +86,7 @@ Examples:
   radroots setup both
 
 This workflow layer sits on top of the existing account, local, and farm commands.
+Use `radroots account create` or `radroots account select` explicitly when no actor is resolved.
 ";
 
 const STATUS_HELP: &str = "\
@@ -95,6 +96,7 @@ Examples:
   radroots config show
 
 This workflow summary reflects the current readiness and configuration surfaces.
+When no actor is resolved, it points to explicit account commands instead of mutating account state.
 ";
 
 const ACCOUNT_HELP: &str = "\

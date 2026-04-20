@@ -39,6 +39,9 @@ fn setup_help_describes_the_landed_workflow_layer() {
     assert!(stdout.contains(
         "This workflow layer sits on top of the existing account, local, and farm commands."
     ));
+    assert!(stdout.contains(
+        "Use `radroots account create` or `radroots account select` explicitly when no actor is resolved."
+    ));
     assert!(!stdout.contains("being added"));
 }
 
@@ -53,6 +56,9 @@ fn status_help_describes_current_readiness_surfaces() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains(
         "This workflow summary reflects the current readiness and configuration surfaces."
+    ));
+    assert!(stdout.contains(
+        "When no actor is resolved, it points to explicit account commands instead of mutating account state."
     ));
     assert!(!stdout.contains("being added"));
 }

@@ -675,7 +675,7 @@ pub struct SetupView {
     pub state: String,
     pub source: String,
     pub role: String,
-    pub selected_account_id: String,
+    pub account_resolution: AccountResolutionView,
     pub local_state: String,
     pub local_root: String,
     pub relay_state: String,

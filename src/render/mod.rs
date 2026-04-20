@@ -3597,7 +3597,9 @@ fn render_setup(stdout: &mut dyn Write, view: &SetupView) -> Result<(), RuntimeE
         &view.ready,
         &view.needs_attention,
         &view.next,
-    )
+    )?;
+    writeln!(stdout)?;
+    render_account_resolution(stdout, &view.account_resolution)
 }
 
 fn render_status_summary(stdout: &mut dyn Write, view: &StatusView) -> Result<(), RuntimeError> {

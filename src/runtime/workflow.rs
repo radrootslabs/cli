@@ -1,7 +1,7 @@
 use crate::cli::{FarmScopedArgs, SetupRoleArg};
 use crate::domain::runtime::{SetupView, StatusView};
 use crate::runtime::RuntimeError;
-use crate::runtime::accounts::{self, AccountRecordView};
+use crate::runtime::accounts::{self};
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::{farm, local};
 
@@ -9,18 +9,31 @@ const WORKFLOW_SOURCE: &str = "workflow summary · local first";
 const RELAY_SETUP_ACTION: &str = "radroots relay list --relay wss://relay.example.com";
 
 pub fn setup(config: &RuntimeConfig, role: SetupRoleArg) -> Result<SetupView, RuntimeError> {
-    let account = ensure_selected_account(config)?;
+    let account_resolution = accounts::resolve_account_resolution(config)?;
     let local_status = ensure_local_status(config)?;
     let farm = inspect_farm(config)?;
     let relay_configured = relay_configured(config);
     let relay_count = config.relay.urls.len();
 
-    let mut ready = vec![
-        "Selected account".to_owned(),
-        "Local market data".to_owned(),
-    ];
+    let mut state = "saved";
+    let mut ready = Vec::new();
     let mut needs_attention = Vec::new();
     let mut next = Vec::new();
+
+    if account_resolution.resolved_account.is_some() {
+        ready.push("Resolved account".to_owned());
+    } else {
+        state = "unconfigured";
+        needs_attention.push("Resolved account".to_owned());
+        push_unresolved_account_actions(config, &mut next, Some(role))?;
+    }
+
+    if local_status.state == "ready" {
+        ready.push("Local market data".to_owned());
+    } else {
+        state = "unconfigured";
+        needs_attention.push("Local market data".to_owned());
+    }
 
     if relay_configured {
         ready.push("Relay configuration".to_owned());
@@ -28,32 +41,34 @@ pub fn setup(config: &RuntimeConfig, role: SetupRoleArg) -> Result<SetupView, Ru
         needs_attention.push("Relay configuration".to_owned());
     }
 
-    match role {
-        SetupRoleArg::Seller | SetupRoleArg::Both => {
-            apply_farm_attention(&mut ready, &mut needs_attention, &mut next, &farm);
-            push_next(&mut next, farm.primary_next_action.as_deref());
+    if account_resolution.resolved_account.is_some() {
+        match role {
+            SetupRoleArg::Seller | SetupRoleArg::Both => {
+                apply_farm_attention(&mut ready, &mut needs_attention, &mut next, &farm);
+                push_next(&mut next, farm.primary_next_action.as_deref());
+            }
+            SetupRoleArg::Buyer => {}
         }
-        SetupRoleArg::Buyer => {}
-    }
 
-    match role {
-        SetupRoleArg::Buyer | SetupRoleArg::Both if relay_configured => {
-            push_next(&mut next, Some("radroots market search tomatoes"));
+        match role {
+            SetupRoleArg::Buyer | SetupRoleArg::Both if relay_configured => {
+                push_next(&mut next, Some("radroots market search tomatoes"));
+            }
+            _ => {}
         }
-        _ => {}
-    }
 
-    if !relay_configured {
-        push_next(&mut next, Some(RELAY_SETUP_ACTION));
-    }
+        if !relay_configured {
+            push_next(&mut next, Some(RELAY_SETUP_ACTION));
+        }
 
-    push_next(&mut next, Some("radroots status"));
+        push_next(&mut next, Some("radroots status"));
+    }
 
     Ok(SetupView {
-        state: "saved".to_owned(),
+        state: state.to_owned(),
         source: WORKFLOW_SOURCE.to_owned(),
         role: role_name(role).to_owned(),
-        selected_account_id: account.record.account_id.to_string(),
+        account_resolution: accounts::account_resolution_view(&account_resolution),
         local_state: local_status.state,
         local_root: local_status.local_root,
         relay_state: relay_state(config).to_owned(),
@@ -82,6 +97,7 @@ pub fn status(config: &RuntimeConfig) -> Result<StatusView, RuntimeError> {
     } else {
         state = "unconfigured";
         needs_attention.push("Resolved account".to_owned());
+        push_unresolved_account_actions(config, &mut next, None)?;
     }
 
     if local_status.state == "ready" {
@@ -108,7 +124,7 @@ pub fn status(config: &RuntimeConfig) -> Result<StatusView, RuntimeError> {
                 _ => {}
             }
         }
-    } else {
+    } else if account_resolution.resolved_account.is_some() {
         push_next(&mut next, Some("radroots setup buyer"));
         push_next(&mut next, Some("radroots setup seller"));
         if account_resolution.resolved_account.is_some()
@@ -134,19 +150,6 @@ pub fn status(config: &RuntimeConfig) -> Result<StatusView, RuntimeError> {
         needs_attention,
         next,
     })
-}
-
-fn ensure_selected_account(config: &RuntimeConfig) -> Result<AccountRecordView, RuntimeError> {
-    if let Some(account) = accounts::resolve_account(config)? {
-        return Ok(account);
-    }
-
-    let snapshot = accounts::snapshot(config)?;
-    if let Some(account) = snapshot.accounts.first() {
-        return accounts::select_account(config, account.record.account_id.as_str());
-    }
-
-    Ok(accounts::create_or_migrate_selected_account(config)?.account)
 }
 
 fn ensure_local_status(
@@ -238,6 +241,47 @@ fn role_name(role: SetupRoleArg) -> &'static str {
     }
 }
 
+fn push_unresolved_account_actions(
+    config: &RuntimeConfig,
+    next: &mut Vec<String>,
+    setup_role: Option<SetupRoleArg>,
+) -> Result<(), RuntimeError> {
+    match unresolved_account_resolution_state(config)? {
+        UnresolvedAccountResolutionState::NoAccounts => {
+            push_next(next, Some("radroots account create"));
+        }
+        UnresolvedAccountResolutionState::AccountsExistWithoutDefault => {
+            push_next(next, Some("radroots account list"));
+            push_next(next, Some("radroots account select <selector>"));
+        }
+    }
+
+    if let Some(role) = setup_role {
+        push_next(next, Some(setup_command(role)));
+    }
+
+    Ok(())
+}
+
+fn unresolved_account_resolution_state(
+    config: &RuntimeConfig,
+) -> Result<UnresolvedAccountResolutionState, RuntimeError> {
+    let snapshot = accounts::snapshot(config)?;
+    Ok(if snapshot.accounts.is_empty() {
+        UnresolvedAccountResolutionState::NoAccounts
+    } else {
+        UnresolvedAccountResolutionState::AccountsExistWithoutDefault
+    })
+}
+
+fn setup_command(role: SetupRoleArg) -> &'static str {
+    match role {
+        SetupRoleArg::Seller => "radroots setup seller",
+        SetupRoleArg::Buyer => "radroots setup buyer",
+        SetupRoleArg::Both => "radroots setup both",
+    }
+}
+
 fn push_next(next: &mut Vec<String>, command: Option<&str>) {
     let Some(command) = command else {
         return;
@@ -245,4 +289,10 @@ fn push_next(next: &mut Vec<String>, command: Option<&str>) {
     if !next.iter().any(|existing| existing == command) {
         next.push(command.to_owned());
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnresolvedAccountResolutionState {
+    NoAccounts,
+    AccountsExistWithoutDefault,
 }

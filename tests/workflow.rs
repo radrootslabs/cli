@@ -6,6 +6,14 @@ use assert_cmd::prelude::*;
 use serde_json::Value;
 use tempfile::tempdir;
 
+fn data_root(workdir: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        workdir.join("local").join("Radroots").join("data")
+    } else {
+        workdir.join("home").join(".radroots").join("data")
+    }
+}
+
 fn cli_command_in(workdir: &Path) -> Command {
     let mut command = Command::cargo_bin("radroots").expect("binary");
     command.current_dir(workdir);
@@ -47,34 +55,27 @@ fn write_workspace_config(workdir: &Path, contents: &str) {
 }
 
 #[test]
-fn setup_seller_creates_local_state_and_reports_farm_attention() {
+fn setup_seller_without_account_is_unconfigured_and_does_not_create_account() {
     let dir = tempdir().expect("tempdir");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
 
     let output = cli_command_in(dir.path())
         .args(["setup", "seller"])
         .output()
         .expect("run setup seller");
 
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(3));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
-    assert!(stdout.contains("Setup saved"));
+    assert!(stdout.contains("Not ready yet"));
     assert!(stdout.contains("Ready"));
-    assert!(stdout.contains("Selected account"));
+    assert!(stdout.contains("Resolved account"));
     assert!(stdout.contains("Local market data"));
     assert!(stdout.contains("Needs attention"));
     assert!(stdout.contains("Relay configuration"));
-    assert!(stdout.contains("Farm draft"));
-    assert!(stdout.contains("radroots farm init"));
-    assert!(stdout.contains("radroots status"));
-
-    let account_output = cli_command_in(dir.path())
-        .args(["--json", "account", "view"])
-        .output()
-        .expect("run account view");
-    assert!(account_output.status.success());
-    let account_json: Value =
-        serde_json::from_slice(account_output.stdout.as_slice()).expect("account json");
-    assert_eq!(account_json["state"], "ready");
+    assert!(stdout.contains("Account resolution"));
+    assert!(stdout.contains("radroots account create"));
+    assert!(stdout.contains("radroots setup seller"));
+    assert!(!store_path.exists());
 
     let local_output = cli_command_in(dir.path())
         .args(["--json", "local", "status"])
@@ -87,7 +88,38 @@ fn setup_seller_creates_local_state_and_reports_farm_attention() {
 }
 
 #[test]
-fn status_is_unconfigured_before_setup() {
+fn setup_seller_with_default_account_reports_farm_attention() {
+    let dir = tempdir().expect("tempdir");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
+
+    let account_output = cli_command_in(dir.path())
+        .args(["account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    assert!(store_path.exists());
+
+    let output = cli_command_in(dir.path())
+        .args(["setup", "seller"])
+        .output()
+        .expect("run setup seller");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(stdout.contains("Setup saved"));
+    assert!(stdout.contains("Ready"));
+    assert!(stdout.contains("Resolved account"));
+    assert!(stdout.contains("Local market data"));
+    assert!(stdout.contains("Needs attention"));
+    assert!(stdout.contains("Relay configuration"));
+    assert!(stdout.contains("Farm draft"));
+    assert!(stdout.contains("Account resolution"));
+    assert!(stdout.contains("radroots farm init"));
+    assert!(stdout.contains("radroots status"));
+}
+
+#[test]
+fn status_is_unconfigured_before_account_setup() {
     let dir = tempdir().expect("tempdir");
 
     let output = cli_command_in(dir.path())
@@ -107,15 +139,55 @@ fn status_is_unconfigured_before_setup() {
             "Relay configuration"
         ])
     );
+    assert_eq!(json["next"], serde_json::json!(["radroots account create"]));
+}
+
+#[test]
+fn status_points_to_account_selection_when_accounts_exist_without_default() {
+    let dir = tempdir().expect("tempdir");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
+
+    let account_output = cli_command_in(dir.path())
+        .args(["account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account_output.status.success());
+    let mut store_json: Value =
+        serde_json::from_slice(fs::read(&store_path).expect("read store").as_slice())
+            .expect("parse store");
+    store_json["selected_account_id"] = Value::Null;
+    fs::write(
+        &store_path,
+        serde_json::to_vec_pretty(&store_json).expect("serialize store"),
+    )
+    .expect("write store");
+
+    let output = cli_command_in(dir.path())
+        .args(["--json", "status"])
+        .output()
+        .expect("run status");
+
+    assert_eq!(output.status.code(), Some(3));
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("status json");
+    assert_eq!(json["state"], "unconfigured");
+    assert_eq!(json["account_resolution"]["source"], "none");
     assert_eq!(
         json["next"],
-        serde_json::json!(["radroots setup buyer", "radroots setup seller"])
+        serde_json::json!([
+            "radroots account list",
+            "radroots account select <selector>"
+        ])
     );
 }
 
 #[test]
 fn status_calls_out_missing_relay_after_buyer_setup() {
     let dir = tempdir().expect("tempdir");
+    let account = cli_command_in(dir.path())
+        .args(["account", "new"])
+        .output()
+        .expect("run account new");
+    assert!(account.status.success());
     let setup = cli_command_in(dir.path())
         .args(["setup", "buyer"])
         .output()
