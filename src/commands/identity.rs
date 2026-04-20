@@ -5,13 +5,13 @@ use crate::domain::runtime::{
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{
     AccountCreateMode, AccountRecordView, SHARED_ACCOUNT_STORE_SOURCE, account_resolution_view,
-    account_summary_view, create_or_migrate_selected_account, resolve_account_resolution,
+    account_summary_view, create_or_migrate_default_account, resolve_account_resolution,
     select_account, snapshot, unresolved_account_reason,
 };
 use crate::runtime::config::RuntimeConfig;
 
 pub fn init(config: &RuntimeConfig) -> Result<AccountNewView, RuntimeError> {
-    let result = create_or_migrate_selected_account(config)?;
+    let result = create_or_migrate_default_account(config)?;
     let account = account_summary(&result.account);
     Ok(AccountNewView {
         state: match result.mode {

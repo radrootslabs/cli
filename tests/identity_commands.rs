@@ -163,7 +163,7 @@ fn account_new_rejects_plaintext_fallback_backend() {
 }
 
 #[test]
-fn account_whoami_json_reads_selected_account() {
+fn account_whoami_json_reads_default_account() {
     let dir = tempdir().expect("tempdir");
 
     let init = cli_command_in(dir.path())
@@ -197,6 +197,48 @@ fn account_whoami_json_reads_selected_account() {
         json["account_resolution"]["resolved_account"]["id"]
     );
     assert!(json["public_identity"]["id"].is_string());
+}
+
+#[test]
+fn account_new_does_not_replace_existing_default_account() {
+    let dir = tempdir().expect("tempdir");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
+
+    let first = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run first account new");
+    assert!(first.status.success());
+    let first_json: Value = serde_json::from_slice(first.stdout.as_slice()).expect("first json");
+    let first_id = first_json["account"]["id"]
+        .as_str()
+        .expect("first account id")
+        .to_owned();
+    assert_eq!(first_json["account"]["is_default"], true);
+
+    let second = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run second account new");
+    assert!(second.status.success());
+    let second_json: Value = serde_json::from_slice(second.stdout.as_slice()).expect("second json");
+    assert_eq!(second_json["account"]["is_default"], false);
+
+    let store_json: Value =
+        serde_json::from_slice(fs::read(&store_path).expect("read store").as_slice())
+            .expect("parse store");
+    assert_eq!(store_json["default_account_id"], first_id);
+
+    let whoami = cli_command_in(dir.path())
+        .args(["--json", "account", "whoami"])
+        .output()
+        .expect("run account whoami");
+    assert!(whoami.status.success());
+    let whoami_json: Value = serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
+    assert_eq!(
+        whoami_json["account_resolution"]["resolved_account"]["id"],
+        first_id
+    );
 }
 
 #[test]
@@ -306,4 +348,45 @@ fn account_use_selects_existing_account() {
         whoami_json["account_resolution"]["resolved_account"]["is_default"],
         true
     );
+}
+
+#[test]
+fn account_use_rejects_ambiguous_label_selector() {
+    let dir = tempdir().expect("tempdir");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
+
+    let first = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run first account new");
+    assert!(first.status.success());
+
+    let second = cli_command_in(dir.path())
+        .args(["--json", "account", "new"])
+        .output()
+        .expect("run second account new");
+    assert!(second.status.success());
+
+    let mut store_json: Value =
+        serde_json::from_slice(fs::read(&store_path).expect("read store").as_slice())
+            .expect("parse store");
+    let accounts = store_json["accounts"]
+        .as_array_mut()
+        .expect("accounts array");
+    accounts[0]["label"] = Value::from("shared");
+    accounts[1]["label"] = Value::from("shared");
+    fs::write(
+        &store_path,
+        serde_json::to_vec_pretty(&store_json).expect("serialize store"),
+    )
+    .expect("write store");
+
+    let output = cli_command_in(dir.path())
+        .args(["account", "use", "shared"])
+        .output()
+        .expect("run account use");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("matched multiple local accounts"));
 }

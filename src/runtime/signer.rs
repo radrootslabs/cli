@@ -7,7 +7,7 @@ use crate::runtime::config::{
     CapabilityBindingConfig, CapabilityBindingTargetKind, RuntimeConfig,
     SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend,
 };
-use radroots_nostr_accounts::prelude::RadrootsNostrSelectedAccountStatus;
+use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
 use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
     RadrootsNostrSignerCapability,
@@ -158,7 +158,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     let used_fallback = secret_backend.used_fallback;
 
     match crate::runtime::accounts::resolved_account_signing_status(config) {
-        Ok(RadrootsNostrSelectedAccountStatus::Ready { account }) => {
+        Ok(RadrootsNostrAccountStatus::Ready { account }) => {
             let capability = RadrootsNostrSignerCapability::LocalAccount(
                 RadrootsNostrLocalSignerCapability::new(
                     account.account_id.clone(),
@@ -191,7 +191,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 myc: None,
             }
         }
-        Ok(RadrootsNostrSelectedAccountStatus::PublicOnly { account }) => SignerStatusView {
+        Ok(RadrootsNostrAccountStatus::PublicOnly { account }) => SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "unconfigured".to_owned(),
             source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
@@ -213,7 +213,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
             }),
             myc: None,
         },
-        Ok(RadrootsNostrSelectedAccountStatus::NotConfigured) => SignerStatusView {
+        Ok(RadrootsNostrAccountStatus::NotConfigured) => SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "unconfigured".to_owned(),
             source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),

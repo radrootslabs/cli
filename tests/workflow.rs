@@ -155,7 +155,7 @@ fn status_points_to_account_selection_when_accounts_exist_without_default() {
     let mut store_json: Value =
         serde_json::from_slice(fs::read(&store_path).expect("read store").as_slice())
             .expect("parse store");
-    store_json["selected_account_id"] = Value::Null;
+    store_json["default_account_id"] = Value::Null;
     fs::write(
         &store_path,
         serde_json::to_vec_pretty(&store_json).expect("serialize store"),

@@ -1,5 +1,6 @@
 use radroots_nostr_accounts::prelude::{
-    RadrootsNostrAccountRecord, RadrootsNostrAccountsManager, RadrootsNostrSelectedAccountStatus,
+    RadrootsNostrAccountRecord, RadrootsNostrAccountStatus, RadrootsNostrAccountsError,
+    RadrootsNostrAccountsManager,
 };
 use radroots_secret_vault::{
     RadrootsHostVaultCapabilities, RadrootsResolvedSecretBackend,
@@ -74,28 +75,32 @@ pub struct AccountResolution {
     pub default_account: Option<AccountRecordView>,
 }
 
-pub fn create_or_migrate_selected_account(
+pub fn create_or_migrate_default_account(
     config: &RuntimeConfig,
 ) -> Result<AccountCreateResult, RuntimeError> {
     let manager = account_manager(config)?;
     let existing = manager.list_accounts()?;
-    let mode = if existing.is_empty() && config.identity.path.exists() {
-        manager.migrate_legacy_identity_file(&config.identity.path, None, true)?;
-        AccountCreateMode::Migrated
+    let (mode, created_account_id) = if existing.is_empty() && config.identity.path.exists() {
+        (
+            AccountCreateMode::Migrated,
+            manager.migrate_legacy_identity_file(&config.identity.path, None, false)?,
+        )
     } else {
-        manager.generate_identity(None, true)?;
-        AccountCreateMode::Created
+        (
+            AccountCreateMode::Created,
+            manager.generate_identity(None, false)?,
+        )
     };
 
     let snapshot = snapshot(config)?;
     let Some(account) = snapshot
         .accounts
         .into_iter()
-        .find(|account| account.is_default)
+        .find(|account| account.record.account_id == created_account_id)
     else {
         return Err(RuntimeError::Accounts(
             radroots_nostr_accounts::prelude::RadrootsNostrAccountsError::InvalidState(
-                "default account missing after account create".to_owned(),
+                "created account missing after account create".to_owned(),
             ),
         ));
     };
@@ -115,21 +120,18 @@ pub fn resolve_account(config: &RuntimeConfig) -> Result<Option<AccountRecordVie
 pub fn resolve_account_resolution(
     config: &RuntimeConfig,
 ) -> Result<AccountResolution, RuntimeError> {
-    let snapshot = snapshot(config)?;
+    let manager = account_manager(config)?;
+    let snapshot = snapshot_from_manager(&manager)?;
     let default_account = snapshot
         .accounts
         .iter()
         .find(|account| account.is_default)
         .cloned();
     if let Some(selector) = config.account.selector.as_deref() {
-        let Some(account) = find_by_selector(snapshot.accounts.as_slice(), selector) else {
-            return Err(RuntimeError::Config(format!(
-                "account selector `{selector}` did not match any local account"
-            )));
-        };
+        let account = resolve_selector_account(&manager, &snapshot, selector)?;
         return Ok(AccountResolution {
             source: AccountResolutionSource::InvocationOverride,
-            resolved_account: Some(account.clone()),
+            resolved_account: Some(account),
             default_account,
         });
     }
@@ -151,13 +153,9 @@ pub fn select_account(
 ) -> Result<AccountRecordView, RuntimeError> {
     let manager = account_manager(config)?;
     let snapshot = snapshot_from_manager(&manager)?;
-    let Some(account) = find_by_selector(snapshot.accounts.as_slice(), selector) else {
-        return Err(RuntimeError::Config(format!(
-            "account selector `{selector}` did not match any local account"
-        )));
-    };
+    let account = resolve_selector_account(&manager, &snapshot, selector)?;
 
-    manager.select_account(&account.record.account_id)?;
+    manager.set_default_account(&account.record.account_id)?;
     let snapshot = snapshot_from_manager(&manager)?;
     snapshot
         .accounts
@@ -174,19 +172,19 @@ pub fn select_account(
 
 pub fn resolved_account_signing_status(
     config: &RuntimeConfig,
-) -> Result<RadrootsNostrSelectedAccountStatus, RuntimeError> {
+) -> Result<RadrootsNostrAccountStatus, RuntimeError> {
     let manager = account_manager(config)?;
     let resolution = resolve_account_resolution(config)?;
     let Some(account) = resolution.resolved_account else {
-        return Ok(RadrootsNostrSelectedAccountStatus::NotConfigured);
+        return Ok(RadrootsNostrAccountStatus::NotConfigured);
     };
 
     Ok(
         match manager.get_signing_identity(&account.record.account_id)? {
-            Some(_) => RadrootsNostrSelectedAccountStatus::Ready {
+            Some(_) => RadrootsNostrAccountStatus::Ready {
                 account: account.record.clone(),
             },
-            None => RadrootsNostrSelectedAccountStatus::PublicOnly {
+            None => RadrootsNostrAccountStatus::PublicOnly {
                 account: account.record.clone(),
             },
         },
@@ -272,14 +270,14 @@ pub fn secret_backend_status(config: &RuntimeConfig) -> AccountSecretBackendStat
 fn snapshot_from_manager(
     manager: &RadrootsNostrAccountsManager,
 ) -> Result<AccountSnapshot, RuntimeError> {
-    let selected_account_id = manager.selected_account_id()?.map(|id| id.to_string());
+    let default_account_id = manager.default_account_id()?.map(|id| id.to_string());
     let accounts = manager
         .list_accounts()?
         .into_iter()
         .map(|record| AccountRecordView {
-            is_default: selected_account_id
+            is_default: default_account_id
                 .as_deref()
-                .is_some_and(|selected| selected == record.account_id.as_str()),
+                .is_some_and(|default| default == record.account_id.as_str()),
             signer: "local",
             record,
         })
@@ -288,20 +286,38 @@ fn snapshot_from_manager(
     Ok(AccountSnapshot { accounts })
 }
 
-fn find_by_selector<'a>(
-    accounts: &'a [AccountRecordView],
+fn resolve_selector_account(
+    manager: &RadrootsNostrAccountsManager,
+    snapshot: &AccountSnapshot,
     selector: &str,
-) -> Option<&'a AccountRecordView> {
-    let normalized = selector.trim();
-    if normalized.is_empty() {
-        return None;
-    }
+) -> Result<AccountRecordView, RuntimeError> {
+    let record = manager
+        .resolve_account_selector(selector)
+        .map_err(|error| selector_runtime_error(selector, error))?;
+    snapshot
+        .accounts
+        .iter()
+        .find(|account| account.record.account_id == record.account_id)
+        .cloned()
+        .ok_or_else(|| {
+            RuntimeError::Accounts(RadrootsNostrAccountsError::InvalidState(
+                "resolved account missing from snapshot".to_owned(),
+            ))
+        })
+}
 
-    accounts.iter().find(|account| {
-        account.record.account_id.as_str() == normalized
-            || account.record.public_identity.public_key_npub == normalized
-            || account.record.label.as_deref() == Some(normalized)
-    })
+fn selector_runtime_error(selector: &str, error: RadrootsNostrAccountsError) -> RuntimeError {
+    let normalized = selector.trim();
+    match error {
+        RadrootsNostrAccountsError::InvalidAccountSelector(reason) => RuntimeError::Config(reason),
+        RadrootsNostrAccountsError::AccountNotFound(_) => RuntimeError::Config(format!(
+            "account selector `{normalized}` did not match any local account"
+        )),
+        RadrootsNostrAccountsError::AmbiguousAccountSelector(_) => RuntimeError::Config(format!(
+            "account selector `{normalized}` matched multiple local accounts; use account id or npub"
+        )),
+        other => RuntimeError::Accounts(other),
+    }
 }
 
 fn account_manager(config: &RuntimeConfig) -> Result<RadrootsNostrAccountsManager, RuntimeError> {
