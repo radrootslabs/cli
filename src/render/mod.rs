@@ -226,10 +226,12 @@ fn render_human_view_to(
                 ("mode", view.mode.as_str()),
                 ("status", view.state.as_str()),
             ];
-            if let Some(account_id) = &view.account_id {
-                signer_rows.push(("account id", account_id.as_str()));
+            if let Some(account_id) = &view.signer_account_id {
+                signer_rows.push(("signer account id", account_id.as_str()));
             }
             render_pairs(stdout, "signer", signer_rows.as_slice())?;
+            writeln!(stdout)?;
+            render_account_resolution(stdout, &view.account_resolution)?;
             if let Some(reason) = &view.reason {
                 writeln!(stdout, "reason: {reason}")?;
             }
@@ -842,7 +844,7 @@ fn render_account_list(stdout: &mut dyn Write, view: &AccountListView) -> Result
             ("Account", account.id.clone()),
             ("Signer", humanize_machine_label(account.signer.as_str())),
             (
-                "Selected",
+                "Default",
                 if account.is_default {
                     "Yes".to_owned()
                 } else {
@@ -892,7 +894,7 @@ fn render_account_use(
     stdout: &mut dyn Write,
     view: &crate::domain::runtime::AccountUseView,
 ) -> Result<(), RuntimeError> {
-    writeln!(stdout, "Account selected")?;
+    writeln!(stdout, "Default account updated")?;
     writeln!(stdout)?;
     render_account_section(stdout, &view.account)
 }
@@ -903,11 +905,13 @@ fn render_account_whoami(
 ) -> Result<(), RuntimeError> {
     match view.state.as_str() {
         "ready" => {
-            writeln!(stdout, "Selected account")?;
+            writeln!(stdout, "Resolved account")?;
             writeln!(stdout)?;
-            if let Some(account) = &view.account {
+            if let Some(account) = &view.account_resolution.resolved_account {
                 render_account_section(stdout, account)?;
             }
+            writeln!(stdout)?;
+            render_account_resolution(stdout, &view.account_resolution)?;
             if let Some(identity) = &view.public_identity {
                 writeln!(stdout)?;
                 writeln!(stdout, "Identity")?;
@@ -921,7 +925,9 @@ fn render_account_whoami(
                 writeln!(stdout, "{reason}")?;
             }
             writeln!(stdout)?;
-            render_item_section(stdout, "Missing", &["Selected account".to_owned()])?;
+            render_account_resolution(stdout, &view.account_resolution)?;
+            writeln!(stdout)?;
+            render_item_section(stdout, "Missing", &["Resolved account".to_owned()])?;
             writeln!(stdout)?;
             render_item_section(stdout, "Next", &["radroots account create".to_owned()])?;
         }
@@ -938,6 +944,29 @@ fn render_account_section(
     push_row(&mut rows, "Name", account.display_name.clone());
     rows.push(("Account", account.id.clone()));
     rows.push(("Signer", humanize_machine_label(account.signer.as_str())));
+    rows.push((
+        "Default",
+        if account.is_default {
+            "Yes".to_owned()
+        } else {
+            "No".to_owned()
+        },
+    ));
+    render_field_rows(stdout, rows.as_slice())
+}
+
+fn render_account_resolution(
+    stdout: &mut dyn Write,
+    resolution: &crate::domain::runtime::AccountResolutionView,
+) -> Result<(), RuntimeError> {
+    writeln!(stdout, "Account resolution")?;
+    let mut rows = vec![("Source", humanize_machine_label(resolution.source.as_str()))];
+    if let Some(account) = &resolution.resolved_account {
+        rows.push(("Resolved account", account.id.clone()));
+    }
+    if let Some(account) = &resolution.default_account {
+        rows.push(("Default account", account.id.clone()));
+    }
     render_field_rows(stdout, rows.as_slice())
 }
 
@@ -1483,6 +1512,8 @@ fn render_doctor(stdout: &mut dyn Write, view: &DoctorView) -> Result<(), Runtim
         }
         render_item_section(stdout, "Next", &view.actions)?;
     }
+    writeln!(stdout)?;
+    render_account_resolution(stdout, &view.account_resolution)?;
     Ok(())
 }
 
@@ -2907,17 +2938,16 @@ fn render_net_status(stdout: &mut dyn Write, view: &NetStatusView) -> Result<(),
         },
     )?;
     let relay_count = view.relay_count.to_string();
-    let mut rows = vec![
+    let rows = vec![
         ("status", view.state.as_str()),
         ("session", view.session.as_str()),
         ("relays configured", relay_count.as_str()),
         ("publish policy", view.publish_policy.as_str()),
         ("signer mode", view.signer_mode.as_str()),
     ];
-    if let Some(account_id) = &view.active_account_id {
-        rows.push(("active account id", account_id.as_str()));
-    }
     render_pairs(stdout, "network", rows.as_slice())?;
+    writeln!(stdout)?;
+    render_account_resolution(stdout, &view.account_resolution)?;
     if let Some(reason) = &view.reason {
         writeln!(stdout, "reason: {reason}")?;
     }
@@ -3202,7 +3232,7 @@ fn render_farm_setup(stdout: &mut dyn Write, view: &FarmSetupView) -> Result<(),
         "unconfigured" => {
             writeln!(stdout, "Not ready yet")?;
             writeln!(stdout)?;
-            render_item_section(stdout, "Missing", &["Selected account".to_owned()])?;
+            render_item_section(stdout, "Missing", &["Resolved account".to_owned()])?;
             if !view.actions.is_empty() {
                 writeln!(stdout)?;
                 render_item_section(stdout, "Next", &view.actions)?;
@@ -3580,7 +3610,9 @@ fn render_status_summary(stdout: &mut dyn Write, view: &StatusView) -> Result<()
         &view.ready,
         &view.needs_attention,
         &view.next,
-    )
+    )?;
+    writeln!(stdout)?;
+    render_account_resolution(stdout, &view.account_resolution)
 }
 
 fn render_checklist_summary(
@@ -4468,6 +4500,11 @@ mod tests {
         let output = CommandOutput::unconfigured(CommandView::Doctor(DoctorView {
             ok: false,
             state: "warn".to_owned(),
+            account_resolution: crate::domain::runtime::AccountResolutionView {
+                source: "none".to_owned(),
+                resolved_account: None,
+                default_account: None,
+            },
             checks: vec![
                 DoctorCheckView {
                     name: "config".to_owned(),
@@ -4501,6 +4538,11 @@ mod tests {
         let output = CommandOutput::success(CommandView::Doctor(DoctorView {
             ok: true,
             state: "ok".to_owned(),
+            account_resolution: crate::domain::runtime::AccountResolutionView {
+                source: "default_account".to_owned(),
+                resolved_account: None,
+                default_account: None,
+            },
             checks: vec![DoctorCheckView {
                 name: "config".to_owned(),
                 status: "ok".to_owned(),

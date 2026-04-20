@@ -55,6 +55,7 @@ fn doctor_reports_unconfigured_local_bootstrap_state() {
     assert_eq!(json["checks"][0]["status"], "ok");
     assert_eq!(json["checks"][1]["name"], "account");
     assert_eq!(json["checks"][1]["status"], "warn");
+    assert_eq!(json["account_resolution"]["source"], "none");
     assert_eq!(json["checks"][2]["name"], "relays");
     assert_eq!(json["checks"][2]["status"], "warn");
     assert_eq!(json["checks"][3]["name"], "signer");
@@ -87,6 +88,7 @@ fn doctor_reports_warn_for_ready_local_bootstrap_without_workflow_provider() {
     assert_eq!(json["state"], "warn");
     assert_eq!(json["checks"][1]["name"], "account");
     assert_eq!(json["checks"][1]["status"], "ok");
+    assert_eq!(json["account_resolution"]["source"], "default_account");
     assert_eq!(json["checks"][2]["name"], "relays");
     assert_eq!(json["checks"][2]["status"], "ok");
     assert_eq!(json["checks"][3]["name"], "signer");

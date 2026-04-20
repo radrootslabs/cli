@@ -66,7 +66,7 @@ pub fn setup(config: &RuntimeConfig, role: SetupRoleArg) -> Result<SetupView, Ru
 }
 
 pub fn status(config: &RuntimeConfig) -> Result<StatusView, RuntimeError> {
-    let account = accounts::resolve_account(config)?;
+    let account_resolution = accounts::resolve_account_resolution(config)?;
     let local_status = local::status(config)?;
     let farm = inspect_farm(config)?;
     let relay_configured = relay_configured(config);
@@ -77,11 +77,11 @@ pub fn status(config: &RuntimeConfig) -> Result<StatusView, RuntimeError> {
     let mut next = Vec::new();
     let mut state = "ready";
 
-    if account.is_some() {
-        ready.push("Selected account".to_owned());
+    if account_resolution.resolved_account.is_some() {
+        ready.push("Resolved account".to_owned());
     } else {
         state = "unconfigured";
-        needs_attention.push("Selected account".to_owned());
+        needs_attention.push("Resolved account".to_owned());
     }
 
     if local_status.state == "ready" {
@@ -111,7 +111,10 @@ pub fn status(config: &RuntimeConfig) -> Result<StatusView, RuntimeError> {
     } else {
         push_next(&mut next, Some("radroots setup buyer"));
         push_next(&mut next, Some("radroots setup seller"));
-        if account.is_some() && local_status.state == "ready" && !relay_configured {
+        if account_resolution.resolved_account.is_some()
+            && local_status.state == "ready"
+            && !relay_configured
+        {
             next.clear();
             push_next(&mut next, Some(RELAY_SETUP_ACTION));
             push_next(&mut next, Some("radroots status"));
@@ -121,7 +124,7 @@ pub fn status(config: &RuntimeConfig) -> Result<StatusView, RuntimeError> {
     Ok(StatusView {
         state: state.to_owned(),
         source: WORKFLOW_SOURCE.to_owned(),
-        selected_account_id: account.map(|account| account.record.account_id.to_string()),
+        account_resolution: accounts::account_resolution_view(&account_resolution),
         local_state: local_status.state,
         local_root: local_status.local_root,
         relay_state: relay_state(config).to_owned(),

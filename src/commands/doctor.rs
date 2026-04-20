@@ -46,7 +46,8 @@ pub fn report(
 ) -> Result<CommandOutput, RuntimeError> {
     let mut checks = Vec::new();
     checks.push(config_check(config));
-    checks.push(account_check(config)?);
+    let account_resolution = crate::runtime::accounts::resolve_account_resolution(config)?;
+    checks.push(account_check(config, &account_resolution)?);
     checks.push(relay_check(config));
 
     let signer = resolve_signer_status(config);
@@ -72,6 +73,7 @@ pub fn report(
     let view = DoctorView {
         ok: severity == DoctorSeverity::Ok,
         state: severity.status().to_owned(),
+        account_resolution: crate::runtime::accounts::account_resolution_view(&account_resolution),
         checks: checks.into_iter().map(|check| check.view).collect(),
         source: doctor_source(config),
         actions,
@@ -112,7 +114,10 @@ fn config_check(config: &RuntimeConfig) -> EvaluatedCheck {
     }
 }
 
-fn account_check(config: &RuntimeConfig) -> Result<EvaluatedCheck, RuntimeError> {
+fn account_check(
+    config: &RuntimeConfig,
+    account_resolution: &crate::runtime::accounts::AccountResolution,
+) -> Result<EvaluatedCheck, RuntimeError> {
     let snapshot = crate::runtime::accounts::snapshot(config)?;
     if snapshot.accounts.is_empty() {
         return Ok(EvaluatedCheck {
@@ -129,12 +134,36 @@ fn account_check(config: &RuntimeConfig) -> Result<EvaluatedCheck, RuntimeError>
         });
     }
 
-    match crate::runtime::accounts::resolve_account(config)? {
+    match account_resolution.resolved_account.as_ref() {
         Some(account) => {
-            let detail = if account.selected {
-                format!("{} selected", account.record.account_id)
-            } else {
-                format!("{} resolved by selector", account.record.account_id)
+            let detail = match account_resolution.source {
+                crate::runtime::accounts::AccountResolutionSource::InvocationOverride => {
+                    match account_resolution.default_account.as_ref() {
+                        Some(default) if default.record.account_id != account.record.account_id => {
+                            format!(
+                                "resolved account {} via invocation override; default account {} remains stored",
+                                account.record.account_id, default.record.account_id
+                            )
+                        }
+                        Some(default) => format!(
+                            "resolved account {} via invocation override; default account {} is also stored",
+                            account.record.account_id, default.record.account_id
+                        ),
+                        None => format!(
+                            "resolved account {} via invocation override; no default account is stored",
+                            account.record.account_id
+                        ),
+                    }
+                }
+                crate::runtime::accounts::AccountResolutionSource::DefaultAccount => {
+                    format!(
+                        "resolved account {} via default account",
+                        account.record.account_id
+                    )
+                }
+                crate::runtime::accounts::AccountResolutionSource::None => {
+                    format!("resolved account {}", account.record.account_id)
+                }
             };
             Ok(EvaluatedCheck {
                 severity: DoctorSeverity::Ok,
@@ -151,10 +180,7 @@ fn account_check(config: &RuntimeConfig) -> Result<EvaluatedCheck, RuntimeError>
             view: DoctorCheckView {
                 name: "account".to_owned(),
                 status: "warn".to_owned(),
-                detail: format!(
-                    "accounts exist but no local account is selected in {}",
-                    config.account.store_path.display()
-                ),
+                detail: crate::runtime::accounts::unresolved_account_reason(config)?,
             },
             action: Some("radroots account ls"),
         }),

@@ -506,6 +506,7 @@ pub struct CapabilityBindingRuntimeView {
 pub struct DoctorView {
     pub ok: bool,
     pub state: String,
+    pub account_resolution: AccountResolutionView,
     pub checks: Vec<DoctorCheckView>,
     pub source: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -561,13 +562,21 @@ impl AccountSummaryView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AccountResolutionView {
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_account: Option<AccountSummaryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_account: Option<AccountSummaryView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AccountWhoamiView {
     pub state: String,
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub account: Option<AccountSummaryView>,
+    pub account_resolution: AccountResolutionView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_identity: Option<IdentityPublicView>,
 }
@@ -595,7 +604,7 @@ pub struct AccountNewView {
 pub struct AccountUseView {
     pub state: String,
     pub source: String,
-    pub active_account_id: String,
+    pub default_account_id: String,
     pub account: AccountSummaryView,
 }
 
@@ -693,8 +702,7 @@ impl SetupView {
 pub struct StatusView {
     pub state: String,
     pub source: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_account_id: Option<String>,
+    pub account_resolution: AccountResolutionView,
     pub local_state: String,
     pub local_root: String,
     pub relay_state: String,
@@ -1912,8 +1920,7 @@ pub struct NetStatusView {
     pub relay_count: usize,
     pub publish_policy: String,
     pub signer_mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_account_id: Option<String>,
+    pub account_resolution: AccountResolutionView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2093,7 +2100,8 @@ pub struct SignerStatusView {
     pub state: String,
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub account_id: Option<String>,
+    pub signer_account_id: Option<String>,
+    pub account_resolution: AccountResolutionView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub binding: SignerBindingStatusView,

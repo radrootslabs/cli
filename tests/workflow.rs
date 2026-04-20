@@ -102,7 +102,7 @@ fn status_is_unconfigured_before_setup() {
     assert_eq!(
         json["needs_attention"],
         serde_json::json!([
-            "Selected account",
+            "Resolved account",
             "Local market data",
             "Relay configuration"
         ])
@@ -132,7 +132,7 @@ fn status_calls_out_missing_relay_after_buyer_setup() {
     assert_eq!(json["state"], "unconfigured");
     assert_eq!(
         json["ready"],
-        serde_json::json!(["Selected account", "Local market data"])
+        serde_json::json!(["Resolved account", "Local market data"])
     );
     assert_eq!(
         json["needs_attention"],
@@ -190,7 +190,8 @@ fn status_reports_farm_publish_need_when_core_state_is_ready() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("Status"));
     assert!(stdout.contains("Ready"));
-    assert!(stdout.contains("Selected account"));
+    assert!(stdout.contains("Resolved account"));
+    assert!(stdout.contains("Account resolution"));
     assert!(stdout.contains("Local market data"));
     assert!(stdout.contains("Relay configuration"));
     assert!(stdout.contains("Needs attention"));

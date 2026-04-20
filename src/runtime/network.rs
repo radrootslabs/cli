@@ -36,8 +36,7 @@ pub fn relay_list(config: &RuntimeConfig) -> RelayListView {
 }
 
 pub fn net_status(config: &RuntimeConfig) -> Result<NetStatusView, RuntimeError> {
-    let active_account_id =
-        accounts::resolve_account(config)?.map(|account| account.record.account_id.to_string());
+    let account_resolution = accounts::resolve_account_resolution(config)?;
     let relay_count = config.relay.urls.len();
     let configured = relay_count > 0;
 
@@ -56,7 +55,7 @@ pub fn net_status(config: &RuntimeConfig) -> Result<NetStatusView, RuntimeError>
         relay_count,
         publish_policy: config.relay.publish_policy.as_str().to_owned(),
         signer_mode: config.signer.backend.as_str().to_owned(),
-        active_account_id,
+        account_resolution: accounts::account_resolution_view(&account_resolution),
         reason: (!configured)
             .then_some("no relays are configured for this operator session".to_owned()),
         actions: relay_actions(config),

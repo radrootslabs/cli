@@ -142,6 +142,10 @@ fn net_status_json_reports_effective_network_configuration() {
     assert_eq!(json["relay_count"], 2);
     assert_eq!(json["publish_policy"], "any");
     assert_eq!(json["signer_mode"], "local");
-    assert_eq!(json["active_account_id"], account_id);
+    assert_eq!(json["account_resolution"]["source"], "default_account");
+    assert_eq!(
+        json["account_resolution"]["resolved_account"]["id"],
+        account_id
+    );
     assert_eq!(json["source"], "cli flags · local first");
 }

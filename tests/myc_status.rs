@@ -175,7 +175,7 @@ fn signer_status_reports_degraded_myc_backend_as_external_unavailable() {
     assert_eq!(json["mode"], "myc");
     assert_eq!(json["state"], "degraded");
     assert_eq!(json["source"], "myc status command · local first");
-    assert_eq!(json["account_id"], Value::Null);
+    assert_eq!(json["signer_account_id"], Value::Null);
     assert_eq!(json["myc"]["state"], "degraded");
     assert_eq!(json["myc"]["service_status"], "degraded");
     assert_eq!(json["binding"]["state"], "unconfigured");
@@ -235,7 +235,7 @@ signer_session_ref = "{signer_session_ref}"
     assert_eq!(json["mode"], "myc");
     assert_eq!(json["state"], "ready");
     assert_eq!(json["source"], "workspace config [[capability_binding]]");
-    assert_eq!(json["account_id"], managed_account_ref);
+    assert_eq!(json["signer_account_id"], managed_account_ref);
     assert_eq!(json["binding"]["state"], "ready");
     assert_eq!(
         json["binding"]["resolved_signer_session_id"],
