@@ -68,6 +68,31 @@ fn doctor_reports_unconfigured_local_bootstrap_state() {
 }
 
 #[test]
+fn doctor_ignores_cwd_workspace_config_in_interactive_user() {
+    let dir = tempdir().expect("tempdir");
+    let config_dir = dir.path().join("infra/local/runtime/radroots");
+    fs::create_dir_all(&config_dir).expect("workspace config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        "[relay]\nurls = [\"wss://relay.cwd\"]\n",
+    )
+    .expect("write cwd workspace config");
+
+    let output = doctor_command_in(dir.path())
+        .args(["--json", "doctor"])
+        .output()
+        .expect("run doctor");
+
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["checks"][0]["name"], "config");
+    assert_eq!(json["checks"][0]["detail"], "defaults active");
+    assert_eq!(json["checks"][2]["name"], "relays");
+    assert_eq!(json["checks"][2]["status"], "warn");
+}
+
+#[test]
 fn doctor_reports_warn_for_ready_local_bootstrap_without_workflow_provider() {
     let dir = tempdir().expect("tempdir");
     let init = doctor_command_in(dir.path())
