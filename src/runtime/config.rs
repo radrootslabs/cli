@@ -1500,7 +1500,7 @@ mod tests {
                     "/home/tester/.radroots/config/apps/cli/config.toml"
                 ),
                 workspace_config_path: PathBuf::from(
-                    "/workspaces/radroots-cli/.radroots/config.toml"
+                    "/workspaces/radroots-cli/infra/local/runtime/radroots/config.toml"
                 ),
                 app_data_root: PathBuf::from("/home/tester/.radroots/data/apps/cli"),
                 app_logs_root: PathBuf::from("/home/tester/.radroots/logs/apps/cli"),
@@ -1848,10 +1848,11 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
         let user_home = temp.path().join("home");
-        fs::create_dir_all(workspace_root.join(".radroots")).expect("workspace config dir");
+        fs::create_dir_all(workspace_root.join("infra/local/runtime/radroots"))
+            .expect("workspace config dir");
         fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
         fs::write(
-            workspace_root.join(".radroots/config.toml"),
+            workspace_root.join("infra/local/runtime/radroots/config.toml"),
             "[relay]\nurls = [\"wss://relay.workspace\"]\npublish_policy = \"any\"\n",
         )
         .expect("write workspace config");
@@ -1894,10 +1895,11 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
         let user_home = temp.path().join("home");
-        fs::create_dir_all(workspace_root.join(".radroots")).expect("workspace config dir");
+        fs::create_dir_all(workspace_root.join("infra/local/runtime/radroots"))
+            .expect("workspace config dir");
         fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
         fs::write(
-            workspace_root.join(".radroots/config.toml"),
+            workspace_root.join("infra/local/runtime/radroots/config.toml"),
             "[hyf]\nenabled = false\nexecutable = \"workspace-hyfd\"\n",
         )
         .expect("write workspace config");
@@ -1938,10 +1940,11 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
         let user_home = temp.path().join("home");
-        fs::create_dir_all(workspace_root.join(".radroots")).expect("workspace config dir");
+        fs::create_dir_all(workspace_root.join("infra/local/runtime/radroots"))
+            .expect("workspace config dir");
         fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
         fs::write(
-            workspace_root.join(".radroots/config.toml"),
+            workspace_root.join("infra/local/runtime/radroots/config.toml"),
             r#"
 [[capability_binding]]
 capability = "inference.hyf_stdio"
@@ -2001,10 +2004,11 @@ target = "bin/user-hyfd"
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
         let user_home = temp.path().join("home");
-        fs::create_dir_all(workspace_root.join(".radroots")).expect("workspace config dir");
+        fs::create_dir_all(workspace_root.join("infra/local/runtime/radroots"))
+            .expect("workspace config dir");
         fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
         fs::write(
-            workspace_root.join(".radroots/config.toml"),
+            workspace_root.join("infra/local/runtime/radroots/config.toml"),
             r#"
 [[capability_binding]]
 capability = "write_plane.trade_jsonrpc"
@@ -2081,7 +2085,7 @@ target = "https://rpc.workspace.test/jsonrpc"
         );
         assert_eq!(
             resolved.paths.workspace_config_path,
-            PathBuf::from("/workspaces/radroots-cli/.radroots/config.toml")
+            PathBuf::from("/workspaces/radroots-cli/infra/local/runtime/radroots/config.toml")
         );
         assert_eq!(
             resolved.paths.app_data_root,

@@ -41,7 +41,7 @@ fn cli_command_in(workdir: &Path) -> Command {
 #[test]
 fn relay_ls_json_reports_workspace_configured_relays() {
     let dir = tempdir().expect("tempdir");
-    let config_dir = dir.path().join(".radroots");
+    let config_dir = dir.path().join("infra/local/runtime/radroots");
     fs::create_dir_all(&config_dir).expect("workspace config dir");
     fs::write(
         config_dir.join("config.toml"),

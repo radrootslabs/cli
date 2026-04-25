@@ -355,14 +355,14 @@ mod tests {
             profile_source: "test".to_owned(),
             allowed_profiles: vec!["interactive_user".to_owned(), "repo_local".to_owned()],
             root_source: "test".to_owned(),
-            repo_local_root: Some(root.join(".radroots")),
+            repo_local_root: Some(root.join("infra/local/runtime/radroots")),
             repo_local_root_source: Some("test".to_owned()),
             subordinate_path_override_source: "test".to_owned(),
             app_namespace: "apps/cli".to_owned(),
             shared_accounts_namespace: "shared/accounts".to_owned(),
             shared_identities_namespace: "shared/identities".to_owned(),
             app_config_path: root.join("home/.radroots/config/apps/cli/config.toml"),
-            workspace_config_path: root.join("workspace/.radroots/config.toml"),
+            workspace_config_path: root.join("workspace/infra/local/runtime/radroots/config.toml"),
             app_data_root: root.join("home/.radroots/data/apps/cli"),
             app_logs_root: root.join("home/.radroots/logs/apps/cli"),
             shared_accounts_data_root: root.join("home/.radroots/data/shared/accounts"),
@@ -462,8 +462,8 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let paths = sample_paths("repo_local", dir.path());
         let document = sample_document(FarmConfigScope::Workspace);
-        let expected_path =
-            PathBuf::from(dir.path()).join("workspace/.radroots/config/apps/cli/farm.toml");
+        let expected_path = PathBuf::from(dir.path())
+            .join("workspace/infra/local/runtime/radroots/config/apps/cli/farm.toml");
 
         let written_path =
             write(&paths, FarmConfigScope::Workspace, &document).expect("write workspace config");

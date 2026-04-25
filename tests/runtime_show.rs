@@ -150,7 +150,7 @@ fn config_show_json_reports_default_bootstrap_state() {
     assert_eq!(
         json["paths"]["workspace_config_path"],
         canonical_root
-            .join(".radroots/config.toml")
+            .join("infra/local/runtime/radroots/config.toml")
             .display()
             .to_string()
     );
@@ -568,7 +568,7 @@ fn config_show_json_reads_logging_from_default_env_file() {
 #[test]
 fn config_show_json_reads_workspace_relay_config() {
     let dir = tempdir().expect("tempdir");
-    let config_dir = dir.path().join(".radroots");
+    let config_dir = dir.path().join("infra/local/runtime/radroots");
     fs::create_dir_all(&config_dir).expect("workspace config dir");
     fs::write(
         config_dir.join("config.toml"),
@@ -593,7 +593,7 @@ fn config_show_json_reads_workspace_relay_config() {
 #[test]
 fn config_show_reads_workspace_rpc_config() {
     let dir = tempdir().expect("tempdir");
-    let config_dir = dir.path().join(".radroots");
+    let config_dir = dir.path().join("infra/local/runtime/radroots");
     fs::create_dir_all(&config_dir).expect("workspace config dir");
     fs::write(
         config_dir.join("config.toml"),
@@ -615,7 +615,7 @@ fn config_show_reads_workspace_rpc_config() {
 #[test]
 fn config_show_reports_explicit_capability_bindings() {
     let dir = tempdir().expect("tempdir");
-    let workspace_config_dir = dir.path().join(".radroots");
+    let workspace_config_dir = dir.path().join("infra/local/runtime/radroots");
     let user_config_dir = config_root(dir.path()).join("apps/cli");
     fs::create_dir_all(&workspace_config_dir).expect("workspace config dir");
     fs::create_dir_all(&user_config_dir).expect("user config dir");

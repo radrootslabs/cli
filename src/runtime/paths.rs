@@ -10,7 +10,7 @@ use crate::runtime::{
     config::{EnvFileValues, Environment},
 };
 
-const DEFAULT_WORKSPACE_CONFIG_PATH: &str = ".radroots/config.toml";
+const DEFAULT_WORKSPACE_CONFIG_PATH: &str = "infra/local/runtime/radroots/config.toml";
 const CLI_DEFAULT_PROFILE: &str = "interactive_user";
 const CLI_REPO_LOCAL_PROFILE: &str = "repo_local";
 const CLI_APP_NAMESPACE_VALUE: &str = "cli";

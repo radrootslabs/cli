@@ -43,7 +43,7 @@ fn cli_command_in(workdir: &Path) -> Command {
 }
 
 fn write_workspace_config(workdir: &Path, contents: &str) {
-    let config_dir = workdir.join(".radroots");
+    let config_dir = workdir.join("infra/local/runtime/radroots");
     fs::create_dir_all(&config_dir).expect("workspace config dir");
     fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
 }

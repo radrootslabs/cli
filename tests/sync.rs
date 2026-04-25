@@ -88,7 +88,7 @@ fn sync_pull_and_push_are_honestly_narrowed_until_relay_plane_lands() {
         .output()
         .expect("run local init");
     assert!(init.status.success());
-    let config_dir = dir.path().join(".radroots");
+    let config_dir = dir.path().join("infra/local/runtime/radroots");
     fs::create_dir_all(&config_dir).expect("workspace config dir");
     fs::write(
         config_dir.join("config.toml"),
@@ -135,7 +135,7 @@ fn sync_watch_ndjson_emits_one_frame_per_poll() {
         .output()
         .expect("run local init");
     assert!(init.status.success());
-    let config_dir = dir.path().join(".radroots");
+    let config_dir = dir.path().join("infra/local/runtime/radroots");
     fs::create_dir_all(&config_dir).expect("workspace config dir");
     fs::write(
         config_dir.join("config.toml"),
@@ -174,7 +174,7 @@ fn sync_watch_human_appends_readable_snapshots_without_screen_clear() {
         .output()
         .expect("run local init");
     assert!(init.status.success());
-    let config_dir = dir.path().join(".radroots");
+    let config_dir = dir.path().join("infra/local/runtime/radroots");
     fs::create_dir_all(&config_dir).expect("workspace config dir");
     fs::write(
         config_dir.join("config.toml"),

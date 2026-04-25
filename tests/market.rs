@@ -185,7 +185,7 @@ fn market_update_stays_honest_about_unavailable_ingest() {
         .expect("run local init");
     assert!(init.status.success());
 
-    let config_dir = dir.path().join(".radroots");
+    let config_dir = dir.path().join("infra/local/runtime/radroots");
     fs::create_dir_all(&config_dir).expect("workspace config dir");
     fs::write(
         config_dir.join("config.toml"),

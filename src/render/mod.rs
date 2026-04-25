@@ -4,14 +4,14 @@ use crate::domain::runtime::{
     AccountClearDefaultView, AccountImportView, AccountListView, AccountRemoveView,
     AccountSummaryView, CommandOutput, CommandView, DoctorCheckView, DoctorView,
     FarmConfigSummaryView, FarmGetView, FarmPublishComponentView, FarmPublishView, FarmSetView,
-    FarmSetupView, FarmStatusView, FindView, JobGetView, JobListView, JobWatchView,
-    ListingGetView, ListingMutationView, ListingNewView, ListingValidateView, LocalBackupView,
-    LocalExportView, LocalInitView, LocalStatusView, NetStatusView, OrderCancelView,
-    OrderDraftItemView, OrderGetView, OrderHistoryView, OrderJobView, OrderListView, OrderNewView,
-    OrderSubmitView, OrderSubmitWatchView, OrderWatchView, OrderWorkflowView, RelayListView,
-    RpcSessionsView, RpcStatusView, RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView,
-    RuntimeStatusView, SellAddView, SellCheckView, SellDraftMutationView, SellMutationView,
-    SellShowView, SetupView, StatusView, SyncActionView, SyncStatusView, SyncWatchView,
+    FarmSetupView, FarmStatusView, FindView, JobGetView, JobListView, JobWatchView, ListingGetView,
+    ListingMutationView, ListingNewView, ListingValidateView, LocalBackupView, LocalExportView,
+    LocalInitView, LocalStatusView, NetStatusView, OrderCancelView, OrderDraftItemView,
+    OrderGetView, OrderHistoryView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView,
+    OrderSubmitWatchView, OrderWatchView, OrderWorkflowView, RelayListView, RpcSessionsView,
+    RpcStatusView, RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView,
+    SellAddView, SellCheckView, SellDraftMutationView, SellMutationView, SellShowView, SetupView,
+    StatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat, Verbosity};
@@ -773,14 +773,20 @@ fn verbose_details(output: &CommandOutput) -> Vec<(&'static str, String)> {
     match output.view() {
         CommandView::AccountClearDefault(view) => vec![
             ("Source", view.source.clone()),
-            ("Remaining accounts", view.remaining_account_count.to_string()),
+            (
+                "Remaining accounts",
+                view.remaining_account_count.to_string(),
+            ),
         ],
         CommandView::AccountImport(view) => vec![("Source", view.source.clone())],
         CommandView::AccountList(view) => vec![("Source", view.source.clone())],
         CommandView::AccountNew(view) => vec![("Source", view.source.clone())],
         CommandView::AccountRemove(view) => vec![
             ("Source", view.source.clone()),
-            ("Remaining accounts", view.remaining_account_count.to_string()),
+            (
+                "Remaining accounts",
+                view.remaining_account_count.to_string(),
+            ),
         ],
         CommandView::AccountUse(view) => vec![("Source", view.source.clone())],
         CommandView::AccountWhoami(view) => vec![("Source", view.source.clone())],
@@ -970,7 +976,10 @@ fn render_account_clear_default(
     writeln!(stdout)?;
     render_field_rows(
         stdout,
-        &[("Remaining accounts", view.remaining_account_count.to_string())],
+        &[(
+            "Remaining accounts",
+            view.remaining_account_count.to_string(),
+        )],
     )?;
     if !view.actions.is_empty() {
         writeln!(stdout)?;
@@ -997,7 +1006,10 @@ fn render_account_remove(
     writeln!(stdout)?;
     render_field_rows(
         stdout,
-        &[("Remaining accounts", view.remaining_account_count.to_string())],
+        &[(
+            "Remaining accounts",
+            view.remaining_account_count.to_string(),
+        )],
     )?;
     if !view.actions.is_empty() {
         writeln!(stdout)?;
@@ -4305,7 +4317,8 @@ mod tests {
                     shared_accounts_namespace: "shared/accounts".into(),
                     shared_identities_namespace: "shared/identities".into(),
                     app_config_path: "/home/tester/.radroots/config/apps/cli/config.toml".into(),
-                    workspace_config_path: "/workspace/.radroots/config.toml".into(),
+                    workspace_config_path: "/workspace/infra/local/runtime/radroots/config.toml"
+                        .into(),
                     app_data_root: "/home/tester/.radroots/data/apps/cli".into(),
                     app_logs_root: "/home/tester/.radroots/logs/apps/cli".into(),
                     shared_accounts_data_root: "/home/tester/.radroots/data/shared/accounts".into(),
@@ -4385,7 +4398,7 @@ mod tests {
         assert_eq!(view.paths.shared_accounts_namespace, "shared/accounts");
         assert_eq!(
             view.paths.workspace_config_path,
-            "/workspace/.radroots/config.toml"
+            "/workspace/infra/local/runtime/radroots/config.toml"
         );
         assert_eq!(view.account.selector.as_deref(), Some("acct_demo"));
         assert!(
@@ -4464,7 +4477,8 @@ mod tests {
                         shared_identities_namespace: "shared/identities".into(),
                         app_config_path: "/home/tester/.radroots/config/apps/cli/config.toml"
                             .into(),
-                        workspace_config_path: "/workspace/.radroots/config.toml".into(),
+                        workspace_config_path:
+                            "/workspace/infra/local/runtime/radroots/config.toml".into(),
                         app_data_root: "/home/tester/.radroots/data/apps/cli".into(),
                         app_logs_root: "/home/tester/.radroots/logs/apps/cli".into(),
                         shared_accounts_data_root: "/home/tester/.radroots/data/shared/accounts"

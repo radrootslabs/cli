@@ -768,7 +768,9 @@ mod tests {
                 shared_accounts_namespace: "shared/accounts".into(),
                 shared_identities_namespace: "shared/identities".into(),
                 app_config_path: PathBuf::from("/tmp/config/apps/cli/config.toml"),
-                workspace_config_path: PathBuf::from("/tmp/workspace/.radroots/config.toml"),
+                workspace_config_path: PathBuf::from(
+                    "/tmp/workspace/infra/local/runtime/radroots/config.toml",
+                ),
                 app_data_root: PathBuf::from("/tmp/data"),
                 app_logs_root: PathBuf::from("/tmp/logs"),
                 shared_accounts_data_root: PathBuf::from("/tmp/shared/accounts"),
@@ -865,7 +867,7 @@ mod tests {
     #[test]
     fn workflow_reports_ready_for_canonical_repo_local_localhost_posture() {
         let dir = tempdir().expect("tempdir");
-        let repo_local_root = dir.path().join(".radroots");
+        let repo_local_root = dir.path().join("infra/local/runtime/radroots");
         let base_paths = RadrootsPathResolver::current()
             .resolve(
                 RadrootsPathProfile::RepoLocal,
