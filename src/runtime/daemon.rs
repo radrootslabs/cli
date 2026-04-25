@@ -571,6 +571,46 @@ fn nip46_sessions_with_target(
     call(target, "nip46.session.list", None, RpcAuthMode::None)
 }
 
+fn hydrate_nip46_session_user_pubkeys(
+    target: &RpcTarget,
+    sessions: Vec<Nip46SessionRemote>,
+) -> Result<Vec<Nip46SessionRemote>, DaemonRpcError> {
+    if sessions
+        .iter()
+        .all(|session| session_user_pubkey(session).is_some())
+    {
+        return Ok(sessions);
+    }
+
+    let sdk = radrootsd_sdk_client(target)?;
+    let signer_sessions = sdk.radrootsd().signer_sessions();
+    sessions
+        .into_iter()
+        .map(|mut session| {
+            if session_user_pubkey(&session).is_none() {
+                let session_ref =
+                    SdkRadrootsdSignerSessionRef::from_session_id(session.session_id.clone());
+                let public_key = block_on_sdk(signer_sessions.get_public_key(&session_ref))?
+                    .map_err(|error| {
+                        DaemonRpcError::Remote(format!(
+                            "failed to hydrate signer session `{}` user pubkey: {error}",
+                            session.session_id
+                        ))
+                    })?;
+                let pubkey = public_key.pubkey.trim().to_owned();
+                if pubkey.is_empty() {
+                    return Err(DaemonRpcError::InvalidResponse(format!(
+                        "hydrated signer session `{}` reported an empty user pubkey",
+                        session.session_id
+                    )));
+                }
+                session.user_pubkey = Some(pubkey);
+            }
+            Ok(session)
+        })
+        .collect()
+}
+
 fn actor_write_target(config: &RuntimeConfig) -> Result<RpcTarget, DaemonRpcError> {
     let resolved =
         provider::resolve_actor_write_plane_target(config).map_err(DaemonRpcError::Unconfigured)?;
@@ -591,11 +631,17 @@ fn actor_write_sdk_client(
     config: &RuntimeConfig,
 ) -> Result<radroots_sdk::RadrootsSdkClient, DaemonRpcError> {
     let target = actor_write_target(config)?;
+    radrootsd_sdk_client(&target)
+}
+
+fn radrootsd_sdk_client(
+    target: &RpcTarget,
+) -> Result<radroots_sdk::RadrootsSdkClient, DaemonRpcError> {
     let mut sdk_config = RadrootsSdkConfig::custom();
     sdk_config.transport = SdkTransportMode::Radrootsd;
     sdk_config.signer = SignerConfig::Nip46;
-    sdk_config.radrootsd.endpoint = Some(target.url);
-    let Some(bridge_bearer_token) = target.bridge_bearer_token else {
+    sdk_config.radrootsd.endpoint = Some(target.url.clone());
+    let Some(bridge_bearer_token) = target.bridge_bearer_token.clone() else {
         return Err(DaemonRpcError::Unconfigured(
             "actor write plane target is missing a bridge bearer token".to_owned(),
         ));
@@ -755,7 +801,8 @@ pub fn resolve_signer_session_id(
     signer_authority: Option<&ActorWriteSignerAuthority>,
 ) -> Result<String, DaemonRpcError> {
     let target = actor_write_target(config)?;
-    let sessions = nip46_sessions_with_target(&target)?;
+    let sessions =
+        hydrate_nip46_session_user_pubkeys(&target, nip46_sessions_with_target(&target)?)?;
 
     if let Some(session_id) = requested_session_id {
         let Some(session) = sessions
@@ -808,10 +855,16 @@ fn validate_signer_session(
             session.session_id
         )));
     }
-    if !session.signer_pubkey.eq_ignore_ascii_case(actor_pubkey) {
+    let Some(user_pubkey) = session_user_pubkey(session) else {
         return Err(DaemonRpcError::Unconfigured(format!(
-            "requested signer session `{}` signer pubkey `{}` does not match {actor_role} pubkey `{actor_pubkey}`",
-            session.session_id, session.signer_pubkey
+            "requested signer session `{}` did not report a user pubkey",
+            session.session_id
+        )));
+    };
+    if !user_pubkey.eq_ignore_ascii_case(actor_pubkey) {
+        return Err(DaemonRpcError::Unconfigured(format!(
+            "requested signer session `{}` user pubkey `{}` does not match {actor_role} pubkey `{actor_pubkey}`",
+            session.session_id, user_pubkey
         )));
     }
     if !sign_event_allowed(&session.permissions, event_kind) {
@@ -831,9 +884,18 @@ fn session_matches_actor(
     signer_authority: Option<&ActorWriteSignerAuthority>,
 ) -> bool {
     session.authorized
-        && session.signer_pubkey.eq_ignore_ascii_case(actor_pubkey)
+        && session_user_pubkey(session)
+            .is_some_and(|user_pubkey| user_pubkey.eq_ignore_ascii_case(actor_pubkey))
         && sign_event_allowed(&session.permissions, event_kind)
         && signer_authority_matches(session, signer_authority)
+}
+
+fn session_user_pubkey(session: &Nip46SessionRemote) -> Option<&str> {
+    session
+        .user_pubkey
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn validate_signer_authority(

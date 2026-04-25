@@ -1267,6 +1267,7 @@ fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
     let session_account_id = account_id.clone();
+    let provider_pubkey = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let server = MockRpcServer::start(move |body, auth_header| {
         recorded
             .lock()
@@ -1274,18 +1275,27 @@ fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
             .push(MockRpcRequest {
                 body: body.clone(),
                 method: body["method"].as_str().unwrap_or_default().to_owned(),
-                auth_header,
+                auth_header: auth_header.clone(),
             });
         match body["method"].as_str().unwrap_or_default() {
             "nip46.session.list" => {
-                MockRpcResponse::success(json!([sample_session_with_authority(
+                let mut session = sample_session_with_authority(
                     "sess_order_02",
-                    buyer_pubkey.as_str(),
+                    provider_pubkey,
                     &["sign_event"],
                     true,
                     Some(session_account_id.as_str()),
-                    Some("conn_order_binding_01")
-                )]))
+                    Some("conn_order_binding_01"),
+                );
+                session["user_pubkey"] = Value::Null;
+                MockRpcResponse::success(json!([session]))
+            }
+            "nip46.get_public_key" => {
+                assert_eq!(auth_header.as_deref(), Some("Bearer test-token"));
+                assert_eq!(body["params"]["session_id"], "sess_order_02");
+                MockRpcResponse::success(json!({
+                    "pubkey": buyer_pubkey.as_str()
+                }))
             }
             "bridge.order.request" => MockRpcResponse::success(serde_json::json!({
                 "deduplicated": false,
@@ -1352,6 +1362,11 @@ managed_account_ref = "{account_id}"
         .iter()
         .find(|request| request.method == "bridge.order.request")
         .expect("bridge order request");
+    assert!(
+        recorded_requests
+            .iter()
+            .any(|request| request.method == "nip46.get_public_key")
+    );
     assert_eq!(request.body["params"]["signer_session_id"], "sess_order_02");
     assert_eq!(
         request.body["params"]["signer_authority"]["provider_runtime_id"],
@@ -1683,7 +1698,7 @@ fn sample_session_with_authority(
         "role": "remote_signer",
         "client_pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "signer_pubkey": signer_pubkey,
-        "user_pubkey": Value::Null,
+        "user_pubkey": signer_pubkey,
         "relays": ["wss://relay.one"],
         "permissions": permissions,
         "auth_required": false,

@@ -802,19 +802,29 @@ fn listing_publish_uses_myc_binding_before_resolving_daemon_signer_session() {
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
     let recorded = Arc::clone(&requests);
     let session_account_id = account_id.clone();
+    let provider_pubkey = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let server = MockRpcServer::start(move |body, auth_header| {
         recorded.lock().expect("recorded").push(body.clone());
         match body["method"].as_str().unwrap_or_default() {
             "nip46.session.list" => {
                 assert_eq!(auth_header, None);
-                MockRpcResponse::success(json!([sample_session_with_authority(
+                let mut session = sample_session_with_authority(
                     "sess_publish_01",
-                    seller_pubkey.as_str(),
+                    provider_pubkey,
                     &["sign_event"],
                     true,
                     Some(session_account_id.as_str()),
                     Some("conn_listing_binding_01"),
-                )]))
+                );
+                session["user_pubkey"] = Value::Null;
+                MockRpcResponse::success(json!([session]))
+            }
+            "nip46.get_public_key" => {
+                assert_eq!(auth_header.as_deref(), Some("Bearer bridge-secret"));
+                assert_eq!(body["params"]["session_id"], "sess_publish_01");
+                MockRpcResponse::success(json!({
+                    "pubkey": seller_pubkey.as_str()
+                }))
             }
             "bridge.listing.publish" => {
                 assert_eq!(auth_header.as_deref(), Some("Bearer bridge-secret"));
@@ -879,23 +889,24 @@ managed_account_ref = "{account_id}"
     assert_eq!(publish_json["requested_signer_session_id"], Value::Null);
 
     let recorded = requests.lock().expect("requests");
-    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded.len(), 3);
     assert_eq!(recorded[0]["method"], "nip46.session.list");
-    assert_eq!(recorded[1]["method"], "bridge.listing.publish");
+    assert_eq!(recorded[1]["method"], "nip46.get_public_key");
+    assert_eq!(recorded[2]["method"], "bridge.listing.publish");
     assert_eq!(
-        recorded[1]["params"]["signer_session_id"],
+        recorded[2]["params"]["signer_session_id"],
         "sess_publish_01"
     );
     assert_eq!(
-        recorded[1]["params"]["signer_authority"]["provider_runtime_id"],
+        recorded[2]["params"]["signer_authority"]["provider_runtime_id"],
         "myc"
     );
     assert_eq!(
-        recorded[1]["params"]["signer_authority"]["account_identity_id"],
+        recorded[2]["params"]["signer_authority"]["account_identity_id"],
         account_id
     );
     assert_eq!(
-        recorded[1]["params"]["signer_authority"]["provider_signer_session_id"],
+        recorded[2]["params"]["signer_authority"]["provider_signer_session_id"],
         "conn_listing_binding_01"
     );
 }
@@ -1717,7 +1728,7 @@ fn sample_session_with_authority(
         "role": "remote_signer",
         "client_pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "signer_pubkey": signer_pubkey,
-        "user_pubkey": Value::Null,
+        "user_pubkey": signer_pubkey,
         "relays": ["wss://relay.one"],
         "permissions": permissions,
         "auth_required": false,
