@@ -478,42 +478,45 @@ impl RuntimeConfig {
                 RadrootsSecretBackend::HostVault(_) => Some(RadrootsSecretBackend::EncryptedFile),
                 _ => None,
             });
+        let output = OutputConfig {
+            format: resolve_output_format(args, env, env_file)?,
+            verbosity: resolve_verbosity(args)?,
+            color: !args.no_color,
+            dry_run: args.dry_run,
+        };
+        let logging = LoggingConfig {
+            filter: args
+                .log_filter
+                .clone()
+                .or_else(|| env_value(env, env_file, &[ENV_CLI_LOG_FILTER, ENV_LOG_FILTER]))
+                .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_owned()),
+            directory: args.log_dir.clone().or_else(|| {
+                env_value(env, env_file, &[ENV_CLI_LOG_DIR, ENV_LOG_DIR])
+                    .map(PathBuf::from)
+                    .or_else(|| Some(paths.app_logs_root.clone()))
+            }),
+            stdout: resolve_bool_pair(
+                args.log_stdout,
+                args.no_log_stdout,
+                &[ENV_CLI_LOG_STDOUT, ENV_LOG_STDOUT],
+                false,
+                env,
+                env_file,
+                "--log-stdout",
+                "--no-log-stdout",
+            )?,
+        };
+        validate_logging_output_contract(&output, &logging)?;
         Ok(Self {
             capability_bindings: resolve_capability_bindings(
                 app_config.as_ref(),
                 workspace_config.as_ref(),
             )?,
-            output: OutputConfig {
-                format: resolve_output_format(args, env, env_file)?,
-                verbosity: resolve_verbosity(args)?,
-                color: !args.no_color,
-                dry_run: args.dry_run,
-            },
+            output,
             interaction: resolve_interaction_config(args, env),
             paths: paths.clone(),
             migration,
-            logging: LoggingConfig {
-                filter: args
-                    .log_filter
-                    .clone()
-                    .or_else(|| env_value(env, env_file, &[ENV_CLI_LOG_FILTER, ENV_LOG_FILTER]))
-                    .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_owned()),
-                directory: args.log_dir.clone().or_else(|| {
-                    env_value(env, env_file, &[ENV_CLI_LOG_DIR, ENV_LOG_DIR])
-                        .map(PathBuf::from)
-                        .or_else(|| Some(paths.app_logs_root.clone()))
-                }),
-                stdout: resolve_bool_pair(
-                    args.log_stdout,
-                    args.no_log_stdout,
-                    &[ENV_CLI_LOG_STDOUT, ENV_LOG_STDOUT],
-                    false,
-                    env,
-                    env_file,
-                    "--log-stdout",
-                    "--no-log-stdout",
-                )?,
-            },
+            logging,
             account: AccountConfig {
                 selector: args
                     .account
@@ -1168,6 +1171,20 @@ fn resolve_interaction_config(args: &CliArgs, env: &dyn Environment) -> Interact
     }
 }
 
+fn validate_logging_output_contract(
+    output: &OutputConfig,
+    logging: &LoggingConfig,
+) -> Result<(), RuntimeError> {
+    if logging.stdout && matches!(output.format, OutputFormat::Json | OutputFormat::Ndjson) {
+        return Err(RuntimeError::Config(format!(
+            "stdout logging cannot be used with {} output; unset {ENV_CLI_LOG_STDOUT}/{ENV_LOG_STDOUT} or use --no-log-stdout",
+            output.format.as_str()
+        )));
+    }
+
+    Ok(())
+}
+
 fn resolve_bool_pair(
     positive_flag: bool,
     negative_flag: bool,
@@ -1423,7 +1440,8 @@ mod tests {
     fn flags_override_environment_values() {
         let args = CliArgs::parse_from([
             "radroots",
-            "--json",
+            "--output",
+            "human",
             "--verbose",
             "--dry-run",
             "--no-color",
@@ -1466,7 +1484,7 @@ mod tests {
         assert_eq!(
             resolved.output,
             OutputConfig {
-                format: OutputFormat::Json,
+                format: OutputFormat::Human,
                 verbosity: Verbosity::Verbose,
                 color: false,
                 dry_run: true,
@@ -1574,7 +1592,7 @@ mod tests {
                 "debug,cli=trace".to_owned(),
             ),
             ("RADROOTS_LOG_DIR".to_owned(), "logs/runtime".to_owned()),
-            ("RADROOTS_LOG_STDOUT".to_owned(), "true".to_owned()),
+            ("RADROOTS_LOG_STDOUT".to_owned(), "false".to_owned()),
             ("RADROOTS_ACCOUNT".to_owned(), "acct_demo".to_owned()),
             (
                 "RADROOTS_IDENTITY_PATH".to_owned(),
@@ -1617,7 +1635,7 @@ mod tests {
             resolved.logging.directory,
             Some(PathBuf::from("logs/runtime"))
         );
-        assert!(resolved.logging.stdout);
+        assert!(!resolved.logging.stdout);
         assert_eq!(resolved.account.selector.as_deref(), Some("acct_demo"));
         assert_eq!(
             resolved.account.secret_backend,
@@ -1708,6 +1726,69 @@ mod tests {
         )
         .expect_err("conflicting output aliases");
         assert!(error.to_string().contains("--output, --json, and --ndjson"));
+    }
+
+    #[test]
+    fn machine_output_rejects_stdout_logging_flags() {
+        let env = MapEnvironment::new(BTreeMap::new());
+
+        let json_args =
+            CliArgs::parse_from(["radroots", "--json", "--log-stdout", "config", "show"]);
+        let error =
+            RuntimeConfig::resolve_with_env_file(&json_args, &env, &EnvFileValues::default())
+                .expect_err("json stdout logging should fail");
+        let message = error.to_string();
+        assert!(message.contains("stdout logging"));
+        assert!(message.contains("json output"));
+        assert!(message.contains("--no-log-stdout"));
+
+        let ndjson_args =
+            CliArgs::parse_from(["radroots", "--ndjson", "--log-stdout", "find", "eggs"]);
+        let error =
+            RuntimeConfig::resolve_with_env_file(&ndjson_args, &env, &EnvFileValues::default())
+                .expect_err("ndjson stdout logging should fail");
+        let message = error.to_string();
+        assert!(message.contains("stdout logging"));
+        assert!(message.contains("ndjson output"));
+    }
+
+    #[test]
+    fn machine_output_rejects_stdout_logging_environment() {
+        let json_args = CliArgs::parse_from(["radroots", "--json", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::from([(
+            "RADROOTS_CLI_LOGGING_STDOUT".to_owned(),
+            "true".to_owned(),
+        )]));
+        let error =
+            RuntimeConfig::resolve_with_env_file(&json_args, &env, &EnvFileValues::default())
+                .expect_err("json stdout logging from env should fail");
+        let message = error.to_string();
+        assert!(message.contains("RADROOTS_CLI_LOGGING_STDOUT"));
+        assert!(message.contains("RADROOTS_LOG_STDOUT"));
+
+        let ndjson_env_args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::from([
+            ("RADROOTS_OUTPUT".to_owned(), "ndjson".to_owned()),
+            ("RADROOTS_LOG_STDOUT".to_owned(), "true".to_owned()),
+        ]));
+        let error =
+            RuntimeConfig::resolve_with_env_file(&ndjson_env_args, &env, &EnvFileValues::default())
+                .expect_err("ndjson stdout logging from env should fail");
+        assert!(error.to_string().contains("ndjson output"));
+    }
+
+    #[test]
+    fn no_log_stdout_overrides_environment_for_machine_output() {
+        let args = CliArgs::parse_from(["radroots", "--json", "--no-log-stdout", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::from([(
+            "RADROOTS_LOG_STDOUT".to_owned(),
+            "true".to_owned(),
+        )]));
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve machine output with stdout logging disabled");
+        assert_eq!(resolved.output.format, OutputFormat::Json);
+        assert!(!resolved.logging.stdout);
     }
 
     #[test]

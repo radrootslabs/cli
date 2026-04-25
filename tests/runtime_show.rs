@@ -349,6 +349,32 @@ fn config_show_json_reports_default_bootstrap_state() {
 }
 
 #[test]
+fn config_show_machine_output_rejects_stdout_logging() {
+    let dir = tempdir().expect("tempdir");
+    let output = runtime_show_command_in(dir.path())
+        .args(["--json", "--log-stdout", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("stdout logging"));
+    assert!(stderr.contains("json output"));
+
+    let env_output = runtime_show_command_in(dir.path())
+        .env("RADROOTS_CLI_LOGGING_STDOUT", "true")
+        .args(["--json", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert_eq!(env_output.status.code(), Some(2));
+    assert!(env_output.stdout.is_empty());
+    let stderr = String::from_utf8(env_output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("RADROOTS_CLI_LOGGING_STDOUT"));
+}
+
+#[test]
 fn config_show_json_reports_detected_legacy_cli_paths_without_moving_them() {
     let dir = tempdir().expect("tempdir");
     let home = dir.path().join("home");
