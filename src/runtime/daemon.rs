@@ -7,7 +7,9 @@ use radroots_events::trade::RadrootsTradeOrder;
 use radroots_sdk::{
     RadrootsSdkConfig, RadrootsdAuth, SdkPublishError, SdkRadrootsdFarmPublishOptions,
     SdkRadrootsdListingPublishOptions, SdkRadrootsdProfilePublishOptions,
-    SdkRadrootsdSignerAuthority, SdkRadrootsdSignerSessionRef, SdkTransportMode, SignerConfig,
+    SdkRadrootsdSignerAuthority, SdkRadrootsdSignerSessionConnectRequest,
+    SdkRadrootsdSignerSessionHandle, SdkRadrootsdSignerSessionRef, SdkRadrootsdSignerSessionRole,
+    SdkRadrootsdSignerSessionView, SdkTransportMode, SignerConfig,
 };
 use reqwest::blocking::Client;
 use serde::de::DeserializeOwned;
@@ -16,14 +18,15 @@ use serde_json::Value;
 
 use crate::domain::runtime::{
     CommandOutput, CommandView, JobDetailView, JobSummaryView, RpcSessionView, RpcSessionsView,
-    RpcStatusView,
+    RpcStatusView, SignerSessionActionView,
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::provider;
-use crate::runtime::signer::ActorWriteSignerAuthority;
+use crate::runtime::signer::{ActorWriteSignerAuthority, configured_myc_signer_authority};
 
 const RPC_SOURCE: &str = "daemon rpc · durable write plane";
 const BRIDGE_SOURCE: &str = "daemon bridge · durable write plane";
+const SIGNER_SESSION_SOURCE: &str = "daemon signer session rpc · durable write plane";
 const RPC_TIMEOUT_SECS: u64 = 2;
 
 #[derive(Debug)]
@@ -378,6 +381,170 @@ pub fn sessions(config: &RuntimeConfig) -> CommandOutput {
     }
 }
 
+pub fn signer_sessions(config: &RuntimeConfig) -> CommandOutput {
+    match signer_session_views(config) {
+        Ok((url, sessions)) => {
+            let entries = sessions
+                .into_iter()
+                .map(map_sdk_session_view)
+                .collect::<Vec<_>>();
+            let state = if entries.is_empty() { "empty" } else { "ready" };
+            CommandOutput::success(CommandView::RpcSessions(RpcSessionsView {
+                state: state.to_owned(),
+                source: SIGNER_SESSION_SOURCE.to_owned(),
+                url,
+                count: entries.len(),
+                reason: None,
+                sessions: entries,
+                actions: Vec::new(),
+            }))
+        }
+        Err(DaemonRpcError::External(reason)) => {
+            CommandOutput::external_unavailable(CommandView::RpcSessions(RpcSessionsView {
+                state: "unavailable".to_owned(),
+                source: SIGNER_SESSION_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                count: 0,
+                reason: Some(reason),
+                sessions: Vec::new(),
+                actions: vec![
+                    "start radrootsd and verify the actor write-plane endpoint".to_owned(),
+                ],
+            }))
+        }
+        Err(DaemonRpcError::Unconfigured(reason))
+        | Err(DaemonRpcError::Unauthorized(reason))
+        | Err(DaemonRpcError::MethodUnavailable(reason)) => {
+            CommandOutput::unconfigured(CommandView::RpcSessions(RpcSessionsView {
+                state: "unconfigured".to_owned(),
+                source: SIGNER_SESSION_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                count: 0,
+                reason: Some(reason),
+                sessions: Vec::new(),
+                actions: vec!["configure the radrootsd actor write-plane binding".to_owned()],
+            }))
+        }
+        Err(DaemonRpcError::InvalidResponse(reason))
+        | Err(DaemonRpcError::Remote(reason))
+        | Err(DaemonRpcError::UnknownJob(reason)) => {
+            CommandOutput::internal_error(CommandView::RpcSessions(RpcSessionsView {
+                state: "error".to_owned(),
+                source: SIGNER_SESSION_SOURCE.to_owned(),
+                url: config.rpc.url.clone(),
+                count: 0,
+                reason: Some(reason),
+                sessions: Vec::new(),
+                actions: Vec::new(),
+            }))
+        }
+    }
+}
+
+pub fn signer_session_connect_bunker(
+    config: &RuntimeConfig,
+    url: &str,
+) -> Result<SignerSessionActionView, DaemonRpcError> {
+    let mut request = SdkRadrootsdSignerSessionConnectRequest::bunker(url.to_owned());
+    if let Some(authority) = configured_myc_signer_authority(config) {
+        request = request.with_signer_authority(sdk_signer_authority(&authority));
+    }
+    signer_session_connect(config, "connect_bunker", &request)
+}
+
+pub fn signer_session_connect_nostrconnect(
+    config: &RuntimeConfig,
+    url: &str,
+    client_secret_key: &str,
+) -> Result<SignerSessionActionView, DaemonRpcError> {
+    let mut request = SdkRadrootsdSignerSessionConnectRequest::nostrconnect(
+        url.to_owned(),
+        client_secret_key.to_owned(),
+    );
+    if let Some(authority) = configured_myc_signer_authority(config) {
+        request = request.with_signer_authority(sdk_signer_authority(&authority));
+    }
+    signer_session_connect(config, "connect_nostrconnect", &request)
+}
+
+pub fn signer_session_show(
+    config: &RuntimeConfig,
+    session_id: &str,
+) -> Result<SignerSessionActionView, DaemonRpcError> {
+    let sdk = actor_write_sdk_client(config)?;
+    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
+    let session = block_on_sdk(sdk.radrootsd().signer_sessions().status(&session_ref))?
+        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
+    Ok(signer_session_view_action("show", session))
+}
+
+pub fn signer_session_public_key(
+    config: &RuntimeConfig,
+    session_id: &str,
+) -> Result<SignerSessionActionView, DaemonRpcError> {
+    let sdk = actor_write_sdk_client(config)?;
+    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
+    let public_key = block_on_sdk(
+        sdk.radrootsd()
+            .signer_sessions()
+            .get_public_key(&session_ref),
+    )?
+    .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
+    let mut view = signer_session_action("public_key", "ready");
+    view.session_id = Some(session_id.to_owned());
+    view.pubkey = Some(public_key.pubkey);
+    Ok(view)
+}
+
+pub fn signer_session_authorize(
+    config: &RuntimeConfig,
+    session_id: &str,
+) -> Result<SignerSessionActionView, DaemonRpcError> {
+    let sdk = actor_write_sdk_client(config)?;
+    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
+    let result = block_on_sdk(sdk.radrootsd().signer_sessions().authorize(&session_ref))?
+        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
+    let mut view = signer_session_action("authorize", "ready");
+    view.session_id = Some(session_id.to_owned());
+    view.authorized = Some(result.authorized);
+    view.replayed = Some(result.replayed);
+    Ok(view)
+}
+
+pub fn signer_session_require_auth(
+    config: &RuntimeConfig,
+    session_id: &str,
+    auth_url: &str,
+) -> Result<SignerSessionActionView, DaemonRpcError> {
+    let sdk = actor_write_sdk_client(config)?;
+    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
+    let result = block_on_sdk(
+        sdk.radrootsd()
+            .signer_sessions()
+            .require_auth(&session_ref, auth_url),
+    )?
+    .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
+    let mut view = signer_session_action("require_auth", "ready");
+    view.session_id = Some(session_id.to_owned());
+    view.required = Some(result.required);
+    view.auth_url = Some(auth_url.to_owned());
+    Ok(view)
+}
+
+pub fn signer_session_close(
+    config: &RuntimeConfig,
+    session_id: &str,
+) -> Result<SignerSessionActionView, DaemonRpcError> {
+    let sdk = actor_write_sdk_client(config)?;
+    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
+    let result = block_on_sdk(sdk.radrootsd().signer_sessions().close(&session_ref))?
+        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
+    let mut view = signer_session_action("close", "ready");
+    view.session_id = Some(session_id.to_owned());
+    view.closed = Some(result.closed);
+    Ok(view)
+}
+
 pub fn bridge_job_list(config: &RuntimeConfig) -> Result<Vec<JobSummaryView>, DaemonRpcError> {
     bridge_jobs(config).map(|jobs| jobs.into_iter().map(map_job_summary_view).collect())
 }
@@ -657,6 +824,83 @@ fn sdk_signer_authority(value: &ActorWriteSignerAuthority) -> SdkRadrootsdSigner
         account_identity_id: value.account_identity_id.clone(),
         provider_signer_session_id: value.provider_signer_session_id.clone(),
     }
+}
+
+fn signer_session_views(
+    config: &RuntimeConfig,
+) -> Result<(String, Vec<SdkRadrootsdSignerSessionView>), DaemonRpcError> {
+    let target = actor_write_target(config)?;
+    let sdk = radrootsd_sdk_client(&target)?;
+    let sessions = block_on_sdk(sdk.radrootsd().signer_sessions().list())?
+        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
+    Ok((target.url, sessions))
+}
+
+fn signer_session_connect(
+    config: &RuntimeConfig,
+    action: &str,
+    request: &SdkRadrootsdSignerSessionConnectRequest,
+) -> Result<SignerSessionActionView, DaemonRpcError> {
+    let sdk = actor_write_sdk_client(config)?;
+    let handle = block_on_sdk(sdk.radrootsd().signer_sessions().connect(request))?
+        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
+    Ok(signer_session_handle_action(action, handle))
+}
+
+fn signer_session_action(action: &str, state: &str) -> SignerSessionActionView {
+    SignerSessionActionView {
+        action: action.to_owned(),
+        state: state.to_owned(),
+        source: SIGNER_SESSION_SOURCE.to_owned(),
+        session_id: None,
+        mode: None,
+        remote_signer_pubkey: None,
+        client_pubkey: None,
+        signer_pubkey: None,
+        user_pubkey: None,
+        relays: Vec::new(),
+        permissions: Vec::new(),
+        auth_required: None,
+        authorized: None,
+        auth_url: None,
+        expires_in_secs: None,
+        pubkey: None,
+        replayed: None,
+        required: None,
+        closed: None,
+        reason: None,
+    }
+}
+
+fn signer_session_handle_action(
+    action: &str,
+    handle: SdkRadrootsdSignerSessionHandle,
+) -> SignerSessionActionView {
+    let mut view = signer_session_action(action, "ready");
+    view.session_id = Some(handle.session().session_id().to_owned());
+    view.mode = Some(format!("{:?}", handle.mode()));
+    view.remote_signer_pubkey = Some(handle.remote_signer_pubkey().to_owned());
+    view.client_pubkey = Some(handle.client_pubkey().to_owned());
+    view.relays = handle.relays().to_vec();
+    view
+}
+
+fn signer_session_view_action(
+    action: &str,
+    session: SdkRadrootsdSignerSessionView,
+) -> SignerSessionActionView {
+    let mut view = signer_session_action(action, "ready");
+    view.session_id = Some(session.session().session_id().to_owned());
+    view.signer_pubkey = Some(session.signer_pubkey);
+    view.user_pubkey = session.user_pubkey;
+    view.client_pubkey = Some(session.client_pubkey);
+    view.relays = session.relays;
+    view.permissions = session.permissions;
+    view.auth_required = Some(session.auth_required);
+    view.authorized = Some(session.authorized);
+    view.auth_url = session.auth_url;
+    view.expires_in_secs = session.expires_in_secs;
+    view
 }
 
 fn map_sdk_publish_error(error: SdkPublishError) -> DaemonRpcError {
@@ -1090,6 +1334,28 @@ fn map_session_view(session: Nip46SessionRemote) -> RpcSessionView {
         auth_required: session.auth_required,
         authorized: session.authorized,
         expires_in_secs: session.expires_in_secs,
+    }
+}
+
+fn map_sdk_session_view(session: SdkRadrootsdSignerSessionView) -> RpcSessionView {
+    RpcSessionView {
+        session_id: session.session().session_id().to_owned(),
+        role: sdk_session_role(session.role).to_owned(),
+        client_pubkey: session.client_pubkey,
+        signer_pubkey: session.signer_pubkey,
+        user_pubkey: session.user_pubkey,
+        relay_count: session.relays.len(),
+        permissions_count: session.permissions.len(),
+        auth_required: session.auth_required,
+        authorized: session.authorized,
+        expires_in_secs: session.expires_in_secs,
+    }
+}
+
+fn sdk_session_role(role: SdkRadrootsdSignerSessionRole) -> &'static str {
+    match role {
+        SdkRadrootsdSignerSessionRole::InboundLocalSigner => "inbound_local_signer",
+        SdkRadrootsdSignerSessionRole::OutboundRemoteSigner => "outbound_remote_signer",
     }
 }
 

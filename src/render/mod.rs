@@ -116,6 +116,9 @@ fn render_human_view_to(
         CommandView::RpcStatus(view) => {
             render_rpc_status(stdout, view)?;
         }
+        CommandView::SignerSessionAction(view) => {
+            render_signer_session_action(stdout, view)?;
+        }
         CommandView::ConfigShow(view) => {
             render_config_show(stdout, view)?;
         }
@@ -482,6 +485,10 @@ fn render_json_to(stdout: &mut dyn Write, output: &CommandOutput) -> Result<(), 
             writeln!(stdout)?;
         }
         CommandView::Setup(view) => {
+            serde_json::to_writer_pretty(&mut *stdout, view)?;
+            writeln!(stdout)?;
+        }
+        CommandView::SignerSessionAction(view) => {
             serde_json::to_writer_pretty(&mut *stdout, view)?;
             writeln!(stdout)?;
         }
@@ -3158,7 +3165,15 @@ fn render_rpc_sessions(stdout: &mut dyn Write, view: &RpcSessionsView) -> Result
         }
     } else {
         let table = Table {
-            headers: &["session", "role", "auth", "authorized", "relays", "expires"],
+            headers: &[
+                "session",
+                "role",
+                "user",
+                "auth",
+                "authorized",
+                "relays",
+                "expires",
+            ],
             rows: view
                 .sessions
                 .iter()
@@ -3166,6 +3181,10 @@ fn render_rpc_sessions(stdout: &mut dyn Write, view: &RpcSessionsView) -> Result
                     vec![
                         session.session_id.clone(),
                         session.role.clone(),
+                        session
+                            .user_pubkey
+                            .clone()
+                            .unwrap_or_else(|| "n/a".to_owned()),
                         yes_no(session.auth_required).to_owned(),
                         yes_no(session.authorized).to_owned(),
                         session.relay_count.to_string(),
@@ -3183,6 +3202,74 @@ fn render_rpc_sessions(stdout: &mut dyn Write, view: &RpcSessionsView) -> Result
     writeln!(stdout, "rpc url: {}", view.url)?;
     writeln!(stdout, "source: {}", view.source)?;
     render_actions(stdout, &view.actions)?;
+    Ok(())
+}
+
+fn render_signer_session_action(
+    stdout: &mut dyn Write,
+    view: &crate::domain::runtime::SignerSessionActionView,
+) -> Result<(), RuntimeError> {
+    write_context(
+        stdout,
+        format!("signer session · {} · {}", view.action, view.state).as_str(),
+    )?;
+    let relays = view.relays.join(", ");
+    let permissions = view.permissions.join(", ");
+    let auth_required = view.auth_required.map(yes_no).unwrap_or("n/a");
+    let authorized = view.authorized.map(yes_no).unwrap_or("n/a");
+    let replayed = view.replayed.map(yes_no).unwrap_or("n/a");
+    let required = view.required.map(yes_no).unwrap_or("n/a");
+    let closed = view.closed.map(yes_no).unwrap_or("n/a");
+    let expires = view
+        .expires_in_secs
+        .map(|secs| format!("{secs}s"))
+        .unwrap_or_else(|| "n/a".to_owned());
+    render_pairs(
+        stdout,
+        "session",
+        &[
+            ("id", view.session_id.as_deref().unwrap_or("n/a")),
+            ("mode", view.mode.as_deref().unwrap_or("n/a")),
+            (
+                "remote signer",
+                view.remote_signer_pubkey.as_deref().unwrap_or("n/a"),
+            ),
+            ("client", view.client_pubkey.as_deref().unwrap_or("n/a")),
+            (
+                "signer pubkey",
+                view.signer_pubkey.as_deref().unwrap_or("n/a"),
+            ),
+            ("user pubkey", view.user_pubkey.as_deref().unwrap_or("n/a")),
+            ("pubkey", view.pubkey.as_deref().unwrap_or("n/a")),
+            ("auth required", auth_required),
+            ("authorized", authorized),
+            ("auth url", view.auth_url.as_deref().unwrap_or("n/a")),
+            ("expires", expires.as_str()),
+            ("replayed", replayed),
+            ("required", required),
+            ("closed", closed),
+            (
+                "relays",
+                if relays.is_empty() {
+                    "n/a"
+                } else {
+                    relays.as_str()
+                },
+            ),
+            (
+                "permissions",
+                if permissions.is_empty() {
+                    "n/a"
+                } else {
+                    permissions.as_str()
+                },
+            ),
+        ],
+    )?;
+    if let Some(reason) = &view.reason {
+        writeln!(stdout, "reason: {reason}")?;
+    }
+    writeln!(stdout, "source: {}", view.source)?;
     Ok(())
 }
 
@@ -4278,6 +4365,7 @@ fn human_command_name(view: &CommandView) -> &'static str {
         },
         CommandView::SellShow(_) => "sell show",
         CommandView::Setup(_) => "setup",
+        CommandView::SignerSessionAction(_) => "signer session",
         CommandView::SignerStatus(_) => "signer status",
         CommandView::Status(_) => "status",
         CommandView::SyncPull(_) => "sync pull",

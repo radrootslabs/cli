@@ -535,6 +535,7 @@ impl Command {
             },
             Self::Signer(signer) => match signer.command {
                 SignerCommand::Status => "signer status",
+                SignerCommand::Session(_) => "signer session",
             },
             Self::Status => "status",
             Self::Sync(sync) => match sync.command {
@@ -698,6 +699,43 @@ pub struct SignerArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum SignerCommand {
     Status,
+    Session(SignerSessionArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SignerSessionArgs {
+    #[command(subcommand)]
+    pub command: SignerSessionCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SignerSessionCommand {
+    List,
+    Show {
+        session_id: String,
+    },
+    ConnectBunker {
+        url: String,
+    },
+    ConnectNostrconnect {
+        url: String,
+        #[arg(long)]
+        client_secret_key: String,
+    },
+    PublicKey {
+        session_id: String,
+    },
+    Authorize {
+        session_id: String,
+    },
+    RequireAuth {
+        session_id: String,
+        #[arg(long)]
+        auth_url: String,
+    },
+    Close {
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1232,7 +1270,7 @@ mod tests {
         JobCommand, JobWatchArgs, ListingCommand, LocalCommand, LocalExportFormatArg,
         MarketCommand, MycCommand, NetCommand, OrderCommand, OrderWatchArgs, OutputFormatArg,
         RelayCommand, RpcCommand, RuntimeCommand, RuntimeConfigCommand, SellCommand, SetupRoleArg,
-        SignerCommand, SyncCommand, SyncWatchArgs,
+        SignerCommand, SignerSessionCommand, SyncCommand, SyncWatchArgs,
     };
     use crate::runtime::config::OutputFormat;
     #[test]
@@ -1616,6 +1654,36 @@ mod tests {
         match parsed.command {
             Command::Signer(signer) => match signer.command {
                 SignerCommand::Status => {}
+                SignerCommand::Session(_) => panic!("unexpected signer session command"),
+            },
+            _ => panic!("unexpected command variant"),
+        }
+    }
+
+    #[test]
+    fn parses_signer_session_lifecycle_commands() {
+        let parsed = CliArgs::parse_from([
+            "radroots",
+            "signer",
+            "session",
+            "require-auth",
+            "sess_123",
+            "--auth-url",
+            "https://auth.example",
+        ]);
+        match parsed.command {
+            Command::Signer(signer) => match signer.command {
+                SignerCommand::Session(session) => match session.command {
+                    SignerSessionCommand::RequireAuth {
+                        session_id,
+                        auth_url,
+                    } => {
+                        assert_eq!(session_id, "sess_123");
+                        assert_eq!(auth_url, "https://auth.example");
+                    }
+                    _ => panic!("unexpected signer session subcommand"),
+                },
+                SignerCommand::Status => panic!("unexpected signer status command"),
             },
             _ => panic!("unexpected command variant"),
         }

@@ -20,7 +20,7 @@ pub mod workflow;
 use crate::cli::{
     AccountCommand, Command, ConfigCommand, FarmCommand, JobCommand, ListingCommand, LocalCommand,
     MarketCommand, MycCommand, NetCommand, OrderCommand, RelayCommand, RpcCommand, RuntimeCommand,
-    RuntimeConfigCommand, SellCommand, SignerCommand, SyncCommand,
+    RuntimeConfigCommand, SellCommand, SignerCommand, SignerSessionCommand, SyncCommand,
 };
 use crate::domain::runtime::{CommandOutput, CommandView};
 use crate::runtime::RuntimeError;
@@ -62,6 +62,40 @@ pub fn dispatch(
         },
         Command::Signer(signer) => match &signer.command {
             SignerCommand::Status => Ok(signer::status(config)),
+            SignerCommand::Session(session) => match &session.command {
+                SignerSessionCommand::List => Ok(signer::session_list(config)),
+                SignerSessionCommand::Show { session_id } => {
+                    Ok(signer::session_show(config, session_id.as_str()))
+                }
+                SignerSessionCommand::ConnectBunker { url } => {
+                    Ok(signer::session_connect_bunker(config, url.as_str()))
+                }
+                SignerSessionCommand::ConnectNostrconnect {
+                    url,
+                    client_secret_key,
+                } => Ok(signer::session_connect_nostrconnect(
+                    config,
+                    url.as_str(),
+                    client_secret_key.as_str(),
+                )),
+                SignerSessionCommand::PublicKey { session_id } => {
+                    Ok(signer::session_public_key(config, session_id.as_str()))
+                }
+                SignerSessionCommand::Authorize { session_id } => {
+                    Ok(signer::session_authorize(config, session_id.as_str()))
+                }
+                SignerSessionCommand::RequireAuth {
+                    session_id,
+                    auth_url,
+                } => Ok(signer::session_require_auth(
+                    config,
+                    session_id.as_str(),
+                    auth_url.as_str(),
+                )),
+                SignerSessionCommand::Close { session_id } => {
+                    Ok(signer::session_close(config, session_id.as_str()))
+                }
+            },
         },
         Command::Doctor => doctor::report(config, logging),
         Command::Farm(farm_command) => match &farm_command.command {

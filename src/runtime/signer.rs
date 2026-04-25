@@ -99,6 +99,27 @@ pub fn resolve_actor_write_authority(
     }))
 }
 
+pub fn configured_myc_signer_authority(
+    config: &RuntimeConfig,
+) -> Option<ActorWriteSignerAuthority> {
+    let binding = config.capability_binding(SIGNER_REMOTE_NIP46_CAPABILITY)?;
+    if binding.provider_runtime_id != SIGNER_BINDING_PROVIDER_RUNTIME_ID {
+        return None;
+    }
+    if !matches!(
+        binding.target_kind,
+        CapabilityBindingTargetKind::ManagedInstance
+    ) || binding.target != "default"
+    {
+        return None;
+    }
+    Some(ActorWriteSignerAuthority {
+        provider_runtime_id: SIGNER_BINDING_PROVIDER_RUNTIME_ID.to_owned(),
+        account_identity_id: binding.managed_account_ref.clone()?,
+        provider_signer_session_id: binding.signer_session_ref.clone(),
+    })
+}
+
 fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     let (account_resolution, resolved_account_id) =
         match crate::runtime::accounts::resolve_account_resolution(config) {

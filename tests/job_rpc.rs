@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
@@ -50,10 +51,78 @@ fn job_rpc_test_guard() -> MutexGuard<'static, ()> {
         .expect("job rpc test lock")
 }
 
+fn write_user_config(workdir: &Path, contents: &str) {
+    let config_dir = workdir.join("home/.radroots/config/apps/cli");
+    fs::create_dir_all(&config_dir).expect("user config dir");
+    fs::write(config_dir.join("config.toml"), contents).expect("write user config");
+}
+
+fn signer_session_config(url: &str) -> String {
+    format!(
+        r#"
+[[capability_binding]]
+capability = "write_plane.trade_jsonrpc"
+provider = "radrootsd"
+target_kind = "explicit_endpoint"
+target = "{url}"
+
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "acct_user"
+signer_session_ref = "myc_conn_1"
+"#
+    )
+}
+
+fn run_signer_session_command<F>(
+    workdir: &Path,
+    args: &[&str],
+    handler: F,
+) -> (Value, MockRpcRequest)
+where
+    F: Fn(&MockRpcRequest) -> MockRpcResponse + Send + Sync + 'static,
+{
+    let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
+    let recorded = Arc::clone(&requests);
+    let server = MockRpcServer::start(move |request| {
+        let response = handler(&request);
+        recorded.lock().expect("record requests").push(request);
+        response
+    });
+    write_user_config(
+        workdir,
+        signer_session_config(server.url().as_str()).as_str(),
+    );
+    let output = job_rpc_command_in(workdir)
+        .env("RADROOTS_RPC_BEARER_TOKEN", "secret")
+        .args(args)
+        .output()
+        .expect("run signer session command");
+    assert!(
+        output.status.success(),
+        "command {:?} stdout: {}\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+    let request = requests
+        .lock()
+        .expect("recorded requests")
+        .first()
+        .expect("one recorded request")
+        .clone();
+    (json, request)
+}
+
 #[derive(Debug, Clone)]
 struct MockRpcRequest {
     method: String,
     auth_header: Option<String>,
+    body: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -98,7 +167,7 @@ struct MockRpcServer {
 impl MockRpcServer {
     fn start<F>(handler: F) -> Self
     where
-        F: Fn(String, Option<String>) -> MockRpcResponse + Send + Sync + 'static,
+        F: Fn(MockRpcRequest) -> MockRpcResponse + Send + Sync + 'static,
     {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock rpc listener");
         listener
@@ -110,22 +179,27 @@ impl MockRpcServer {
             .to_string();
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_flag = Arc::clone(&shutdown);
-        let handler: Arc<dyn Fn(String, Option<String>) -> MockRpcResponse + Send + Sync> =
+        let handler: Arc<dyn Fn(MockRpcRequest) -> MockRpcResponse + Send + Sync> =
             Arc::new(handler);
         let handle = thread::spawn(move || {
             while !shutdown_flag.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        if let Ok(request) = read_request(&mut stream) {
-                            let response =
-                                handler(request.method.clone(), request.auth_header.clone());
-                            let _ = write_response(&mut stream, &response);
+                        let _ = stream.set_nonblocking(false);
+                        match read_request(&mut stream) {
+                            Ok(request) => {
+                                let response = handler(request);
+                                let _ = write_response(&mut stream, &response);
+                            }
+                            Err(_) => {}
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
                 }
             }
         });
@@ -201,6 +275,7 @@ fn read_request(stream: &mut TcpStream) -> Result<MockRpcRequest, String> {
     Ok(MockRpcRequest {
         method,
         auth_header,
+        body: envelope,
     })
 }
 
@@ -282,6 +357,27 @@ fn sample_bridge_status() -> Value {
     })
 }
 
+fn sample_signer_session() -> Value {
+    json!({
+        "session_id": "sess_1",
+        "role": "outbound_remote_signer",
+        "client_pubkey": "client_pubkey",
+        "signer_pubkey": "myc_signer_pubkey",
+        "user_pubkey": "user_pubkey",
+        "relays": ["wss://relay.one"],
+        "permissions": ["sign_event", "nip44_encrypt"],
+        "auth_required": false,
+        "authorized": true,
+        "auth_url": null,
+        "expires_in_secs": 60,
+        "signer_authority": {
+            "provider_runtime_id": "myc",
+            "account_identity_id": "acct_user",
+            "provider_signer_session_id": "myc_conn_1"
+        }
+    })
+}
+
 fn sample_job(job_id: &str, state: &str, terminal: bool, completed_at_unix: Option<u64>) -> Value {
     json!({
         "job_id": job_id,
@@ -315,14 +411,9 @@ fn rpc_status_reports_bridge_ready_via_daemon_rpc() {
     let _guard = job_rpc_test_guard();
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
-    let server = MockRpcServer::start(move |method, auth_header| {
-        recorded
-            .lock()
-            .expect("record requests")
-            .push(MockRpcRequest {
-                method: method.clone(),
-                auth_header: auth_header.clone(),
-            });
+    let server = MockRpcServer::start(move |request| {
+        let method = request.method.clone();
+        recorded.lock().expect("record requests").push(request);
         match method.as_str() {
             "bridge.status" => MockRpcResponse::success(sample_bridge_status()),
             _ => MockRpcResponse::rpc_error(-32601, "method not found"),
@@ -356,14 +447,9 @@ fn rpc_sessions_ndjson_emits_public_session_entries() {
     let _guard = job_rpc_test_guard();
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
-    let server = MockRpcServer::start(move |method, auth_header| {
-        recorded
-            .lock()
-            .expect("record requests")
-            .push(MockRpcRequest {
-                method: method.clone(),
-                auth_header: auth_header.clone(),
-            });
+    let server = MockRpcServer::start(move |request| {
+        let method = request.method.clone();
+        recorded.lock().expect("record requests").push(request);
         match method.as_str() {
             "nip46.session.list" => MockRpcResponse::success(json!([
                 {
@@ -416,18 +502,189 @@ fn rpc_sessions_ndjson_emits_public_session_entries() {
 }
 
 #[test]
+fn signer_session_connect_preserves_configured_myc_authority() {
+    let _guard = job_rpc_test_guard();
+    let dir = tempdir().expect("tempdir");
+
+    let (bunker_json, bunker_request) = run_signer_session_command(
+        dir.path(),
+        &[
+            "--json",
+            "signer",
+            "session",
+            "connect-bunker",
+            "bunker://remote",
+        ],
+        |_| {
+            MockRpcResponse::success(json!({
+                "session_id": "sess_bunker",
+                "mode": "Bunker",
+                "remote_signer_pubkey": "myc_signer_pubkey",
+                "client_pubkey": "client_pubkey",
+                "relays": ["wss://relay.one"]
+            }))
+        },
+    );
+    assert_eq!(bunker_json["action"], "connect_bunker");
+    assert_eq!(bunker_json["session_id"], "sess_bunker");
+    assert_eq!(bunker_json["remote_signer_pubkey"], "myc_signer_pubkey");
+
+    let nostr_dir = tempdir().expect("tempdir");
+    let (nostr_json, nostr_request) = run_signer_session_command(
+        nostr_dir.path(),
+        &[
+            "--json",
+            "signer",
+            "session",
+            "connect-nostrconnect",
+            "nostrconnect://remote",
+            "--client-secret-key",
+            "client-secret",
+        ],
+        |_| {
+            MockRpcResponse::success(json!({
+                "session_id": "sess_nostrconnect",
+                "mode": "Nostrconnect",
+                "remote_signer_pubkey": "myc_signer_pubkey",
+                "client_pubkey": "client_pubkey",
+                "relays": ["wss://relay.two"]
+            }))
+        },
+    );
+    assert_eq!(nostr_json["action"], "connect_nostrconnect");
+    assert_eq!(nostr_json["session_id"], "sess_nostrconnect");
+
+    for request in [&bunker_request, &nostr_request] {
+        assert_eq!(request.method, "nip46.connect");
+        assert_eq!(request.auth_header.as_deref(), Some("Bearer secret"));
+        assert_eq!(
+            request.body["params"]["signer_authority"]["provider_runtime_id"],
+            "myc"
+        );
+        assert_eq!(
+            request.body["params"]["signer_authority"]["account_identity_id"],
+            "acct_user"
+        );
+        assert_eq!(
+            request.body["params"]["signer_authority"]["provider_signer_session_id"],
+            "myc_conn_1"
+        );
+    }
+    assert_eq!(bunker_request.body["params"]["url"], "bunker://remote");
+    assert_eq!(nostr_request.body["params"]["url"], "nostrconnect://remote");
+    assert_eq!(
+        nostr_request.body["params"]["client_secret_key"],
+        "client-secret"
+    );
+}
+
+#[test]
+fn signer_session_commands_cover_inspect_hydrate_authorize_require_auth_and_close() {
+    let _guard = job_rpc_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let mut recorded = Vec::<MockRpcRequest>::new();
+
+    let (list_json, request) =
+        run_signer_session_command(dir.path(), &["--json", "signer", "session", "list"], |_| {
+            MockRpcResponse::success(json!([sample_signer_session()]))
+        });
+    recorded.push(request);
+    assert_eq!(list_json["state"], "ready");
+    assert_eq!(list_json["sessions"][0]["session_id"], "sess_1");
+    assert_eq!(list_json["sessions"][0]["user_pubkey"], "user_pubkey");
+
+    let (show_json, request) = run_signer_session_command(
+        dir.path(),
+        &["--json", "signer", "session", "show", "sess_1"],
+        |_| MockRpcResponse::success(sample_signer_session()),
+    );
+    recorded.push(request);
+    assert_eq!(show_json["action"], "show");
+    assert_eq!(show_json["session_id"], "sess_1");
+    assert_eq!(show_json["user_pubkey"], "user_pubkey");
+
+    let (public_key_json, request) = run_signer_session_command(
+        dir.path(),
+        &["--json", "signer", "session", "public-key", "sess_1"],
+        |_| MockRpcResponse::success(json!({ "pubkey": "user_pubkey" })),
+    );
+    recorded.push(request);
+    assert_eq!(public_key_json["action"], "public_key");
+    assert_eq!(public_key_json["pubkey"], "user_pubkey");
+
+    let (authorize_json, request) = run_signer_session_command(
+        dir.path(),
+        &["--json", "signer", "session", "authorize", "sess_1"],
+        |_| MockRpcResponse::success(json!({ "authorized": true, "replayed": false })),
+    );
+    recorded.push(request);
+    assert_eq!(authorize_json["action"], "authorize");
+    assert_eq!(authorize_json["authorized"], true);
+    assert_eq!(authorize_json["replayed"], false);
+
+    let (require_auth_json, request) = run_signer_session_command(
+        dir.path(),
+        &[
+            "--json",
+            "signer",
+            "session",
+            "require-auth",
+            "sess_1",
+            "--auth-url",
+            "https://auth.example",
+        ],
+        |_| MockRpcResponse::success(json!({ "required": true })),
+    );
+    recorded.push(request);
+    assert_eq!(require_auth_json["action"], "require_auth");
+    assert_eq!(require_auth_json["required"], true);
+    assert_eq!(require_auth_json["auth_url"], "https://auth.example");
+
+    let (close_json, request) = run_signer_session_command(
+        dir.path(),
+        &["--json", "signer", "session", "close", "sess_1"],
+        |_| MockRpcResponse::success(json!({ "closed": true })),
+    );
+    recorded.push(request);
+    assert_eq!(close_json["action"], "close");
+    assert_eq!(close_json["closed"], true);
+
+    let methods = recorded
+        .iter()
+        .map(|request| request.method.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        [
+            "nip46.session.list",
+            "nip46.session.status",
+            "nip46.get_public_key",
+            "nip46.session.authorize",
+            "nip46.session.require_auth",
+            "nip46.session.close",
+        ]
+    );
+    assert!(
+        recorded
+            .iter()
+            .all(|request| request.auth_header.as_deref() == Some("Bearer secret"))
+    );
+    for request in recorded.iter().skip(1) {
+        assert_eq!(request.body["params"]["session_id"], "sess_1");
+    }
+    assert_eq!(
+        recorded[4].body["params"]["auth_url"],
+        "https://auth.example"
+    );
+}
+
+#[test]
 fn job_commands_require_bridge_bearer_token() {
     let _guard = job_rpc_test_guard();
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
-    let server = MockRpcServer::start(move |method, auth_header| {
-        recorded
-            .lock()
-            .expect("record requests")
-            .push(MockRpcRequest {
-                method,
-                auth_header,
-            });
+    let server = MockRpcServer::start(move |request| {
+        recorded.lock().expect("record requests").push(request);
         MockRpcResponse::rpc_error(-32601, "method not found")
     });
 
@@ -455,14 +712,9 @@ fn job_ls_and_get_report_retained_bridge_jobs() {
     let _guard = job_rpc_test_guard();
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let recorded = Arc::clone(&requests);
-    let server = MockRpcServer::start(move |method, auth_header| {
-        recorded
-            .lock()
-            .expect("record requests")
-            .push(MockRpcRequest {
-                method: method.clone(),
-                auth_header: auth_header.clone(),
-            });
+    let server = MockRpcServer::start(move |request| {
+        let method = request.method.clone();
+        recorded.lock().expect("record requests").push(request);
         match method.as_str() {
             "bridge.job.list" => {
                 MockRpcResponse::success(json!([sample_job("job-123", "publishing", false, None)]))
@@ -526,14 +778,9 @@ fn job_watch_ndjson_emits_one_frame_per_poll_until_terminal() {
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let observed = Arc::clone(&requests);
     let counter = Arc::clone(&sequence);
-    let server = MockRpcServer::start(move |method, auth_header| {
-        observed
-            .lock()
-            .expect("record requests")
-            .push(MockRpcRequest {
-                method: method.clone(),
-                auth_header,
-            });
+    let server = MockRpcServer::start(move |request| {
+        let method = request.method.clone();
+        observed.lock().expect("record requests").push(request);
         match method.as_str() {
             "bridge.job.status" => {
                 let mut count = counter.lock().expect("watch count");
@@ -590,14 +837,9 @@ fn job_watch_human_appends_snapshots_without_screen_clear() {
     let requests = Arc::new(Mutex::new(Vec::<MockRpcRequest>::new()));
     let observed = Arc::clone(&requests);
     let counter = Arc::clone(&sequence);
-    let server = MockRpcServer::start(move |method, auth_header| {
-        observed
-            .lock()
-            .expect("record requests")
-            .push(MockRpcRequest {
-                method: method.clone(),
-                auth_header,
-            });
+    let server = MockRpcServer::start(move |request| {
+        let method = request.method.clone();
+        observed.lock().expect("record requests").push(request);
         match method.as_str() {
             "bridge.job.status" => {
                 let mut count = counter.lock().expect("watch count");

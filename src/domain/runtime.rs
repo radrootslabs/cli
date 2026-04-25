@@ -132,6 +132,7 @@ pub enum CommandView {
     SellMutation(SellMutationView),
     SellShow(SellShowView),
     Setup(SetupView),
+    SignerSessionAction(SignerSessionActionView),
     SignerStatus(SignerStatusView),
     Status(StatusView),
     SyncPull(SyncActionView),
@@ -2151,6 +2152,47 @@ pub struct SignerStatusView {
     pub local: Option<LocalSignerStatusView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub myc: Option<MycStatusView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SignerSessionActionView {
+    pub action: String,
+    pub state: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_signer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_pubkey: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorized: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replayed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl SignerStatusView {

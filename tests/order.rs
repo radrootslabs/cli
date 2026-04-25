@@ -283,6 +283,7 @@ impl MockRpcServer {
             while !shutdown_flag.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
                         if let Ok(request) = read_request(&mut stream) {
                             let response =
                                 handler(request.body.clone(), request.auth_header.clone());
@@ -292,7 +293,9 @@ impl MockRpcServer {
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
                 }
             }
         });
