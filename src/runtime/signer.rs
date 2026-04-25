@@ -21,7 +21,7 @@ const SIGNER_BINDING_MODEL: &str = "session_authorized_remote_signer";
 struct MycBindingResolution {
     view: SignerBindingStatusView,
     resolved_account_id: Option<String>,
-    resolved_signer_public_key_hex: Option<String>,
+    resolved_account_public_key_hex: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,15 +74,15 @@ pub fn resolve_actor_write_authority(
         }
     }
 
-    let Some(resolved_signer_public_key_hex) = resolution.resolved_signer_public_key_hex else {
+    let Some(resolved_account_public_key_hex) = resolution.resolved_account_public_key_hex else {
         return Err(ActorWriteBindingError::Unconfigured(
-            "myc signer binding reported ready without a resolved signer identity".to_owned(),
+            "myc signer binding reported ready without a resolved user identity".to_owned(),
         ));
     };
 
-    if !resolved_signer_public_key_hex.eq_ignore_ascii_case(actor_pubkey) {
+    if !resolved_account_public_key_hex.eq_ignore_ascii_case(actor_pubkey) {
         return Err(ActorWriteBindingError::Unconfigured(format!(
-            "configured myc signer binding resolves signer pubkey `{resolved_signer_public_key_hex}` instead of {actor_role} pubkey `{actor_pubkey}`"
+            "configured myc signer binding resolves user pubkey `{resolved_account_public_key_hex}` instead of {actor_role} pubkey `{actor_pubkey}`"
         )));
     }
 
@@ -308,7 +308,7 @@ fn resolve_myc_binding(config: &RuntimeConfig, myc: &MycStatusView) -> MycBindin
                 ),
             },
             resolved_account_id: None,
-            resolved_signer_public_key_hex: None,
+            resolved_account_public_key_hex: None,
         };
     };
 
@@ -407,7 +407,7 @@ fn resolve_myc_binding(config: &RuntimeConfig, myc: &MycStatusView) -> MycBindin
         }
 
         if let Some(account_ref) = binding.managed_account_ref.as_deref() {
-            if session.signer_identity.id != account_ref {
+            if session.user_identity.id != account_ref {
                 return binding_status(
                     binding,
                     "unauthorized",
@@ -415,8 +415,8 @@ fn resolve_myc_binding(config: &RuntimeConfig, myc: &MycStatusView) -> MycBindin
                     Some(1),
                     None,
                     format!(
-                        "configured signer session `{session_ref}` resolves signer `{}` instead of managed account `{account_ref}`",
-                        session.signer_identity.id
+                        "configured signer session `{session_ref}` resolves user `{}` instead of managed account `{account_ref}`",
+                        session.user_identity.id
                     ),
                 );
             }
@@ -435,7 +435,7 @@ fn resolve_myc_binding(config: &RuntimeConfig, myc: &MycStatusView) -> MycBindin
     if let Some(account_ref) = binding.managed_account_ref.as_deref() {
         let matching_sessions = signing_sessions
             .into_iter()
-            .filter(|session| session.signer_identity.id == account_ref)
+            .filter(|session| session.user_identity.id == account_ref)
             .collect::<Vec<_>>();
         return resolve_matching_sessions(binding, account_ref, matching_sessions);
     }
@@ -548,9 +548,9 @@ fn binding_status(
                 Some(reason)
             },
         },
-        resolved_account_id: resolved_session.map(|session| session.signer_identity.id.clone()),
-        resolved_signer_public_key_hex: resolved_session
-            .map(|session| session.signer_identity.public_key_hex.clone()),
+        resolved_account_id: resolved_session.map(|session| session.user_identity.id.clone()),
+        resolved_account_public_key_hex: resolved_session
+            .map(|session| session.user_identity.public_key_hex.clone()),
     }
 }
 

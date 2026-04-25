@@ -10,6 +10,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use assert_cmd::prelude::*;
+use radroots_identity::RadrootsIdentity;
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -193,21 +194,28 @@ fn sample_myc_status_payload(
     public_identity: &Value,
     connection_id: &str,
 ) -> Value {
+    let signer_identity =
+        serde_json::to_value(RadrootsIdentity::generate().to_public()).expect("signer identity");
+    let signer_account_id = signer_identity["id"]
+        .as_str()
+        .expect("signer id")
+        .to_owned();
+    assert_ne!(signer_account_id, account_id);
     json!({
         "status": "healthy",
         "ready": true,
         "reasons": [],
         "signer_backend": {
             "local_signer": {
-                "account_id": account_id,
-                "public_identity": public_identity,
+                "account_id": signer_account_id,
+                "public_identity": signer_identity.clone(),
                 "availability": "SecretBacked"
             },
             "remote_session_count": 1,
             "remote_sessions": [
                 {
                     "connection_id": connection_id,
-                    "signer_identity": public_identity,
+                    "signer_identity": signer_identity,
                     "user_identity": public_identity,
                     "relays": ["wss://relay.one"],
                     "permissions": "sign_event"
@@ -1468,7 +1476,7 @@ managed_account_ref = "{mismatch_account_id}"
     assert_eq!(submit_json["state"], "unconfigured");
     assert_eq!(submit_json["signer_mode"], "myc");
     assert!(submit_json["reason"].as_str().is_some_and(|value| {
-        value.contains("configured myc signer binding resolves signer pubkey")
+        value.contains("configured myc signer binding resolves user pubkey")
     }));
     assert!(requests.lock().expect("requests lock").is_empty());
 }

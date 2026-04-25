@@ -195,9 +195,14 @@ fn signer_status_reports_ready_for_configured_myc_managed_account_binding() {
         dir.path(),
         successful_status_script(payload.to_string()).as_str(),
     );
-    let managed_account_ref = payload["signer_backend"]["local_signer"]["account_id"]
+    let managed_account_ref =
+        payload["signer_backend"]["remote_sessions"][0]["user_identity"]["id"]
+            .as_str()
+            .expect("managed account ref");
+    let provider_account_ref = payload["signer_backend"]["local_signer"]["account_id"]
         .as_str()
-        .expect("managed account ref");
+        .expect("provider account ref");
+    assert_ne!(managed_account_ref, provider_account_ref);
     let signer_session_ref = payload["signer_backend"]["remote_sessions"][0]["connection_id"]
         .as_str()
         .expect("signer session ref");
@@ -244,6 +249,18 @@ signer_session_ref = "{signer_session_ref}"
     assert_eq!(json["binding"]["managed_account_ref"], managed_account_ref);
     assert_eq!(json["binding"]["signer_session_ref"], signer_session_ref);
     assert_eq!(json["myc"]["remote_session_count"], 1);
+    assert_eq!(
+        json["myc"]["remote_sessions"][0]["user_identity"]["id"],
+        managed_account_ref
+    );
+    assert_ne!(
+        json["myc"]["remote_sessions"][0]["signer_identity"]["id"],
+        json["myc"]["remote_sessions"][0]["user_identity"]["id"]
+    );
+    assert_ne!(
+        json["myc"]["local_signer"]["account_id"],
+        json["myc"]["remote_sessions"][0]["user_identity"]["id"]
+    );
 }
 
 #[test]
@@ -371,9 +388,10 @@ fn signer_status_reports_unauthorized_for_session_without_sign_event_permission(
         dir.path(),
         successful_status_script(payload.to_string()).as_str(),
     );
-    let managed_account_ref = payload["signer_backend"]["local_signer"]["account_id"]
-        .as_str()
-        .expect("managed account ref");
+    let managed_account_ref =
+        payload["signer_backend"]["remote_sessions"][0]["user_identity"]["id"]
+            .as_str()
+            .expect("managed account ref");
     let signer_session_ref = payload["signer_backend"]["remote_sessions"][0]["connection_id"]
         .as_str()
         .expect("signer session ref");
@@ -426,9 +444,10 @@ fn signer_status_reports_unavailable_for_missing_bound_session() {
         dir.path(),
         successful_status_script(payload.to_string()).as_str(),
     );
-    let managed_account_ref = payload["signer_backend"]["local_signer"]["account_id"]
-        .as_str()
-        .expect("managed account ref");
+    let managed_account_ref =
+        payload["signer_backend"]["remote_sessions"][0]["user_identity"]["id"]
+            .as_str()
+            .expect("managed account ref");
     write_user_config(
         dir.path(),
         format!(
