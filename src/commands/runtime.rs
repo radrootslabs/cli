@@ -46,7 +46,11 @@ pub fn show(
         },
         config_files: ConfigFilesRuntimeView {
             user_present: config.paths.app_config_path.exists(),
-            workspace_present: config.paths.workspace_config_path.exists(),
+            workspace_present: config
+                .paths
+                .workspace_config_path
+                .as_ref()
+                .is_some_and(|path| path.exists()),
         },
         paths: PathsRuntimeView {
             profile: config.paths.profile.clone(),
@@ -64,7 +68,12 @@ pub fn show(
             shared_accounts_namespace: config.paths.shared_accounts_namespace.clone(),
             shared_identities_namespace: config.paths.shared_identities_namespace.clone(),
             app_config_path: config.paths.app_config_path.display().to_string(),
-            workspace_config_path: config.paths.workspace_config_path.display().to_string(),
+            workspace_config_enabled: config.paths.workspace_config_path.is_some(),
+            workspace_config_path: config
+                .paths
+                .workspace_config_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
             app_data_root: config.paths.app_data_root.display().to_string(),
             app_logs_root: config.paths.app_logs_root.display().to_string(),
             shared_accounts_data_root: config.paths.shared_accounts_data_root.display().to_string(),

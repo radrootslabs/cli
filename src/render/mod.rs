@@ -1129,7 +1129,10 @@ fn render_config_show(
     let workspace_config = format!(
         "{} · {}",
         present_absent(view.config_files.workspace_present),
-        view.paths.workspace_config_path
+        view.paths
+            .workspace_config_path
+            .as_deref()
+            .unwrap_or("disabled for interactive_user")
     );
     let allowed_profiles = view.paths.allowed_profiles.join(", ");
     render_pairs(
@@ -4334,8 +4337,7 @@ mod tests {
                     shared_accounts_namespace: "shared/accounts".into(),
                     shared_identities_namespace: "shared/identities".into(),
                     app_config_path: "/home/tester/.radroots/config/apps/cli/config.toml".into(),
-                    workspace_config_path: "/workspace/infra/local/runtime/radroots/config.toml"
-                        .into(),
+                    workspace_config_path: None,
                     app_data_root: "/home/tester/.radroots/data/apps/cli".into(),
                     app_logs_root: "/home/tester/.radroots/logs/apps/cli".into(),
                     shared_accounts_data_root: "/home/tester/.radroots/data/shared/accounts".into(),
@@ -4409,10 +4411,8 @@ mod tests {
         assert_eq!(view.paths.profile, "interactive_user");
         assert_eq!(view.paths.app_namespace, "apps/cli");
         assert_eq!(view.paths.shared_accounts_namespace, "shared/accounts");
-        assert_eq!(
-            view.paths.workspace_config_path,
-            "/workspace/infra/local/runtime/radroots/config.toml"
-        );
+        assert!(!view.paths.workspace_config_enabled);
+        assert_eq!(view.paths.workspace_config_path, None);
         assert_eq!(view.account.selector.as_deref(), Some("acct_demo"));
         assert!(
             view.account
@@ -4490,8 +4490,7 @@ mod tests {
                         shared_identities_namespace: "shared/identities".into(),
                         app_config_path: "/home/tester/.radroots/config/apps/cli/config.toml"
                             .into(),
-                        workspace_config_path:
-                            "/workspace/infra/local/runtime/radroots/config.toml".into(),
+                        workspace_config_path: None,
                         app_data_root: "/home/tester/.radroots/data/apps/cli".into(),
                         app_logs_root: "/home/tester/.radroots/logs/apps/cli".into(),
                         shared_accounts_data_root: "/home/tester/.radroots/data/shared/accounts"

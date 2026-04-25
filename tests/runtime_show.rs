@@ -104,7 +104,6 @@ fn binding_by_capability<'a>(json: &'a Value, capability_id: &str) -> &'a Value 
 #[test]
 fn config_show_json_reports_default_bootstrap_state() {
     let dir = tempdir().expect("tempdir");
-    let canonical_root = dir.path().canonicalize().expect("canonical tempdir");
     let output = runtime_show_command_in(dir.path())
         .args(["--json", "config", "show"])
         .output()
@@ -147,13 +146,8 @@ fn config_show_json_reports_default_bootstrap_state() {
             .display()
             .to_string()
     );
-    assert_eq!(
-        json["paths"]["workspace_config_path"],
-        canonical_root
-            .join("infra/local/runtime/radroots/config.toml")
-            .display()
-            .to_string()
-    );
+    assert_eq!(json["paths"]["workspace_config_enabled"], false);
+    assert_eq!(json["paths"]["workspace_config_path"], Value::Null);
     assert_eq!(
         json["paths"]["app_data_root"],
         data_root(dir.path()).join("apps/cli").display().to_string()
@@ -471,6 +465,7 @@ fn config_show_json_reports_repo_local_paths_when_requested() {
         json["paths"]["workspace_config_path"],
         repo_local_root.join("config.toml").display().to_string()
     );
+    assert_eq!(json["paths"]["workspace_config_enabled"], true);
     assert_eq!(
         json["paths"]["app_data_root"],
         repo_local_root.join("data/apps/cli").display().to_string()
@@ -526,6 +521,7 @@ fn config_show_json_reads_repo_local_workspace_config_from_explicit_root() {
         json["paths"]["workspace_config_path"],
         repo_local_root.join("config.toml").display().to_string()
     );
+    assert_eq!(json["paths"]["workspace_config_enabled"], true);
     assert_eq!(json["config_files"]["workspace_present"], true);
     assert_eq!(json["relay"]["count"], 1);
     assert_eq!(json["relay"]["urls"][0], "wss://relay.repo-local");

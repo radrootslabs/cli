@@ -10,7 +10,6 @@ use crate::runtime::{
     config::{EnvFileValues, Environment},
 };
 
-const DEFAULT_WORKSPACE_CONFIG_PATH: &str = "infra/local/runtime/radroots/config.toml";
 const CLI_DEFAULT_PROFILE: &str = "interactive_user";
 const CLI_REPO_LOCAL_PROFILE: &str = "repo_local";
 const CLI_APP_NAMESPACE_VALUE: &str = "cli";
@@ -34,7 +33,7 @@ pub struct PathsConfig {
     pub shared_accounts_namespace: String,
     pub shared_identities_namespace: String,
     pub app_config_path: PathBuf,
-    pub workspace_config_path: PathBuf,
+    pub workspace_config_path: Option<PathBuf>,
     pub app_data_root: PathBuf,
     pub app_logs_root: PathBuf,
     pub shared_accounts_data_root: PathBuf,
@@ -51,8 +50,7 @@ pub(crate) fn resolve_paths(
     let (profile, profile_label, profile_source) = resolve_cli_path_profile(env, env_file)?;
     let override_selection =
         resolve_cli_path_overrides(current_dir.as_path(), env, env_file, profile)?;
-    let workspace_config_path =
-        resolve_workspace_config_path(current_dir.as_path(), profile, &override_selection)?;
+    let workspace_config_path = resolve_workspace_config_path(profile, &override_selection)?;
     let resolved = resolver
         .resolve(profile, &override_selection.overrides)
         .map_err(|err| RuntimeError::Config(format!("resolve Radroots path roots: {err}")))?;
@@ -193,16 +191,15 @@ fn normalize_explicit_path_root(current_dir: &Path, value: &str) -> PathBuf {
 }
 
 fn resolve_workspace_config_path(
-    current_dir: &Path,
     profile: RadrootsPathProfile,
     override_selection: &CliPathOverrideSelection,
-) -> Result<PathBuf, RuntimeError> {
+) -> Result<Option<PathBuf>, RuntimeError> {
     match profile {
-        RadrootsPathProfile::InteractiveUser => Ok(current_dir.join(DEFAULT_WORKSPACE_CONFIG_PATH)),
+        RadrootsPathProfile::InteractiveUser => Ok(None),
         RadrootsPathProfile::RepoLocal => override_selection
             .repo_local_root
             .as_ref()
-            .map(|root| root.join(DEFAULT_CONFIG_FILE_NAME))
+            .map(|root| Some(root.join(DEFAULT_CONFIG_FILE_NAME)))
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
                     "{ENV_CLI_PATHS_REPO_LOCAL_ROOT} must be resolved when {ENV_CLI_PATHS_PROFILE}=repo_local"

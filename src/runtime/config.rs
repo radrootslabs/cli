@@ -467,7 +467,12 @@ impl RuntimeConfig {
     ) -> Result<Self, RuntimeError> {
         let paths = resolve_paths(env, env_file)?;
         let migration = resolve_migration(paths.clone(), env);
-        let workspace_config = load_cli_config_file(paths.workspace_config_path.as_path())?;
+        let workspace_config = paths
+            .workspace_config_path
+            .as_deref()
+            .map(load_cli_config_file)
+            .transpose()?
+            .flatten();
         let app_config = load_cli_config_file(paths.app_config_path.as_path())?;
         let account_secret_backend = resolve_account_secret_backend(args, env, env_file)?
             .unwrap_or(RadrootsSecretBackend::HostVault(
@@ -1521,9 +1526,7 @@ mod tests {
                 app_config_path: PathBuf::from(
                     "/home/tester/.radroots/config/apps/cli/config.toml"
                 ),
-                workspace_config_path: PathBuf::from(
-                    "/workspaces/radroots-cli/infra/local/runtime/radroots/config.toml"
-                ),
+                workspace_config_path: None,
                 app_data_root: PathBuf::from("/home/tester/.radroots/data/apps/cli"),
                 app_logs_root: PathBuf::from("/home/tester/.radroots/logs/apps/cli"),
                 shared_accounts_data_root: PathBuf::from(
@@ -2164,10 +2167,7 @@ target = "https://rpc.workspace.test/jsonrpc"
             resolved.paths.shared_identities_namespace,
             "shared/identities"
         );
-        assert_eq!(
-            resolved.paths.workspace_config_path,
-            PathBuf::from("/workspaces/radroots-cli/infra/local/runtime/radroots/config.toml")
-        );
+        assert_eq!(resolved.paths.workspace_config_path, None);
         assert_eq!(
             resolved.paths.app_data_root,
             PathBuf::from("/home/tester/.radroots/data/apps/cli")
@@ -2276,7 +2276,9 @@ target = "https://rpc.workspace.test/jsonrpc"
         );
         assert_eq!(
             resolved.paths.workspace_config_path,
-            PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/config.toml")
+            Some(PathBuf::from(
+                "/workspaces/radroots-cli/.local/radroots/dev/config.toml"
+            ))
         );
         assert_eq!(
             resolved.paths.app_data_root,
@@ -2337,7 +2339,9 @@ RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT=.local/radroots/dev
         );
         assert_eq!(
             resolved.paths.workspace_config_path,
-            PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/config.toml")
+            Some(PathBuf::from(
+                "/workspaces/radroots-cli/.local/radroots/dev/config.toml"
+            ))
         );
     }
 

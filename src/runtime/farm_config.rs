@@ -128,10 +128,16 @@ pub fn user_config_path(paths: &PathsConfig) -> Result<PathBuf, RuntimeError> {
 }
 
 pub fn workspace_config_path(paths: &PathsConfig) -> Result<PathBuf, RuntimeError> {
-    let Some(parent) = paths.workspace_config_path.parent() else {
+    let Some(path) = paths.workspace_config_path.as_ref() else {
+        return Err(RuntimeError::Config(format!(
+            "workspace farm config requires repo_local path profile, got `{}`",
+            paths.profile
+        )));
+    };
+    let Some(parent) = path.parent() else {
         return Err(RuntimeError::Config(format!(
             "workspace config path {} has no parent directory",
-            paths.workspace_config_path.display()
+            path.display()
         )));
     };
     Ok(parent.join("config/apps/cli").join(FARM_CONFIG_FILE_NAME))
@@ -350,19 +356,21 @@ mod tests {
     use tempfile::tempdir;
 
     fn sample_paths(profile: &str, root: &Path) -> PathsConfig {
+        let repo_local_root = root.join("infra/local/runtime/radroots");
         PathsConfig {
             profile: profile.to_owned(),
             profile_source: "test".to_owned(),
             allowed_profiles: vec!["interactive_user".to_owned(), "repo_local".to_owned()],
             root_source: "test".to_owned(),
-            repo_local_root: Some(root.join("infra/local/runtime/radroots")),
+            repo_local_root: Some(repo_local_root.clone()),
             repo_local_root_source: Some("test".to_owned()),
             subordinate_path_override_source: "test".to_owned(),
             app_namespace: "apps/cli".to_owned(),
             shared_accounts_namespace: "shared/accounts".to_owned(),
             shared_identities_namespace: "shared/identities".to_owned(),
             app_config_path: root.join("home/.radroots/config/apps/cli/config.toml"),
-            workspace_config_path: root.join("workspace/infra/local/runtime/radroots/config.toml"),
+            workspace_config_path: (profile == "repo_local")
+                .then(|| repo_local_root.join("config.toml")),
             app_data_root: root.join("home/.radroots/data/apps/cli"),
             app_logs_root: root.join("home/.radroots/logs/apps/cli"),
             shared_accounts_data_root: root.join("home/.radroots/data/shared/accounts"),
@@ -463,7 +471,7 @@ mod tests {
         let paths = sample_paths("repo_local", dir.path());
         let document = sample_document(FarmConfigScope::Workspace);
         let expected_path = PathBuf::from(dir.path())
-            .join("workspace/infra/local/runtime/radroots/config/apps/cli/farm.toml");
+            .join("infra/local/runtime/radroots/config/apps/cli/farm.toml");
 
         let written_path =
             write(&paths, FarmConfigScope::Workspace, &document).expect("write workspace config");

@@ -95,7 +95,11 @@ pub fn report(
 fn config_check(config: &RuntimeConfig) -> EvaluatedCheck {
     let detail = match (
         config.paths.app_config_path.exists(),
-        config.paths.workspace_config_path.exists(),
+        config
+            .paths
+            .workspace_config_path
+            .as_ref()
+            .is_some_and(|path| path.exists()),
     ) {
         (false, false) => "defaults active".to_owned(),
         (true, false) => "app config root present".to_owned(),

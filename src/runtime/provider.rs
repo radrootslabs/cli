@@ -768,9 +768,7 @@ mod tests {
                 shared_accounts_namespace: "shared/accounts".into(),
                 shared_identities_namespace: "shared/identities".into(),
                 app_config_path: PathBuf::from("/tmp/config/apps/cli/config.toml"),
-                workspace_config_path: PathBuf::from(
-                    "/tmp/workspace/infra/local/runtime/radroots/config.toml",
-                ),
+                workspace_config_path: None,
                 app_data_root: PathBuf::from("/tmp/data"),
                 app_logs_root: PathBuf::from("/tmp/logs"),
                 shared_accounts_data_root: PathBuf::from("/tmp/shared/accounts"),
