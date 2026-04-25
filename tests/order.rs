@@ -10,8 +10,16 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use assert_cmd::prelude::*;
+use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::{Value, json};
 use tempfile::tempdir;
+
+const ORDER_SELLER_PUBKEY: &str =
+    "1111111111111111111111111111111111111111111111111111111111111111";
+const ORDER_LISTING_ADDR: &str =
+    "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
+const ORDER_DRAFT_LISTING_ADDR: &str =
+    "30403:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
 
 fn data_root(workdir: &Path) -> std::path::PathBuf {
     if cfg!(windows) {
@@ -59,6 +67,90 @@ fn write_workspace_config(workdir: &Path, contents: &str) {
     let config_dir = workdir.join("infra/local/runtime/radroots");
     fs::create_dir_all(&config_dir).expect("workspace config dir");
     fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
+}
+
+fn init_local_replica(workdir: &Path) {
+    let init = order_command_in(workdir)
+        .args(["local", "init"])
+        .output()
+        .expect("run local init");
+    assert!(init.status.success());
+}
+
+fn seed_trade_product(workdir: &Path, product_id: &str, key: &str, listing_addr: Option<&str>) {
+    let replica_db = data_root(workdir).join("apps/cli/replica/replica.sqlite");
+    let executor = SqliteExecutor::open(&replica_db).expect("open replica db");
+    let now = "2026-04-07T00:00:00.000Z";
+    executor
+        .exec(
+            "INSERT INTO trade_product (id, created_at, updated_at, key, listing_addr, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            json!([
+                product_id,
+                now,
+                now,
+                key,
+                listing_addr,
+                "produce",
+                "Pasture Eggs",
+                "Fresh pasture-raised eggs",
+                "fresh",
+                "lot-a",
+                "standard",
+                2026,
+                36,
+                "each",
+                "dozen",
+                18,
+                4.5,
+                "USD",
+                1,
+                "each",
+                Value::Null
+            ])
+            .to_string()
+            .as_str(),
+        )
+        .expect("insert trade product");
+}
+
+fn assert_no_order_drafts(workdir: &Path) {
+    let drafts_dir = data_root(workdir).join("apps/cli/orders/drafts");
+    if !drafts_dir.exists() {
+        return;
+    }
+    assert!(
+        fs::read_dir(&drafts_dir)
+            .expect("read drafts dir")
+            .next()
+            .is_none()
+    );
+}
+
+fn run_order_lookup_failure(seed: impl FnOnce(&Path), expected_stderr: &str) {
+    let dir = tempdir().expect("tempdir");
+    seed(dir.path());
+
+    let output = order_command_in(dir.path())
+        .args([
+            "--json",
+            "order",
+            "new",
+            "--listing",
+            "pasture-eggs",
+            "--bin",
+            "bin-1",
+            "--qty",
+            "1",
+        ])
+        .output()
+        .expect("run order new failure");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains(expected_stderr),
+        "stderr did not contain `{expected_stderr}`: {stderr}"
+    );
+    assert_no_order_drafts(dir.path());
 }
 
 fn workspace_config_with_write_plane(extra: &str, url: &str) -> String {
@@ -369,6 +461,14 @@ fn order_new_creates_a_local_draft_with_selected_account_defaults() {
         .as_str()
         .expect("buyer pubkey");
 
+    init_local_replica(dir.path());
+    seed_trade_product(
+        dir.path(),
+        "00000000-0000-0000-0000-000000000901",
+        "pasture-eggs",
+        Some(ORDER_LISTING_ADDR),
+    );
+
     let output = order_command_in(dir.path())
         .args([
             "--json",
@@ -376,8 +476,6 @@ fn order_new_creates_a_local_draft_with_selected_account_defaults() {
             "new",
             "--listing",
             "pasture-eggs",
-            "--listing-addr",
-            "30402:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef:AAAAAAAAAAAAAAAAAAAAAg",
             "--bin",
             "bin-1",
             "--qty",
@@ -390,10 +488,8 @@ fn order_new_creates_a_local_draft_with_selected_account_defaults() {
     assert_eq!(json["state"], "draft_created");
     assert_eq!(json["buyer_account_id"], account_id);
     assert_eq!(json["buyer_pubkey"], buyer_pubkey);
-    assert_eq!(
-        json["seller_pubkey"],
-        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-    );
+    assert_eq!(json["listing_addr"], ORDER_LISTING_ADDR);
+    assert_eq!(json["seller_pubkey"], ORDER_SELLER_PUBKEY);
     assert_eq!(json["ready_for_submit"], true);
     assert_eq!(json["items"][0]["bin_id"], "bin-1");
     assert_eq!(json["items"][0]["bin_count"], 2);
@@ -403,7 +499,64 @@ fn order_new_creates_a_local_draft_with_selected_account_defaults() {
     let contents = fs::read_to_string(file).expect("read order draft");
     assert!(contents.contains("kind = \"order_draft_v1\""));
     assert!(contents.contains("listing_lookup = \"pasture-eggs\""));
+    assert!(contents.contains(&format!("listing_addr = \"{ORDER_LISTING_ADDR}\"")));
+    assert!(contents.contains(&format!("seller_pubkey = \"{ORDER_SELLER_PUBKEY}\"")));
     assert!(contents.contains(&format!("buyer_account_id = \"{account_id}\"")));
+}
+
+#[test]
+fn order_new_listing_lookup_failures_do_not_create_drafts() {
+    let _guard = order_test_guard();
+
+    run_order_lookup_failure(|_| {}, "requires local market data");
+    run_order_lookup_failure(
+        |workdir| {
+            init_local_replica(workdir);
+        },
+        "is not available in the local replica",
+    );
+    run_order_lookup_failure(
+        |workdir| {
+            init_local_replica(workdir);
+            seed_trade_product(
+                workdir,
+                "00000000-0000-0000-0000-000000000902",
+                "pasture-eggs",
+                None,
+            );
+        },
+        "is missing a canonical listing address",
+    );
+    run_order_lookup_failure(
+        |workdir| {
+            init_local_replica(workdir);
+            seed_trade_product(
+                workdir,
+                "00000000-0000-0000-0000-000000000903",
+                "pasture-eggs",
+                Some(ORDER_DRAFT_LISTING_ADDR),
+            );
+        },
+        "must reference a public NIP-99 listing",
+    );
+    run_order_lookup_failure(
+        |workdir| {
+            init_local_replica(workdir);
+            seed_trade_product(
+                workdir,
+                "00000000-0000-0000-0000-000000000904",
+                "pasture-eggs",
+                Some(ORDER_LISTING_ADDR),
+            );
+            seed_trade_product(
+                workdir,
+                "00000000-0000-0000-0000-000000000905",
+                "pasture-eggs",
+                Some(ORDER_LISTING_ADDR),
+            );
+        },
+        "matched 2 local listings",
+    );
 }
 
 #[test]
@@ -435,7 +588,15 @@ fn order_get_and_ls_read_local_drafts_and_report_missing() {
     let first_order_id = first_json["order_id"].as_str().expect("first order id");
 
     let second = order_command_in(dir.path())
-        .args(["--json", "order", "new", "--listing", "carrots"])
+        .args([
+            "--json",
+            "order",
+            "new",
+            "--listing",
+            "carrots",
+            "--listing-addr",
+            ORDER_LISTING_ADDR,
+        ])
         .output()
         .expect("run second order new");
     assert!(second.status.success());

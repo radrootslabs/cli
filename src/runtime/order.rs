@@ -10,11 +10,13 @@ use radroots_events::trade::{
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
+use radroots_replica_db::ReplicaSql;
 use radroots_runtime::BackoffConfig;
 use radroots_runtime_paths::{
     RadrootsPathOverrides, RadrootsPathProfile, RadrootsPathResolver, RadrootsRuntimeNamespace,
 };
 use radroots_sdk::config::RadrootsSdkConfig;
+use radroots_sql_core::SqliteExecutor;
 use rhi::features::trade_listing::state::{TradeListingRuntime, TradeListingRuntimeConfig};
 use rhi::identity_storage::load_service_identity;
 use rhi::rhi::{Rhi, start_subscriber};
@@ -144,8 +146,22 @@ impl WorkflowResolutionError {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedOrderListing {
+    listing_addr: String,
+    seller_pubkey: String,
+}
+
 pub fn scaffold(config: &RuntimeConfig, args: &OrderNewArgs) -> Result<OrderNewView, RuntimeError> {
     validate_scaffold_args(args)?;
+
+    let listing_lookup = normalize_optional(args.listing.as_deref());
+    let explicit_listing_addr = normalize_optional(args.listing_addr.as_deref());
+    let resolved_listing = resolve_order_listing(
+        config,
+        listing_lookup.as_deref(),
+        explicit_listing_addr.as_deref(),
+    )?;
 
     let selected_account = accounts::resolve_account(config)?;
     let buyer_account_id = selected_account
@@ -156,10 +172,11 @@ pub fn scaffold(config: &RuntimeConfig, args: &OrderNewArgs) -> Result<OrderNewV
         .map(|account| account.record.public_identity.public_key_hex.clone())
         .unwrap_or_default();
 
-    let listing_lookup = normalize_optional(args.listing.as_deref());
-    let listing_addr = normalize_optional(args.listing_addr.as_deref()).unwrap_or_default();
-    let parsed_listing_addr = parse_listing_addr(listing_addr.as_str());
-    let seller_pubkey = parsed_listing_addr
+    let listing_addr = resolved_listing
+        .as_ref()
+        .map(|listing| listing.listing_addr.clone())
+        .unwrap_or_default();
+    let seller_pubkey = resolved_listing
         .as_ref()
         .map(|listing| listing.seller_pubkey.clone())
         .unwrap_or_default();
@@ -873,6 +890,66 @@ fn validate_scaffold_args(args: &OrderNewArgs) -> Result<(), RuntimeError> {
             "`--qty` must be greater than zero".to_owned(),
         )),
         (Some(_), None) | (Some(_), Some(_)) | (None, None) => Ok(()),
+    }
+}
+
+fn resolve_order_listing(
+    config: &RuntimeConfig,
+    listing_lookup: Option<&str>,
+    explicit_listing_addr: Option<&str>,
+) -> Result<Option<ResolvedOrderListing>, RuntimeError> {
+    if let Some(listing_addr) = explicit_listing_addr {
+        let seller_pubkey = parse_listing_addr(listing_addr)
+            .map(|listing| listing.seller_pubkey)
+            .unwrap_or_default();
+        return Ok(Some(ResolvedOrderListing {
+            listing_addr: listing_addr.to_owned(),
+            seller_pubkey,
+        }));
+    }
+
+    let Some(listing_lookup) = listing_lookup else {
+        return Ok(None);
+    };
+
+    if !config.local.replica_db_path.exists() {
+        return Err(RuntimeError::Config(format!(
+            "order listing lookup `{listing_lookup}` requires local market data; run `radroots local init` and `radroots market update` before creating an order from a listing"
+        )));
+    }
+
+    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
+    let rows = db.trade_product_lookup(listing_lookup)?;
+    match rows.len() {
+        0 => Err(RuntimeError::Config(format!(
+            "listing `{listing_lookup}` is not available in the local replica; run `radroots market update` or pass `--listing-addr`"
+        ))),
+        1 => {
+            let row = rows.into_iter().next().expect("one row");
+            let listing_addr = normalize_optional(row.listing_addr.as_deref()).ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "listing `{listing_lookup}` is missing a canonical listing address; run `radroots market update` or pass `--listing-addr`"
+                ))
+            })?;
+            let parsed = parse_listing_addr(listing_addr.as_str()).map_err(|error| {
+                RuntimeError::Config(format!(
+                    "listing `{listing_lookup}` has invalid listing_addr: {error}; run `radroots market update` or pass `--listing-addr`"
+                ))
+            })?;
+            if parsed.kind != KIND_LISTING {
+                return Err(RuntimeError::Config(format!(
+                    "listing `{listing_lookup}` listing_addr must reference a public NIP-99 listing; run `radroots market update` or pass `--listing-addr`"
+                )));
+            }
+
+            Ok(Some(ResolvedOrderListing {
+                listing_addr,
+                seller_pubkey: parsed.seller_pubkey,
+            }))
+        }
+        count => Err(RuntimeError::Config(format!(
+            "listing lookup `{listing_lookup}` matched {count} local listings; use a unique product key or pass `--listing-addr`"
+        ))),
     }
 }
 
