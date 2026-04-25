@@ -1,7 +1,8 @@
+use crate::cli::AccountImportArgs;
 use crate::domain::runtime::{
-    AccountClearDefaultView, AccountImportView, AccountListView, AccountNewView,
-    AccountRemoveView, AccountSummaryView, AccountUseView, AccountWhoamiView,
-    CommandDisposition, CommandOutput, CommandView, IdentityPublicView,
+    AccountClearDefaultView, AccountImportView, AccountListView, AccountNewView, AccountRemoveView,
+    AccountSummaryView, AccountUseView, AccountWhoamiView, CommandDisposition, CommandOutput,
+    CommandView, IdentityPublicView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{
@@ -10,7 +11,6 @@ use crate::runtime::accounts::{
     import_public_identity, remove_account as remove_stored_account, resolve_account_resolution,
     select_account, snapshot, unresolved_account_reason,
 };
-use crate::cli::AccountImportArgs;
 use crate::runtime::config::RuntimeConfig;
 
 pub fn init(config: &RuntimeConfig) -> Result<AccountNewView, RuntimeError> {

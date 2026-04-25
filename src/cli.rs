@@ -1564,8 +1564,13 @@ mod tests {
             _ => panic!("unexpected command variant"),
         }
 
-        let import =
-            CliArgs::parse_from(["radroots", "account", "import", "./identity.json", "--default"]);
+        let import = CliArgs::parse_from([
+            "radroots",
+            "account",
+            "import",
+            "./identity.json",
+            "--default",
+        ]);
         match import.command {
             Command::Account(account) => match account.command {
                 AccountCommand::Import(args) => {
@@ -2240,16 +2245,14 @@ mod tests {
         assert_eq!(account_import.command.display_name(), "account import");
         assert!(!account_import.command.supports_dry_run());
 
-        let account_clear_default =
-            CliArgs::parse_from(["radroots", "account", "clear-default"]);
+        let account_clear_default = CliArgs::parse_from(["radroots", "account", "clear-default"]);
         assert_eq!(
             account_clear_default.command.display_name(),
             "account clear-default"
         );
         assert!(!account_clear_default.command.supports_dry_run());
 
-        let account_remove =
-            CliArgs::parse_from(["radroots", "account", "remove", "market-main"]);
+        let account_remove = CliArgs::parse_from(["radroots", "account", "remove", "market-main"]);
         assert_eq!(account_remove.command.display_name(), "account remove");
         assert!(!account_remove.command.supports_dry_run());
 

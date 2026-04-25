@@ -159,15 +159,18 @@ fn account_import_json_creates_watch_only_account_without_secret_material() {
 
     let secrets_dir = secrets_root(dir.path()).join("shared/accounts");
     assert!(!secrets_dir.join(format!("{account_id}.secret")).exists());
-    assert!(!secrets_dir.join(format!("{account_id}.secret.json")).exists());
+    assert!(
+        !secrets_dir
+            .join(format!("{account_id}.secret.json"))
+            .exists()
+    );
 
     let whoami = cli_command_in(dir.path())
         .args(["--json", "account", "whoami"])
         .output()
         .expect("run account whoami");
     assert!(whoami.status.success());
-    let whoami_json: Value =
-        serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
+    let whoami_json: Value = serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
     assert_eq!(
         whoami_json["account_resolution"]["resolved_account"]["id"],
         account_id
@@ -342,10 +345,12 @@ fn account_clear_default_json_clears_stored_default_without_removing_accounts() 
         .output()
         .expect("run account whoami");
     assert_eq!(whoami.status.code(), Some(3));
-    let whoami_json: Value =
-        serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
+    let whoami_json: Value = serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
     assert_eq!(whoami_json["account_resolution"]["source"], "none");
-    assert_eq!(whoami_json["account_resolution"]["default_account"], Value::Null);
+    assert_eq!(
+        whoami_json["account_resolution"]["default_account"],
+        Value::Null
+    );
 }
 
 #[test]
@@ -508,10 +513,12 @@ fn account_remove_json_clears_default_when_removing_default_account() {
         .output()
         .expect("run account whoami");
     assert_eq!(whoami.status.code(), Some(3));
-    let whoami_json: Value =
-        serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
+    let whoami_json: Value = serde_json::from_slice(whoami.stdout.as_slice()).expect("whoami json");
     assert_eq!(whoami_json["account_resolution"]["source"], "none");
-    assert_eq!(whoami_json["account_resolution"]["default_account"], Value::Null);
+    assert_eq!(
+        whoami_json["account_resolution"]["default_account"],
+        Value::Null
+    );
 }
 
 #[test]

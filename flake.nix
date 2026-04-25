@@ -103,13 +103,20 @@
           };
           fmt = mkApp "fmt" {
             text = ''
-              cargo fmt --all --check
+              cargo fmt --package radroots_cli --check
+            '';
+          };
+          release-acceptance = mkApp "release-acceptance" {
+            text = ''
+              cargo fmt --package radroots_cli --check
+              cargo metadata --format-version 1 --no-deps
+              cargo check
+              cargo test -j1 -- --test-threads=1
             '';
           };
           test = mkApp "test" {
             text = ''
-              # serialize integration test binaries; plain cargo test is flaky here
-              cargo test -j1
+              cargo test -j1 -- --test-threads=1
             '';
           };
         }

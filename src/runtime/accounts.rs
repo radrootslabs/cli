@@ -131,7 +131,8 @@ pub fn import_public_identity(
             format_identity_error(error)
         ))
     })?;
-    let imported_account_id = manager.upsert_public_identity(public_identity, None, make_default)?;
+    let imported_account_id =
+        manager.upsert_public_identity(public_identity, None, make_default)?;
     let snapshot = snapshot_from_manager(&manager)?;
     snapshot_account(
         &snapshot,
@@ -207,7 +208,11 @@ pub fn clear_default_account(
 ) -> Result<AccountClearDefaultResult, RuntimeError> {
     let manager = account_manager(config)?;
     let snapshot = snapshot_from_manager(&manager)?;
-    let cleared_account = snapshot.accounts.iter().find(|account| account.is_default).cloned();
+    let cleared_account = snapshot
+        .accounts
+        .iter()
+        .find(|account| account.is_default)
+        .cloned();
     manager.clear_default_account()?;
     let remaining_account_count = snapshot_from_manager(&manager)?.accounts.len();
     Ok(AccountClearDefaultResult {
