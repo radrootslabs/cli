@@ -497,6 +497,26 @@ mod tests {
     }
 
     #[test]
+    fn workspace_config_write_requires_repo_local_profile() {
+        let dir = tempdir().expect("tempdir");
+        let paths = sample_paths("interactive_user", dir.path());
+        let document = sample_document(FarmConfigScope::Workspace);
+        let repo_local_root = dir.path().join("infra/local/runtime/radroots");
+
+        let error = write(&paths, FarmConfigScope::Workspace, &document)
+            .expect_err("interactive workspace farm config should fail");
+
+        match error {
+            RuntimeError::Config(message) => {
+                assert!(message.contains("requires repo_local path profile"));
+                assert!(message.contains("interactive_user"));
+            }
+            other => panic!("expected config error, got {other:?}"),
+        }
+        assert!(!repo_local_root.exists());
+    }
+
+    #[test]
     fn load_rejects_scope_mismatch() {
         let dir = tempdir().expect("tempdir");
         let paths = sample_paths("repo_local", dir.path());
