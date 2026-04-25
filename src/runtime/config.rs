@@ -29,7 +29,7 @@ const DEFAULT_RPC_URL: &str = "http://127.0.0.1:7070";
 const CLI_HOST_VAULT_POLICY: &str = "desktop";
 const CLI_DEFAULT_SECRET_BACKEND: &str = "host_vault";
 const CLI_DEFAULT_SECRET_FALLBACK: &str = "encrypted_file";
-const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] = &["host_vault", "encrypted_file", "memory"];
+const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] = &["host_vault", "encrypted_file"];
 const CLI_USES_PROTECTED_STORE: bool = true;
 const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
 const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
@@ -1332,11 +1332,16 @@ fn parse_account_secret_fallback(
     key: &str,
     value: &str,
 ) -> Result<Option<RadrootsSecretBackend>, RuntimeError> {
-    if value.trim().eq_ignore_ascii_case("none") {
-        return Ok(None);
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok(None),
+        "host_vault" => Ok(Some(RadrootsSecretBackend::HostVault(
+            RadrootsHostVaultPolicy::desktop(),
+        ))),
+        "encrypted_file" => Ok(Some(RadrootsSecretBackend::EncryptedFile)),
+        other => Err(RuntimeError::Config(format!(
+            "{key} must be `host_vault`, `encrypted_file`, or `none`, got `{other}`"
+        ))),
     }
-
-    parse_account_secret_backend(key, value).map(Some)
 }
 
 fn parse_account_secret_backend(
@@ -1348,9 +1353,8 @@ fn parse_account_secret_backend(
             RadrootsHostVaultPolicy::desktop(),
         )),
         "encrypted_file" => Ok(RadrootsSecretBackend::EncryptedFile),
-        "memory" => Ok(RadrootsSecretBackend::Memory),
         other => Err(RuntimeError::Config(format!(
-            "{key} must be `host_vault`, `encrypted_file`, `memory`, or `none` for fallback, got `{other}`"
+            "{key} must be `host_vault` or `encrypted_file`, got `{other}`"
         ))),
     }
 }
@@ -1556,11 +1560,7 @@ mod tests {
             AccountSecretContractConfig {
                 default_backend: "host_vault".to_owned(),
                 default_fallback: Some("encrypted_file".to_owned()),
-                allowed_backends: vec![
-                    "host_vault".to_owned(),
-                    "encrypted_file".to_owned(),
-                    "memory".to_owned(),
-                ],
+                allowed_backends: vec!["host_vault".to_owned(), "encrypted_file".to_owned(),],
                 host_vault_policy: Some("desktop".to_owned()),
                 uses_protected_store: true,
             }

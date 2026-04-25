@@ -237,6 +237,13 @@ fn config_show_json_reports_default_bootstrap_state() {
         "encrypted_file"
     );
     assert_eq!(
+        json["account"]["secret_backend"]["allowed_backends"]
+            .as_array()
+            .expect("allowed backends")
+            .len(),
+        2
+    );
+    assert_eq!(
         json["account"]["secret_backend"]["allowed_backends"][0],
         "host_vault"
     );

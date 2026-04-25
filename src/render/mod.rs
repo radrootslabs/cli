@@ -4345,11 +4345,7 @@ mod tests {
                 account_secret_contract: AccountSecretContractConfig {
                     default_backend: "host_vault".into(),
                     default_fallback: Some("encrypted_file".into()),
-                    allowed_backends: vec![
-                        "host_vault".into(),
-                        "encrypted_file".into(),
-                        "memory".into(),
-                    ],
+                    allowed_backends: vec!["host_vault".into(), "encrypted_file".into()],
                     host_vault_policy: Some("desktop".into()),
                     uses_protected_store: true,
                 },
@@ -4506,11 +4502,7 @@ mod tests {
                     account_secret_contract: AccountSecretContractConfig {
                         default_backend: "host_vault".into(),
                         default_fallback: Some("encrypted_file".into()),
-                        allowed_backends: vec![
-                            "host_vault".into(),
-                            "encrypted_file".into(),
-                            "memory".into(),
-                        ],
+                        allowed_backends: vec!["host_vault".into(), "encrypted_file".into()],
                         host_vault_policy: Some("desktop".into()),
                         uses_protected_store: true,
                     },

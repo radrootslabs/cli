@@ -211,9 +211,46 @@ fn account_new_rejects_plaintext_fallback_backend() {
 
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
-    assert!(
-        stderr.contains("must be `host_vault`, `encrypted_file`, `memory`, or `none` for fallback")
-    );
+    assert!(stderr.contains("must be `host_vault`, `encrypted_file`, or `none`"));
+}
+
+#[test]
+fn account_new_rejects_memory_secret_backend_without_creating_store_state() {
+    let dir = tempdir().expect("tempdir");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
+
+    let output = cli_command_in(dir.path())
+        .env("RADROOTS_ACCOUNT_SECRET_BACKEND", "memory")
+        .args(["account", "new"])
+        .output()
+        .expect("run account new");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!store_path.exists());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("RADROOTS_ACCOUNT_SECRET_BACKEND"));
+    assert!(stderr.contains("must be `host_vault` or `encrypted_file`"));
+}
+
+#[test]
+fn account_new_rejects_memory_secret_fallback_without_creating_store_state() {
+    let dir = tempdir().expect("tempdir");
+    let store_path = data_root(dir.path()).join("shared/accounts/store.json");
+
+    let output = cli_command_in(dir.path())
+        .env("RADROOTS_ACCOUNT_SECRET_BACKEND", "host_vault")
+        .env("RADROOTS_ACCOUNT_SECRET_FALLBACK", "memory")
+        .args(["account", "new"])
+        .output()
+        .expect("run account new");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!store_path.exists());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("RADROOTS_ACCOUNT_SECRET_FALLBACK"));
+    assert!(stderr.contains("must be `host_vault`, `encrypted_file`, or `none`"));
 }
 
 #[test]
