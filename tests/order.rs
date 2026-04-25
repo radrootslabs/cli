@@ -63,10 +63,10 @@ fn order_command_in(workdir: &Path) -> Command {
     command
 }
 
-fn write_workspace_config(workdir: &Path, contents: &str) {
-    let config_dir = workdir.join("infra/local/runtime/radroots");
-    fs::create_dir_all(&config_dir).expect("workspace config dir");
-    fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
+fn write_user_config(workdir: &Path, contents: &str) {
+    let config_dir = workdir.join("home/.radroots/config/apps/cli");
+    fs::create_dir_all(&config_dir).expect("user config dir");
+    fs::write(config_dir.join("config.toml"), contents).expect("write user config");
 }
 
 fn init_local_replica(workdir: &Path) {
@@ -153,7 +153,7 @@ fn run_order_lookup_failure(seed: impl FnOnce(&Path), expected_stderr: &str) {
     assert_no_order_drafts(dir.path());
 }
 
-fn workspace_config_with_write_plane(extra: &str, url: &str) -> String {
+fn config_with_write_plane(extra: &str, url: &str) -> String {
     let mut rendered = String::new();
     if !extra.trim().is_empty() {
         rendered.push_str(extra.trim());
@@ -823,9 +823,9 @@ fn order_submit_persists_submission_metadata_and_reports_job() {
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+        config_with_write_plane("", server.url().as_str()).as_str(),
     );
 
     let submit_output = order_command_in(dir.path())
@@ -939,9 +939,9 @@ fn order_submit_quiet_reports_submitted_order_id() {
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+        config_with_write_plane("", server.url().as_str()).as_str(),
     );
 
     let submit_output = order_command_in(dir.path())
@@ -1036,9 +1036,9 @@ fn order_submit_watch_appends_human_watch_snapshots() {
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+        config_with_write_plane("", server.url().as_str()).as_str(),
     );
 
     let output = order_command_in(dir.path())
@@ -1286,9 +1286,9 @@ fn order_submit_uses_myc_binding_before_resolving_daemon_signer_session() {
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane(
+        config_with_write_plane(
             format!(
                 r#"
 [[capability_binding]]
@@ -1428,9 +1428,9 @@ fn order_submit_rejects_myc_binding_that_resolves_the_wrong_actor() {
             });
         panic!("daemon write path should not be reached");
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane(
+        config_with_write_plane(
             format!(
                 r#"
 [[capability_binding]]
@@ -1537,9 +1537,9 @@ fn order_submit_without_unique_matching_signer_session_exits_unconfigured() {
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+        config_with_write_plane("", server.url().as_str()).as_str(),
     );
 
     let submit_output = order_command_in(dir.path())
@@ -1613,9 +1613,9 @@ fn order_submit_rejects_requested_session_that_mismatches_buyer_pubkey() {
             other => panic!("unexpected mock rpc method {other}"),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+        config_with_write_plane("", server.url().as_str()).as_str(),
     );
 
     let submit_output = order_command_in(dir.path())

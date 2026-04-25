@@ -48,10 +48,10 @@ fn cli_command_in(workdir: &Path) -> Command {
     command
 }
 
-fn write_workspace_config(workdir: &Path, contents: &str) {
-    let config_dir = workdir.join("infra/local/runtime/radroots");
-    fs::create_dir_all(&config_dir).expect("workspace config dir");
-    fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
+fn write_user_config(workdir: &Path, contents: &str) {
+    let config_dir = workdir.join("home/.radroots/config/apps/cli");
+    fs::create_dir_all(&config_dir).expect("user config dir");
+    fs::write(config_dir.join("config.toml"), contents).expect("write user config");
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn status_reports_farm_publish_need_when_core_state_is_ready() {
         .expect("run local init");
     assert!(local.status.success());
 
-    write_workspace_config(
+    write_user_config(
         dir.path(),
         "[relay]\nurls = [\"wss://relay.one\"]\npublish_policy = \"any\"\n",
     );

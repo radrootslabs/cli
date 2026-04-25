@@ -59,13 +59,13 @@ fn cli_command_in(workdir: &Path) -> Command {
     command
 }
 
-fn write_workspace_config(workdir: &Path, contents: &str) {
-    let config_dir = workdir.join("infra/local/runtime/radroots");
-    fs::create_dir_all(&config_dir).expect("workspace config dir");
-    fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
+fn write_user_config(workdir: &Path, contents: &str) {
+    let config_dir = workdir.join("home/.radroots/config/apps/cli");
+    fs::create_dir_all(&config_dir).expect("user config dir");
+    fs::write(config_dir.join("config.toml"), contents).expect("write user config");
 }
 
-fn workspace_config_with_write_plane(extra: &str, url: &str) -> String {
+fn config_with_write_plane(extra: &str, url: &str) -> String {
     let mut rendered = String::new();
     if !extra.trim().is_empty() {
         rendered.push_str(extra.trim());
@@ -501,9 +501,9 @@ fn listing_publish_and_update_use_durable_bridge_publish() {
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+        config_with_write_plane("", server.url().as_str()).as_str(),
     );
 
     let publish_output = cli_command_in(dir.path())
@@ -652,9 +652,9 @@ fn listing_archive_and_dry_run_are_truthful() {
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+        config_with_write_plane("", server.url().as_str()).as_str(),
     );
 
     let archive_output = cli_command_in(dir.path())
@@ -824,9 +824,9 @@ fn listing_publish_uses_myc_binding_before_resolving_daemon_signer_session() {
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane(
+        config_with_write_plane(
             format!(
                 r#"
 [[capability_binding]]
@@ -975,9 +975,9 @@ fn listing_publish_rejects_myc_binding_that_resolves_the_wrong_actor() {
         recorded.lock().expect("recorded").push(body.clone());
         MockRpcResponse::rpc_error(-32601, "daemon write path should not be reached")
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane(
+        config_with_write_plane(
             format!(
                 r#"
 [[capability_binding]]
@@ -1107,9 +1107,9 @@ fn listing_publish_rejects_daemon_session_with_mismatched_myc_authority() {
             _ => MockRpcResponse::rpc_error(-32601, "unexpected rpc method"),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane(
+        config_with_write_plane(
             format!(
                 r#"
 [[capability_binding]]
@@ -1217,9 +1217,9 @@ fn listing_publish_without_matching_signer_session_exits_unconfigured() {
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+        config_with_write_plane("", server.url().as_str()).as_str(),
     );
 
     let publish_output = cli_command_in(dir.path())
@@ -1314,9 +1314,9 @@ fn listing_publish_rejects_requested_session_that_mismatches_seller_pubkey() {
             other => MockRpcResponse::rpc_error(-32601, &format!("unexpected method: {other}")),
         }
     });
-    write_workspace_config(
+    write_user_config(
         dir.path(),
-        workspace_config_with_write_plane("", server.url().as_str()).as_str(),
+        config_with_write_plane("", server.url().as_str()).as_str(),
     );
 
     let publish_output = cli_command_in(dir.path())

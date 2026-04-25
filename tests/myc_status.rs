@@ -42,10 +42,10 @@ fn cli_command_in(workdir: &Path) -> Command {
     command
 }
 
-fn write_workspace_config(workdir: &Path, contents: &str) {
-    let config_dir = workdir.join("infra/local/runtime/radroots");
-    fs::create_dir_all(&config_dir).expect("workspace config dir");
-    fs::write(config_dir.join("config.toml"), contents).expect("write workspace config");
+fn write_user_config(workdir: &Path, contents: &str) {
+    let config_dir = workdir.join("home/.radroots/config/apps/cli");
+    fs::create_dir_all(&config_dir).expect("user config dir");
+    fs::write(config_dir.join("config.toml"), contents).expect("write user config");
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn signer_status_reports_ready_for_configured_myc_managed_account_binding() {
     let signer_session_ref = payload["signer_backend"]["remote_sessions"][0]["connection_id"]
         .as_str()
         .expect("signer session ref");
-    write_workspace_config(
+    write_user_config(
         dir.path(),
         format!(
             r#"
@@ -234,7 +234,7 @@ signer_session_ref = "{signer_session_ref}"
     let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
     assert_eq!(json["mode"], "myc");
     assert_eq!(json["state"], "ready");
-    assert_eq!(json["source"], "workspace config [[capability_binding]]");
+    assert_eq!(json["source"], "user config [[capability_binding]]");
     assert_eq!(json["signer_account_id"], managed_account_ref);
     assert_eq!(json["binding"]["state"], "ready");
     assert_eq!(
@@ -287,7 +287,7 @@ fn signer_status_reports_unsupported_for_explicit_endpoint_binding() {
         dir.path(),
         successful_status_script(sample_status_payload(true).to_string()).as_str(),
     );
-    write_workspace_config(
+    write_user_config(
         dir.path(),
         r#"
 [[capability_binding]]
@@ -331,7 +331,7 @@ fn signer_status_reports_ambiguous_for_accountless_myc_binding() {
         dir.path(),
         successful_status_script(payload.to_string()).as_str(),
     );
-    write_workspace_config(
+    write_user_config(
         dir.path(),
         r#"
 [[capability_binding]]
@@ -377,7 +377,7 @@ fn signer_status_reports_unauthorized_for_session_without_sign_event_permission(
     let signer_session_ref = payload["signer_backend"]["remote_sessions"][0]["connection_id"]
         .as_str()
         .expect("signer session ref");
-    write_workspace_config(
+    write_user_config(
         dir.path(),
         format!(
             r#"
@@ -429,7 +429,7 @@ fn signer_status_reports_unavailable_for_missing_bound_session() {
     let managed_account_ref = payload["signer_backend"]["local_signer"]["account_id"]
         .as_str()
         .expect("managed account ref");
-    write_workspace_config(
+    write_user_config(
         dir.path(),
         format!(
             r#"

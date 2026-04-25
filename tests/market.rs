@@ -190,13 +190,13 @@ fn market_update_stays_honest_about_unavailable_ingest() {
         .expect("run local init");
     assert!(init.status.success());
 
-    let config_dir = dir.path().join("infra/local/runtime/radroots");
-    fs::create_dir_all(&config_dir).expect("workspace config dir");
+    let config_dir = dir.path().join("home/.radroots/config/apps/cli");
+    fs::create_dir_all(&config_dir).expect("user config dir");
     fs::write(
         config_dir.join("config.toml"),
         "[relay]\nurls = [\"wss://relay.one\"]\npublish_policy = \"any\"\n",
     )
-    .expect("write workspace config");
+    .expect("write user config");
 
     let json_output = cli_command_in(dir.path())
         .args(["--json", "market", "update"])

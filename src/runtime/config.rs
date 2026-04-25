@@ -1931,23 +1931,33 @@ RADROOTS_CLI_LOGGING_STDOUT=false
     fn user_relay_config_overrides_workspace_relay_config() {
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let app_config_dir = repo_local_root.join("config/apps/cli");
         let user_home = temp.path().join("home");
-        fs::create_dir_all(workspace_root.join("infra/local/runtime/radroots"))
-            .expect("workspace config dir");
-        fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
+        fs::create_dir_all(&repo_local_root).expect("workspace config dir");
+        fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
-            workspace_root.join("infra/local/runtime/radroots/config.toml"),
+            repo_local_root.join("config.toml"),
             "[relay]\nurls = [\"wss://relay.workspace\"]\npublish_policy = \"any\"\n",
         )
         .expect("write workspace config");
         fs::write(
-            user_home.join(".radroots/config/apps/cli/config.toml"),
+            app_config_dir.join("config.toml"),
             "[relay]\nurls = [\"wss://relay.user\", \"wss://relay.workspace\"]\n",
         )
         .expect("write user config");
 
         let env = MapEnvironment {
-            values: BTreeMap::new(),
+            values: BTreeMap::from([
+                (
+                    "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
+                    "repo_local".to_owned(),
+                ),
+                (
+                    "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT".to_owned(),
+                    repo_local_root.display().to_string(),
+                ),
+            ]),
             current_dir: workspace_root,
             path_resolver: RadrootsPathResolver::new(
                 RadrootsPlatform::Linux,
@@ -1978,23 +1988,33 @@ RADROOTS_CLI_LOGGING_STDOUT=false
     fn user_hyf_config_overrides_workspace_hyf_config() {
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let app_config_dir = repo_local_root.join("config/apps/cli");
         let user_home = temp.path().join("home");
-        fs::create_dir_all(workspace_root.join("infra/local/runtime/radroots"))
-            .expect("workspace config dir");
-        fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
+        fs::create_dir_all(&repo_local_root).expect("workspace config dir");
+        fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
-            workspace_root.join("infra/local/runtime/radroots/config.toml"),
+            repo_local_root.join("config.toml"),
             "[hyf]\nenabled = false\nexecutable = \"workspace-hyfd\"\n",
         )
         .expect("write workspace config");
         fs::write(
-            user_home.join(".radroots/config/apps/cli/config.toml"),
+            app_config_dir.join("config.toml"),
             "[hyf]\nenabled = true\nexecutable = \"user-hyfd\"\n",
         )
         .expect("write user config");
 
         let env = MapEnvironment {
-            values: BTreeMap::new(),
+            values: BTreeMap::from([
+                (
+                    "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
+                    "repo_local".to_owned(),
+                ),
+                (
+                    "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT".to_owned(),
+                    repo_local_root.display().to_string(),
+                ),
+            ]),
             current_dir: workspace_root,
             path_resolver: RadrootsPathResolver::new(
                 RadrootsPlatform::Linux,
@@ -2023,12 +2043,13 @@ RADROOTS_CLI_LOGGING_STDOUT=false
     fn user_capability_binding_overrides_workspace_binding() {
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let app_config_dir = repo_local_root.join("config/apps/cli");
         let user_home = temp.path().join("home");
-        fs::create_dir_all(workspace_root.join("infra/local/runtime/radroots"))
-            .expect("workspace config dir");
-        fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
+        fs::create_dir_all(&repo_local_root).expect("workspace config dir");
+        fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
-            workspace_root.join("infra/local/runtime/radroots/config.toml"),
+            repo_local_root.join("config.toml"),
             r#"
 [[capability_binding]]
 capability = "inference.hyf_stdio"
@@ -2039,7 +2060,7 @@ target = "workspace-hyf"
         )
         .expect("write workspace config");
         fs::write(
-            user_home.join(".radroots/config/apps/cli/config.toml"),
+            app_config_dir.join("config.toml"),
             r#"
 [[capability_binding]]
 capability = "inference.hyf_stdio"
@@ -2051,7 +2072,16 @@ target = "bin/user-hyfd"
         .expect("write user config");
 
         let env = MapEnvironment {
-            values: BTreeMap::new(),
+            values: BTreeMap::from([
+                (
+                    "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
+                    "repo_local".to_owned(),
+                ),
+                (
+                    "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT".to_owned(),
+                    repo_local_root.display().to_string(),
+                ),
+            ]),
             current_dir: workspace_root,
             path_resolver: RadrootsPathResolver::new(
                 RadrootsPlatform::Linux,
@@ -2087,12 +2117,12 @@ target = "bin/user-hyfd"
     fn invalid_capability_binding_provider_fails() {
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
         let user_home = temp.path().join("home");
-        fs::create_dir_all(workspace_root.join("infra/local/runtime/radroots"))
-            .expect("workspace config dir");
+        fs::create_dir_all(&repo_local_root).expect("workspace config dir");
         fs::create_dir_all(user_home.join(".radroots/config/apps/cli")).expect("app config dir");
         fs::write(
-            workspace_root.join("infra/local/runtime/radroots/config.toml"),
+            repo_local_root.join("config.toml"),
             r#"
 [[capability_binding]]
 capability = "write_plane.trade_jsonrpc"
@@ -2104,7 +2134,16 @@ target = "https://rpc.workspace.test/jsonrpc"
         .expect("write workspace config");
 
         let env = MapEnvironment {
-            values: BTreeMap::new(),
+            values: BTreeMap::from([
+                (
+                    "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
+                    "repo_local".to_owned(),
+                ),
+                (
+                    "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT".to_owned(),
+                    repo_local_root.display().to_string(),
+                ),
+            ]),
             current_dir: workspace_root,
             path_resolver: RadrootsPathResolver::new(
                 RadrootsPlatform::Linux,

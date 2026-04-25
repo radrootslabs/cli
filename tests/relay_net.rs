@@ -50,6 +50,8 @@ fn relay_ls_json_reports_workspace_configured_relays() {
     .expect("write workspace config");
 
     let output = cli_command_in(dir.path())
+        .env("RADROOTS_CLI_PATHS_PROFILE", "repo_local")
+        .env("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT", &config_dir)
         .args(["--json", "relay", "ls"])
         .output()
         .expect("run relay ls");

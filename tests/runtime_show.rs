@@ -640,6 +640,8 @@ fn config_show_json_reads_workspace_relay_config() {
     .expect("write workspace config");
 
     let output = runtime_show_command_in(dir.path())
+        .env("RADROOTS_CLI_PATHS_PROFILE", "repo_local")
+        .env("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT", &config_dir)
         .args(["--json", "config", "show"])
         .output()
         .expect("run config show");
@@ -665,6 +667,8 @@ fn config_show_reads_workspace_rpc_config() {
     .expect("write workspace config");
 
     let output = runtime_show_command_in(dir.path())
+        .env("RADROOTS_CLI_PATHS_PROFILE", "repo_local")
+        .env("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT", &config_dir)
         .args(["--json", "config", "show"])
         .output()
         .expect("run config show");
@@ -679,7 +683,7 @@ fn config_show_reads_workspace_rpc_config() {
 fn config_show_reports_explicit_capability_bindings() {
     let dir = tempdir().expect("tempdir");
     let workspace_config_dir = dir.path().join("infra/local/runtime/radroots");
-    let user_config_dir = config_root(dir.path()).join("apps/cli");
+    let user_config_dir = workspace_config_dir.join("config/apps/cli");
     fs::create_dir_all(&workspace_config_dir).expect("workspace config dir");
     fs::create_dir_all(&user_config_dir).expect("user config dir");
     fs::write(
@@ -726,6 +730,8 @@ target = "bin/hyfd-user"
     .expect("write user config");
 
     let output = runtime_show_command_in(dir.path())
+        .env("RADROOTS_CLI_PATHS_PROFILE", "repo_local")
+        .env("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT", &workspace_config_dir)
         .args(["--json", "config", "show"])
         .output()
         .expect("run config show");
