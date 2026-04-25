@@ -14,6 +14,9 @@ use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+const ADDRESS_BACKED_LISTING_ADDR: &str =
+    "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
+
 fn data_root(workdir: &Path) -> std::path::PathBuf {
     if cfg!(windows) {
         workdir.join("local").join("Radroots").join("data")
@@ -368,6 +371,7 @@ fn listing_get_reads_real_local_rows_and_reports_missing() {
         dir.path(),
         "00000000-0000-0000-0000-000000000301",
         "pasture-eggs",
+        Some(ADDRESS_BACKED_LISTING_ADDR),
         "protein",
         "Pasture Eggs",
         "Fresh pasture-raised eggs collected daily.",
@@ -384,6 +388,7 @@ fn listing_get_reads_real_local_rows_and_reports_missing() {
     let json: Value = serde_json::from_slice(json_output.stdout.as_slice()).expect("json");
     assert_eq!(json["state"], "ready");
     assert_eq!(json["product_key"], "pasture-eggs");
+    assert_eq!(json["listing_addr"], ADDRESS_BACKED_LISTING_ADDR);
     assert_eq!(json["title"], "Pasture Eggs");
     assert_eq!(json["location_primary"], "Marshall");
     assert_eq!(json["provenance"]["origin"], "local_replica.trade_product");
@@ -1722,6 +1727,7 @@ fn seed_trade_product(
     workdir: &Path,
     product_id: &str,
     key: &str,
+    listing_addr: Option<&str>,
     category: &str,
     title: &str,
     summary: &str,
@@ -1734,12 +1740,13 @@ fn seed_trade_product(
     let now = "2026-04-07T00:00:00.000Z";
     executor
         .exec(
-            "INSERT INTO trade_product (id, created_at, updated_at, key, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            "INSERT INTO trade_product (id, created_at, updated_at, key, listing_addr, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
             json!([
                 product_id,
                 now,
                 now,
                 key,
+                listing_addr,
                 category,
                 title,
                 summary,

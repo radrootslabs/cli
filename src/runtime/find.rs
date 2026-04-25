@@ -82,6 +82,7 @@ pub fn search(config: &RuntimeConfig, args: &FindArgs) -> Result<FindView, Runti
         .map(|row| FindResultView {
             id: row.id,
             product_key: row.key,
+            listing_addr: row.listing_addr.and_then(non_empty),
             title: row.title,
             category: row.category,
             summary: non_empty(row.summary),

@@ -6,6 +6,9 @@ use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+const ADDRESS_BACKED_LISTING_ADDR: &str =
+    "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
+
 fn data_root(workdir: &Path) -> std::path::PathBuf {
     if cfg!(windows) {
         workdir.join("local").join("Radroots").join("data")
@@ -77,6 +80,7 @@ fn find_returns_json_and_ndjson_from_local_market_rows() {
         dir.path(),
         "00000000-0000-0000-0000-000000000101",
         "heirloom-tomato",
+        Some(ADDRESS_BACKED_LISTING_ADDR),
         "produce",
         "Heirloom Tomato",
         "Bright red slicing tomatoes",
@@ -88,6 +92,7 @@ fn find_returns_json_and_ndjson_from_local_market_rows() {
         dir.path(),
         "00000000-0000-0000-0000-000000000102",
         "tomato-sauce",
+        None,
         "prepared",
         "Tomato Sauce",
         "Slow cooked tomato sauce",
@@ -109,6 +114,10 @@ fn find_returns_json_and_ndjson_from_local_market_rows() {
         "local_replica.trade_product"
     );
     assert_eq!(json["results"][0]["location_primary"], "Asheville");
+    assert_eq!(
+        json["results"][0]["listing_addr"],
+        ADDRESS_BACKED_LISTING_ADDR
+    );
 
     let ndjson_output = cli_command_in(dir.path())
         .args(["--ndjson", "find", "tomato"])
@@ -119,6 +128,7 @@ fn find_returns_json_and_ndjson_from_local_market_rows() {
     let lines = stdout.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 2);
     assert!(lines[0].contains("\"title\":\"Heirloom Tomato\""));
+    assert!(lines[0].contains("\"listing_addr\""));
     assert!(lines[1].contains("\"title\":\"Tomato Sauce\""));
 }
 
@@ -135,6 +145,7 @@ fn find_human_output_uses_market_cards_without_internal_footer() {
         dir.path(),
         "00000000-0000-0000-0000-000000000103",
         "fresh-eggs",
+        None,
         "protein",
         "Fresh Eggs",
         "Pasture-raised eggs",
@@ -196,6 +207,7 @@ fn find_uses_hyf_query_rewrite_when_available() {
         dir.path(),
         "00000000-0000-0000-0000-000000000104",
         "fresh-eggs",
+        None,
         "protein",
         "Fresh Eggs",
         "Pasture-raised eggs",
@@ -266,6 +278,7 @@ fn find_human_output_tiers_change_information_budget() {
         dir.path(),
         "00000000-0000-0000-0000-000000000105",
         "fresh-eggs",
+        None,
         "protein",
         "Fresh Eggs",
         "Pasture-raised eggs",
@@ -331,6 +344,7 @@ fn find_uses_hyf_query_rewrite_without_status_preflight() {
         dir.path(),
         "00000000-0000-0000-0000-000000000106",
         "fresh-eggs",
+        None,
         "protein",
         "Fresh Eggs",
         "Pasture-raised eggs",
@@ -373,6 +387,7 @@ fn find_falls_back_cleanly_when_hyf_is_unavailable() {
         dir.path(),
         "00000000-0000-0000-0000-000000000105",
         "fresh-eggs",
+        None,
         "protein",
         "Fresh Eggs",
         "Pasture-raised eggs",
@@ -400,6 +415,7 @@ fn seed_trade_product(
     workdir: &Path,
     product_id: &str,
     key: &str,
+    listing_addr: Option<&str>,
     category: &str,
     title: &str,
     summary: &str,
@@ -412,12 +428,13 @@ fn seed_trade_product(
     let now = "2026-04-07T00:00:00.000Z";
     executor
         .exec(
-            "INSERT INTO trade_product (id, created_at, updated_at, key, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            "INSERT INTO trade_product (id, created_at, updated_at, key, listing_addr, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
             json!([
                 product_id,
                 now,
                 now,
                 key,
+                listing_addr,
                 category,
                 title,
                 summary,

@@ -7,6 +7,9 @@ use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+const ADDRESS_BACKED_LISTING_ADDR: &str =
+    "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
+
 fn data_root(workdir: &Path) -> std::path::PathBuf {
     if cfg!(windows) {
         workdir.join("local").join("Radroots").join("data")
@@ -55,6 +58,7 @@ fn seed_trade_product(
     workdir: &Path,
     product_id: &str,
     key: &str,
+    listing_addr: Option<&str>,
     category: &str,
     title: &str,
     summary: &str,
@@ -67,12 +71,13 @@ fn seed_trade_product(
     let now = "2026-04-07T00:00:00.000Z";
     executor
         .exec(
-            "INSERT INTO trade_product (id, created_at, updated_at, key, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+            "INSERT INTO trade_product (id, created_at, updated_at, key, listing_addr, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
             json!([
                 product_id,
                 now,
                 now,
                 key,
+                listing_addr,
                 category,
                 title,
                 summary,
@@ -236,6 +241,7 @@ fn market_search_preserves_machine_shape_and_renders_card_list() {
         dir.path(),
         "00000000-0000-0000-0000-000000000401",
         "sf-tomatoes",
+        Some(ADDRESS_BACKED_LISTING_ADDR),
         "produce",
         "San Francisco Early Girl Tomatoes",
         "Fresh local tomatoes packed for pickup from the farm.",
@@ -253,6 +259,10 @@ fn market_search_preserves_machine_shape_and_renders_card_list() {
     assert_eq!(json["state"], "ready");
     assert_eq!(json["count"], 1);
     assert_eq!(json["results"][0]["product_key"], "sf-tomatoes");
+    assert_eq!(
+        json["results"][0]["listing_addr"],
+        ADDRESS_BACKED_LISTING_ADDR
+    );
     assert_eq!(
         json["results"][0]["title"],
         "San Francisco Early Girl Tomatoes"
@@ -313,6 +323,7 @@ fn market_search_uses_also_searched_for_when_hyf_rewrites_query() {
         dir.path(),
         "00000000-0000-0000-0000-000000000402",
         "fresh-eggs",
+        None,
         "protein",
         "Fresh Eggs",
         "Pasture-raised eggs",
@@ -338,6 +349,8 @@ fn market_search_uses_also_searched_for_when_hyf_rewrites_query() {
     assert_eq!(json["state"], "ready");
     assert_eq!(json["hyf"]["state"], "query_rewrite_applied");
     assert_eq!(json["hyf"]["rewritten_query"], "eggs");
+    assert_eq!(json["actions"][0], "radroots market view fresh-eggs");
+    assert_eq!(json["actions"].as_array().expect("actions").len(), 1);
 
     let human_output = cli_command_in(dir.path())
         .env("RADROOTS_HYF_ENABLED", "true")
@@ -350,6 +363,8 @@ fn market_search_uses_also_searched_for_when_hyf_rewrites_query() {
     assert!(stdout.contains("1 listing for eggs"));
     assert!(stdout.contains("Also searched for"));
     assert!(stdout.contains("henhouse"));
+    assert!(stdout.contains("radroots market view fresh-eggs"));
+    assert!(!stdout.contains("radroots order create --listing fresh-eggs"));
     assert!(!stdout.contains("hyf: query rewritten"));
 }
 
@@ -366,6 +381,7 @@ fn market_view_wraps_listing_reads_and_guides_to_order_create() {
         dir.path(),
         "00000000-0000-0000-0000-000000000403",
         "pasture-eggs",
+        Some(ADDRESS_BACKED_LISTING_ADDR),
         "protein",
         "Pasture Eggs",
         "Fresh pasture-raised eggs collected daily.",
@@ -382,6 +398,7 @@ fn market_view_wraps_listing_reads_and_guides_to_order_create() {
     let json: Value = serde_json::from_slice(json_output.stdout.as_slice()).expect("json");
     assert_eq!(json["state"], "ready");
     assert_eq!(json["product_key"], "pasture-eggs");
+    assert_eq!(json["listing_addr"], ADDRESS_BACKED_LISTING_ADDR);
     assert_eq!(json["title"], "Pasture Eggs");
     assert_eq!(json["location_primary"], "Marshall");
     assert_eq!(

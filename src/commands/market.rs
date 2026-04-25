@@ -1,3 +1,6 @@
+use radroots_events::kinds::KIND_LISTING;
+use radroots_events_codec::trade::RadrootsTradeListingAddress;
+
 use crate::cli::{FindArgs, RecordKeyArgs};
 use crate::domain::runtime::{
     CommandDisposition, CommandOutput, CommandView, FindView, ListingGetView, SyncActionView,
@@ -52,10 +55,14 @@ fn market_search_view(mut view: FindView) -> FindView {
             .results
             .first()
             .map(|result| {
-                vec![
-                    format!("radroots market view {}", result.product_key),
-                    format!("radroots order create --listing {}", result.product_key),
-                ]
+                let mut actions = vec![format!("radroots market view {}", result.product_key)];
+                if listing_addr_can_back_order(result.listing_addr.as_deref()) {
+                    actions.push(format!(
+                        "radroots order create --listing {}",
+                        result.product_key
+                    ));
+                }
+                actions
             })
             .unwrap_or_default(),
         "empty" => vec![
@@ -75,7 +82,11 @@ fn market_view_view(mut view: ListingGetView) -> ListingGetView {
                 .as_deref()
                 .unwrap_or(view.lookup.as_str())
                 .to_owned();
-            vec![format!("radroots order create --listing {listing_key}")]
+            if listing_addr_can_back_order(view.listing_addr.as_deref()) {
+                vec![format!("radroots order create --listing {listing_key}")]
+            } else {
+                Vec::new()
+            }
         }
         "missing" => vec![
             "radroots market search tomatoes".to_owned(),
@@ -106,6 +117,13 @@ fn market_update_output(view: SyncActionView) -> CommandOutput {
             CommandOutput::internal_error(CommandView::MarketUpdate(view))
         }
     }
+}
+
+fn listing_addr_can_back_order(listing_addr: Option<&str>) -> bool {
+    let Some(listing_addr) = listing_addr else {
+        return false;
+    };
+    RadrootsTradeListingAddress::parse(listing_addr).is_ok_and(|parsed| parsed.kind == KIND_LISTING)
 }
 
 fn market_search_output(view: FindView) -> CommandOutput {

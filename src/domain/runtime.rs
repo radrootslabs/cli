@@ -1702,6 +1702,8 @@ pub struct ListingGetView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub product_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
@@ -1811,6 +1813,8 @@ pub struct ListingMutationEventView {
 pub struct FindResultView {
     pub id: String,
     pub product_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
     pub title: String,
     pub category: String,
     #[serde(skip_serializing_if = "Option::is_none")]

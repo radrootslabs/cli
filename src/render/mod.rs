@@ -1692,6 +1692,15 @@ fn render_market_search_card(
     let mut rows = vec![("Key", result.product_key.clone())];
     push_row(
         &mut rows,
+        "Listing address",
+        result
+            .listing_addr
+            .as_deref()
+            .and_then(non_empty_str)
+            .map(str::to_owned),
+    );
+    push_row(
+        &mut rows,
         "Place",
         result
             .location_primary
@@ -2635,6 +2644,14 @@ fn render_market_view(stdout: &mut dyn Write, view: &ListingGetView) -> Result<(
                 &mut rows,
                 "Key",
                 view.product_key
+                    .as_deref()
+                    .and_then(non_empty_str)
+                    .map(str::to_owned),
+            );
+            push_row(
+                &mut rows,
+                "Listing address",
+                view.listing_addr
                     .as_deref()
                     .and_then(non_empty_str)
                     .map(str::to_owned),
