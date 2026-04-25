@@ -1,12 +1,14 @@
 use crate::domain::runtime::{
     IdentityPublicView, LocalSignerStatusView, MycRemoteSessionView, MycStatusView,
-    SignerBindingStatusView, SignerStatusView,
+    SignerBindingStatusView, SignerStatusView, SignerWriteKindReadinessView,
 };
 use crate::runtime::accounts::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolution_view};
 use crate::runtime::config::{
     CapabilityBindingConfig, CapabilityBindingTargetKind, RuntimeConfig,
     SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend,
 };
+use radroots_events::kinds::{KIND_FARM, KIND_LISTING, KIND_PROFILE};
+use radroots_events::trade::RadrootsTradeMessageType;
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
 use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
@@ -16,6 +18,12 @@ use serde::{Deserialize, Serialize};
 
 const SIGNER_BINDING_PROVIDER_RUNTIME_ID: &str = "myc";
 const SIGNER_BINDING_MODEL: &str = "session_authorized_remote_signer";
+
+#[derive(Debug, Clone, Copy)]
+struct CliWriteKind {
+    command: &'static str,
+    event_kind: u32,
+}
 
 #[derive(Debug, Clone)]
 struct MycBindingResolution {
@@ -131,14 +139,16 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                     .map(|account| account.record.account_id.to_string()),
             ),
             Err(error) => {
+                let reason = error.to_string();
                 return SignerStatusView {
                     mode: config.signer.backend.as_str().to_owned(),
                     state: "error".to_owned(),
                     source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
                     signer_account_id: None,
                     account_resolution: empty_account_resolution_view(),
-                    reason: Some(error.to_string()),
+                    reason: Some(reason.clone()),
                     binding: disabled_binding_status(),
+                    write_kinds: local_write_kind_readiness(false, Some(reason)),
                     local: None,
                     myc: None,
                 };
@@ -146,28 +156,32 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         };
     let secret_backend = crate::runtime::accounts::secret_backend_status(config);
     if secret_backend.state == "unavailable" {
+        let reason = secret_backend.reason.clone();
         return SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "unavailable".to_owned(),
             source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             signer_account_id: resolved_account_id.clone(),
             account_resolution: account_resolution.clone(),
-            reason: secret_backend.reason,
+            reason: reason.clone(),
             binding: disabled_binding_status(),
+            write_kinds: local_write_kind_readiness(false, reason),
             local: None,
             myc: None,
         };
     }
 
     if secret_backend.state == "error" {
+        let reason = secret_backend.reason.clone();
         return SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "error".to_owned(),
             source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             signer_account_id: resolved_account_id.clone(),
             account_resolution: account_resolution.clone(),
-            reason: secret_backend.reason,
+            reason: reason.clone(),
             binding: disabled_binding_status(),
+            write_kinds: local_write_kind_readiness(false, reason),
             local: None,
             myc: None,
         };
@@ -199,6 +213,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 account_resolution: account_resolution.clone(),
                 reason: None,
                 binding: disabled_binding_status(),
+                write_kinds: local_write_kind_readiness(true, None),
                 local: Some(LocalSignerStatusView {
                     account_id: local.account_id.to_string(),
                     public_identity: IdentityPublicView::from_public_identity(
@@ -223,6 +238,13 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 account.account_id
             )),
             binding: disabled_binding_status(),
+            write_kinds: local_write_kind_readiness(
+                false,
+                Some(format!(
+                    "local account {} is present but not secret-backed",
+                    account.account_id
+                )),
+            ),
             local: Some(LocalSignerStatusView {
                 account_id: account.account_id.to_string(),
                 public_identity: IdentityPublicView::from_public_identity(&account.public_identity),
@@ -242,20 +264,28 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
             account_resolution: account_resolution.clone(),
             reason: crate::runtime::accounts::unresolved_account_reason(config).ok(),
             binding: disabled_binding_status(),
+            write_kinds: local_write_kind_readiness(
+                false,
+                crate::runtime::accounts::unresolved_account_reason(config).ok(),
+            ),
             local: None,
             myc: None,
         },
-        Err(error) => SignerStatusView {
-            mode: config.signer.backend.as_str().to_owned(),
-            state: "error".to_owned(),
-            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
-            signer_account_id: resolved_account_id,
-            account_resolution,
-            reason: Some(error.to_string()),
-            binding: disabled_binding_status(),
-            local: None,
-            myc: None,
-        },
+        Err(error) => {
+            let reason = error.to_string();
+            SignerStatusView {
+                mode: config.signer.backend.as_str().to_owned(),
+                state: "error".to_owned(),
+                source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
+                signer_account_id: resolved_account_id,
+                account_resolution,
+                reason: Some(reason.clone()),
+                binding: disabled_binding_status(),
+                write_kinds: local_write_kind_readiness(false, Some(reason)),
+                local: None,
+                myc: None,
+            }
+        }
     }
 }
 
@@ -268,6 +298,19 @@ fn resolve_myc_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     let resolution = resolve_myc_binding(config, &myc);
     let binding = resolution.view;
     let state = myc_signer_state(&myc, &binding).to_owned();
+    let resolved_session = binding
+        .resolved_signer_session_id
+        .as_deref()
+        .and_then(|session_id| {
+            myc.remote_sessions
+                .iter()
+                .find(|session| session.connection_id == session_id)
+        });
+    let write_kinds = myc_write_kind_readiness(
+        resolved_session,
+        binding.state.as_str(),
+        binding.reason.as_deref(),
+    );
     SignerStatusView {
         mode: config.signer.backend.as_str().to_owned(),
         state,
@@ -284,6 +327,7 @@ fn resolve_myc_signer_status(config: &RuntimeConfig) -> SignerStatusView {
             myc.reason.clone().or_else(|| binding.reason.clone())
         },
         binding,
+        write_kinds,
         local: None,
         myc: Some(myc),
     }
@@ -422,7 +466,7 @@ fn resolve_myc_binding(config: &RuntimeConfig, myc: &MycStatusView) -> MycBindin
                 Some(1),
                 None,
                 format!(
-                    "configured signer session `{session_ref}` is not approved for `sign_event`"
+                    "configured signer session `{session_ref}` is not approved for any cli write event kind"
                 ),
             );
         }
@@ -468,7 +512,8 @@ fn resolve_myc_binding(config: &RuntimeConfig, myc: &MycStatusView) -> MycBindin
             None,
             Some(0),
             None,
-            "no authorized remote signer session currently exposes `sign_event`".to_owned(),
+            "no authorized remote signer session currently approves a cli write event kind"
+                .to_owned(),
         );
     }
 
@@ -479,7 +524,7 @@ fn resolve_myc_binding(config: &RuntimeConfig, myc: &MycStatusView) -> MycBindin
             None,
             Some(signing_sessions.len()),
             None,
-            "multiple authorized remote signer sessions expose `sign_event`; set managed_account_ref or signer_session_ref".to_owned(),
+            "multiple authorized remote signer sessions approve cli write event kinds; set managed_account_ref or signer_session_ref".to_owned(),
         );
     }
 
@@ -589,10 +634,94 @@ fn myc_signer_state(myc: &MycStatusView, binding: &SignerBindingStatusView) -> &
 }
 
 fn session_supports_signing(session: &MycRemoteSessionView) -> bool {
+    cli_write_kinds()
+        .iter()
+        .any(|kind| session_allows_event_kind(session, kind.event_kind))
+}
+
+fn cli_write_kinds() -> [CliWriteKind; 4] {
+    [
+        CliWriteKind {
+            command: "farm profile publish",
+            event_kind: KIND_PROFILE,
+        },
+        CliWriteKind {
+            command: "farm publish",
+            event_kind: KIND_FARM,
+        },
+        CliWriteKind {
+            command: "listing publish",
+            event_kind: KIND_LISTING,
+        },
+        CliWriteKind {
+            command: "order submit",
+            event_kind: u32::from(RadrootsTradeMessageType::OrderRequest.kind()),
+        },
+    ]
+}
+
+fn local_write_kind_readiness(
+    ready: bool,
+    reason: Option<String>,
+) -> Vec<SignerWriteKindReadinessView> {
+    cli_write_kinds()
+        .iter()
+        .map(|kind| SignerWriteKindReadinessView {
+            command: kind.command.to_owned(),
+            event_kind: kind.event_kind,
+            permission: "local_account_secret".to_owned(),
+            ready,
+            reason: if ready { None } else { reason.clone() },
+        })
+        .collect()
+}
+
+fn myc_write_kind_readiness(
+    session: Option<&MycRemoteSessionView>,
+    binding_state: &str,
+    binding_reason: Option<&str>,
+) -> Vec<SignerWriteKindReadinessView> {
+    cli_write_kinds()
+        .iter()
+        .map(|kind| {
+            let permission = format!("sign_event:{}", kind.event_kind);
+            match session {
+                Some(session) => {
+                    let ready = session_allows_event_kind(session, kind.event_kind);
+                    SignerWriteKindReadinessView {
+                        command: kind.command.to_owned(),
+                        event_kind: kind.event_kind,
+                        permission,
+                        ready,
+                        reason: if ready {
+                            None
+                        } else {
+                            Some(format!(
+                                "resolved signer session `{}` is not approved for sign_event:{}",
+                                session.connection_id, kind.event_kind
+                            ))
+                        },
+                    }
+                }
+                None => SignerWriteKindReadinessView {
+                    command: kind.command.to_owned(),
+                    event_kind: kind.event_kind,
+                    permission,
+                    ready: false,
+                    reason: binding_reason
+                        .map(str::to_owned)
+                        .or_else(|| Some(format!("signer binding is {binding_state}"))),
+                },
+            }
+        })
+        .collect()
+}
+
+fn session_allows_event_kind(session: &MycRemoteSessionView, kind: u32) -> bool {
     session
         .permissions
         .iter()
-        .any(|permission| permission == "sign_event" || permission.starts_with("sign_event:"))
+        .any(|permission| permission == "sign_event" || permission == &format!("sign_event:{kind}"))
 }
 
 fn local_availability(value: RadrootsNostrLocalSignerAvailability) -> &'static str {

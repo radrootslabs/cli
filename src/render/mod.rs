@@ -11,7 +11,7 @@ use crate::domain::runtime::{
     OrderSubmitWatchView, OrderWatchView, OrderWorkflowView, RelayListView, RpcSessionsView,
     RpcStatusView, RuntimeActionView, RuntimeLogsView, RuntimeManagedConfigView, RuntimeStatusView,
     SellAddView, SellCheckView, SellDraftMutationView, SellMutationView, SellShowView, SetupView,
-    StatusView, SyncActionView, SyncStatusView, SyncWatchView,
+    SignerWriteKindReadinessView, StatusView, SyncActionView, SyncStatusView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{OutputConfig, OutputFormat, Verbosity};
@@ -237,6 +237,10 @@ fn render_human_view_to(
                 signer_rows.push(("signer account id", account_id.as_str()));
             }
             render_pairs(stdout, "signer", signer_rows.as_slice())?;
+            if !view.write_kinds.is_empty() {
+                writeln!(stdout)?;
+                render_signer_write_kinds(stdout, &view.write_kinds)?;
+            }
             writeln!(stdout)?;
             render_account_resolution(stdout, &view.account_resolution)?;
             if let Some(reason) = &view.reason {
@@ -4189,6 +4193,42 @@ fn render_myc_remote_session(
     writeln!(stdout, "  relay count: {}", session.relay_count)?;
     if !session.permissions.is_empty() {
         writeln!(stdout, "  permissions: {}", session.permissions.join(", "))?;
+    }
+    Ok(())
+}
+
+fn render_signer_write_kinds(
+    stdout: &mut dyn Write,
+    write_kinds: &[SignerWriteKindReadinessView],
+) -> Result<(), RuntimeError> {
+    let table = Table {
+        headers: &["command", "kind", "ready", "permission"],
+        rows: write_kinds
+            .iter()
+            .map(|kind| {
+                vec![
+                    kind.command.clone(),
+                    kind.event_kind.to_string(),
+                    yes_no(kind.ready).to_owned(),
+                    kind.permission.clone(),
+                ]
+            })
+            .collect(),
+    };
+    render_table(stdout, &table)?;
+    let reasons = write_kinds
+        .iter()
+        .filter_map(|kind| {
+            kind.reason
+                .as_ref()
+                .map(|reason| (kind.command.as_str(), reason))
+        })
+        .collect::<Vec<_>>();
+    if !reasons.is_empty() {
+        writeln!(stdout)?;
+        for (command, reason) in reasons {
+            writeln!(stdout, "{command}: {reason}")?;
+        }
     }
     Ok(())
 }

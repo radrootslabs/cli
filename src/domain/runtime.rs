@@ -2148,10 +2148,22 @@ pub struct SignerStatusView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub binding: SignerBindingStatusView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_kinds: Vec<SignerWriteKindReadinessView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local: Option<LocalSignerStatusView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub myc: Option<MycStatusView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SignerWriteKindReadinessView {
+    pub command: String,
+    pub event_kind: u32,
+    pub permission: String,
+    pub ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

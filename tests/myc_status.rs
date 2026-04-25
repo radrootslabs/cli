@@ -261,6 +261,82 @@ signer_session_ref = "{signer_session_ref}"
         json["myc"]["local_signer"]["account_id"],
         json["myc"]["remote_sessions"][0]["user_identity"]["id"]
     );
+    assert!(
+        json["write_kinds"]
+            .as_array()
+            .expect("write kinds")
+            .iter()
+            .all(|kind| kind["ready"] == true)
+    );
+}
+
+#[test]
+fn signer_status_reports_kind_specific_myc_write_readiness() {
+    let _guard = myc_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let payload = sample_status_payload_with_permissions(true, &["sign_event:30402"]);
+    let executable = write_fake_myc(
+        dir.path(),
+        successful_status_script(payload.to_string()).as_str(),
+    );
+    let managed_account_ref =
+        payload["signer_backend"]["remote_sessions"][0]["user_identity"]["id"]
+            .as_str()
+            .expect("managed account ref");
+    let signer_session_ref = payload["signer_backend"]["remote_sessions"][0]["connection_id"]
+        .as_str()
+        .expect("signer session ref");
+    write_user_config(
+        dir.path(),
+        format!(
+            r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{managed_account_ref}"
+signer_session_ref = "{signer_session_ref}"
+"#
+        )
+        .as_str(),
+    );
+
+    let output = cli_command_in(dir.path())
+        .args([
+            "--json",
+            "--signer",
+            "myc",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "signer",
+            "status",
+        ])
+        .output()
+        .expect("run signer status");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+    assert_eq!(json["state"], "ready");
+    assert_eq!(json["binding"]["state"], "ready");
+    let write_kinds = json["write_kinds"].as_array().expect("write kinds");
+    let listing = write_kinds
+        .iter()
+        .find(|kind| kind["event_kind"] == 30402)
+        .expect("listing kind");
+    assert_eq!(listing["command"], "listing publish");
+    assert_eq!(listing["ready"], true);
+    let order = write_kinds
+        .iter()
+        .find(|kind| kind["event_kind"] == 3422)
+        .expect("order kind");
+    assert_eq!(order["command"], "order submit");
+    assert_eq!(order["ready"], false);
+    assert!(
+        order["reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("sign_event:3422"))
+    );
 }
 
 #[test]
@@ -431,7 +507,65 @@ signer_session_ref = "{signer_session_ref}"
     assert!(
         json["binding"]["reason"]
             .as_str()
-            .is_some_and(|value| value.contains("not approved for `sign_event`"))
+            .is_some_and(|value| value.contains("not approved for any cli write event kind"))
+    );
+}
+
+#[test]
+fn signer_status_does_not_treat_sign_event_star_as_wildcard() {
+    let _guard = myc_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let payload = sample_status_payload_with_permissions(true, &["sign_event:*"]);
+    let executable = write_fake_myc(
+        dir.path(),
+        successful_status_script(payload.to_string()).as_str(),
+    );
+    let managed_account_ref =
+        payload["signer_backend"]["remote_sessions"][0]["user_identity"]["id"]
+            .as_str()
+            .expect("managed account ref");
+    let signer_session_ref = payload["signer_backend"]["remote_sessions"][0]["connection_id"]
+        .as_str()
+        .expect("signer session ref");
+    write_user_config(
+        dir.path(),
+        format!(
+            r#"
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "managed_instance"
+target = "default"
+managed_account_ref = "{managed_account_ref}"
+signer_session_ref = "{signer_session_ref}"
+"#
+        )
+        .as_str(),
+    );
+
+    let output = cli_command_in(dir.path())
+        .args([
+            "--json",
+            "--signer",
+            "myc",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "signer",
+            "status",
+        ])
+        .output()
+        .expect("run signer status");
+
+    assert_eq!(output.status.code(), Some(3));
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+    assert_eq!(json["state"], "unconfigured");
+    assert_eq!(json["binding"]["state"], "unauthorized");
+    assert!(
+        json["write_kinds"]
+            .as_array()
+            .expect("write kinds")
+            .iter()
+            .all(|kind| kind["ready"] == false)
     );
 }
 
