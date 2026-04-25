@@ -435,6 +435,10 @@ fn config_show_json_reports_repo_local_paths_when_requested() {
             .to_string()
     );
     assert_eq!(
+        json["paths"]["workspace_config_path"],
+        repo_local_root.join("config.toml").display().to_string()
+    );
+    assert_eq!(
         json["paths"]["app_data_root"],
         repo_local_root.join("data/apps/cli").display().to_string()
     );
@@ -463,6 +467,36 @@ fn config_show_json_reports_repo_local_paths_when_requested() {
             .display()
             .to_string()
     );
+}
+
+#[test]
+fn config_show_json_reads_repo_local_workspace_config_from_explicit_root() {
+    let dir = tempdir().expect("tempdir");
+    let repo_local_root = dir.path().join("repo-runtime");
+    fs::create_dir_all(&repo_local_root).expect("repo-local root");
+    fs::write(
+        repo_local_root.join("config.toml"),
+        "[relay]\nurls = [\"wss://relay.repo-local\"]\npublish_policy = \"any\"\n",
+    )
+    .expect("write repo-local workspace config");
+
+    let output = runtime_show_command_in(dir.path())
+        .env("RADROOTS_CLI_PATHS_PROFILE", "repo_local")
+        .env("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT", &repo_local_root)
+        .args(["--json", "config", "show"])
+        .output()
+        .expect("run config show");
+
+    assert!(output.status.success());
+    let json: Value = serde_json::from_slice(output.stdout.as_slice()).expect("json output");
+    assert_eq!(
+        json["paths"]["workspace_config_path"],
+        repo_local_root.join("config.toml").display().to_string()
+    );
+    assert_eq!(json["config_files"]["workspace_present"], true);
+    assert_eq!(json["relay"]["count"], 1);
+    assert_eq!(json["relay"]["urls"][0], "wss://relay.repo-local");
+    assert_eq!(json["relay"]["source"], "workspace config · local first");
 }
 
 #[test]

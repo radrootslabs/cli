@@ -51,6 +51,8 @@ pub(crate) fn resolve_paths(
     let (profile, profile_label, profile_source) = resolve_cli_path_profile(env, env_file)?;
     let override_selection =
         resolve_cli_path_overrides(current_dir.as_path(), env, env_file, profile)?;
+    let workspace_config_path =
+        resolve_workspace_config_path(current_dir.as_path(), profile, &override_selection)?;
     let resolved = resolver
         .resolve(profile, &override_selection.overrides)
         .map_err(|err| RuntimeError::Config(format!("resolve Radroots path roots: {err}")))?;
@@ -91,7 +93,7 @@ pub(crate) fn resolve_paths(
             .display()
             .to_string(),
         app_config_path: app_paths.config.join(DEFAULT_CONFIG_FILE_NAME),
-        workspace_config_path: current_dir.join(DEFAULT_WORKSPACE_CONFIG_PATH),
+        workspace_config_path,
         app_data_root: app_paths.data,
         app_logs_root: app_paths.logs,
         shared_accounts_data_root: shared_accounts_paths.data,
@@ -187,6 +189,28 @@ fn normalize_explicit_path_root(current_dir: &Path, value: &str) -> PathBuf {
         root
     } else {
         current_dir.join(root)
+    }
+}
+
+fn resolve_workspace_config_path(
+    current_dir: &Path,
+    profile: RadrootsPathProfile,
+    override_selection: &CliPathOverrideSelection,
+) -> Result<PathBuf, RuntimeError> {
+    match profile {
+        RadrootsPathProfile::InteractiveUser => Ok(current_dir.join(DEFAULT_WORKSPACE_CONFIG_PATH)),
+        RadrootsPathProfile::RepoLocal => override_selection
+            .repo_local_root
+            .as_ref()
+            .map(|root| root.join(DEFAULT_CONFIG_FILE_NAME))
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "{ENV_CLI_PATHS_REPO_LOCAL_ROOT} must be resolved when {ENV_CLI_PATHS_PROFILE}=repo_local"
+                ))
+            }),
+        _ => Err(RuntimeError::Config(
+            "cli only supports interactive_user and repo_local path profiles".to_owned(),
+        )),
     }
 }
 

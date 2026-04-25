@@ -2194,6 +2194,10 @@ target = "https://rpc.workspace.test/jsonrpc"
             )
         );
         assert_eq!(
+            resolved.paths.workspace_config_path,
+            PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/config.toml")
+        );
+        assert_eq!(
             resolved.paths.app_data_root,
             PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/data/apps/cli")
         );
@@ -2249,6 +2253,10 @@ RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT=.local/radroots/dev
         assert_eq!(
             resolved.paths.app_data_root,
             PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/data/apps/cli")
+        );
+        assert_eq!(
+            resolved.paths.workspace_config_path,
+            PathBuf::from("/workspaces/radroots-cli/.local/radroots/dev/config.toml")
         );
     }
 
