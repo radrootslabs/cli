@@ -24,6 +24,7 @@ const DEFAULT_LOCAL_DB_FILE: &str = "replica.sqlite";
 const DEFAULT_LOCAL_BACKUPS_DIR: &str = "backups";
 const DEFAULT_LOCAL_EXPORTS_DIR: &str = "exports";
 const DEFAULT_SHARED_ACCOUNTS_STORE_FILE: &str = "store.json";
+const DEFAULT_MYC_STATUS_TIMEOUT_MS: u64 = 2_000;
 const DEFAULT_HYF_EXECUTABLE: &str = "hyfd";
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:7070";
 const CLI_HOST_VAULT_POLICY: &str = "desktop";
@@ -46,6 +47,7 @@ const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
 const ENV_SIGNER: &str = "RADROOTS_SIGNER";
 const ENV_RELAYS: &str = "RADROOTS_RELAYS";
 const ENV_MYC_EXECUTABLE: &str = "RADROOTS_MYC_EXECUTABLE";
+const ENV_MYC_STATUS_TIMEOUT_MS: &str = "RADROOTS_MYC_STATUS_TIMEOUT_MS";
 const ENV_HYF_ENABLED: &str = "RADROOTS_HYF_ENABLED";
 const ENV_HYF_EXECUTABLE: &str = "RADROOTS_HYF_EXECUTABLE";
 const ENV_RPC_URL: &str = "RADROOTS_RPC_URL";
@@ -67,6 +69,7 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_SIGNER,
     ENV_RELAYS,
     ENV_MYC_EXECUTABLE,
+    ENV_MYC_STATUS_TIMEOUT_MS,
     ENV_HYF_ENABLED,
     ENV_HYF_EXECUTABLE,
     ENV_RPC_URL,
@@ -229,6 +232,7 @@ pub struct LocalConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MycConfig {
     pub executable: PathBuf,
+    pub status_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,6 +355,7 @@ impl EnvFileValues {
 #[derive(Debug, Default, Deserialize)]
 struct CliConfigFile {
     relay: Option<RelayFileConfig>,
+    myc: Option<MycFileConfig>,
     hyf: Option<HyfFileConfig>,
     rpc: Option<RpcFileConfig>,
     capability_binding: Option<Vec<CapabilityBindingFileConfig>>,
@@ -365,6 +370,12 @@ struct RelayFileConfig {
 #[derive(Debug, Default, Deserialize)]
 struct RpcFileConfig {
     url: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MycFileConfig {
+    executable: Option<PathBuf>,
+    status_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -582,13 +593,13 @@ impl RuntimeConfig {
                     .join(DEFAULT_LOCAL_STATE_DIR)
                     .join(DEFAULT_LOCAL_EXPORTS_DIR),
             },
-            myc: MycConfig {
-                executable: args
-                    .myc_executable
-                    .clone()
-                    .or_else(|| env_value(env, env_file, &[ENV_MYC_EXECUTABLE]).map(PathBuf::from))
-                    .unwrap_or_else(|| PathBuf::from("myc")),
-            },
+            myc: resolve_myc_config(
+                args,
+                env,
+                env_file,
+                app_config.as_ref(),
+                workspace_config.as_ref(),
+            )?,
             hyf: HyfConfig {
                 enabled: resolve_hyf_enabled(
                     args,
@@ -939,6 +950,85 @@ fn resolve_relay_config(
         publish_policy,
         source: RelayConfigSource::Defaults,
     })
+}
+
+fn resolve_myc_config(
+    args: &CliArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<MycConfig, RuntimeError> {
+    let executable = args
+        .myc_executable
+        .clone()
+        .or_else(|| env_value(env, env_file, &[ENV_MYC_EXECUTABLE]).map(PathBuf::from))
+        .or_else(|| {
+            user_config
+                .and_then(|config| config.myc.as_ref())
+                .and_then(|myc| myc.executable.clone())
+        })
+        .or_else(|| {
+            workspace_config
+                .and_then(|config| config.myc.as_ref())
+                .and_then(|myc| myc.executable.clone())
+        })
+        .unwrap_or_else(|| PathBuf::from("myc"));
+
+    Ok(MycConfig {
+        executable,
+        status_timeout_ms: resolve_myc_status_timeout_ms(
+            args,
+            env,
+            env_file,
+            user_config,
+            workspace_config,
+        )?,
+    })
+}
+
+fn resolve_myc_status_timeout_ms(
+    args: &CliArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<u64, RuntimeError> {
+    if let Some(value) = args.myc_status_timeout_ms {
+        return validate_myc_status_timeout_ms("--myc-status-timeout-ms", value);
+    }
+
+    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_MYC_STATUS_TIMEOUT_MS]) {
+        let parsed = value.trim().parse::<u64>().map_err(|err| {
+            RuntimeError::Config(format!("{key} must be an integer millisecond value: {err}"))
+        })?;
+        return validate_myc_status_timeout_ms(key.as_str(), parsed);
+    }
+
+    if let Some(value) = user_config
+        .and_then(|config| config.myc.as_ref())
+        .and_then(|myc| myc.status_timeout_ms)
+    {
+        return validate_myc_status_timeout_ms("user config [myc].status_timeout_ms", value);
+    }
+
+    if let Some(value) = workspace_config
+        .and_then(|config| config.myc.as_ref())
+        .and_then(|myc| myc.status_timeout_ms)
+    {
+        return validate_myc_status_timeout_ms("workspace config [myc].status_timeout_ms", value);
+    }
+
+    Ok(DEFAULT_MYC_STATUS_TIMEOUT_MS)
+}
+
+fn validate_myc_status_timeout_ms(source: &str, value: u64) -> Result<u64, RuntimeError> {
+    if value == 0 {
+        return Err(RuntimeError::Config(format!(
+            "{source} must be greater than zero"
+        )));
+    }
+    Ok(value)
 }
 
 fn resolve_hyf_enabled(
@@ -1467,6 +1557,8 @@ mod tests {
             "wss://relay.two",
             "--myc-executable",
             "bin/myc-cli",
+            "--myc-status-timeout-ms",
+            "2500",
             "--hyf-enabled",
             "--hyf-executable",
             "bin/hyfd-cli",
@@ -1484,6 +1576,10 @@ mod tests {
             ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
             ("RADROOTS_RELAYS".to_owned(), "wss://relay.env".to_owned()),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "env-myc".to_owned()),
+            (
+                "RADROOTS_MYC_STATUS_TIMEOUT_MS".to_owned(),
+                "9000".to_owned(),
+            ),
             ("RADROOTS_HYF_ENABLED".to_owned(), "false".to_owned()),
             ("RADROOTS_HYF_EXECUTABLE".to_owned(), "env-hyfd".to_owned()),
         ]));
@@ -1576,6 +1672,7 @@ mod tests {
         assert_eq!(resolved.relay.source, RelayConfigSource::Flags);
         assert_eq!(resolved.relay.publish_policy, RelayPublishPolicy::Any);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc-cli"));
+        assert_eq!(resolved.myc.status_timeout_ms, 2500);
         assert_eq!(
             resolved.hyf,
             HyfConfig {
@@ -1607,6 +1704,10 @@ mod tests {
                 "wss://relay.one,wss://relay.two".to_owned(),
             ),
             ("RADROOTS_MYC_EXECUTABLE".to_owned(), "bin/myc".to_owned()),
+            (
+                "RADROOTS_MYC_STATUS_TIMEOUT_MS".to_owned(),
+                "3500".to_owned(),
+            ),
             ("RADROOTS_HYF_ENABLED".to_owned(), "true".to_owned()),
             ("RADROOTS_HYF_EXECUTABLE".to_owned(), "bin/hyfd".to_owned()),
         ]));
@@ -1656,6 +1757,7 @@ mod tests {
         );
         assert_eq!(resolved.relay.source, RelayConfigSource::Environment);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
+        assert_eq!(resolved.myc.status_timeout_ms, 3500);
         assert_eq!(
             resolved.hyf,
             HyfConfig {
@@ -1804,6 +1906,21 @@ mod tests {
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("invalid bool");
         assert!(error.to_string().contains("RADROOTS_LOG_STDOUT"));
+
+        let env = MapEnvironment::new(BTreeMap::from([(
+            "RADROOTS_MYC_STATUS_TIMEOUT_MS".to_owned(),
+            "slow".to_owned(),
+        )]));
+        let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect_err("invalid myc timeout");
+        assert!(error.to_string().contains("RADROOTS_MYC_STATUS_TIMEOUT_MS"));
+
+        let args =
+            CliArgs::parse_from(["radroots", "--myc-status-timeout-ms", "0", "config", "show"]);
+        let env = MapEnvironment::new(BTreeMap::new());
+        let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect_err("zero myc timeout");
+        assert!(error.to_string().contains("greater than zero"));
     }
 
     #[test]
@@ -1821,6 +1938,7 @@ RADROOTS_IDENTITY_PATH=state/identity.json
 RADROOTS_SIGNER=myc
 RADROOTS_RELAYS=wss://relay.env-file
 RADROOTS_MYC_EXECUTABLE=bin/myc
+RADROOTS_MYC_STATUS_TIMEOUT_MS=4500
 RADROOTS_HYF_ENABLED=true
 RADROOTS_HYF_EXECUTABLE=bin/hyfd
 "#,
@@ -1843,6 +1961,7 @@ RADROOTS_HYF_EXECUTABLE=bin/hyfd
         assert_eq!(resolved.relay.urls, vec!["wss://relay.env-file".to_owned()]);
         assert_eq!(resolved.relay.source, RelayConfigSource::Environment);
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
+        assert_eq!(resolved.myc.status_timeout_ms, 4500);
         assert_eq!(
             resolved.hyf,
             HyfConfig {
@@ -2037,6 +2156,56 @@ RADROOTS_CLI_LOGGING_STDOUT=false
                 executable: PathBuf::from("user-hyfd"),
             }
         );
+    }
+
+    #[test]
+    fn user_myc_config_overrides_workspace_myc_config() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let app_config_dir = repo_local_root.join("config/apps/cli");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(&repo_local_root).expect("workspace config dir");
+        fs::create_dir_all(&app_config_dir).expect("app config dir");
+        fs::write(
+            repo_local_root.join("config.toml"),
+            "[myc]\nexecutable = \"workspace-myc\"\nstatus_timeout_ms = 9000\n",
+        )
+        .expect("write workspace config");
+        fs::write(
+            app_config_dir.join("config.toml"),
+            "[myc]\nexecutable = \"user-myc\"\nstatus_timeout_ms = 3000\n",
+        )
+        .expect("write user config");
+
+        let env = MapEnvironment {
+            values: BTreeMap::from([
+                (
+                    "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
+                    "repo_local".to_owned(),
+                ),
+                (
+                    "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT".to_owned(),
+                    repo_local_root.display().to_string(),
+                ),
+            ]),
+            current_dir: workspace_root,
+            path_resolver: RadrootsPathResolver::new(
+                RadrootsPlatform::Linux,
+                RadrootsHostEnvironment {
+                    home_dir: Some(user_home),
+                    ..RadrootsHostEnvironment::default()
+                },
+            ),
+            stdin_tty: false,
+            stdout_tty: false,
+        };
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve config");
+        assert_eq!(resolved.myc.executable, PathBuf::from("user-myc"));
+        assert_eq!(resolved.myc.status_timeout_ms, 3000);
     }
 
     #[test]

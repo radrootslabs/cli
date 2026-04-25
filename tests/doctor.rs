@@ -29,6 +29,7 @@ fn doctor_command_in(workdir: &Path) -> Command {
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
         "RADROOTS_MYC_EXECUTABLE",
+        "RADROOTS_MYC_STATUS_TIMEOUT_MS",
         "RADROOTS_RPC_URL",
         "RADROOTS_RPC_BEARER_TOKEN",
     ] {

@@ -83,6 +83,7 @@ fn runtime_show_command_in(workdir: &Path) -> Command {
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
         "RADROOTS_MYC_EXECUTABLE",
+        "RADROOTS_MYC_STATUS_TIMEOUT_MS",
         "RADROOTS_RPC_URL",
         "RADROOTS_RPC_BEARER_TOKEN",
     ] {
@@ -286,6 +287,7 @@ fn config_show_json_reports_default_bootstrap_state() {
             .to_string()
     );
     assert_eq!(json["myc"]["executable"], "myc");
+    assert_eq!(json["myc"]["status_timeout_ms"], 2000);
     assert_eq!(json["write_plane"]["provider_runtime_id"], "radrootsd");
     assert_eq!(
         json["write_plane"]["binding_model"],
@@ -541,6 +543,7 @@ fn config_show_json_reflects_environment_configuration() {
         .env("RADROOTS_SIGNER", "myc")
         .env("RADROOTS_RELAYS", "wss://relay.one,wss://relay.two")
         .env("RADROOTS_MYC_EXECUTABLE", "bin/myc")
+        .env("RADROOTS_MYC_STATUS_TIMEOUT_MS", "3500")
         .env("RADROOTS_RPC_URL", "https://rpc.radroots.test/jsonrpc")
         .env("RADROOTS_RPC_BEARER_TOKEN", "secret")
         .args(["config", "show"])
@@ -564,6 +567,7 @@ fn config_show_json_reflects_environment_configuration() {
     assert_eq!(json["relay"]["urls"][0], "wss://relay.one");
     assert_eq!(json["relay"]["source"], "environment · local first");
     assert_eq!(json["myc"]["executable"], "bin/myc");
+    assert_eq!(json["myc"]["status_timeout_ms"], 3500);
     assert_eq!(json["rpc"]["url"], "https://rpc.radroots.test/jsonrpc");
     assert_eq!(json["rpc"]["bridge_auth_configured"], true);
 }

@@ -412,6 +412,7 @@ pub struct LocalRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct MycRuntimeView {
     pub executable: String,
+    pub status_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

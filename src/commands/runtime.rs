@@ -135,6 +135,7 @@ pub fn show(
         },
         myc: MycRuntimeView {
             executable: config.myc.executable.display().to_string(),
+            status_timeout_ms: config.myc.status_timeout_ms,
         },
         write_plane: WritePlaneRuntimeView {
             provider_runtime_id: write_plane.provider_runtime_id,

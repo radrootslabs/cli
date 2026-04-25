@@ -14,7 +14,8 @@ use crate::domain::runtime::{
 };
 use crate::runtime::config::MycConfig;
 
-const MYC_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
+const MYC_SIGNER_STATUS_CONTRACT_VERSION: u32 = 1;
+const MYC_STATUS_VIEW: &str = "signer";
 const MYC_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub fn resolve_status(config: &MycConfig) -> MycStatusView {
@@ -55,7 +56,7 @@ pub fn resolve_status(config: &MycConfig) -> MycStatusView {
                 "unavailable",
                 format!(
                     "myc status command timed out after {}ms",
-                    MYC_STATUS_TIMEOUT.as_millis()
+                    config.status_timeout_ms
                 ),
             );
         }
@@ -95,24 +96,46 @@ pub fn resolve_status(config: &MycConfig) -> MycStatusView {
         }
     };
 
-    let payload = match serde_json::from_str::<MycStatusPayload>(stdout.as_str()) {
+    let payload_value = match serde_json::from_str::<serde_json::Value>(stdout.as_str()) {
         Ok(payload) => payload,
         Err(error) => {
             return unavailable_status(
                 executable,
                 "unavailable",
-                format!("myc status output was not valid JSON: {error}"),
+                format!("myc signer status output was not valid JSON: {error}"),
+            );
+        }
+    };
+    let payload = match serde_json::from_value::<MycStatusPayload>(payload_value) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return unavailable_status(
+                executable,
+                "unavailable",
+                format!(
+                    "myc signer status output did not match contract version {MYC_SIGNER_STATUS_CONTRACT_VERSION}: {error}"
+                ),
             );
         }
     };
 
     let MycStatusPayload {
+        status_contract_version,
         status,
         ready,
         reasons,
         signer_backend,
         custody,
     } = payload;
+    if status_contract_version != MYC_SIGNER_STATUS_CONTRACT_VERSION {
+        return unavailable_status(
+            executable,
+            "unavailable",
+            format!(
+                "myc signer status contract version {status_contract_version} is incompatible with cli expected {MYC_SIGNER_STATUS_CONTRACT_VERSION}"
+            ),
+        );
+    }
     let MycSignerBackendPayload {
         local_signer,
         remote_session_count,
@@ -153,7 +176,7 @@ pub fn resolve_status(config: &MycConfig) -> MycStatusView {
 
 fn run_status_command(config: &MycConfig) -> Result<Output, MycCommandError> {
     let mut child = Command::new(&config.executable)
-        .args(["status", "--view", "full"])
+        .args(["status", "--view", MYC_STATUS_VIEW])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -163,11 +186,12 @@ fn run_status_command(config: &MycConfig) -> Result<Output, MycCommandError> {
         })?;
 
     let started_at = Instant::now();
+    let status_timeout = Duration::from_millis(config.status_timeout_ms);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return collect_output(child, status),
             Ok(None) => {
-                if started_at.elapsed() >= MYC_STATUS_TIMEOUT {
+                if started_at.elapsed() >= status_timeout {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(MycCommandError::Timeout);
@@ -277,6 +301,7 @@ enum MycCommandError {
 
 #[derive(Debug, Deserialize)]
 struct MycStatusPayload {
+    status_contract_version: u32,
     status: String,
     ready: bool,
     #[serde(default)]
@@ -382,6 +407,7 @@ mod tests {
     fn empty_executable_path_reports_unconfigured_status() {
         let view = resolve_status(&MycConfig {
             executable: PathBuf::new(),
+            status_timeout_ms: 2_000,
         });
 
         assert_eq!(view.state, "unconfigured");

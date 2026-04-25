@@ -71,6 +71,7 @@ Global options
   --account <ACCOUNT>
   --signer <SIGNER>
   --relay <RELAY>
+  --myc-status-timeout-ms <MS>
 
 Examples
   radroots setup seller
@@ -205,6 +206,8 @@ pub struct CliArgs {
     pub relay: Vec<String>,
     #[arg(long, global = true)]
     pub myc_executable: Option<PathBuf>,
+    #[arg(long = "myc-status-timeout-ms", global = true)]
+    pub myc_status_timeout_ms: Option<u64>,
     #[arg(long = "hyf-enabled", global = true, action = ArgAction::SetTrue)]
     pub hyf_enabled: bool,
     #[arg(long = "no-hyf-enabled", global = true, action = ArgAction::SetTrue)]
@@ -1315,6 +1318,8 @@ mod tests {
             "wss://relay.two",
             "--myc-executable",
             "bin/myc",
+            "--myc-status-timeout-ms",
+            "2500",
             "--hyf-enabled",
             "--hyf-executable",
             "bin/hyfd",
@@ -1361,6 +1366,7 @@ mod tests {
                 .and_then(|path| path.to_str()),
             Some("bin/myc")
         );
+        assert_eq!(parsed.myc_status_timeout_ms, Some(2500));
         assert!(parsed.hyf_enabled);
         assert_eq!(
             parsed

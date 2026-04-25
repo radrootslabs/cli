@@ -1259,10 +1259,14 @@ fn render_config_show(
             ("exports dir", view.local.exports_dir.as_str()),
         ],
     )?;
+    let myc_status_timeout_ms = view.myc.status_timeout_ms.to_string();
     render_pairs(
         stdout,
         "myc",
-        &[("executable", view.myc.executable.as_str())],
+        &[
+            ("executable", view.myc.executable.as_str()),
+            ("status timeout ms", myc_status_timeout_ms.as_str()),
+        ],
     )?;
     let write_plane_target = format_runtime_target(
         view.write_plane.target_kind.as_deref(),
@@ -4516,6 +4520,7 @@ mod tests {
                 },
                 myc: MycConfig {
                     executable: "myc".into(),
+                    status_timeout_ms: 2_000,
                 },
                 hyf: HyfConfig {
                     enabled: false,
@@ -4671,6 +4676,7 @@ mod tests {
                     },
                     myc: MycConfig {
                         executable: "myc".into(),
+                        status_timeout_ms: 2_000,
                     },
                     hyf: HyfConfig {
                         enabled: false,

@@ -33,6 +33,7 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
         "RADROOTS_MYC_EXECUTABLE",
+        "RADROOTS_MYC_STATUS_TIMEOUT_MS",
         "RADROOTS_RPC_URL",
         "RADROOTS_RPC_BEARER_TOKEN",
     ] {
@@ -49,7 +50,7 @@ fn write_user_config(workdir: &Path, contents: &str) {
 }
 
 #[test]
-fn myc_status_reports_ready_for_valid_full_status_payload() {
+fn myc_status_reports_ready_for_valid_signer_status_payload() {
     let _guard = myc_test_guard();
     let dir = tempdir().expect("tempdir");
     let executable = write_fake_myc(
@@ -111,6 +112,75 @@ fn myc_status_reports_unavailable_for_invalid_status_payload() {
         json["reason"]
             .as_str()
             .is_some_and(|value| value.contains("not valid JSON"))
+    );
+}
+
+#[test]
+fn myc_status_rejects_missing_signer_status_contract_version() {
+    let _guard = myc_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let mut payload = sample_status_payload(true);
+    payload
+        .as_object_mut()
+        .expect("payload object")
+        .remove("status_contract_version");
+    let executable = write_fake_myc(
+        dir.path(),
+        successful_status_script(payload.to_string()).as_str(),
+    );
+
+    let output = cli_command_in(dir.path())
+        .args([
+            "--json",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "myc",
+            "status",
+        ])
+        .output()
+        .expect("run myc status");
+
+    assert_eq!(output.status.code(), Some(4));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["state"], "unavailable");
+    assert!(
+        json["reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("contract version 1"))
+    );
+}
+
+#[test]
+fn myc_status_rejects_incompatible_signer_status_contract_version() {
+    let _guard = myc_test_guard();
+    let dir = tempdir().expect("tempdir");
+    let mut payload = sample_status_payload(true);
+    payload["status_contract_version"] = json!(99);
+    let executable = write_fake_myc(
+        dir.path(),
+        successful_status_script(payload.to_string()).as_str(),
+    );
+
+    let output = cli_command_in(dir.path())
+        .args([
+            "--json",
+            "--myc-executable",
+            executable.to_str().expect("executable path"),
+            "myc",
+            "status",
+        ])
+        .output()
+        .expect("run myc status");
+
+    assert_eq!(output.status.code(), Some(4));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let json: Value = serde_json::from_str(stdout.as_str()).expect("json output");
+    assert_eq!(json["state"], "unavailable");
+    assert!(
+        json["reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("contract version 99"))
     );
 }
 
@@ -684,12 +754,14 @@ fn myc_status_reports_unavailable_for_timeout() {
     let dir = tempdir().expect("tempdir");
     let executable = write_fake_myc(
         dir.path(),
-        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"full\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\nexec sleep 5\n",
+        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"signer\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\nexec sleep 5\n",
     );
 
     let output = cli_command_in(dir.path())
         .args([
             "--json",
+            "--myc-status-timeout-ms",
+            "25",
             "--myc-executable",
             executable.to_str().expect("executable path"),
             "myc",
@@ -705,7 +777,7 @@ fn myc_status_reports_unavailable_for_timeout() {
     assert!(
         json["reason"]
             .as_str()
-            .is_some_and(|value| value.contains("timed out"))
+            .is_some_and(|value| value.contains("timed out after 25ms"))
     );
 }
 
@@ -727,7 +799,7 @@ fn myc_test_guard() -> MutexGuard<'static, ()> {
 
 fn successful_status_script(payload_json: String) -> String {
     format!(
-        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"full\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\ncat <<'JSON'\n{payload_json}\nJSON\n"
+        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"signer\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\ncat <<'JSON'\n{payload_json}\nJSON\n"
     )
 }
 
@@ -751,6 +823,7 @@ fn sample_status_payload_with_permissions(ready: bool, permissions: &[&str]) -> 
     };
 
     json!({
+        "status_contract_version": 1,
         "status": service_status,
         "ready": ready,
         "reasons": reasons,
@@ -801,6 +874,7 @@ fn sample_multi_session_status_payload() -> Value {
     let first_user_public_key_hex = first_user.public_key_hex.clone();
 
     json!({
+        "status_contract_version": 1,
         "status": "healthy",
         "ready": true,
         "reasons": [],

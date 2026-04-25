@@ -51,6 +51,7 @@ fn cli_command_in(workdir: &Path) -> Command {
         "RADROOTS_SIGNER",
         "RADROOTS_RELAYS",
         "RADROOTS_MYC_EXECUTABLE",
+        "RADROOTS_MYC_STATUS_TIMEOUT_MS",
         "RADROOTS_RPC_URL",
         "RADROOTS_RPC_BEARER_TOKEN",
     ] {
@@ -97,7 +98,7 @@ fn write_fake_myc(dir: &Path, script: &str) -> std::path::PathBuf {
 
 fn successful_status_script(payload_json: String) -> String {
     format!(
-        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"full\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\ncat <<'JSON'\n{payload_json}\nJSON\n"
+        "#!/bin/sh\nif [ \"$1\" != \"status\" ] || [ \"$2\" != \"--view\" ] || [ \"$3\" != \"signer\" ]; then\n  echo \"unexpected args: $*\" >&2\n  exit 64\nfi\ncat <<'JSON'\n{payload_json}\nJSON\n"
     )
 }
 
@@ -114,6 +115,7 @@ fn sample_myc_status_payload(
         .to_owned();
     assert_ne!(signer_account_id, account_id);
     json!({
+        "status_contract_version": 1,
         "status": "healthy",
         "ready": true,
         "reasons": [],

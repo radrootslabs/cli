@@ -816,6 +816,7 @@ mod tests {
             },
             myc: MycConfig {
                 executable: PathBuf::from("myc"),
+                status_timeout_ms: 2_000,
             },
             hyf: HyfConfig {
                 enabled: hyf_enabled,
