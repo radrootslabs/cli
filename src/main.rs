@@ -3,6 +3,7 @@
 mod cli;
 mod commands;
 mod domain;
+mod operation_adapter;
 mod operation_registry;
 mod output_contract;
 mod render;
@@ -30,6 +31,7 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode, runtime::RuntimeError> {
     debug_assert!(operation_registry::registry_linkage_is_valid());
+    debug_assert!(operation_adapter::adapter_registry_linkage_is_valid());
     let args = CliArgs::parse();
     let config = RuntimeConfig::from_system(&args)?;
     validate_command_contracts(&args.command, &config)?;
