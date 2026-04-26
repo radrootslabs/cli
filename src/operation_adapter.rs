@@ -3,6 +3,7 @@
 use std::fmt::Debug;
 
 use serde::Serialize;
+use serde_json::{Map, Value};
 
 use crate::operation_registry::{OPERATION_REGISTRY, OperationSpec, get_operation};
 use crate::output_contract::{
@@ -118,17 +119,37 @@ impl OperationContext {
     }
 }
 
-pub trait OperationRequestPayload: Debug + Clone + PartialEq + Eq + 'static {
+pub type OperationData = Map<String, Value>;
+
+pub trait OperationRequestPayload: Debug + Clone + PartialEq + 'static {
     const OPERATION_ID: &'static str;
     const REQUEST_TYPE: &'static str;
 }
 
-pub trait OperationResultPayload: Debug + Clone + PartialEq + Eq + Serialize + 'static {
+pub trait OperationRequestData: OperationRequestPayload {
+    fn input(&self) -> &OperationData;
+}
+
+pub trait OperationResultPayload: Debug + Clone + PartialEq + Serialize + 'static {
     const OPERATION_ID: &'static str;
     const RESULT_TYPE: &'static str;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub trait OperationResultData: OperationResultPayload + Sized {
+    fn from_data(data: OperationData) -> Self;
+
+    fn from_value(value: Value) -> Self {
+        Self::from_data(value_to_data(value))
+    }
+
+    fn from_serializable<T: Serialize>(value: &T) -> Result<Self, OperationAdapterError> {
+        Ok(Self::from_value(serde_json::to_value(value).map_err(
+            |error| OperationAdapterError::Serialization(error.to_string()),
+        )?))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct OperationRequest<P: OperationRequestPayload> {
     pub spec: &'static OperationSpec,
     pub context: OperationContext,
@@ -272,11 +293,18 @@ pub enum OperationAdapterError {
     },
     #[error("failed to serialize operation result: {0}")]
     Serialization(String),
+    #[error("invalid operation input for `{operation_id}`: {message}")]
+    InvalidInput {
+        operation_id: String,
+        message: String,
+    },
+    #[error("operation runtime error: {0}")]
+    Runtime(String),
 }
 
 macro_rules! mvp_operation_contracts {
     ($( $variant:ident => ($request:ident, $result:ident, $operation_id:literal) ),+ $(,)?) => {
-        #[derive(Debug, Clone, PartialEq, Eq)]
+        #[derive(Debug, Clone, PartialEq)]
         pub enum MvpOperationRequest {
             $( $variant(OperationRequest<$request>), )+
         }
@@ -355,23 +383,79 @@ macro_rules! mvp_operation_contracts {
         }
 
         $(
-            #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
-            pub struct $request {}
+            #[derive(Debug, Default, Clone, PartialEq, Serialize)]
+            pub struct $request {
+                #[serde(flatten)]
+                pub input: OperationData,
+            }
+
+            impl $request {
+                pub fn from_data(input: OperationData) -> Self {
+                    Self { input }
+                }
+            }
 
             impl OperationRequestPayload for $request {
                 const OPERATION_ID: &'static str = $operation_id;
                 const REQUEST_TYPE: &'static str = stringify!($request);
             }
 
-            #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
-            pub struct $result {}
+            impl OperationRequestData for $request {
+                fn input(&self) -> &OperationData {
+                    &self.input
+                }
+            }
+
+            #[derive(Debug, Default, Clone, PartialEq, Serialize)]
+            pub struct $result {
+                #[serde(flatten)]
+                pub data: OperationData,
+            }
+
+            impl $result {
+                pub fn from_data(data: OperationData) -> Self {
+                    Self { data }
+                }
+
+                pub fn from_value(value: Value) -> Self {
+                    Self {
+                        data: value_to_data(value),
+                    }
+                }
+
+                pub fn from_serializable<T: Serialize>(
+                    value: &T,
+                ) -> Result<Self, OperationAdapterError> {
+                    Ok(Self::from_value(
+                        serde_json::to_value(value)
+                            .map_err(|error| OperationAdapterError::Serialization(error.to_string()))?,
+                    ))
+                }
+            }
 
             impl OperationResultPayload for $result {
                 const OPERATION_ID: &'static str = $operation_id;
                 const RESULT_TYPE: &'static str = stringify!($result);
             }
+
+            impl OperationResultData for $result {
+                fn from_data(data: OperationData) -> Self {
+                    Self { data }
+                }
+            }
         )+
     };
+}
+
+fn value_to_data(value: Value) -> OperationData {
+    match value {
+        Value::Object(map) => map,
+        other => {
+            let mut map = OperationData::new();
+            map.insert("value".to_owned(), other);
+            map
+        }
+    }
 }
 
 mvp_operation_contracts! {

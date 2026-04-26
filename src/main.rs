@@ -4,6 +4,7 @@ mod cli;
 mod commands;
 mod domain;
 mod operation_adapter;
+mod operation_core;
 mod operation_registry;
 mod output_contract;
 mod render;
