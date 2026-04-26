@@ -7,6 +7,7 @@ mod operation_registry;
 mod output_contract;
 mod render;
 mod runtime;
+mod target_cli;
 
 use std::io::Write;
 use std::process::ExitCode;

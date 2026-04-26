@@ -1,0 +1,787 @@
+#![allow(dead_code)]
+
+use std::path::PathBuf;
+
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TargetOutputFormat {
+    Human,
+    Json,
+    Ndjson,
+}
+
+#[derive(Debug, Parser, Clone)]
+#[command(name = "radroots")]
+pub struct TargetCliArgs {
+    #[arg(long = "format", global = true, value_enum, default_value = "human")]
+    pub format: TargetOutputFormat,
+    #[arg(long = "account-id", global = true)]
+    pub account_id: Option<String>,
+    #[arg(long = "farm-id", global = true)]
+    pub farm_id: Option<String>,
+    #[arg(long = "profile", global = true)]
+    pub profile: Option<String>,
+    #[arg(long = "signer-session-id", global = true)]
+    pub signer_session_id: Option<String>,
+    #[arg(long = "relay", global = true)]
+    pub relay: Vec<String>,
+    #[arg(long = "offline", global = true, action = ArgAction::SetTrue, conflicts_with = "online")]
+    pub offline: bool,
+    #[arg(long = "online", global = true, action = ArgAction::SetTrue, conflicts_with = "offline")]
+    pub online: bool,
+    #[arg(long = "dry-run", global = true, action = ArgAction::SetTrue)]
+    pub dry_run: bool,
+    #[arg(long = "idempotency-key", global = true)]
+    pub idempotency_key: Option<String>,
+    #[arg(long = "correlation-id", global = true)]
+    pub correlation_id: Option<String>,
+    #[arg(long = "approval-token", global = true)]
+    pub approval_token: Option<String>,
+    #[arg(long = "no-input", global = true, action = ArgAction::SetTrue)]
+    pub no_input: bool,
+    #[arg(long = "quiet", global = true, action = ArgAction::SetTrue)]
+    pub quiet: bool,
+    #[arg(long = "verbose", global = true, action = ArgAction::SetTrue)]
+    pub verbose: bool,
+    #[arg(long = "trace", global = true, action = ArgAction::SetTrue)]
+    pub trace: bool,
+    #[arg(long = "no-color", global = true, action = ArgAction::SetTrue)]
+    pub no_color: bool,
+    #[command(subcommand)]
+    pub command: TargetCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum TargetCommand {
+    Workspace(WorkspaceArgs),
+    Health(HealthArgs),
+    Config(ConfigArgs),
+    Account(AccountArgs),
+    Signer(SignerArgs),
+    Relay(RelayArgs),
+    Store(StoreArgs),
+    Sync(SyncArgs),
+    Runtime(RuntimeArgs),
+    Job(JobArgs),
+    Farm(FarmArgs),
+    Listing(ListingArgs),
+    Market(MarketArgs),
+    Basket(BasketArgs),
+    Order(OrderArgs),
+}
+
+impl TargetCommand {
+    pub fn operation_id(&self) -> &'static str {
+        match self {
+            Self::Workspace(args) => match args.command {
+                WorkspaceCommand::Init => "workspace.init",
+                WorkspaceCommand::Get => "workspace.get",
+            },
+            Self::Health(args) => match &args.command {
+                HealthCommand::Status(status) => match status.command {
+                    HealthStatusCommand::Get => "health.status.get",
+                },
+                HealthCommand::Check(check) => match check.command {
+                    HealthCheckCommand::Run => "health.check.run",
+                },
+            },
+            Self::Config(args) => match args.command {
+                ConfigCommand::Get => "config.get",
+            },
+            Self::Account(args) => match &args.command {
+                AccountCommand::Create => "account.create",
+                AccountCommand::Import => "account.import",
+                AccountCommand::Get => "account.get",
+                AccountCommand::List => "account.list",
+                AccountCommand::Remove => "account.remove",
+                AccountCommand::Selection(selection) => match selection.command {
+                    AccountSelectionCommand::Get => "account.selection.get",
+                    AccountSelectionCommand::Update => "account.selection.update",
+                    AccountSelectionCommand::Clear => "account.selection.clear",
+                },
+            },
+            Self::Signer(args) => match &args.command {
+                SignerCommand::Status(status) => match status.command {
+                    SignerStatusCommand::Get => "signer.status.get",
+                },
+            },
+            Self::Relay(args) => match args.command {
+                RelayCommand::List => "relay.list",
+            },
+            Self::Store(args) => match &args.command {
+                StoreCommand::Init => "store.init",
+                StoreCommand::Status(status) => match status.command {
+                    StoreStatusCommand::Get => "store.status.get",
+                },
+                StoreCommand::Export => "store.export",
+                StoreCommand::Backup(backup) => match backup.command {
+                    StoreBackupCommand::Create => "store.backup.create",
+                },
+            },
+            Self::Sync(args) => match &args.command {
+                SyncCommand::Status(status) => match status.command {
+                    SyncStatusCommand::Get => "sync.status.get",
+                },
+                SyncCommand::Pull => "sync.pull",
+                SyncCommand::Push => "sync.push",
+                SyncCommand::Watch => "sync.watch",
+            },
+            Self::Runtime(args) => match &args.command {
+                RuntimeCommand::Status(status) => match status.command {
+                    RuntimeStatusCommand::Get => "runtime.status.get",
+                },
+                RuntimeCommand::Start => "runtime.start",
+                RuntimeCommand::Stop => "runtime.stop",
+                RuntimeCommand::Restart => "runtime.restart",
+                RuntimeCommand::Log(log) => match log.command {
+                    RuntimeLogCommand::Watch => "runtime.log.watch",
+                },
+                RuntimeCommand::Config(config) => match config.command {
+                    RuntimeConfigCommand::Get => "runtime.config.get",
+                },
+            },
+            Self::Job(args) => match args.command {
+                JobCommand::Get => "job.get",
+                JobCommand::List => "job.list",
+                JobCommand::Watch => "job.watch",
+            },
+            Self::Farm(args) => match &args.command {
+                FarmCommand::Create => "farm.create",
+                FarmCommand::Get => "farm.get",
+                FarmCommand::Profile(profile) => match profile.command {
+                    FarmProfileCommand::Update => "farm.profile.update",
+                },
+                FarmCommand::Location(location) => match location.command {
+                    FarmLocationCommand::Update => "farm.location.update",
+                },
+                FarmCommand::Fulfillment(fulfillment) => match fulfillment.command {
+                    FarmFulfillmentCommand::Update => "farm.fulfillment.update",
+                },
+                FarmCommand::Readiness(readiness) => match readiness.command {
+                    FarmReadinessCommand::Check => "farm.readiness.check",
+                },
+                FarmCommand::Publish => "farm.publish",
+            },
+            Self::Listing(args) => match args.command {
+                ListingCommand::Create => "listing.create",
+                ListingCommand::Get => "listing.get",
+                ListingCommand::List => "listing.list",
+                ListingCommand::Update => "listing.update",
+                ListingCommand::Validate => "listing.validate",
+                ListingCommand::Publish => "listing.publish",
+                ListingCommand::Archive => "listing.archive",
+            },
+            Self::Market(args) => match &args.command {
+                MarketCommand::Refresh => "market.refresh",
+                MarketCommand::Product(product) => match product.command {
+                    MarketProductCommand::Search => "market.product.search",
+                },
+                MarketCommand::Listing(listing) => match listing.command {
+                    MarketListingCommand::Get => "market.listing.get",
+                },
+            },
+            Self::Basket(args) => match &args.command {
+                BasketCommand::Create => "basket.create",
+                BasketCommand::Get => "basket.get",
+                BasketCommand::List => "basket.list",
+                BasketCommand::Item(item) => match item.command {
+                    BasketItemCommand::Add => "basket.item.add",
+                    BasketItemCommand::Update => "basket.item.update",
+                    BasketItemCommand::Remove => "basket.item.remove",
+                },
+                BasketCommand::Validate => "basket.validate",
+                BasketCommand::Quote(quote) => match quote.command {
+                    BasketQuoteCommand::Create => "basket.quote.create",
+                },
+            },
+            Self::Order(args) => match &args.command {
+                OrderCommand::Submit => "order.submit",
+                OrderCommand::Get => "order.get",
+                OrderCommand::List => "order.list",
+                OrderCommand::Event(event) => match event.command {
+                    OrderEventCommand::List => "order.event.list",
+                    OrderEventCommand::Watch => "order.event.watch",
+                },
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct WorkspaceArgs {
+    #[command(subcommand)]
+    pub command: WorkspaceCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum WorkspaceCommand {
+    Init,
+    Get,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct HealthArgs {
+    #[command(subcommand)]
+    pub command: HealthCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum HealthCommand {
+    Status(HealthStatusArgs),
+    Check(HealthCheckArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct HealthStatusArgs {
+    #[command(subcommand)]
+    pub command: HealthStatusCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum HealthStatusCommand {
+    Get,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct HealthCheckArgs {
+    #[command(subcommand)]
+    pub command: HealthCheckCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum HealthCheckCommand {
+    Run,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub command: ConfigCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum ConfigCommand {
+    Get,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountArgs {
+    #[command(subcommand)]
+    pub command: AccountCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum AccountCommand {
+    Create,
+    Import,
+    Get,
+    List,
+    Remove,
+    Selection(AccountSelectionArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountSelectionArgs {
+    #[command(subcommand)]
+    pub command: AccountSelectionCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum AccountSelectionCommand {
+    Get,
+    Update,
+    Clear,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SignerArgs {
+    #[command(subcommand)]
+    pub command: SignerCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SignerCommand {
+    Status(SignerStatusArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SignerStatusArgs {
+    #[command(subcommand)]
+    pub command: SignerStatusCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum SignerStatusCommand {
+    Get,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RelayArgs {
+    #[command(subcommand)]
+    pub command: RelayCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum RelayCommand {
+    List,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct StoreArgs {
+    #[command(subcommand)]
+    pub command: StoreCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum StoreCommand {
+    Init,
+    Status(StoreStatusArgs),
+    Export,
+    Backup(StoreBackupArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct StoreStatusArgs {
+    #[command(subcommand)]
+    pub command: StoreStatusCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum StoreStatusCommand {
+    Get,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct StoreBackupArgs {
+    #[command(subcommand)]
+    pub command: StoreBackupCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum StoreBackupCommand {
+    Create,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SyncArgs {
+    #[command(subcommand)]
+    pub command: SyncCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum SyncCommand {
+    Status(SyncStatusArgs),
+    Pull,
+    Push,
+    Watch,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SyncStatusArgs {
+    #[command(subcommand)]
+    pub command: SyncStatusCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum SyncStatusCommand {
+    Get,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RuntimeArgs {
+    #[command(subcommand)]
+    pub command: RuntimeCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum RuntimeCommand {
+    Status(RuntimeStatusArgs),
+    Start,
+    Stop,
+    Restart,
+    Log(RuntimeLogArgs),
+    Config(RuntimeConfigArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RuntimeStatusArgs {
+    #[command(subcommand)]
+    pub command: RuntimeStatusCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum RuntimeStatusCommand {
+    Get,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RuntimeLogArgs {
+    #[command(subcommand)]
+    pub command: RuntimeLogCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum RuntimeLogCommand {
+    Watch,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RuntimeConfigArgs {
+    #[command(subcommand)]
+    pub command: RuntimeConfigCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum RuntimeConfigCommand {
+    Get,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct JobArgs {
+    #[command(subcommand)]
+    pub command: JobCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum JobCommand {
+    Get,
+    List,
+    Watch,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmArgs {
+    #[command(subcommand)]
+    pub command: FarmCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum FarmCommand {
+    Create,
+    Get,
+    Profile(FarmProfileArgs),
+    Location(FarmLocationArgs),
+    Fulfillment(FarmFulfillmentArgs),
+    Readiness(FarmReadinessArgs),
+    Publish,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmProfileArgs {
+    #[command(subcommand)]
+    pub command: FarmProfileCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum FarmProfileCommand {
+    Update,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmLocationArgs {
+    #[command(subcommand)]
+    pub command: FarmLocationCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum FarmLocationCommand {
+    Update,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmFulfillmentArgs {
+    #[command(subcommand)]
+    pub command: FarmFulfillmentCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum FarmFulfillmentCommand {
+    Update,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmReadinessArgs {
+    #[command(subcommand)]
+    pub command: FarmReadinessCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum FarmReadinessCommand {
+    Check,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListingArgs {
+    #[command(subcommand)]
+    pub command: ListingCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum ListingCommand {
+    Create,
+    Get,
+    List,
+    Update,
+    Validate,
+    Publish,
+    Archive,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MarketArgs {
+    #[command(subcommand)]
+    pub command: MarketCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum MarketCommand {
+    Refresh,
+    Product(MarketProductArgs),
+    Listing(MarketListingArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MarketProductArgs {
+    #[command(subcommand)]
+    pub command: MarketProductCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum MarketProductCommand {
+    Search,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MarketListingArgs {
+    #[command(subcommand)]
+    pub command: MarketListingCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum MarketListingCommand {
+    Get,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketArgs {
+    #[command(subcommand)]
+    pub command: BasketCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum BasketCommand {
+    Create,
+    Get,
+    List,
+    Item(BasketItemArgs),
+    Validate,
+    Quote(BasketQuoteArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketItemArgs {
+    #[command(subcommand)]
+    pub command: BasketItemCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum BasketItemCommand {
+    Add,
+    Update,
+    Remove,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketQuoteArgs {
+    #[command(subcommand)]
+    pub command: BasketQuoteCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum BasketQuoteCommand {
+    Create,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderArgs {
+    #[command(subcommand)]
+    pub command: OrderCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrderCommand {
+    Submit,
+    Get,
+    List,
+    Event(OrderEventArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderEventArgs {
+    #[command(subcommand)]
+    pub command: OrderEventCommand,
+}
+
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub enum OrderEventCommand {
+    List,
+    Watch,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct PathOutputArgs {
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use clap::{CommandFactory, Parser};
+
+    use super::{TargetCliArgs, TargetOutputFormat};
+    use crate::operation_registry::OPERATION_REGISTRY;
+
+    #[test]
+    fn target_parser_accepts_every_mvp_registry_path() {
+        for operation in OPERATION_REGISTRY {
+            let parsed = TargetCliArgs::try_parse_from(operation.cli_path.split_whitespace())
+                .unwrap_or_else(|error| {
+                    panic!("{} failed to parse: {error}", operation.cli_path);
+                });
+            assert_eq!(parsed.command.operation_id(), operation.operation_id);
+        }
+    }
+
+    #[test]
+    fn target_parser_exposes_only_mvp_top_level_namespaces() {
+        let actual = TargetCliArgs::command()
+            .get_subcommands()
+            .map(|command| command.get_name().to_owned())
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "workspace",
+            "health",
+            "config",
+            "account",
+            "signer",
+            "relay",
+            "store",
+            "sync",
+            "runtime",
+            "job",
+            "farm",
+            "listing",
+            "market",
+            "basket",
+            "order",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn target_global_flags_parse() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "--format",
+            "ndjson",
+            "--account-id",
+            "acct_test",
+            "--farm-id",
+            "farm_test",
+            "--profile",
+            "repo_local",
+            "--signer-session-id",
+            "sess_test",
+            "--relay",
+            "wss://relay.one",
+            "--relay",
+            "wss://relay.two",
+            "--offline",
+            "--dry-run",
+            "--idempotency-key",
+            "idem_test",
+            "--correlation-id",
+            "corr_test",
+            "--approval-token",
+            "approval_test",
+            "--no-input",
+            "--quiet",
+            "--no-color",
+            "workspace",
+            "get",
+        ])
+        .expect("target args parse");
+
+        assert_eq!(parsed.format, TargetOutputFormat::Ndjson);
+        assert_eq!(parsed.account_id.as_deref(), Some("acct_test"));
+        assert_eq!(parsed.farm_id.as_deref(), Some("farm_test"));
+        assert_eq!(parsed.profile.as_deref(), Some("repo_local"));
+        assert_eq!(parsed.signer_session_id.as_deref(), Some("sess_test"));
+        assert_eq!(
+            parsed.relay,
+            vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
+        );
+        assert!(parsed.offline);
+        assert!(parsed.dry_run);
+        assert_eq!(parsed.idempotency_key.as_deref(), Some("idem_test"));
+        assert_eq!(parsed.correlation_id.as_deref(), Some("corr_test"));
+        assert_eq!(parsed.approval_token.as_deref(), Some("approval_test"));
+        assert!(parsed.no_input);
+        assert!(parsed.quiet);
+        assert!(parsed.no_color);
+        assert_eq!(parsed.command.operation_id(), "workspace.get");
+    }
+
+    #[test]
+    fn target_parser_rejects_removed_global_flags() {
+        let rejected = [
+            vec!["radroots", "--output", "json", "config", "get"],
+            vec!["radroots", "--json", "config", "get"],
+            vec!["radroots", "--ndjson", "config", "get"],
+            vec!["radroots", "--yes", "config", "get"],
+            vec!["radroots", "--non-interactive", "config", "get"],
+        ];
+
+        for args in rejected {
+            assert!(TargetCliArgs::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn target_parser_rejects_removed_top_level_commands() {
+        for command in [
+            "setup", "status", "doctor", "sell", "find", "local", "net", "myc", "rpc",
+        ] {
+            assert!(TargetCliArgs::try_parse_from(["radroots", command]).is_err());
+        }
+    }
+
+    #[test]
+    fn target_parser_rejects_deferred_namespaces() {
+        for command in ["product", "message", "approval", "agent"] {
+            assert!(TargetCliArgs::try_parse_from(["radroots", command]).is_err());
+        }
+    }
+
+    #[test]
+    fn target_parser_rejects_online_offline_conflict() {
+        assert!(
+            TargetCliArgs::try_parse_from([
+                "radroots",
+                "--online",
+                "--offline",
+                "health",
+                "status",
+                "get"
+            ])
+            .is_err()
+        );
+    }
+}
