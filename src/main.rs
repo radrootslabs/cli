@@ -5,6 +5,7 @@ mod commands;
 mod domain;
 mod operation_adapter;
 mod operation_core;
+mod operation_farm;
 mod operation_registry;
 mod operation_runtime;
 mod output_contract;
