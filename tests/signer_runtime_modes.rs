@@ -641,6 +641,83 @@ fn local_farm_publish_fails_without_configured_relay() {
 }
 
 #[test]
+fn local_seller_publish_commands_attempt_configured_direct_relay() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_d_tag = farm["result"]["config"]["farm_d_tag"]
+        .as_str()
+        .expect("farm d tag");
+    let relay = "ws://127.0.0.1:9";
+
+    let (farm_output, farm_value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        relay,
+        "--approval-token",
+        "approve",
+        "farm",
+        "publish",
+    ]);
+    assert!(!farm_output.status.success());
+    assert_direct_relay_connection_failure(&farm_value, "farm.publish", &["farm", "publish"]);
+
+    let listing_file = create_listing_draft(&sandbox, "direct-relay-attempt");
+    make_listing_publishable(&listing_file, farm_d_tag);
+    let listing_file_arg = listing_file.to_string_lossy();
+
+    let (publish_output, publish_value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        relay,
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file_arg.as_ref(),
+    ]);
+    assert!(!publish_output.status.success());
+    assert_direct_relay_connection_failure(
+        &publish_value,
+        "listing.publish",
+        &["listing", "publish"],
+    );
+
+    let (archive_output, archive_value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        relay,
+        "--approval-token",
+        "approve",
+        "listing",
+        "archive",
+        listing_file_arg.as_ref(),
+    ]);
+    assert!(!archive_output.status.success());
+    assert_direct_relay_connection_failure(
+        &archive_value,
+        "listing.archive",
+        &["listing", "archive"],
+    );
+}
+
+#[test]
 fn watch_only_farm_publish_dry_run_fails_as_account_watch_only() {
     let sandbox = RadrootsCliSandbox::new();
     let public_identity = identity_public(13);
@@ -763,4 +840,22 @@ fn configure_myc_mode(sandbox: &RadrootsCliSandbox, executable: &Path) {
         "[signer]\nmode = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
         toml_string(executable.display().to_string().as_str())
     ));
+}
+
+fn assert_direct_relay_connection_failure(
+    value: &serde_json::Value,
+    operation_id: &str,
+    args: &[&str],
+) {
+    assert_eq!(value["operation_id"], operation_id);
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "network_unavailable");
+    assert_ne!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "network");
+    assert_contains(
+        &value["errors"][0]["message"],
+        "direct relay connection failed",
+    );
+    assert_no_removed_command_reference(value, args);
+    assert_no_daemon_runtime_reference(value, args);
 }

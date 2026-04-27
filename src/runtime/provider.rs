@@ -8,7 +8,7 @@ use crate::runtime::config::{
 #[cfg(test)]
 use crate::runtime::hyf;
 
-const WRITE_PLANE_UNAVAILABLE_DETAIL: &str = "actor-authored relay writes are unavailable until direct Nostr relay publishing is implemented";
+const WRITE_PLANE_UNAVAILABLE_DETAIL: &str = "legacy write-plane provider is unavailable; use seller publish commands with configured direct relays";
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,7 +160,7 @@ fn unavailable_write_plane_view() -> WritePlaneProviderView {
         binding_model: "direct_relay_publish".to_owned(),
         state: "unavailable".to_owned(),
         provenance: ProviderProvenance::Unavailable.as_str().to_owned(),
-        source: "direct relay publishing is not implemented".to_owned(),
+        source: "legacy write-plane provider is not active".to_owned(),
         target_kind: None,
         target: None,
         detail: WRITE_PLANE_UNAVAILABLE_DETAIL.to_owned(),
@@ -344,17 +344,14 @@ mod tests {
     }
 
     #[test]
-    fn write_plane_is_unavailable_until_direct_relay_publish_lands() {
+    fn write_plane_provider_is_not_active_for_direct_relay_publish() {
         let view = resolve_write_plane_provider(&sample_config(Vec::new(), false));
         assert_eq!(view.provider_runtime_id, "nostr_relay");
         assert_eq!(view.binding_model, "direct_relay_publish");
         assert_eq!(view.state, "unavailable");
         assert_eq!(view.provenance, ProviderProvenance::Unavailable.as_str());
         assert!(view.target.is_none());
-        assert!(
-            view.detail
-                .contains("direct Nostr relay publishing is implemented")
-        );
+        assert!(view.detail.contains("seller publish commands"));
     }
 
     #[test]
@@ -363,7 +360,7 @@ mod tests {
             .expect_err("write plane target");
         assert_eq!(
             error,
-            "actor-authored relay writes are unavailable until direct Nostr relay publishing is implemented"
+            "legacy write-plane provider is unavailable; use seller publish commands with configured direct relays"
         );
     }
 
