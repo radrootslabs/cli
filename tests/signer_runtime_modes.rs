@@ -403,6 +403,8 @@ fn local_listing_publish_fails_without_local_account_authority() {
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
+        "--relay",
+        "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
         "listing",
@@ -445,7 +447,7 @@ fn local_listing_publish_dry_run_validates_local_account_authority() {
 }
 
 #[test]
-fn local_listing_publish_fails_until_direct_relay_publish_exists() {
+fn local_listing_publish_fails_without_configured_relay() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let listing_file = create_listing_draft(&sandbox, "local-unavailable");
@@ -464,11 +466,11 @@ fn local_listing_publish_fails_until_direct_relay_publish_exists() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"], serde_json::Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+    assert_eq!(value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "direct Nostr relay publishing is not implemented",
+        "requires at least one configured relay",
     );
     assert_no_removed_command_reference(&value, &["listing", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["listing", "publish"]);
@@ -545,6 +547,8 @@ fn local_listing_publish_fails_when_selected_account_does_not_match_seller() {
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
+        "--relay",
+        "ws://127.0.0.1:9",
         "--account-id",
         second_account_id,
         "--approval-token",
@@ -596,7 +600,7 @@ fn local_farm_publish_dry_run_validates_secret_backed_account() {
 }
 
 #[test]
-fn local_farm_publish_fails_until_direct_relay_publish_exists() {
+fn local_farm_publish_fails_without_configured_relay() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     sandbox.json_success(&[
@@ -626,11 +630,11 @@ fn local_farm_publish_fails_until_direct_relay_publish_exists() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "farm.publish");
     assert_eq!(value["result"], serde_json::Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+    assert_eq!(value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "direct Nostr relay publishing is not implemented",
+        "requires at least one configured relay",
     );
     assert_no_removed_command_reference(&value, &["farm", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish"]);
@@ -698,6 +702,8 @@ fn watch_only_listing_publish_fails_as_account_watch_only() {
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
+        "--relay",
+        "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
         "listing",

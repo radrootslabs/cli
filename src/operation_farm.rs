@@ -143,6 +143,7 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
                 request.operation_id(),
             ));
         }
+        require_relay_target(&request, self.config)?;
 
         let view = crate::runtime::farm::publish(self.config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
@@ -233,6 +234,26 @@ fn farm_publish_result(
             }),
         )),
     }
+}
+
+fn require_relay_target<P>(
+    request: &OperationRequest<P>,
+    config: &RuntimeConfig,
+) -> Result<(), OperationAdapterError>
+where
+    P: OperationRequestPayload,
+{
+    if request.context.dry_run || !config.relay.urls.is_empty() {
+        return Ok(());
+    }
+
+    Err(OperationAdapterError::NetworkUnavailable {
+        operation_id: request.operation_id().to_owned(),
+        message: format!(
+            "`{}` requires at least one configured relay for direct relay publication",
+            request.spec.cli_path
+        ),
+    })
 }
 
 fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {

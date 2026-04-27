@@ -1285,11 +1285,11 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     assert_eq!(unavailable_publish["operation_id"], "listing.publish");
     assert_eq!(
         unavailable_publish["errors"][0]["code"],
-        "operation_unavailable"
+        "network_unavailable"
     );
     assert_eq!(
         unavailable_publish["errors"][0]["detail"]["class"],
-        "operation"
+        "network"
     );
     assert_no_removed_command_reference(&unavailable_publish, &["listing", "publish"]);
     assert_no_daemon_runtime_reference(&unavailable_publish, &["listing", "publish"]);
@@ -1307,11 +1307,11 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     assert_eq!(unavailable_archive["operation_id"], "listing.archive");
     assert_eq!(
         unavailable_archive["errors"][0]["code"],
-        "operation_unavailable"
+        "network_unavailable"
     );
     assert_eq!(
         unavailable_archive["errors"][0]["detail"]["class"],
-        "operation"
+        "network"
     );
     assert_no_removed_command_reference(&unavailable_archive, &["listing", "archive"]);
     assert_no_daemon_runtime_reference(&unavailable_archive, &["listing", "archive"]);
