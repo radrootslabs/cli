@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::domain::runtime::{CommandDisposition, LocalBackupView};
 use crate::operation_adapter::{
     AccountCreateRequest, AccountCreateResult, AccountGetRequest, AccountGetResult,
     AccountImportRequest, AccountImportResult, AccountListRequest, AccountListResult,
@@ -19,8 +20,9 @@ use crate::operation_adapter::{
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{
     account_resolution_view, account_summary_view, clear_default_account,
-    create_or_migrate_default_account, import_public_identity, remove_account,
-    resolve_account_resolution, select_account, snapshot, unresolved_account_reason,
+    create_or_migrate_default_account, import_public_identity, preview_account_removal,
+    preview_public_identity_import, remove_account, resolve_account_resolution,
+    resolve_account_selector, select_account, snapshot, unresolved_account_reason,
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
@@ -220,10 +222,15 @@ impl OperationService<AccountImportRequest> for CoreOperationService<'_> {
         let path = required_path(&request, "path")?;
         let make_default = bool_input(&request, "default").unwrap_or(false);
         if request.context.dry_run {
+            let account = map_expected_runtime(
+                request.operation_id(),
+                preview_public_identity_import(self.config, path.as_path(), make_default),
+            )?;
             return json_operation_result::<AccountImportResult>(json!({
                 "state": "dry_run",
                 "path": path.display().to_string(),
                 "default": make_default,
+                "account": account_summary_view(&account),
             }));
         }
         if request.context.approval_token.is_none() {
@@ -232,11 +239,10 @@ impl OperationService<AccountImportRequest> for CoreOperationService<'_> {
             ));
         }
 
-        let account = map_runtime(import_public_identity(
-            self.config,
-            path.as_path(),
-            make_default,
-        ))?;
+        let account = map_expected_runtime(
+            request.operation_id(),
+            import_public_identity(self.config, path.as_path(), make_default),
+        )?;
         json_operation_result::<AccountImportResult>(json!({
             "state": "imported",
             "account": account_summary_view(&account),
@@ -304,9 +310,15 @@ impl OperationService<AccountRemoveRequest> for CoreOperationService<'_> {
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let selector = required_string(&request, "selector")?;
         if request.context.dry_run {
+            let preview =
+                preview_account_removal(self.config, selector.as_str()).map_err(|error| {
+                    OperationAdapterError::unconfigured(request.operation_id(), error.to_string())
+                })?;
             return json_operation_result::<AccountRemoveResult>(json!({
                 "state": "dry_run",
-                "selector": selector,
+                "removed_account": account_summary_view(&preview.account),
+                "default_would_clear": preview.default_would_clear,
+                "remaining_account_count": preview.remaining_account_count,
             }));
         }
         if request.context.approval_token.is_none() {
@@ -350,9 +362,13 @@ impl OperationService<AccountSelectionUpdateRequest> for CoreOperationService<'_
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let selector = required_string(&request, "selector")?;
         if request.context.dry_run {
+            let account =
+                resolve_account_selector(self.config, selector.as_str()).map_err(|error| {
+                    OperationAdapterError::unconfigured(request.operation_id(), error.to_string())
+                })?;
             return json_operation_result::<AccountSelectionUpdateResult>(json!({
                 "state": "dry_run",
-                "selector": selector,
+                "account": account_summary_view(&account),
             }));
         }
 
@@ -439,11 +455,10 @@ impl OperationService<StoreExportRequest> for CoreOperationService<'_> {
             }
         };
         if request.context.dry_run {
-            return json_operation_result::<StoreExportResult>(json!({
-                "state": "dry_run",
-                "format": format.as_str(),
-                "file": output.display().to_string(),
-            }));
+            return Err(invalid_input(
+                request.operation_id(),
+                "`radroots store export` does not support --dry-run".to_owned(),
+            ));
         }
 
         let view = map_runtime(crate::runtime::local::export(
@@ -465,14 +480,18 @@ impl OperationService<StoreBackupCreateRequest> for CoreOperationService<'_> {
         let output = optional_path(&request, "output")
             .unwrap_or_else(|| self.config.local.backups_dir.join("store-backup.json"));
         if request.context.dry_run {
-            return json_operation_result::<StoreBackupCreateResult>(json!({
-                "state": "dry_run",
-                "file": output.display().to_string(),
-            }));
+            let view = map_expected_runtime(
+                request.operation_id(),
+                crate::runtime::local::backup_preflight(self.config, output.as_path()),
+            )?;
+            return local_backup_result(request.operation_id(), &view);
         }
 
-        let view = map_runtime(crate::runtime::local::backup(self.config, output.as_path()))?;
-        serialized_operation_result::<StoreBackupCreateResult, _>(&view)
+        let view = map_expected_runtime(
+            request.operation_id(),
+            crate::runtime::local::backup(self.config, output.as_path()),
+        )?;
+        local_backup_result(request.operation_id(), &view)
     }
 }
 
@@ -493,6 +512,47 @@ where
 
 fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
     result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
+}
+
+fn map_expected_runtime<T>(
+    operation_id: &str,
+    result: Result<T, RuntimeError>,
+) -> Result<T, OperationAdapterError> {
+    result.map_err(|error| OperationAdapterError::runtime_failure(operation_id, error))
+}
+
+fn local_backup_result(
+    operation_id: &str,
+    view: &LocalBackupView,
+) -> Result<OperationResult<StoreBackupCreateResult>, OperationAdapterError> {
+    match view.disposition() {
+        CommandDisposition::Success => {
+            serialized_operation_result::<StoreBackupCreateResult, _>(view)
+        }
+        CommandDisposition::Unconfigured => Err(OperationAdapterError::unconfigured(
+            operation_id,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| "store backup is unconfigured".to_owned()),
+        )),
+        CommandDisposition::ExternalUnavailable => Err(OperationAdapterError::unavailable(
+            operation_id,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| "store backup is unavailable".to_owned()),
+        )),
+        CommandDisposition::Unsupported => Err(invalid_input(
+            operation_id,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| "store backup is unsupported".to_owned()),
+        )),
+        CommandDisposition::InternalError => Err(OperationAdapterError::Runtime(
+            view.reason
+                .clone()
+                .unwrap_or_else(|| "store backup failed".to_owned()),
+        )),
+    }
 }
 
 fn selected_config(config: &RuntimeConfig, selector: String) -> RuntimeConfig {

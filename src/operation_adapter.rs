@@ -733,6 +733,7 @@ fn looks_like_validation_failure(value: &str) -> bool {
             "must not",
             "must be",
             "validation",
+            "failed to import account",
         ],
     )
 }

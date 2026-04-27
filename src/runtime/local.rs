@@ -92,16 +92,7 @@ pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, RuntimeError> {
 
 pub fn backup(config: &RuntimeConfig, output: &Path) -> Result<LocalBackupView, RuntimeError> {
     if !config.local.replica_db_path.exists() {
-        return Ok(LocalBackupView {
-            state: "unconfigured".to_owned(),
-            source: LOCAL_SOURCE.to_owned(),
-            file: output.display().to_string(),
-            size_bytes: 0,
-            backup_format_version: String::new(),
-            replica_db_version: String::new(),
-            reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots store init".to_owned()],
-        });
+        return Ok(missing_backup_view(output));
     }
 
     ensure_safe_output_path(config, output)?;
@@ -122,6 +113,30 @@ pub fn backup(config: &RuntimeConfig, output: &Path) -> Result<LocalBackupView, 
         replica_db_version: manifest.replica_db_version,
         reason: None,
         actions: Vec::new(),
+    })
+}
+
+pub fn backup_preflight(
+    config: &RuntimeConfig,
+    output: &Path,
+) -> Result<LocalBackupView, RuntimeError> {
+    if !config.local.replica_db_path.exists() {
+        return Ok(missing_backup_view(output));
+    }
+
+    ensure_safe_output_path(config, output)?;
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let manifest = export_manifest(&executor)?;
+
+    Ok(LocalBackupView {
+        state: "dry_run".to_owned(),
+        source: LOCAL_SOURCE.to_owned(),
+        file: output.display().to_string(),
+        size_bytes: 0,
+        backup_format_version: manifest.backup_format_version,
+        replica_db_version: manifest.replica_db_version,
+        reason: Some("dry run requested; backup file was not written".to_owned()),
+        actions: vec!["radroots store backup create".to_owned()],
     })
 }
 
@@ -222,6 +237,19 @@ fn ensure_local_roots(config: &RuntimeConfig) -> Result<(), RuntimeError> {
     fs::create_dir_all(&config.local.backups_dir)?;
     fs::create_dir_all(&config.local.exports_dir)?;
     Ok(())
+}
+
+fn missing_backup_view(output: &Path) -> LocalBackupView {
+    LocalBackupView {
+        state: "unconfigured".to_owned(),
+        source: LOCAL_SOURCE.to_owned(),
+        file: output.display().to_string(),
+        size_bytes: 0,
+        backup_format_version: String::new(),
+        replica_db_version: String::new(),
+        reason: Some("local replica database is not initialized".to_owned()),
+        actions: vec!["radroots store init".to_owned()],
+    }
 }
 
 fn create_parent_dir(path: &Path) -> Result<(), RuntimeError> {

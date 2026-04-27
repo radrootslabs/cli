@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use radroots_identity::{IdentityError, RadrootsIdentity, load_identity_profile};
+use radroots_identity::{
+    IdentityError, RadrootsIdentity, RadrootsIdentityPublic, load_identity_profile,
+};
 use radroots_nostr_accounts::prelude::{
     RadrootsNostrAccountRecord, RadrootsNostrAccountStatus, RadrootsNostrAccountsError,
     RadrootsNostrAccountsManager,
@@ -67,6 +69,13 @@ pub struct AccountRemoveResult {
     pub remaining_account_count: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct AccountRemovePreview {
+    pub account: AccountRecordView,
+    pub default_would_clear: bool,
+    pub remaining_account_count: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountResolutionSource {
     InvocationOverride,
@@ -130,13 +139,7 @@ pub fn import_public_identity(
     make_default: bool,
 ) -> Result<AccountRecordView, RuntimeError> {
     let manager = account_manager(config)?;
-    let public_identity = load_identity_profile(path).map_err(|error| {
-        RuntimeError::Config(format!(
-            "failed to import account from {}: {}",
-            path.display(),
-            format_identity_error(error)
-        ))
-    })?;
+    let public_identity = load_public_identity_for_import(path)?;
     let imported_account_id =
         manager.upsert_public_identity(public_identity, None, make_default)?;
     let snapshot = snapshot_from_manager(&manager)?;
@@ -145,6 +148,34 @@ pub fn import_public_identity(
         &imported_account_id,
         "imported account missing after account import",
     )
+}
+
+pub fn preview_public_identity_import(
+    config: &RuntimeConfig,
+    path: &Path,
+    make_default: bool,
+) -> Result<AccountRecordView, RuntimeError> {
+    let public_identity = load_public_identity_for_import(path)?;
+    let manager = account_manager(config)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    if let Some(existing) = snapshot
+        .accounts
+        .iter()
+        .find(|account| account.record.account_id == public_identity.id)
+        .cloned()
+    {
+        let mut account = existing;
+        if make_default {
+            account.is_default = true;
+        }
+        return Ok(account);
+    }
+
+    Ok(AccountRecordView {
+        record: RadrootsNostrAccountRecord::new(public_identity, None, 0),
+        is_default: make_default,
+        signer: "watch_only",
+    })
 }
 
 pub fn snapshot(config: &RuntimeConfig) -> Result<AccountSnapshot, RuntimeError> {
@@ -209,6 +240,15 @@ pub fn select_account(
         })
 }
 
+pub fn resolve_account_selector(
+    config: &RuntimeConfig,
+    selector: &str,
+) -> Result<AccountRecordView, RuntimeError> {
+    let manager = account_manager(config)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    resolve_selector_account(&manager, &snapshot, selector)
+}
+
 pub fn clear_default_account(
     config: &RuntimeConfig,
 ) -> Result<AccountClearDefaultResult, RuntimeError> {
@@ -241,6 +281,20 @@ pub fn remove_account(
         removed_account,
         default_cleared,
         remaining_account_count,
+    })
+}
+
+pub fn preview_account_removal(
+    config: &RuntimeConfig,
+    selector: &str,
+) -> Result<AccountRemovePreview, RuntimeError> {
+    let manager = account_manager(config)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    let account = resolve_selector_account(&manager, &snapshot, selector)?;
+    Ok(AccountRemovePreview {
+        default_would_clear: account.is_default,
+        remaining_account_count: snapshot.accounts.len().saturating_sub(1),
+        account,
     })
 }
 
@@ -451,6 +505,16 @@ fn format_identity_error(error: IdentityError) -> String {
         IdentityError::NotFound(path) => format!("path not found: {}", path.display()),
         other => other.to_string(),
     }
+}
+
+fn load_public_identity_for_import(path: &Path) -> Result<RadrootsIdentityPublic, RuntimeError> {
+    load_identity_profile(path).map_err(|error| {
+        RuntimeError::Config(format!(
+            "failed to import account from {}: {}",
+            path.display(),
+            format_identity_error(error)
+        ))
+    })
 }
 
 fn account_manager(config: &RuntimeConfig) -> Result<RadrootsNostrAccountsManager, RuntimeError> {

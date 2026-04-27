@@ -143,6 +143,140 @@ fn local_account_selection_and_invocation_override_resolve_signer_actor() {
 }
 
 #[test]
+fn account_import_dry_run_validates_profile_without_mutating_store() {
+    let sandbox = RadrootsCliSandbox::new();
+    let public_identity = identity_public(21);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "dry-run-import", &public_identity);
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert_eq!(value["operation_id"], "account.import");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(
+        value["result"]["account"]["id"],
+        public_identity.id.as_str()
+    );
+    assert_eq!(value["result"]["account"]["signer"], "watch_only");
+    assert_eq!(value["result"]["account"]["is_default"], true);
+
+    let list = sandbox.json_success(&["--format", "json", "account", "list"]);
+    assert_eq!(list["result"]["count"], 0);
+}
+
+#[test]
+fn account_import_dry_run_validates_missing_profile_file() {
+    let sandbox = RadrootsCliSandbox::new();
+    let missing = sandbox.root().join("missing-account.json");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "import",
+        missing.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "account.import");
+    assert_eq!(value["errors"][0]["code"], "not_found");
+    assert_eq!(value["errors"][0]["exit_code"], 4);
+}
+
+#[test]
+fn account_remove_dry_run_validates_selector_without_mutating_store() {
+    let sandbox = RadrootsCliSandbox::new();
+    let created = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = created["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "remove",
+        account_id,
+    ]);
+
+    assert_eq!(value["operation_id"], "account.remove");
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(value["result"]["removed_account"]["id"], account_id);
+    assert_eq!(value["result"]["default_would_clear"], true);
+    assert_eq!(value["result"]["remaining_account_count"], 0);
+
+    let get = sandbox.json_success(&["--format", "json", "account", "get", account_id]);
+    assert_eq!(get["result"]["state"], "ready");
+    assert_eq!(
+        get["result"]["account_resolution"]["resolved_account"]["id"],
+        account_id
+    );
+}
+
+#[test]
+fn account_selection_update_dry_run_validates_selector_without_mutating_selection() {
+    let sandbox = RadrootsCliSandbox::new();
+    let first = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let first_account_id = first["result"]["account"]["id"]
+        .as_str()
+        .expect("first account id");
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "selection",
+        "update",
+        second_account_id,
+    ]);
+
+    assert_eq!(value["operation_id"], "account.selection.update");
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(value["result"]["account"]["id"], second_account_id);
+
+    let selected = sandbox.json_success(&["--format", "json", "account", "selection", "get"]);
+    assert_eq!(
+        selected["result"]["account_resolution"]["resolved_account"]["id"],
+        first_account_id
+    );
+}
+
+#[test]
+fn account_selection_update_dry_run_rejects_missing_selector() {
+    let sandbox = RadrootsCliSandbox::new();
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "selection",
+        "update",
+        "missing-account",
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "account.selection.update");
+    assert_eq!(value["errors"][0]["code"], "account_unresolved");
+    assert_eq!(value["errors"][0]["exit_code"], 5);
+}
+
+#[test]
 fn unresolved_account_override_returns_account_failure() {
     let sandbox = RadrootsCliSandbox::new();
     let (output, value) = sandbox.json_output(&[

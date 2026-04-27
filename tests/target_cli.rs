@@ -1,6 +1,7 @@
 mod support;
 
 use std::fs;
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -405,6 +406,44 @@ fn online_allows_local_diagnostics() {
 
     assert_eq!(value["operation_id"], "workspace.get");
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
+}
+
+#[test]
+fn store_export_dry_run_is_structured_unsupported() {
+    let sandbox = RadrootsCliSandbox::new();
+    let (output, value) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "store", "export"]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(value["operation_id"], "store.export");
+    assert_eq!(value["errors"][0]["code"], "invalid_input");
+    assert_eq!(value["errors"][0]["exit_code"], 2);
+}
+
+#[test]
+fn store_backup_dry_run_preflights_initialized_store_without_writing_file() {
+    let sandbox = RadrootsCliSandbox::new();
+    let (missing_output, missing_value) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "store", "backup", "create"]);
+
+    assert!(!missing_output.status.success());
+    assert_eq!(missing_value["operation_id"], "store.backup.create");
+    assert_eq!(missing_value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(missing_value["errors"][0]["exit_code"], 3);
+
+    let init = sandbox.json_success(&["--format", "json", "store", "init"]);
+    assert_eq!(init["operation_id"], "store.init");
+
+    let backup =
+        sandbox.json_success(&["--format", "json", "--dry-run", "store", "backup", "create"]);
+    let file = backup["result"]["file"].as_str().expect("backup file");
+
+    assert_eq!(backup["operation_id"], "store.backup.create");
+    assert_eq!(backup["dry_run"], true);
+    assert_eq!(backup["result"]["state"], "dry_run");
+    assert_eq!(backup["result"]["size_bytes"], 0);
+    assert!(!Path::new(file).exists());
 }
 
 #[test]
