@@ -1390,15 +1390,15 @@ fn order_binding_error_view(
             "unconfigured".to_owned(),
             reason,
             vec![
-                "radroots --signer myc signer status".to_owned(),
-                "radroots rpc sessions".to_owned(),
+                "set RADROOTS_SIGNER=myc and run radroots signer status get".to_owned(),
+                "configure signer.remote_nip46 capability binding".to_owned(),
             ],
         ),
         ActorWriteBindingError::Unavailable(reason) => (
             "unavailable".to_owned(),
             reason,
             vec![
-                "radroots myc status".to_owned(),
+                "RADROOTS_SIGNER=myc radroots signer status get".to_owned(),
                 "verify RADROOTS_MYC_EXECUTABLE and signer.remote_nip46 binding".to_owned(),
             ],
         ),

@@ -85,6 +85,7 @@ fn removed_global_flags_are_rejected_publicly() {
         ["--ndjson", "workspace", "get"].as_slice(),
         ["--yes", "workspace", "get"].as_slice(),
         ["--non-interactive", "workspace", "get"].as_slice(),
+        ["--signer", "myc", "workspace", "get"].as_slice(),
     ] {
         let output = radroots().args(args).output().expect("run removed flag");
 

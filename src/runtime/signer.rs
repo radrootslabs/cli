@@ -368,7 +368,7 @@ fn resolve_myc_binding(config: &RuntimeConfig, myc: &MycStatusView) -> MycBindin
                 resolved_signer_session_id: None,
                 matched_session_count: None,
                 reason: Some(
-                    "configure [[capability_binding]] for `signer.remote_nip46` before using `--signer myc`"
+                    "configure [[capability_binding]] for `signer.remote_nip46` before using myc signer mode"
                         .to_owned(),
                 ),
             },

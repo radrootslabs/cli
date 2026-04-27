@@ -200,7 +200,7 @@ fn signer_check(signer: &crate::domain::runtime::SignerStatusView) -> EvaluatedC
                 .reason
                 .clone()
                 .unwrap_or_else(|| format!("{} signer is not configured", signer.mode)),
-            Some("radroots signer status"),
+            Some("radroots signer status get"),
         ),
         "degraded" | "unavailable" => (
             DoctorSeverity::ExternalFail,
@@ -208,11 +208,7 @@ fn signer_check(signer: &crate::domain::runtime::SignerStatusView) -> EvaluatedC
                 .reason
                 .clone()
                 .unwrap_or_else(|| format!("{} signer is unavailable", signer.mode)),
-            Some(if signer.mode == "myc" {
-                "radroots myc status"
-            } else {
-                "radroots signer status"
-            }),
+            Some("radroots signer status get"),
         ),
         _ => (
             DoctorSeverity::InternalFail,
@@ -220,7 +216,7 @@ fn signer_check(signer: &crate::domain::runtime::SignerStatusView) -> EvaluatedC
                 .reason
                 .clone()
                 .unwrap_or_else(|| format!("{} signer reported an internal error", signer.mode)),
-            Some("radroots signer status --json"),
+            Some("radroots --format json signer status get"),
         ),
     };
 
@@ -277,14 +273,14 @@ fn myc_check(myc: &crate::domain::runtime::MycStatusView) -> EvaluatedCheck {
             myc.reason
                 .clone()
                 .unwrap_or_else(|| "myc is not configured".to_owned()),
-            Some("radroots myc status"),
+            Some("radroots signer status get"),
         ),
         _ => (
             DoctorSeverity::ExternalFail,
             myc.reason
                 .clone()
                 .unwrap_or_else(|| "myc is unavailable".to_owned()),
-            Some("radroots myc status"),
+            Some("radroots signer status get"),
         ),
     };
 

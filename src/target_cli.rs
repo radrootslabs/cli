@@ -845,6 +845,7 @@ mod tests {
             vec!["radroots", "--ndjson", "config", "get"],
             vec!["radroots", "--yes", "config", "get"],
             vec!["radroots", "--non-interactive", "config", "get"],
+            vec!["radroots", "--signer", "myc", "config", "get"],
         ];
 
         for args in rejected {

@@ -355,6 +355,7 @@ impl EnvFileValues {
 #[derive(Debug, Default, Deserialize)]
 struct CliConfigFile {
     relay: Option<RelayFileConfig>,
+    signer: Option<SignerFileConfig>,
     myc: Option<MycFileConfig>,
     hyf: Option<HyfFileConfig>,
     rpc: Option<RpcFileConfig>,
@@ -376,6 +377,11 @@ struct RpcFileConfig {
 struct MycFileConfig {
     executable: Option<PathBuf>,
     status_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SignerFileConfig {
+    mode: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -562,15 +568,13 @@ impl RuntimeConfig {
                     .or_else(|| env_value(env, env_file, &[ENV_IDENTITY_PATH]).map(PathBuf::from))
                     .unwrap_or_else(|| paths.default_identity_path.clone()),
             },
-            signer: SignerConfig {
-                backend: args
-                    .signer
-                    .clone()
-                    .or_else(|| env_value(env, env_file, &[ENV_SIGNER]))
-                    .map(parse_signer_mode)
-                    .transpose()?
-                    .unwrap_or(SignerBackend::Local),
-            },
+            signer: resolve_signer_config(
+                args,
+                env,
+                env_file,
+                app_config.as_ref(),
+                workspace_config.as_ref(),
+            )?,
             relay: resolve_relay_config(
                 args,
                 env,
@@ -950,6 +954,34 @@ fn resolve_relay_config(
         publish_policy,
         source: RelayConfigSource::Defaults,
     })
+}
+
+fn resolve_signer_config(
+    args: &CliArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<SignerConfig, RuntimeError> {
+    let backend = if let Some(value) = args.signer.clone() {
+        parse_signer_mode("internal invocation signer mode", value)?
+    } else if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_SIGNER]) {
+        parse_signer_mode(key.as_str(), value)?
+    } else if let Some(value) = user_config
+        .and_then(|config| config.signer.as_ref())
+        .and_then(|signer| signer.mode.clone())
+    {
+        parse_signer_mode("user config [signer].mode", value)?
+    } else if let Some(value) = workspace_config
+        .and_then(|config| config.signer.as_ref())
+        .and_then(|signer| signer.mode.clone())
+    {
+        parse_signer_mode("workspace config [signer].mode", value)?
+    } else {
+        SignerBackend::Local
+    };
+
+    Ok(SignerConfig { backend })
 }
 
 fn resolve_myc_config(
@@ -1393,12 +1425,12 @@ fn parse_output_format(value: &str) -> Result<OutputFormat, RuntimeError> {
     }
 }
 
-fn parse_signer_mode(value: String) -> Result<SignerBackend, RuntimeError> {
+fn parse_signer_mode(source: &str, value: String) -> Result<SignerBackend, RuntimeError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "local" => Ok(SignerBackend::Local),
         "myc" => Ok(SignerBackend::Myc),
         other => Err(RuntimeError::Config(format!(
-            "{ENV_SIGNER} or --signer must be `local` or `myc`, got `{other}`"
+            "{source} must be `local` or `myc`, got `{other}`"
         ))),
     }
 }
@@ -1532,6 +1564,36 @@ mod tests {
 
         fn stdout_is_tty(&self) -> bool {
             self.stdout_tty
+        }
+    }
+
+    fn repo_local_env(
+        workspace_root: PathBuf,
+        repo_local_root: PathBuf,
+        user_home: PathBuf,
+        mut values: BTreeMap<String, String>,
+    ) -> MapEnvironment {
+        values.insert(
+            "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
+            "repo_local".to_owned(),
+        );
+        values.insert(
+            "RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT".to_owned(),
+            repo_local_root.display().to_string(),
+        );
+
+        MapEnvironment {
+            values,
+            current_dir: workspace_root,
+            path_resolver: RadrootsPathResolver::new(
+                RadrootsPlatform::Linux,
+                RadrootsHostEnvironment {
+                    home_dir: Some(user_home),
+                    ..RadrootsHostEnvironment::default()
+                },
+            ),
+            stdin_tty: false,
+            stdout_tty: false,
         }
     }
 
@@ -2206,6 +2268,83 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             .expect("resolve config");
         assert_eq!(resolved.myc.executable, PathBuf::from("user-myc"));
         assert_eq!(resolved.myc.status_timeout_ms, 3000);
+    }
+
+    #[test]
+    fn user_signer_config_overrides_workspace_signer_config() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let app_config_dir = repo_local_root.join("config/apps/cli");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(&app_config_dir).expect("app config dir");
+        fs::write(
+            repo_local_root.join("config.toml"),
+            "[signer]\nmode = \"myc\"\n",
+        )
+        .expect("write workspace config");
+        fs::write(
+            app_config_dir.join("config.toml"),
+            "[signer]\nmode = \"local\"\n",
+        )
+        .expect("write user config");
+
+        let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve config");
+        assert_eq!(resolved.signer.backend, SignerBackend::Local);
+    }
+
+    #[test]
+    fn environment_signer_overrides_user_signer_config() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let app_config_dir = repo_local_root.join("config/apps/cli");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(&app_config_dir).expect("app config dir");
+        fs::write(
+            app_config_dir.join("config.toml"),
+            "[signer]\nmode = \"local\"\n",
+        )
+        .expect("write user config");
+
+        let env = repo_local_env(
+            workspace_root,
+            repo_local_root,
+            user_home,
+            BTreeMap::from([("RADROOTS_SIGNER".to_owned(), "myc".to_owned())]),
+        );
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve config");
+        assert_eq!(resolved.signer.backend, SignerBackend::Myc);
+    }
+
+    #[test]
+    fn invalid_signer_config_reports_config_source() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(&repo_local_root).expect("workspace config dir");
+        fs::write(
+            repo_local_root.join("config.toml"),
+            "[signer]\nmode = \"remote\"\n",
+        )
+        .expect("write workspace config");
+
+        let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
+        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+
+        let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect_err("invalid signer mode");
+        let message = error.to_string();
+        assert!(message.contains("workspace config [signer].mode"));
+        assert!(!message.contains("--signer"));
     }
 
     #[test]
