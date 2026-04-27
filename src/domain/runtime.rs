@@ -1377,6 +1377,8 @@ pub struct ListingNewView {
     pub file: String,
     pub listing_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
