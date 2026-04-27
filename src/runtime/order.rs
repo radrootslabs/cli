@@ -231,6 +231,80 @@ pub fn scaffold(
     Ok(view)
 }
 
+pub fn scaffold_preflight(
+    config: &RuntimeConfig,
+    args: &OrderDraftCreateArgs,
+) -> Result<OrderNewView, RuntimeError> {
+    validate_scaffold_args(args)?;
+
+    let listing_lookup = normalize_optional(args.listing.as_deref());
+    let explicit_listing_addr = normalize_optional(args.listing_addr.as_deref());
+    let resolved_listing = resolve_order_listing(
+        config,
+        listing_lookup.as_deref(),
+        explicit_listing_addr.as_deref(),
+    )?;
+
+    let selected_account = accounts::resolve_account(config)?;
+    let buyer_account_id = selected_account
+        .as_ref()
+        .map(|account| account.record.account_id.to_string());
+    let buyer_pubkey = selected_account
+        .as_ref()
+        .map(|account| account.record.public_identity.public_key_hex.clone())
+        .unwrap_or_default();
+
+    let listing_addr = resolved_listing
+        .as_ref()
+        .map(|listing| listing.listing_addr.clone())
+        .unwrap_or_default();
+    let seller_pubkey = resolved_listing
+        .as_ref()
+        .map(|listing| listing.seller_pubkey.clone())
+        .unwrap_or_default();
+
+    let items = match normalize_optional(args.bin_id.as_deref()) {
+        Some(bin_id) => vec![OrderDraftItem {
+            bin_id,
+            bin_count: args.bin_count.unwrap_or(1),
+        }],
+        None => Vec::new(),
+    };
+
+    let order_id = next_order_id();
+    let file = drafts_dir(config).join(format!("{order_id}.toml"));
+    let document = OrderDraftDocument {
+        version: 1,
+        kind: ORDER_DRAFT_KIND.to_owned(),
+        order: OrderDraft {
+            order_id: order_id.clone(),
+            listing_addr,
+            buyer_pubkey,
+            seller_pubkey,
+            items,
+        },
+        listing_lookup,
+        buyer_account_id,
+        submission: None,
+    };
+
+    let mut view: OrderNewView = view_from_loaded(
+        config,
+        LoadedOrderDraft {
+            file,
+            updated_at_unix: now_unix(),
+            document,
+        },
+        false,
+    )
+    .into();
+    view.state = "dry_run".to_owned();
+    view.actions
+        .insert(0, format!("radroots order get {}", view.order_id));
+
+    Ok(view)
+}
+
 pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetView, RuntimeError> {
     let lookup = args.key.clone();
     let file = draft_lookup_path(config, lookup.as_str());

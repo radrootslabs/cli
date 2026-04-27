@@ -102,22 +102,22 @@ impl OperationService<BasketCreateRequest> for BasketOperationService<'_> {
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let basket_id = string_input(&request, "basket_id").unwrap_or_else(next_basket_id);
         let initial_item = optional_item_from_request(&request, None)?;
-        if request.context.dry_run {
-            return json_operation_result::<BasketCreateResult>(json!({
-                "state": "dry_run",
-                "source": BASKET_SOURCE,
-                "basket_id": basket_id,
-                "item_count": initial_item.as_ref().map(|_| 1).unwrap_or(0),
-                "actions": ["radroots basket create"],
-            }));
-        }
-
         let file = basket_lookup_path(self.config, basket_id.as_str());
         if file.exists() {
             return Err(invalid_input(
                 request.operation_id(),
                 format!("basket `{basket_id}` already exists"),
             ));
+        }
+        if request.context.dry_run {
+            return json_operation_result::<BasketCreateResult>(json!({
+                "state": "dry_run",
+                "source": BASKET_SOURCE,
+                "basket_id": basket_id,
+                "file": file.display().to_string(),
+                "item_count": initial_item.as_ref().map(|_| 1).unwrap_or(0),
+                "actions": ["radroots basket create"],
+            }));
         }
 
         let now = now_unix();
@@ -360,11 +360,22 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
             .expect("validated basket has one item")
             .clone();
         if request.context.dry_run {
+            let order = map_runtime(crate::runtime::order::scaffold_preflight(
+                self.config,
+                &OrderDraftCreateArgs {
+                    listing: item.listing.clone(),
+                    listing_addr: item.listing_addr.clone(),
+                    bin_id: Some(item.bin_id.clone()),
+                    bin_count: Some(item.quantity),
+                },
+            ))?;
             return json_operation_result::<BasketQuoteCreateResult>(json!({
                 "state": "dry_run",
                 "source": BASKET_QUOTE_SOURCE,
                 "basket_id": basket_id,
+                "file": loaded.file.display().to_string(),
                 "item": item,
+                "order": order,
                 "actions": ["radroots basket quote create"],
             }));
         }
@@ -1040,7 +1051,8 @@ mod tests {
         assert_eq!(envelope.operation_id, "basket.quote.create");
         assert_eq!(envelope.dry_run, true);
         assert_eq!(envelope.result["state"], "dry_run");
-        assert!(envelope.result.get("order").is_none());
+        assert_eq!(envelope.result["order"]["state"], "dry_run");
+        assert!(!PathBuf::from(envelope.result["order"]["file"].as_str().unwrap()).exists());
     }
 
     fn create_basket(service: &OperationAdapter<BasketOperationService<'_>>, basket_id: &str) {

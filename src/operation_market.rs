@@ -1,7 +1,7 @@
 use radroots_events::kinds::KIND_LISTING;
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::domain::runtime::{FindView, ListingGetView, SyncActionView};
 use crate::operation_adapter::{
@@ -29,16 +29,8 @@ impl OperationService<MarketRefreshRequest> for MarketOperationService<'_> {
 
     fn execute(
         &self,
-        request: OperationRequest<MarketRefreshRequest>,
+        _request: OperationRequest<MarketRefreshRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        if request.context.dry_run {
-            return json_operation_result::<MarketRefreshResult>(json!({
-                "state": "dry_run",
-                "source": "market refresh target operation",
-                "actions": ["radroots sync status get"],
-            }));
-        }
-
         let view = market_refresh_view(map_runtime(crate::runtime::sync::pull(self.config))?);
         serialized_operation_result::<MarketRefreshResult, _>(&view)
     }
@@ -234,13 +226,6 @@ where
     OperationResult::new(R::from_serializable(value)?)
 }
 
-fn json_operation_result<R>(value: Value) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    OperationResult::new(R::from_value(value))
-}
-
 fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
     result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
 }
@@ -328,7 +313,9 @@ mod tests {
 
         assert_eq!(envelope.operation_id, "market.refresh");
         assert_eq!(envelope.dry_run, true);
-        assert_eq!(envelope.result["state"], "dry_run");
+        assert_eq!(envelope.result["state"], "unconfigured");
+        assert_eq!(envelope.result["replica_db"], "missing");
+        assert_eq!(envelope.result["direction"], "pull");
     }
 
     #[test]

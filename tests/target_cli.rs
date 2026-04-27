@@ -776,6 +776,114 @@ fn seller_dry_runs_preflight_without_mutating_farm_or_listing_files() {
 }
 
 #[test]
+fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+
+    let market = sandbox.json_success(&["--format", "json", "--dry-run", "market", "refresh"]);
+    assert_eq!(market["operation_id"], "market.refresh");
+    assert_eq!(market["dry_run"], true);
+    assert_eq!(market["result"]["state"], "unconfigured");
+    assert_eq!(market["result"]["replica_db"], "missing");
+
+    let sync_pull = sandbox.json_success(&["--format", "json", "--dry-run", "sync", "pull"]);
+    assert_eq!(sync_pull["operation_id"], "sync.pull");
+    assert_eq!(sync_pull["dry_run"], true);
+    assert_eq!(sync_pull["result"]["state"], "unconfigured");
+    assert_eq!(sync_pull["result"]["replica_db"], "missing");
+
+    let sync_push = sandbox.json_success(&["--format", "json", "--dry-run", "sync", "push"]);
+    assert_eq!(sync_push["operation_id"], "sync.push");
+    assert_eq!(sync_push["dry_run"], true);
+    assert_eq!(sync_push["result"]["state"], "unconfigured");
+    assert_eq!(sync_push["result"]["replica_db"], "missing");
+
+    let create_dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "basket",
+        "create",
+        "basket_probe",
+    ]);
+    let basket_file = create_dry_run["result"]["file"]
+        .as_str()
+        .expect("basket file");
+    assert_eq!(create_dry_run["operation_id"], "basket.create");
+    assert_eq!(create_dry_run["result"]["state"], "dry_run");
+    assert!(!Path::new(basket_file).exists());
+
+    sandbox.json_success(&["--format", "json", "basket", "create", "basket_probe"]);
+    let (collision_output, collision) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "basket",
+        "create",
+        "basket_probe",
+    ]);
+    assert!(!collision_output.status.success());
+    assert_eq!(collision["operation_id"], "basket.create");
+    assert_eq!(collision["errors"][0]["code"], "invalid_input");
+
+    let before_add = sandbox.json_success(&["--format", "json", "basket", "get", "basket_probe"]);
+    let add = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "basket",
+        "item",
+        "add",
+        "basket_probe",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    assert_eq!(add["operation_id"], "basket.item.add");
+    assert_eq!(add["result"]["state"], "dry_run");
+    let after_add = sandbox.json_success(&["--format", "json", "basket", "get", "basket_probe"]);
+    assert_eq!(after_add["result"], before_add["result"]);
+
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "basket_probe",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "basket",
+        "quote",
+        "create",
+        "basket_probe",
+    ]);
+    let order_file = quote["result"]["order"]["file"]
+        .as_str()
+        .expect("order file");
+    assert_eq!(quote["operation_id"], "basket.quote.create");
+    assert_eq!(quote["result"]["state"], "dry_run");
+    assert_eq!(quote["result"]["order"]["state"], "dry_run");
+    assert!(!Path::new(order_file).exists());
+
+    let basket_after_quote =
+        sandbox.json_success(&["--format", "json", "basket", "get", "basket_probe"]);
+    assert_eq!(basket_after_quote["result"]["quote"], Value::Null);
+}
+
+#[test]
 fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
     let sandbox = RadrootsCliSandbox::new();
     let public_identity = identity_public(61);
