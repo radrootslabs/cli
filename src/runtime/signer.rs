@@ -4,8 +4,7 @@ use crate::domain::runtime::{
 };
 use crate::runtime::accounts::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolution_view};
 use crate::runtime::config::{RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend};
-use radroots_events::kinds::{KIND_FARM, KIND_LISTING, KIND_PROFILE};
-use radroots_events::trade::RadrootsTradeMessageType;
+use radroots_events::kinds::{KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_ORDER_REQUEST};
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
 use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
@@ -289,7 +288,7 @@ fn cli_write_kinds() -> [CliWriteKind; 4] {
         },
         CliWriteKind {
             command: "order submit",
-            event_kind: u32::from(RadrootsTradeMessageType::OrderRequest.kind()),
+            event_kind: KIND_TRADE_ORDER_REQUEST,
         },
     ]
 }
@@ -327,5 +326,23 @@ fn local_availability(value: RadrootsNostrLocalSignerAvailability) -> &'static s
     match value {
         RadrootsNostrLocalSignerAvailability::PublicOnly => "public_only",
         RadrootsNostrLocalSignerAvailability::SecretBacked => "secret_backed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use radroots_events::kinds::KIND_TRADE_DISCOUNT_DECLINE;
+
+    use super::{KIND_TRADE_ORDER_REQUEST, cli_write_kinds};
+
+    #[test]
+    fn order_submit_readiness_uses_active_order_request_kind() {
+        let write_kind = cli_write_kinds()
+            .into_iter()
+            .find(|kind| kind.command == "order submit")
+            .expect("order submit readiness");
+
+        assert_eq!(write_kind.event_kind, KIND_TRADE_ORDER_REQUEST);
+        assert_ne!(write_kind.event_kind, KIND_TRADE_DISCOUNT_DECLINE);
     }
 }
