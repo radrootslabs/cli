@@ -174,7 +174,6 @@ pub struct OrderDraftCreateArgs {
 pub struct OrderSubmitArgs {
     pub key: String,
     pub idempotency_key: Option<String>,
-    pub signer_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]

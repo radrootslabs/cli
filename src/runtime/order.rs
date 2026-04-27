@@ -1,58 +1,34 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_events::kinds::KIND_LISTING;
-use radroots_events::trade::{
-    RadrootsTradeMessageType, RadrootsTradeOrder, RadrootsTradeOrderItem,
-};
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use radroots_replica_db::ReplicaSql;
-use radroots_runtime::BackoffConfig;
-use radroots_runtime_paths::{
-    RadrootsPathOverrides, RadrootsPathProfile, RadrootsPathResolver, RadrootsRuntimeNamespace,
-};
-use radroots_sdk::config::RadrootsSdkConfig;
 use radroots_sql_core::SqliteExecutor;
-use rhi::features::trade_listing::state::{TradeListingRuntime, TradeListingRuntimeConfig};
-use rhi::identity_storage::load_service_identity;
-use rhi::rhi::{Rhi, start_subscriber};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 
 use crate::domain::runtime::{
-    OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView, OrderHistoryView,
-    OrderIssueView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView,
-    OrderWatchFrameView, OrderWatchView, OrderWorkflowView,
+    OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryView, OrderIssueView,
+    OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView, OrderWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
-use crate::runtime::config::{
-    CapabilityBindingTargetKind, RuntimeConfig, SignerBackend, WORKFLOW_TRADE_CAPABILITY,
-};
-use crate::runtime::daemon::{self, DaemonRpcError};
-use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
+use crate::runtime::config::{RuntimeConfig, SignerBackend};
+use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime_args::{
     OrderDraftCreateArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
 };
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
-const ORDER_LIFECYCLE_SOURCE: &str = "local order drafts · durable job lifecycle";
-const ORDER_WORKFLOW_SOURCE: &str = "local order drafts · substrate-authoritative workflow state";
+const ORDER_SUBMIT_UNAVAILABLE_REASON: &str =
+    "direct Nostr relay order publication is not implemented";
+const ORDER_EVENT_STATE_UNAVAILABLE_REASON: &str =
+    "relay-backed order event state is not implemented";
 const ORDERS_DIR: &str = "orders/drafts";
-const WORKFLOW_PROVIDER_RUNTIME_ID: &str = "rhi";
-const WORKFLOW_TARGET: &str = "workflow-default";
-const WORKFLOW_STATE_DIR_NAME: &str = "trade-listing";
-const WORKFLOW_STATE_FILE_NAME: &str = "state.json";
-const WORKFLOW_IDENTITY_FILE_NAME: &str = "identity.secret.json";
-const WORKFLOW_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
-const WORKFLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const WORKFLOW_REPLAY_WINDOW_SECS: u64 = 24 * 60 * 60;
-const WORKFLOW_REPLAY_OVERLAP_SECS: u64 = 5 * 60;
 
 static ORDER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -66,8 +42,6 @@ struct OrderDraftDocument {
     listing_lookup: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     buyer_account_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    submission: Option<OrderDraftSubmission>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,61 +65,11 @@ struct OrderDraftItem {
     bin_count: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OrderDraftSubmission {
-    job_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    state: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    signer_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    signer_session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    event_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    event_addr: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    submitted_at_unix: Option<u64>,
-}
-
 #[derive(Debug, Clone)]
 struct LoadedOrderDraft {
     file: PathBuf,
     updated_at_unix: u64,
     document: OrderDraftDocument,
-}
-
-#[derive(Debug, Clone)]
-struct WorkflowContext {
-    relay_url: String,
-    identity_path: PathBuf,
-    state_path: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-enum WorkflowResolutionError {
-    Unconfigured(String),
-    Unavailable(String),
-    Error(String),
-}
-
-impl WorkflowResolutionError {
-    fn state(&self) -> &'static str {
-        match self {
-            Self::Unconfigured(_) => "unconfigured",
-            Self::Unavailable(_) => "unavailable",
-            Self::Error(_) => "error",
-        }
-    }
-
-    fn reason(self) -> String {
-        match self {
-            Self::Unconfigured(reason) | Self::Unavailable(reason) | Self::Error(reason) => reason,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -211,19 +135,14 @@ pub fn scaffold(
         },
         listing_lookup,
         buyer_account_id,
-        submission: None,
     };
     save_draft(file.as_path(), &document)?;
 
-    let mut view: OrderNewView = view_from_loaded(
-        config,
-        LoadedOrderDraft {
-            file,
-            updated_at_unix: now_unix(),
-            document,
-        },
-        false,
-    )
+    let mut view: OrderNewView = view_from_loaded(LoadedOrderDraft {
+        file,
+        updated_at_unix: now_unix(),
+        document,
+    })
     .into();
     view.actions
         .insert(0, format!("radroots order get {}", view.order_id));
@@ -285,18 +204,13 @@ pub fn scaffold_preflight(
         },
         listing_lookup,
         buyer_account_id,
-        submission: None,
     };
 
-    let mut view: OrderNewView = view_from_loaded(
-        config,
-        LoadedOrderDraft {
-            file,
-            updated_at_unix: now_unix(),
-            document,
-        },
-        false,
-    )
+    let mut view: OrderNewView = view_from_loaded(LoadedOrderDraft {
+        file,
+        updated_at_unix: now_unix(),
+        document,
+    })
     .into();
     view.state = "dry_run".to_owned();
     view.actions
@@ -335,7 +249,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
     }
 
     match load_draft(file.as_path()) {
-        Ok(loaded) => Ok(view_from_loaded(config, loaded, true)),
+        Ok(loaded) => Ok(view_from_loaded(loaded)),
         Err(reason) => Ok(OrderGetView {
             state: "error".to_owned(),
             source: ORDER_SOURCE.to_owned(),
@@ -379,7 +293,7 @@ pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
             continue;
         }
         match load_draft(path.as_path()) {
-            Ok(loaded) => orders.push(summary_from_loaded(config, &loaded)),
+            Ok(loaded) => orders.push(summary_from_loaded(&loaded)),
             Err(reason) => orders.push(summary_for_invalid_file(path.as_path(), reason)),
         }
     }
@@ -421,7 +335,7 @@ pub fn submit(
     if !file.exists() {
         return Ok(OrderSubmitView {
             state: "missing".to_owned(),
-            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            source: ORDER_SOURCE.to_owned(),
             order_id: args.key.clone(),
             file: file.display().to_string(),
             listing_lookup: None,
@@ -434,7 +348,7 @@ pub fn submit(
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             signer_session_id: None,
-            requested_signer_session_id: args.signer_session_id.clone(),
+            requested_signer_session_id: None,
             reason: Some(format!("order draft `{}` was not found", args.key)),
             job: None,
             issues: Vec::new(),
@@ -450,7 +364,7 @@ pub fn submit(
         Err(reason) => {
             return Ok(OrderSubmitView {
                 state: "error".to_owned(),
-                source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+                source: ORDER_SOURCE.to_owned(),
                 order_id: args.key.clone(),
                 file: file.display().to_string(),
                 listing_lookup: None,
@@ -463,7 +377,7 @@ pub fn submit(
                 idempotency_key: args.idempotency_key.clone(),
                 signer_mode: None,
                 signer_session_id: None,
-                requested_signer_session_id: args.signer_session_id.clone(),
+                requested_signer_session_id: None,
                 reason: Some(reason),
                 job: None,
                 issues: Vec::new(),
@@ -471,38 +385,6 @@ pub fn submit(
             });
         }
     };
-
-    if let Some(job) = submission_job_view(config, &loaded.document, true) {
-        let mut actions = vec![
-            format!(
-                "radroots order event watch {}",
-                loaded.document.order.order_id
-            ),
-            "radroots order event list".to_owned(),
-        ];
-        actions.push(format!("radroots job get {}", job.job_id));
-        return Ok(OrderSubmitView {
-            state: "already_submitted".to_owned(),
-            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
-            order_id: loaded.document.order.order_id.clone(),
-            file: loaded.file.display().to_string(),
-            listing_lookup: loaded.document.listing_lookup.clone(),
-            listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
-            buyer_account_id: loaded.document.buyer_account_id.clone(),
-            buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
-            seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
-            dry_run: config.output.dry_run,
-            deduplicated: false,
-            idempotency_key: args.idempotency_key.clone(),
-            signer_mode: job.signer_mode.clone(),
-            signer_session_id: job.signer_session_id.clone(),
-            requested_signer_session_id: args.signer_session_id.clone(),
-            reason: Some("order draft already has a recorded submission job".to_owned()),
-            job: Some(job),
-            issues: Vec::new(),
-            actions,
-        });
-    }
 
     let issues = collect_issues(&loaded.document);
     if !issues.is_empty() {
@@ -513,7 +395,7 @@ pub fn submit(
         ));
         return Ok(OrderSubmitView {
             state: "unconfigured".to_owned(),
-            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            source: ORDER_SOURCE.to_owned(),
             order_id: loaded.document.order.order_id.clone(),
             file: loaded.file.display().to_string(),
             listing_lookup: loaded.document.listing_lookup.clone(),
@@ -526,8 +408,8 @@ pub fn submit(
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             signer_session_id: None,
-            requested_signer_session_id: args.signer_session_id.clone(),
-            reason: Some("order draft is not ready for durable submit".to_owned()),
+            requested_signer_session_id: None,
+            reason: Some("order draft is not ready for submit".to_owned()),
             job: None,
             issues,
             actions,
@@ -543,7 +425,7 @@ pub fn submit(
         }
         return Ok(OrderSubmitView {
             state: "dry_run".to_owned(),
-            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            source: ORDER_SOURCE.to_owned(),
             order_id: loaded.document.order.order_id.clone(),
             file: loaded.file.display().to_string(),
             listing_lookup: loaded.document.listing_lookup.clone(),
@@ -556,19 +438,9 @@ pub fn submit(
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             signer_session_id: None,
-            requested_signer_session_id: args.signer_session_id.clone(),
-            reason: Some("dry run requested; daemon order submission skipped".to_owned()),
-            job: Some(OrderJobView {
-                job_id: "not_submitted".to_owned(),
-                state: "not_submitted".to_owned(),
-                command: Some("order.submit".to_owned()),
-                signer_mode: Some(config.signer.backend.as_str().to_owned()),
-                signer_session_id: None,
-                requested_signer_session_id: args.signer_session_id.clone(),
-                event_id: None,
-                event_addr: None,
-                reason: None,
-            }),
+            requested_signer_session_id: None,
+            reason: Some("dry run requested; relay order publication skipped".to_owned()),
+            job: None,
             issues: Vec::new(),
             actions: vec![format!(
                 "radroots order submit {}",
@@ -577,106 +449,15 @@ pub fn submit(
         });
     }
 
-    let signer_authority = match resolve_actor_write_authority(
-        config,
-        "buyer",
-        loaded.document.order.buyer_pubkey.as_str(),
-    ) {
-        Ok(authority) => authority,
-        Err(error) => return Ok(order_binding_error_view(config, &loaded, args, error)),
-    };
-
-    let signer_session_id = match daemon::resolve_signer_session_id(
-        config,
-        "buyer",
-        loaded.document.order.buyer_pubkey.as_str(),
-        u32::from(RadrootsTradeMessageType::OrderRequest.kind()),
-        args.signer_session_id.as_deref(),
-        signer_authority.as_ref(),
-    ) {
-        Ok(session_id) => session_id,
-        Err(error) => return Ok(order_submit_error_view(&loaded, args, error)),
-    };
-
-    let order = trade_order_from_document(&loaded.document);
-    match daemon::bridge_order_request(
-        config,
-        &order,
-        args.idempotency_key.as_deref(),
-        Some(signer_session_id.as_str()),
-        signer_authority.as_ref(),
-    ) {
-        Ok(result) => {
-            let mut updated = loaded.document.clone();
-            updated.submission = Some(OrderDraftSubmission {
-                job_id: result.job_id.clone(),
-                state: Some(result.status.clone()),
-                signer_mode: Some(result.signer_mode.clone()),
-                signer_session_id: result.signer_session_id.clone(),
-                command: Some("order.submit".to_owned()),
-                event_id: result.event_id.clone(),
-                event_addr: result.event_addr.clone(),
-                submitted_at_unix: Some(now_unix()),
-            });
-            save_draft(loaded.file.as_path(), &updated)?;
-
-            let failed = result.status == "failed";
-            let mut actions = Vec::new();
-            if failed {
-                actions.push(format!("radroots job get {}", result.job_id));
-                actions.push("radroots runtime status get".to_owned());
-                actions.push("radroots order event list".to_owned());
-            } else {
-                actions.push(format!(
-                    "radroots order event watch {}",
-                    updated.order.order_id
-                ));
-                actions.push(format!("radroots job get {}", result.job_id));
-                actions.push("radroots order event list".to_owned());
-            }
-
-            Ok(OrderSubmitView {
-                state: if failed {
-                    "unavailable".to_owned()
-                } else if result.deduplicated {
-                    "deduplicated".to_owned()
-                } else {
-                    result.status.clone()
-                },
-                source: daemon::bridge_source().to_owned(),
-                order_id: updated.order.order_id.clone(),
-                file: loaded.file.display().to_string(),
-                listing_lookup: updated.listing_lookup.clone(),
-                listing_addr: non_empty_string(updated.order.listing_addr.clone()),
-                buyer_account_id: updated.buyer_account_id.clone(),
-                buyer_pubkey: non_empty_string(updated.order.buyer_pubkey.clone()),
-                seller_pubkey: non_empty_string(updated.order.seller_pubkey.clone()),
-                dry_run: false,
-                deduplicated: result.deduplicated,
-                idempotency_key: result.idempotency_key.clone(),
-                signer_mode: Some(result.signer_mode.clone()),
-                signer_session_id: result.signer_session_id.clone(),
-                requested_signer_session_id: args.signer_session_id.clone(),
-                reason: failed.then(|| {
-                    "daemon order request failed before relay delivery completed".to_owned()
-                }),
-                job: Some(OrderJobView {
-                    job_id: result.job_id,
-                    state: result.status,
-                    command: Some("order.submit".to_owned()),
-                    signer_mode: Some(result.signer_mode),
-                    signer_session_id: result.signer_session_id,
-                    requested_signer_session_id: args.signer_session_id.clone(),
-                    event_id: result.event_id,
-                    event_addr: result.event_addr,
-                    reason: None,
-                }),
-                issues: Vec::new(),
-                actions,
-            })
-        }
-        Err(error) => Ok(order_submit_error_view(&loaded, args, error)),
+    if let Err(error) =
+        validate_local_order_write_authority(config, loaded.document.order.buyer_pubkey.as_str())
+    {
+        return Ok(order_binding_error_view(config, &loaded, args, error));
     }
+
+    Ok(direct_relay_unavailable_order_submit_view(
+        config, &loaded, args,
+    ))
 }
 
 pub fn watch(
@@ -693,7 +474,7 @@ pub fn watch(
     if !file.exists() {
         return Ok(OrderWatchView {
             state: "missing".to_owned(),
-            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            source: ORDER_SOURCE.to_owned(),
             order_id: args.key.clone(),
             job_id: None,
             interval_ms: args.interval_ms,
@@ -709,7 +490,7 @@ pub fn watch(
         Err(reason) => {
             return Ok(OrderWatchView {
                 state: "error".to_owned(),
-                source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+                source: ORDER_SOURCE.to_owned(),
                 order_id: args.key.clone(),
                 job_id: None,
                 interval_ms: args.interval_ms,
@@ -721,109 +502,20 @@ pub fn watch(
         }
     };
 
-    let Some(submission) = loaded.document.submission.as_ref() else {
-        return Ok(OrderWatchView {
-            state: "not_submitted".to_owned(),
-            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
-            order_id: loaded.document.order.order_id.clone(),
-            job_id: None,
-            interval_ms: args.interval_ms,
-            reason: Some("order draft does not have a recorded submission job yet".to_owned()),
-            workflow: None,
-            frames: Vec::new(),
-            actions: vec![format!(
-                "radroots order submit {}",
-                loaded.document.order.order_id
-            )],
-        });
-    };
-
-    let job_id = submission.job_id.clone();
-    let max_frames = args.frames.unwrap_or(usize::MAX);
-    let mut frames = Vec::new();
-    loop {
-        match daemon::bridge_job(config, job_id.as_str()) {
-            Ok(Some(job)) => {
-                frames.push(OrderWatchFrameView {
-                    sequence: frames.len() + 1,
-                    observed_at_unix: job.completed_at_unix.unwrap_or(job.requested_at_unix),
-                    state: job.state.clone(),
-                    terminal: job.terminal,
-                    signer_mode: job.signer.clone(),
-                    signer_session_id: job.signer_session_id.clone(),
-                    summary: job.relay_outcome_summary.clone(),
-                });
-                if job.terminal || frames.len() >= max_frames {
-                    let workflow = if job.terminal
-                        && job_state_allows_workflow_verification(job.state.as_str())
-                    {
-                        match wait_for_order_workflow_truth(config, &loaded.document) {
-                            Ok(workflow) => workflow,
-                            Err(error) => {
-                                let state = error.state().to_owned();
-                                let reason = error.reason();
-                                let workflow = workflow_error_view(
-                                    &loaded.document,
-                                    state.as_str(),
-                                    reason.clone(),
-                                );
-                                return Ok(OrderWatchView {
-                                    state,
-                                    source: ORDER_WORKFLOW_SOURCE.to_owned(),
-                                    order_id: loaded.document.order.order_id.clone(),
-                                    job_id: Some(job_id.clone()),
-                                    interval_ms: args.interval_ms,
-                                    reason: Some(reason.clone()),
-                                    workflow: Some(workflow),
-                                    frames,
-                                    actions: vec!["radroots order event list".to_owned()],
-                                });
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    return Ok(OrderWatchView {
-                        state: if let Some(workflow) = workflow.as_ref() {
-                            workflow.state.clone()
-                        } else if job.terminal {
-                            job.state
-                        } else {
-                            "watching".to_owned()
-                        },
-                        source: if workflow.is_some() {
-                            ORDER_WORKFLOW_SOURCE.to_owned()
-                        } else {
-                            ORDER_LIFECYCLE_SOURCE.to_owned()
-                        },
-                        order_id: loaded.document.order.order_id.clone(),
-                        job_id: Some(job_id.clone()),
-                        interval_ms: args.interval_ms,
-                        reason: None,
-                        workflow,
-                        frames,
-                        actions: vec!["radroots order event list".to_owned()],
-                    });
-                }
-            }
-            Ok(None) => {
-                return Ok(OrderWatchView {
-                    state: "missing".to_owned(),
-                    source: ORDER_LIFECYCLE_SOURCE.to_owned(),
-                    order_id: loaded.document.order.order_id.clone(),
-                    job_id: Some(job_id.clone()),
-                    interval_ms: args.interval_ms,
-                    reason: Some("recorded job id was not found in radrootsd".to_owned()),
-                    workflow: None,
-                    frames,
-                    actions: vec!["radroots order event list".to_owned()],
-                });
-            }
-            Err(error) => return Ok(order_watch_error_view(&loaded, args, job_id, frames, error)),
-        }
-
-        thread::sleep(Duration::from_millis(args.interval_ms));
-    }
+    Ok(OrderWatchView {
+        state: "unavailable".to_owned(),
+        source: ORDER_SOURCE.to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        job_id: None,
+        interval_ms: args.interval_ms,
+        reason: Some(ORDER_EVENT_STATE_UNAVAILABLE_REASON.to_owned()),
+        workflow: None,
+        frames: Vec::new(),
+        actions: vec![format!(
+            "radroots order get {}",
+            loaded.document.order.order_id
+        )],
+    })
 }
 
 pub fn history(config: &RuntimeConfig) -> Result<OrderHistoryView, RuntimeError> {
@@ -831,15 +523,14 @@ pub fn history(config: &RuntimeConfig) -> Result<OrderHistoryView, RuntimeError>
     if !dir.exists() {
         return Ok(OrderHistoryView {
             state: "empty".to_owned(),
-            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            source: ORDER_SOURCE.to_owned(),
             count: 0,
-            reason: Some("no submitted order drafts recorded yet".to_owned()),
+            reason: Some("no relay-backed order events recorded yet".to_owned()),
             orders: Vec::new(),
             actions: vec!["radroots order list".to_owned()],
         });
     }
 
-    let mut orders = Vec::new();
     let mut invalid_count = 0usize;
     for entry in fs::read_dir(&dir)? {
         let entry = entry?;
@@ -847,60 +538,33 @@ pub fn history(config: &RuntimeConfig) -> Result<OrderHistoryView, RuntimeError>
         if path.extension().and_then(|value| value.to_str()) != Some("toml") {
             continue;
         }
-        match load_draft(path.as_path()) {
-            Ok(loaded) => {
-                if loaded.document.submission.is_some() {
-                    orders.push(history_entry_from_loaded(config, &loaded));
-                }
-            }
-            Err(_) => {
-                invalid_count += 1;
-            }
+        if load_draft(path.as_path()).is_err() {
+            invalid_count += 1;
         }
     }
 
-    orders.sort_by(|left, right| {
-        right
-            .submitted_at_unix
-            .unwrap_or(right.updated_at_unix)
-            .cmp(&left.submitted_at_unix.unwrap_or(left.updated_at_unix))
-            .then_with(|| left.id.cmp(&right.id))
-    });
-
-    let state = if orders.is_empty() {
-        "empty"
-    } else if invalid_count > 0
-        || orders
-            .iter()
-            .any(|order| matches!(order.state.as_str(), "error" | "unavailable"))
-    {
+    let state = if invalid_count > 0 {
         "degraded"
     } else {
-        "ready"
+        "empty"
     };
 
-    let reason = if orders.is_empty() {
-        Some("no submitted order drafts recorded yet".to_owned())
-    } else if invalid_count > 0 {
+    let reason = if invalid_count > 0 {
         Some(format!(
-            "{invalid_count} invalid order draft file{} skipped while building history",
+            "{invalid_count} invalid order draft file{} skipped while reading local order event state",
             if invalid_count == 1 { "" } else { "s" }
         ))
     } else {
-        None
+        Some("no relay-backed order events recorded yet".to_owned())
     };
 
     Ok(OrderHistoryView {
         state: state.to_owned(),
-        source: ORDER_LIFECYCLE_SOURCE.to_owned(),
-        count: orders.len(),
+        source: ORDER_SOURCE.to_owned(),
+        count: 0,
         reason,
-        orders,
-        actions: if state == "empty" {
-            vec!["radroots basket create".to_owned()]
-        } else {
-            Vec::new()
-        },
+        orders: Vec::new(),
+        actions: vec!["radroots order list".to_owned()],
     })
 }
 
@@ -912,7 +576,7 @@ pub fn cancel(
     if !file.exists() {
         return Ok(OrderCancelView {
             state: "missing".to_owned(),
-            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+            source: ORDER_SOURCE.to_owned(),
             lookup: args.key.clone(),
             order_id: None,
             reason: Some(format!("order draft `{}` was not found", args.key)),
@@ -926,7 +590,7 @@ pub fn cancel(
         Err(reason) => {
             return Ok(OrderCancelView {
                 state: "error".to_owned(),
-                source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+                source: ORDER_SOURCE.to_owned(),
                 lookup: args.key.clone(),
                 order_id: None,
                 reason: Some(reason),
@@ -936,39 +600,17 @@ pub fn cancel(
         }
     };
 
-    let Some(job) = submission_job_view(config, &loaded.document, false) else {
-        return Ok(OrderCancelView {
-            state: "not_submitted".to_owned(),
-            source: ORDER_LIFECYCLE_SOURCE.to_owned(),
-            lookup: args.key.clone(),
-            order_id: Some(loaded.document.order.order_id.clone()),
-            reason: Some("order draft has not been submitted yet".to_owned()),
-            job: None,
-            actions: vec![format!(
-                "radroots order submit {}",
-                loaded.document.order.order_id
-            )],
-        });
-    };
-
-    let job_id = loaded
-        .document
-        .submission
-        .as_ref()
-        .map(|submission| submission.job_id.clone());
     Ok(OrderCancelView {
-        state: "unconfigured".to_owned(),
-        source: ORDER_LIFECYCLE_SOURCE.to_owned(),
+        state: "unavailable".to_owned(),
+        source: ORDER_SOURCE.to_owned(),
         lookup: args.key.clone(),
         order_id: Some(loaded.document.order.order_id.clone()),
-        reason: Some(
-            "durable order cancel needs trade-chain root and previous event refs that the current local order read plane does not persist yet".to_owned(),
-        ),
-        job: Some(job),
-        actions: vec![
-            "radroots order event list".to_owned(),
-            format!("radroots job get {}", job_id.unwrap_or_default()),
-        ],
+        reason: Some(ORDER_EVENT_STATE_UNAVAILABLE_REASON.to_owned()),
+        job: None,
+        actions: vec![format!(
+            "radroots order get {}",
+            loaded.document.order.order_id
+        )],
     })
 }
 
@@ -1044,30 +686,16 @@ fn resolve_order_listing(
     }
 }
 
-fn view_from_loaded(
-    config: &RuntimeConfig,
-    loaded: LoadedOrderDraft,
-    enrich_job: bool,
-) -> OrderGetView {
+fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
     let OrderInspection {
         state,
         ready_for_submit,
         listing_addr,
         seller_pubkey,
         issues,
-        job,
-    } = inspect_document(config, &loaded.document, enrich_job);
-    let workflow = resolve_order_workflow_snapshot(config, &loaded.document)
-        .ok()
-        .flatten();
-    let state = preferred_order_state(state, workflow.as_ref());
+    } = inspect_document(&loaded.document);
 
-    let mut actions =
-        actions_for_document(&loaded.document, loaded.file.as_path(), issues.as_slice());
-    if let Some(job) = &job {
-        actions.push(format!("radroots job get {}", job.job_id));
-        actions.push("radroots order event list".to_owned());
-    }
+    let actions = actions_for_document(&loaded.document, loaded.file.as_path(), issues.as_slice());
 
     OrderGetView {
         state,
@@ -1092,23 +720,22 @@ fn view_from_loaded(
             })
             .collect(),
         updated_at_unix: Some(loaded.updated_at_unix),
-        job,
-        workflow,
+        job: None,
+        workflow: None,
         reason: None,
         issues,
         actions,
     }
 }
 
-fn summary_from_loaded(config: &RuntimeConfig, loaded: &LoadedOrderDraft) -> OrderSummaryView {
+fn summary_from_loaded(loaded: &LoadedOrderDraft) -> OrderSummaryView {
     let OrderInspection {
         state,
         ready_for_submit,
         listing_addr,
         seller_pubkey: _,
         issues,
-        job,
-    } = inspect_document(config, &loaded.document, false);
+    } = inspect_document(&loaded.document);
 
     OrderSummaryView {
         id: loaded.document.order.order_id.clone(),
@@ -1120,40 +747,8 @@ fn summary_from_loaded(config: &RuntimeConfig, loaded: &LoadedOrderDraft) -> Ord
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         item_count: loaded.document.order.items.len(),
         updated_at_unix: loaded.updated_at_unix,
-        job,
+        job: None,
         issues,
-    }
-}
-
-fn history_entry_from_loaded(
-    config: &RuntimeConfig,
-    loaded: &LoadedOrderDraft,
-) -> OrderHistoryEntryView {
-    let job = submission_job_view(config, &loaded.document, true);
-    let workflow = resolve_order_workflow_snapshot(config, &loaded.document)
-        .ok()
-        .flatten();
-    let submitted_at_unix = loaded
-        .document
-        .submission
-        .as_ref()
-        .and_then(|submission| submission.submitted_at_unix);
-    OrderHistoryEntryView {
-        id: loaded.document.order.order_id.clone(),
-        state: preferred_order_state(
-            job.as_ref()
-                .map(|job| job.state.clone())
-                .unwrap_or_else(|| "recorded".to_owned()),
-            workflow.as_ref(),
-        ),
-        listing_lookup: loaded.document.listing_lookup.clone(),
-        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
-        submitted_at_unix,
-        updated_at_unix: loaded.updated_at_unix,
-        job,
-        workflow,
-        issues: Vec::new(),
     }
 }
 
@@ -1181,11 +776,7 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
     }
 }
 
-fn inspect_document(
-    config: &RuntimeConfig,
-    document: &OrderDraftDocument,
-    enrich_job: bool,
-) -> OrderInspection {
+fn inspect_document(document: &OrderDraftDocument) -> OrderInspection {
     let listing_addr = non_empty_string(document.order.listing_addr.clone());
     let parsed_listing_addr = listing_addr
         .as_deref()
@@ -1196,11 +787,8 @@ fn inspect_document(
             .map(|listing| listing.seller_pubkey.clone())
     });
     let issues = collect_issues(document);
-    let job = submission_job_view(config, document, enrich_job);
-    let ready_for_submit = issues.is_empty() && job.is_none();
-    let state = if job.is_some() {
-        "submitted".to_owned()
-    } else if ready_for_submit {
+    let ready_for_submit = issues.is_empty();
+    let state = if ready_for_submit {
         "ready".to_owned()
     } else {
         "draft".to_owned()
@@ -1212,7 +800,6 @@ fn inspect_document(
         listing_addr,
         seller_pubkey,
         issues,
-        job,
     }
 }
 
@@ -1320,136 +907,14 @@ fn actions_for_document(
     actions
 }
 
-fn submission_job_view(
+fn direct_relay_unavailable_order_submit_view(
     config: &RuntimeConfig,
-    document: &OrderDraftDocument,
-    enrich: bool,
-) -> Option<OrderJobView> {
-    let submission = document.submission.as_ref()?;
-    let job_id = normalize_optional(Some(submission.job_id.as_str()))?;
-    if !enrich || config.rpc.bridge_bearer_token.is_none() {
-        return Some(recorded_job_view(submission, job_id));
-    }
-
-    match daemon::bridge_job(config, job_id.as_str()) {
-        Ok(Some(job)) => Some(OrderJobView {
-            job_id,
-            state: job.state,
-            command: Some(job.command),
-            signer_mode: Some(job.signer.clone()),
-            signer_session_id: job.signer_session_id,
-            requested_signer_session_id: None,
-            event_id: job.event_id,
-            event_addr: job.event_addr,
-            reason: None,
-        }),
-        Ok(None) => Some(OrderJobView {
-            job_id,
-            state: "missing".to_owned(),
-            command: submission.command.clone(),
-            signer_mode: submission.signer_mode.clone(),
-            signer_session_id: submission.signer_session_id.clone(),
-            requested_signer_session_id: None,
-            event_id: submission.event_id.clone(),
-            event_addr: submission.event_addr.clone(),
-            reason: Some("recorded job id was not found in radrootsd".to_owned()),
-        }),
-        Err(error) => Some(job_view_from_error(job_id, error)),
-    }
-}
-
-fn recorded_job_view(submission: &OrderDraftSubmission, job_id: String) -> OrderJobView {
-    OrderJobView {
-        job_id,
-        state: submission
-            .state
-            .clone()
-            .unwrap_or_else(|| "recorded".to_owned()),
-        command: submission.command.clone(),
-        signer_mode: submission.signer_mode.clone(),
-        signer_session_id: submission.signer_session_id.clone(),
-        requested_signer_session_id: None,
-        event_id: submission.event_id.clone(),
-        event_addr: submission.event_addr.clone(),
-        reason: None,
-    }
-}
-
-fn job_view_from_error(job_id: String, error: DaemonRpcError) -> OrderJobView {
-    match error {
-        DaemonRpcError::Unconfigured(reason)
-        | DaemonRpcError::Unauthorized(reason)
-        | DaemonRpcError::MethodUnavailable(reason) => OrderJobView {
-            job_id,
-            state: "unconfigured".to_owned(),
-            command: None,
-            signer_mode: None,
-            signer_session_id: None,
-            requested_signer_session_id: None,
-            event_id: None,
-            event_addr: None,
-            reason: Some(reason),
-        },
-        DaemonRpcError::External(reason) => OrderJobView {
-            job_id,
-            state: "unavailable".to_owned(),
-            command: None,
-            signer_mode: None,
-            signer_session_id: None,
-            requested_signer_session_id: None,
-            event_id: None,
-            event_addr: None,
-            reason: Some(reason),
-        },
-        DaemonRpcError::InvalidResponse(reason)
-        | DaemonRpcError::Remote(reason)
-        | DaemonRpcError::UnknownJob(reason) => OrderJobView {
-            job_id,
-            state: "error".to_owned(),
-            command: None,
-            signer_mode: None,
-            signer_session_id: None,
-            requested_signer_session_id: None,
-            event_id: None,
-            event_addr: None,
-            reason: Some(reason),
-        },
-    }
-}
-
-fn order_submit_error_view(
     loaded: &LoadedOrderDraft,
     args: &OrderSubmitArgs,
-    error: DaemonRpcError,
 ) -> OrderSubmitView {
-    let (state, reason, mut actions) = match error {
-        DaemonRpcError::Unconfigured(reason)
-        | DaemonRpcError::Unauthorized(reason)
-        | DaemonRpcError::MethodUnavailable(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec![
-                "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell".to_owned(),
-                "start radrootsd with bridge ingress enabled".to_owned(),
-            ],
-        ),
-        DaemonRpcError::External(reason) => (
-            "unavailable".to_owned(),
-            reason,
-            vec!["start radrootsd and verify the rpc url".to_owned()],
-        ),
-        DaemonRpcError::InvalidResponse(reason)
-        | DaemonRpcError::Remote(reason)
-        | DaemonRpcError::UnknownJob(reason) => ("error".to_owned(), reason, Vec::new()),
-    };
-    actions.push(format!(
-        "radroots order get {}",
-        loaded.document.order.order_id
-    ));
-
     OrderSubmitView {
-        state,
-        source: daemon::bridge_source().to_owned(),
+        state: "unavailable".to_owned(),
+        source: ORDER_SOURCE.to_owned(),
         order_id: loaded.document.order.order_id.clone(),
         file: loaded.file.display().to_string(),
         listing_lookup: loaded.document.listing_lookup.clone(),
@@ -1460,13 +925,13 @@ fn order_submit_error_view(
         dry_run: false,
         deduplicated: false,
         idempotency_key: args.idempotency_key.clone(),
-        signer_mode: None,
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
         signer_session_id: None,
-        requested_signer_session_id: args.signer_session_id.clone(),
-        reason: Some(reason),
+        requested_signer_session_id: None,
+        reason: Some(ORDER_SUBMIT_UNAVAILABLE_REASON.to_owned()),
         job: None,
         issues: Vec::new(),
-        actions,
+        actions: Vec::new(),
     }
 }
 
@@ -1492,7 +957,7 @@ fn order_binding_error_view(
 
     OrderSubmitView {
         state: state.clone(),
-        source: daemon::bridge_source().to_owned(),
+        source: ORDER_SOURCE.to_owned(),
         order_id: loaded.document.order.order_id.clone(),
         file: loaded.file.display().to_string(),
         listing_lookup: loaded.document.listing_lookup.clone(),
@@ -1505,7 +970,7 @@ fn order_binding_error_view(
         idempotency_key: args.idempotency_key.clone(),
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
         signer_session_id: None,
-        requested_signer_session_id: args.signer_session_id.clone(),
+        requested_signer_session_id: None,
         reason: Some(reason),
         job: None,
         issues: Vec::new(),
@@ -1534,468 +999,6 @@ fn validate_local_order_write_authority(
         )));
     }
     Ok(())
-}
-
-fn order_watch_error_view(
-    loaded: &LoadedOrderDraft,
-    args: &OrderWatchArgs,
-    job_id: String,
-    frames: Vec<OrderWatchFrameView>,
-    error: DaemonRpcError,
-) -> OrderWatchView {
-    let (state, reason, actions) = match error {
-        DaemonRpcError::Unconfigured(reason)
-        | DaemonRpcError::Unauthorized(reason)
-        | DaemonRpcError::MethodUnavailable(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec![
-                "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell".to_owned(),
-                "start radrootsd with bridge ingress enabled".to_owned(),
-            ],
-        ),
-        DaemonRpcError::External(reason) => (
-            "unavailable".to_owned(),
-            reason,
-            vec!["start radrootsd and verify the rpc url".to_owned()],
-        ),
-        DaemonRpcError::InvalidResponse(reason)
-        | DaemonRpcError::Remote(reason)
-        | DaemonRpcError::UnknownJob(reason) => ("error".to_owned(), reason, Vec::new()),
-    };
-
-    OrderWatchView {
-        state,
-        source: ORDER_LIFECYCLE_SOURCE.to_owned(),
-        order_id: loaded.document.order.order_id.clone(),
-        job_id: Some(job_id),
-        interval_ms: args.interval_ms,
-        reason: Some(reason),
-        workflow: None,
-        frames,
-        actions: if actions.is_empty() {
-            Vec::new()
-        } else {
-            actions
-        },
-    }
-}
-
-fn resolve_order_workflow_snapshot(
-    config: &RuntimeConfig,
-    document: &OrderDraftDocument,
-) -> Result<Option<OrderWorkflowView>, WorkflowResolutionError> {
-    let Some(context) = resolve_workflow_context(config)? else {
-        return Ok(None);
-    };
-    load_order_workflow_view(
-        context.state_path.as_path(),
-        document.order.order_id.as_str(),
-    )
-    .map_err(WorkflowResolutionError::Error)
-}
-
-fn wait_for_order_workflow_truth(
-    config: &RuntimeConfig,
-    document: &OrderDraftDocument,
-) -> Result<Option<OrderWorkflowView>, WorkflowResolutionError> {
-    let Some(context) = resolve_workflow_context(config)? else {
-        return Ok(None);
-    };
-
-    if let Some(workflow) = load_order_workflow_view(
-        context.state_path.as_path(),
-        document.order.order_id.as_str(),
-    )
-    .map_err(WorkflowResolutionError::Error)?
-    {
-        if workflow_state_is_terminal(workflow.state.as_str()) {
-            return Ok(Some(workflow));
-        }
-    }
-
-    let identity =
-        load_service_identity(Some(context.identity_path.as_path()), false).map_err(|error| {
-            WorkflowResolutionError::Unconfigured(format!(
-                "workflow verification requires repo-local rhi identity at {}: {error}",
-                context.identity_path.display()
-            ))
-        })?;
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| {
-            WorkflowResolutionError::Error(format!(
-                "build localhost workflow verifier runtime: {error}"
-            ))
-        })?;
-
-    runtime.block_on(async move {
-        let replay_window_secs = workflow_replay_window_secs(document);
-        let trade_listing_runtime = TradeListingRuntime::load(TradeListingRuntimeConfig {
-            state_path: context.state_path.clone(),
-            replay_window_secs,
-            replay_overlap_secs: WORKFLOW_REPLAY_OVERLAP_SECS,
-        })
-        .await
-        .map_err(|error| {
-            WorkflowResolutionError::Unavailable(format!(
-                "load repo-local rhi workflow state {}: {error}",
-                context.state_path.display()
-            ))
-        })?;
-
-        let rhi = Rhi::with_trade_listing_runtime(
-            identity.keys().clone(),
-            trade_listing_runtime.clone(),
-        );
-        rhi.client
-            .add_relay(context.relay_url.as_str())
-            .await
-            .map_err(|error| {
-                WorkflowResolutionError::Unavailable(format!(
-                    "attach localhost relay `{}` to workflow verifier: {error}",
-                    context.relay_url
-                ))
-            })?;
-
-        let handle = start_subscriber(
-            rhi.client.clone(),
-            identity.keys().clone(),
-            trade_listing_runtime,
-            BackoffConfig::default(),
-        )
-        .await;
-
-        let mut last_observed = load_order_workflow_view(
-            context.state_path.as_path(),
-            document.order.order_id.as_str(),
-        )
-        .map_err(WorkflowResolutionError::Error)?;
-        let deadline = Instant::now() + WORKFLOW_FETCH_TIMEOUT;
-
-        loop {
-            if let Some(workflow) = load_order_workflow_view(
-                context.state_path.as_path(),
-                document.order.order_id.as_str(),
-            )
-            .map_err(WorkflowResolutionError::Error)?
-            {
-                if workflow_state_is_terminal(workflow.state.as_str()) {
-                    handle.stop();
-                    handle.stopped().await;
-                    return Ok(Some(workflow));
-                }
-                last_observed = Some(workflow);
-            }
-
-            if Instant::now() >= deadline {
-                handle.stop();
-                handle.stopped().await;
-                let detail = match last_observed {
-                    Some(view) => format!(
-                        "workflow state did not reach a terminal value within {:?}; last observed workflow state was `{}`",
-                        WORKFLOW_FETCH_TIMEOUT, view.state
-                    ),
-                    None => format!(
-                        "workflow state did not appear within {:?} at {}",
-                        WORKFLOW_FETCH_TIMEOUT,
-                        context.state_path.display()
-                    ),
-                };
-                return Err(WorkflowResolutionError::Unavailable(detail));
-            }
-
-            tokio::time::sleep(WORKFLOW_POLL_INTERVAL).await;
-        }
-    })
-}
-
-fn workflow_replay_window_secs(document: &OrderDraftDocument) -> u64 {
-    let Some(submitted_at_unix) = document
-        .submission
-        .as_ref()
-        .and_then(|submission| submission.submitted_at_unix)
-    else {
-        return WORKFLOW_REPLAY_WINDOW_SECS;
-    };
-
-    let now = now_unix();
-    if submitted_at_unix >= now {
-        return WORKFLOW_REPLAY_OVERLAP_SECS.max(1);
-    }
-
-    let recent_window = now
-        .saturating_sub(submitted_at_unix)
-        .saturating_add(WORKFLOW_REPLAY_OVERLAP_SECS);
-    recent_window.clamp(1, WORKFLOW_REPLAY_WINDOW_SECS)
-}
-
-fn resolve_workflow_context(
-    config: &RuntimeConfig,
-) -> Result<Option<WorkflowContext>, WorkflowResolutionError> {
-    let Some(binding) = config.capability_binding(WORKFLOW_TRADE_CAPABILITY) else {
-        return Ok(None);
-    };
-
-    if binding.provider_runtime_id != WORKFLOW_PROVIDER_RUNTIME_ID {
-        return Err(WorkflowResolutionError::Unconfigured(format!(
-            "workflow.trade binding must use provider `{WORKFLOW_PROVIDER_RUNTIME_ID}`, got `{}`",
-            binding.provider_runtime_id
-        )));
-    }
-    if binding.target_kind != CapabilityBindingTargetKind::ManagedInstance {
-        return Err(WorkflowResolutionError::Unconfigured(format!(
-            "workflow.trade binding must use target_kind `managed_instance`, got `{}`",
-            binding.target_kind.as_str()
-        )));
-    }
-    if binding.target != WORKFLOW_TARGET {
-        return Err(WorkflowResolutionError::Unconfigured(format!(
-            "workflow.trade binding must target `{WORKFLOW_TARGET}`, got `{}`",
-            binding.target
-        )));
-    }
-    if config.paths.profile != "repo_local" {
-        return Err(WorkflowResolutionError::Unconfigured(
-            "workflow.trade progression requires RADROOTS_CLI_PATHS_PROFILE=repo_local".to_owned(),
-        ));
-    }
-    let repo_local_root = config.paths.repo_local_root.as_ref().ok_or_else(|| {
-        WorkflowResolutionError::Unconfigured(
-            "workflow.trade progression requires a repo-local cli root".to_owned(),
-        )
-    })?;
-    let canonical_relay_url =
-        canonical_local_relay_url().map_err(WorkflowResolutionError::Error)?;
-    if !config
-        .relay
-        .urls
-        .iter()
-        .any(|configured| loopback_endpoint_matches(configured, canonical_relay_url.as_str()))
-    {
-        return Err(WorkflowResolutionError::Unconfigured(format!(
-            "workflow.trade progression requires canonical localhost relay `{canonical_relay_url}`"
-        )));
-    }
-
-    let base_paths = RadrootsPathResolver::current()
-        .resolve(
-            RadrootsPathProfile::RepoLocal,
-            &RadrootsPathOverrides::repo_local(repo_local_root),
-        )
-        .map_err(|error| {
-            WorkflowResolutionError::Error(format!(
-                "resolve repo-local workflow verifier roots from {}: {error}",
-                repo_local_root.display()
-            ))
-        })?;
-    let worker_namespace =
-        RadrootsRuntimeNamespace::worker(WORKFLOW_PROVIDER_RUNTIME_ID).map_err(|error| {
-            WorkflowResolutionError::Error(format!(
-                "resolve worker namespace `{WORKFLOW_PROVIDER_RUNTIME_ID}`: {error}"
-            ))
-        })?;
-    let worker_paths = base_paths.namespaced(&worker_namespace);
-
-    Ok(Some(WorkflowContext {
-        relay_url: canonical_relay_url,
-        identity_path: worker_paths.secrets.join(WORKFLOW_IDENTITY_FILE_NAME),
-        state_path: worker_paths
-            .data
-            .join(WORKFLOW_STATE_DIR_NAME)
-            .join(WORKFLOW_STATE_FILE_NAME),
-    }))
-}
-
-fn load_order_workflow_view(
-    state_path: &Path,
-    order_id: &str,
-) -> Result<Option<OrderWorkflowView>, String> {
-    if !state_path.exists() {
-        return Ok(None);
-    }
-
-    let raw = fs::read_to_string(state_path)
-        .map_err(|error| format!("read workflow state {}: {error}", state_path.display()))?;
-    let snapshot: JsonValue = serde_json::from_str(raw.as_str())
-        .map_err(|error| format!("parse workflow state {}: {error}", state_path.display()))?;
-    let state = snapshot
-        .get("state")
-        .and_then(JsonValue::as_object)
-        .ok_or_else(|| {
-            format!(
-                "workflow state {} did not include top-level `state` object",
-                state_path.display()
-            )
-        })?;
-    let orders = state
-        .get("orders")
-        .and_then(JsonValue::as_object)
-        .ok_or_else(|| {
-            format!(
-                "workflow state {} did not include `state.orders`",
-                state_path.display()
-            )
-        })?;
-    let Some(order) = orders.get(order_id) else {
-        return Ok(None);
-    };
-    let order_object = order.as_object().ok_or_else(|| {
-        format!(
-            "workflow state {} stored `state.orders.{order_id}` as a non-object",
-            state_path.display()
-        )
-    })?;
-    let workflow_state = order_object
-        .get("status")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| {
-            format!(
-                "workflow state {} did not include `status` for order `{order_id}`",
-                state_path.display()
-            )
-        })?;
-    let listing_addr = order_object
-        .get("listing_addr")
-        .and_then(JsonValue::as_str)
-        .map(str::to_owned);
-    let validated_listing_event_id = listing_addr
-        .as_ref()
-        .and_then(|listing_addr| {
-            state
-                .get("validated_listing_events")
-                .and_then(JsonValue::as_object)
-                .and_then(|events| events.get(listing_addr))
-                .and_then(JsonValue::as_object)
-                .and_then(|entry| entry.get("event_id"))
-                .and_then(JsonValue::as_str)
-        })
-        .map(str::to_owned);
-
-    Ok(Some(OrderWorkflowView {
-        state: workflow_state.to_owned(),
-        source: ORDER_WORKFLOW_SOURCE.to_owned(),
-        order_id: order_id.to_owned(),
-        listing_addr,
-        validated_listing_event_id,
-        root_event_id: order_object
-            .get("root_event_id")
-            .and_then(JsonValue::as_str)
-            .map(str::to_owned),
-        last_event_id: order_object
-            .get("last_event_id")
-            .and_then(JsonValue::as_str)
-            .map(str::to_owned),
-        reason: None,
-    }))
-}
-
-fn preferred_order_state(base_state: String, workflow: Option<&OrderWorkflowView>) -> String {
-    match workflow {
-        Some(workflow) if workflow_state_is_business_truth(workflow.state.as_str()) => {
-            workflow.state.clone()
-        }
-        _ => base_state,
-    }
-}
-
-fn workflow_state_is_business_truth(state: &str) -> bool {
-    matches!(
-        state,
-        "draft"
-            | "validated"
-            | "requested"
-            | "questioned"
-            | "revised"
-            | "accepted"
-            | "declined"
-            | "cancelled"
-            | "fulfilled"
-            | "completed"
-    )
-}
-
-fn workflow_state_is_terminal(state: &str) -> bool {
-    matches!(state, "declined" | "cancelled" | "completed")
-}
-
-fn job_state_allows_workflow_verification(state: &str) -> bool {
-    !matches!(
-        state,
-        "failed" | "error" | "missing" | "unavailable" | "unconfigured"
-    )
-}
-
-fn workflow_error_view(
-    document: &OrderDraftDocument,
-    state: &str,
-    reason: String,
-) -> OrderWorkflowView {
-    OrderWorkflowView {
-        state: state.to_owned(),
-        source: ORDER_WORKFLOW_SOURCE.to_owned(),
-        order_id: document.order.order_id.clone(),
-        listing_addr: non_empty_string(document.order.listing_addr.clone()),
-        validated_listing_event_id: None,
-        root_event_id: None,
-        last_event_id: None,
-        reason: Some(reason),
-    }
-}
-
-fn canonical_local_relay_url() -> Result<String, String> {
-    let config = RadrootsSdkConfig::local();
-    config
-        .resolved_relay_urls()
-        .map_err(|error| format!("resolve canonical localhost relay url: {error}"))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| "missing canonical localhost relay url".to_owned())
-}
-
-fn loopback_endpoint_matches(left: &str, right: &str) -> bool {
-    let Ok(left_url) = url::Url::parse(left) else {
-        return false;
-    };
-    let Ok(right_url) = url::Url::parse(right) else {
-        return false;
-    };
-
-    if left_url.scheme() != right_url.scheme()
-        || left_url.port_or_known_default() != right_url.port_or_known_default()
-    {
-        return false;
-    }
-
-    match (left_url.host_str(), right_url.host_str()) {
-        (Some(left_host), Some(right_host)) if left_host == right_host => true,
-        (Some(left_host), Some(right_host)) => matches!(
-            (left_host, right_host),
-            ("127.0.0.1", "localhost") | ("localhost", "127.0.0.1")
-        ),
-        _ => false,
-    }
-}
-
-fn trade_order_from_document(document: &OrderDraftDocument) -> RadrootsTradeOrder {
-    RadrootsTradeOrder {
-        order_id: document.order.order_id.clone(),
-        listing_addr: document.order.listing_addr.clone(),
-        buyer_pubkey: document.order.buyer_pubkey.clone(),
-        seller_pubkey: document.order.seller_pubkey.clone(),
-        items: document
-            .order
-            .items
-            .iter()
-            .map(|item| RadrootsTradeOrderItem {
-                bin_id: item.bin_id.clone(),
-                bin_count: item.bin_count,
-            })
-            .collect(),
-        discounts: None,
-    }
 }
 
 fn load_draft(path: &Path) -> Result<LoadedOrderDraft, String> {
@@ -2141,7 +1144,6 @@ struct OrderInspection {
     listing_addr: Option<String>,
     seller_pubkey: Option<String>,
     issues: Vec<OrderIssueView>,
-    job: Option<OrderJobView>,
 }
 
 impl From<OrderGetView> for OrderNewView {
@@ -2166,11 +1168,7 @@ impl From<OrderGetView> for OrderNewView {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, OrderDraftSubmission,
-        WORKFLOW_REPLAY_OVERLAP_SECS, WORKFLOW_REPLAY_WINDOW_SECS, next_order_id, now_unix,
-        workflow_replay_window_secs,
-    };
+    use super::{ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, next_order_id};
 
     #[test]
     fn generated_order_id_uses_stable_prefix() {
@@ -2196,95 +1194,10 @@ mod tests {
             },
             listing_lookup: Some("fresh-eggs".to_owned()),
             buyer_account_id: Some("acct_demo".to_owned()),
-            submission: Some(OrderDraftSubmission {
-                job_id: "job_01".to_owned(),
-                state: Some("accepted".to_owned()),
-                signer_mode: Some("embedded_service_identity".to_owned()),
-                signer_session_id: None,
-                command: Some("order.submit".to_owned()),
-                event_id: None,
-                event_addr: None,
-                submitted_at_unix: Some(1),
-            }),
         };
 
         let rendered = toml::to_string_pretty(&document).expect("render draft");
         assert!(rendered.contains("kind = \"order_draft_v1\""));
         assert!(rendered.contains("order_id = \"ord_AAAAAAAAAAAAAAAAAAAAAg\""));
-        assert!(rendered.contains("job_id = \"job_01\""));
-    }
-
-    #[test]
-    fn workflow_replay_window_prefers_recent_submission_age_plus_overlap() {
-        let now = now_unix();
-        let document = OrderDraftDocument {
-            version: 1,
-            kind: ORDER_DRAFT_KIND.to_owned(),
-            order: OrderDraft {
-                order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
-                listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
-                buyer_pubkey: "a".repeat(64),
-                seller_pubkey: "b".repeat(64),
-                items: vec![OrderDraftItem {
-                    bin_id: "bin-1".to_owned(),
-                    bin_count: 2,
-                }],
-            },
-            listing_lookup: Some("fresh-eggs".to_owned()),
-            buyer_account_id: Some("acct_demo".to_owned()),
-            submission: Some(OrderDraftSubmission {
-                job_id: "job_01".to_owned(),
-                state: Some("accepted".to_owned()),
-                signer_mode: Some("embedded_service_identity".to_owned()),
-                signer_session_id: None,
-                command: Some("order.submit".to_owned()),
-                event_id: None,
-                event_addr: None,
-                submitted_at_unix: Some(now.saturating_sub(42)),
-            }),
-        };
-
-        assert_eq!(
-            workflow_replay_window_secs(&document),
-            42 + WORKFLOW_REPLAY_OVERLAP_SECS
-        );
-    }
-
-    #[test]
-    fn workflow_replay_window_caps_at_default_window_for_old_orders() {
-        let now = now_unix();
-        let document = OrderDraftDocument {
-            version: 1,
-            kind: ORDER_DRAFT_KIND.to_owned(),
-            order: OrderDraft {
-                order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
-                listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
-                buyer_pubkey: "a".repeat(64),
-                seller_pubkey: "b".repeat(64),
-                items: vec![OrderDraftItem {
-                    bin_id: "bin-1".to_owned(),
-                    bin_count: 2,
-                }],
-            },
-            listing_lookup: Some("fresh-eggs".to_owned()),
-            buyer_account_id: Some("acct_demo".to_owned()),
-            submission: Some(OrderDraftSubmission {
-                job_id: "job_01".to_owned(),
-                state: Some("accepted".to_owned()),
-                signer_mode: Some("embedded_service_identity".to_owned()),
-                signer_session_id: None,
-                command: Some("order.submit".to_owned()),
-                event_id: None,
-                event_addr: None,
-                submitted_at_unix: Some(
-                    now.saturating_sub(WORKFLOW_REPLAY_WINDOW_SECS + WORKFLOW_REPLAY_OVERLAP_SECS),
-                ),
-            }),
-        };
-
-        assert_eq!(
-            workflow_replay_window_secs(&document),
-            WORKFLOW_REPLAY_WINDOW_SECS
-        );
     }
 }

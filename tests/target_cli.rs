@@ -946,6 +946,7 @@ fn order_submit_missing_order_returns_not_found_while_read_view_stays_successful
     assert_eq!(submit["errors"][0]["exit_code"], 4);
     assert_eq!(submit["errors"][0]["detail"]["class"], "resource");
     assert_no_removed_command_reference(&submit, &["order", "submit"]);
+    assert_no_daemon_runtime_reference(&submit, &["order", "submit"]);
 }
 
 #[test]
@@ -1024,6 +1025,7 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     );
     assert_eq!(orders["result"]["orders"][0]["issues"], Value::Null);
     assert_no_removed_command_reference(&orders, &["order", "list"]);
+    assert_no_daemon_runtime_reference(&orders, &["order", "list"]);
 
     let submit =
         sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
@@ -1035,6 +1037,50 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(submit["result"]["buyer_account_id"], account_id);
     assert_eq!(submit["errors"].as_array().expect("errors").len(), 0);
     assert_no_removed_command_reference(&submit, &["order", "submit", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&submit, &["order", "submit", "--dry-run"]);
+
+    let (output, unavailable_submit) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "order",
+        "submit",
+        order_id,
+    ]);
+    assert!(!output.status.success());
+    assert_eq!(unavailable_submit["operation_id"], "order.submit");
+    assert_eq!(unavailable_submit["result"], Value::Null);
+    assert_eq!(
+        unavailable_submit["errors"][0]["code"],
+        "operation_unavailable"
+    );
+    assert_eq!(
+        unavailable_submit["errors"][0]["detail"]["class"],
+        "operation"
+    );
+    assert!(
+        unavailable_submit["errors"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("direct Nostr relay order publication is not implemented")
+    );
+    assert_no_removed_command_reference(&unavailable_submit, &["order", "submit"]);
+    assert_no_daemon_runtime_reference(&unavailable_submit, &["order", "submit"]);
+
+    let order_after_submit = sandbox.json_success(&["--format", "json", "order", "get", order_id]);
+    assert_eq!(order_after_submit["operation_id"], "order.get");
+    assert_eq!(order_after_submit["result"]["state"], "ready");
+    assert_eq!(order_after_submit["result"]["job"], Value::Null);
+    assert_eq!(order_after_submit["result"]["workflow"], Value::Null);
+    assert_no_daemon_runtime_reference(&order_after_submit, &["order", "get"]);
+
+    let watch = sandbox.json_success(&["--format", "json", "order", "event", "watch", order_id]);
+    assert_eq!(watch["operation_id"], "order.event.watch");
+    assert_eq!(watch["result"]["state"], "unavailable");
+    assert_eq!(watch["result"]["job_id"], Value::Null);
+    assert_eq!(watch["result"]["workflow"], Value::Null);
+    assert_no_daemon_runtime_reference(&watch, &["order", "event", "watch"]);
 }
 
 #[test]
@@ -1084,6 +1130,7 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     assert_eq!(dry_run["result"]["state"], "dry_run");
     assert_eq!(dry_run["result"]["dry_run"], true);
     assert_eq!(dry_run["result"]["buyer_account_id"], first_account_id);
+    assert_no_daemon_runtime_reference(&dry_run, &["order", "submit", "--dry-run"]);
 
     let second = sandbox.json_success(&["--format", "json", "account", "create"]);
     let second_account_id = second["result"]["account"]["id"]
@@ -1106,6 +1153,7 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     assert_eq!(mismatch["errors"][0]["code"], "account_mismatch");
     assert_eq!(mismatch["errors"][0]["detail"]["class"], "account");
     assert_no_removed_command_reference(&mismatch, &["order", "submit", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&mismatch, &["order", "submit", "--dry-run"]);
 }
 
 #[test]
