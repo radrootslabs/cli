@@ -597,6 +597,39 @@ fn assert_required_approval_token_rejected(
 }
 
 #[test]
+fn order_submit_missing_order_returns_not_found_while_read_view_stays_successful() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let get = sandbox.json_success(&[
+        "--format",
+        "json",
+        "order",
+        "get",
+        "ord_missing_submit_target",
+    ]);
+    assert_eq!(get["operation_id"], "order.get");
+    assert_eq!(get["result"]["state"], "missing");
+    assert_eq!(get["errors"].as_array().expect("errors").len(), 0);
+
+    let (output, submit) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "order",
+        "submit",
+        "ord_missing_submit_target",
+    ]);
+
+    assert_eq!(output.status.code(), Some(4));
+    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["errors"][0]["code"], "not_found");
+    assert_eq!(submit["errors"][0]["exit_code"], 4);
+    assert_eq!(submit["errors"][0]["detail"]["class"], "resource");
+    assert_no_removed_command_reference(&submit, &["order", "submit"]);
+}
+
+#[test]
 fn buyer_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
 

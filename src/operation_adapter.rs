@@ -6,6 +6,7 @@ use std::io::ErrorKind;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
+use crate::domain::runtime::CommandDisposition;
 use crate::operation_registry::{OPERATION_REGISTRY, OperationSpec, get_operation};
 use crate::output_contract::{
     CliExitCode, EnvelopeActor, EnvelopeContext, NextAction, OUTPUT_SCHEMA_VERSION, OutputEnvelope,
@@ -389,6 +390,27 @@ impl OperationAdapterError {
         Self::ApprovalRequired {
             operation_id: operation_id.to_owned(),
             message: "missing required `approval_token` input".to_owned(),
+        }
+    }
+
+    pub fn from_command_disposition(
+        operation_id: &str,
+        disposition: CommandDisposition,
+        message: String,
+    ) -> Self {
+        match disposition {
+            CommandDisposition::Success => Self::Runtime(message),
+            CommandDisposition::NotFound => Self::NotFound {
+                operation_id: operation_id.to_owned(),
+                message,
+            },
+            CommandDisposition::Unconfigured => Self::unconfigured(operation_id, message),
+            CommandDisposition::ExternalUnavailable => Self::unavailable(operation_id, message),
+            CommandDisposition::Unsupported => Self::InvalidInput {
+                operation_id: operation_id.to_owned(),
+                message,
+            },
+            CommandDisposition::InternalError => Self::Runtime(message),
         }
     }
 

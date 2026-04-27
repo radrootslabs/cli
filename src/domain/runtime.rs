@@ -11,6 +11,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandDisposition {
     Success,
+    NotFound,
     Unconfigured,
     ExternalUnavailable,
     Unsupported,
@@ -21,6 +22,7 @@ impl CommandDisposition {
     pub fn exit_code(self) -> ExitCode {
         match self {
             Self::Success => ExitCode::SUCCESS,
+            Self::NotFound => ExitCode::from(4),
             Self::Unconfigured => ExitCode::from(3),
             Self::ExternalUnavailable => ExitCode::from(4),
             Self::Unsupported => ExitCode::from(5),
@@ -1164,6 +1166,7 @@ pub struct OrderSubmitView {
 impl OrderSubmitView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
+            "missing" => CommandDisposition::NotFound,
             "unconfigured" => CommandDisposition::Unconfigured,
             "unavailable" => CommandDisposition::ExternalUnavailable,
             "error" => CommandDisposition::InternalError,

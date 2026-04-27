@@ -228,29 +228,17 @@ fn farm_publish_result(
 ) -> Result<OperationResult<FarmPublishResult>, OperationAdapterError> {
     match view.disposition() {
         CommandDisposition::Success => serialized_operation_result::<FarmPublishResult, _>(view),
-        CommandDisposition::Unconfigured => Err(OperationAdapterError::unconfigured(
+        disposition => Err(OperationAdapterError::from_command_disposition(
             operation_id,
-            view.reason
-                .clone()
-                .unwrap_or_else(|| "farm publish is unconfigured".to_owned()),
-        )),
-        CommandDisposition::ExternalUnavailable => Err(OperationAdapterError::unavailable(
-            operation_id,
-            view.reason
-                .clone()
-                .unwrap_or_else(|| "farm publish is unavailable".to_owned()),
-        )),
-        CommandDisposition::Unsupported => Err(OperationAdapterError::InvalidInput {
-            operation_id: operation_id.to_owned(),
-            message: view
-                .reason
-                .clone()
-                .unwrap_or_else(|| "farm publish is unsupported".to_owned()),
-        }),
-        CommandDisposition::InternalError => Err(OperationAdapterError::Runtime(
-            view.reason
-                .clone()
-                .unwrap_or_else(|| "farm publish failed".to_owned()),
+            disposition,
+            view.reason.clone().unwrap_or_else(|| match disposition {
+                CommandDisposition::Success => "farm publish succeeded".to_owned(),
+                CommandDisposition::NotFound => "farm publish target was not found".to_owned(),
+                CommandDisposition::Unconfigured => "farm publish is unconfigured".to_owned(),
+                CommandDisposition::ExternalUnavailable => "farm publish is unavailable".to_owned(),
+                CommandDisposition::Unsupported => "farm publish is unsupported".to_owned(),
+                CommandDisposition::InternalError => "farm publish failed".to_owned(),
+            }),
         )),
     }
 }

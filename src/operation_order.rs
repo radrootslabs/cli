@@ -131,34 +131,13 @@ where
 {
     match view.disposition() {
         CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        disposition => Err(disposition_error(
+        disposition => Err(OperationAdapterError::from_command_disposition(
             operation_id,
             disposition,
             view.reason
                 .clone()
                 .unwrap_or_else(|| format!("order submit finished with state `{}`", view.state)),
         )),
-    }
-}
-
-fn disposition_error(
-    operation_id: &str,
-    disposition: CommandDisposition,
-    message: String,
-) -> OperationAdapterError {
-    match disposition {
-        CommandDisposition::Success => OperationAdapterError::Runtime(message),
-        CommandDisposition::Unconfigured => {
-            OperationAdapterError::unconfigured(operation_id, message)
-        }
-        CommandDisposition::ExternalUnavailable => {
-            OperationAdapterError::unavailable(operation_id, message)
-        }
-        CommandDisposition::Unsupported => OperationAdapterError::InvalidInput {
-            operation_id: operation_id.to_owned(),
-            message,
-        },
-        CommandDisposition::InternalError => OperationAdapterError::Runtime(message),
     }
 }
 
@@ -290,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn order_submit_with_approval_preserves_missing_order_truth() {
+    fn order_submit_with_approval_returns_not_found_for_missing_order() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(OrderOperationService::new(&config));
@@ -301,15 +280,12 @@ mod tests {
             OrderSubmitRequest::from_data(data(&[("order_id", "ord_missing")])),
         )
         .expect("order submit request");
-        let envelope = service
-            .execute(submit)
-            .expect("order submit result")
-            .to_envelope(context.envelope_context("req_order_submit"))
-            .expect("order submit envelope");
+        let error = service.execute(submit).expect_err("missing order error");
+        let output_error = error.to_output_error();
 
-        assert_eq!(envelope.operation_id, "order.submit");
-        assert_eq!(envelope.result["state"], "missing");
-        assert_eq!(envelope.result["actions"][0], "radroots order list");
+        assert_eq!(output_error.code, "not_found");
+        assert_eq!(output_error.exit_code, 4);
+        assert!(output_error.message.contains("ord_missing"));
     }
 
     #[test]

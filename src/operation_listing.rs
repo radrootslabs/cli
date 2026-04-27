@@ -233,7 +233,7 @@ where
 {
     match view.disposition() {
         CommandDisposition::Success => serialized_operation_result::<R, _>(view),
-        disposition => Err(disposition_error(
+        disposition => Err(OperationAdapterError::from_command_disposition(
             operation_id,
             disposition,
             view.reason.clone().unwrap_or_else(|| {
@@ -243,27 +243,6 @@ where
                 )
             }),
         )),
-    }
-}
-
-fn disposition_error(
-    operation_id: &str,
-    disposition: CommandDisposition,
-    message: String,
-) -> OperationAdapterError {
-    match disposition {
-        CommandDisposition::Success => OperationAdapterError::Runtime(message),
-        CommandDisposition::Unconfigured => {
-            OperationAdapterError::unconfigured(operation_id, message)
-        }
-        CommandDisposition::ExternalUnavailable => {
-            OperationAdapterError::unavailable(operation_id, message)
-        }
-        CommandDisposition::Unsupported => OperationAdapterError::InvalidInput {
-            operation_id: operation_id.to_owned(),
-            message,
-        },
-        CommandDisposition::InternalError => OperationAdapterError::Runtime(message),
     }
 }
 

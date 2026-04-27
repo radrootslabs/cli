@@ -529,28 +529,17 @@ fn local_backup_result(
         CommandDisposition::Success => {
             serialized_operation_result::<StoreBackupCreateResult, _>(view)
         }
-        CommandDisposition::Unconfigured => Err(OperationAdapterError::unconfigured(
+        disposition => Err(OperationAdapterError::from_command_disposition(
             operation_id,
-            view.reason
-                .clone()
-                .unwrap_or_else(|| "store backup is unconfigured".to_owned()),
-        )),
-        CommandDisposition::ExternalUnavailable => Err(OperationAdapterError::unavailable(
-            operation_id,
-            view.reason
-                .clone()
-                .unwrap_or_else(|| "store backup is unavailable".to_owned()),
-        )),
-        CommandDisposition::Unsupported => Err(invalid_input(
-            operation_id,
-            view.reason
-                .clone()
-                .unwrap_or_else(|| "store backup is unsupported".to_owned()),
-        )),
-        CommandDisposition::InternalError => Err(OperationAdapterError::Runtime(
-            view.reason
-                .clone()
-                .unwrap_or_else(|| "store backup failed".to_owned()),
+            disposition,
+            view.reason.clone().unwrap_or_else(|| match disposition {
+                CommandDisposition::Success => "store backup succeeded".to_owned(),
+                CommandDisposition::NotFound => "store backup target was not found".to_owned(),
+                CommandDisposition::Unconfigured => "store backup is unconfigured".to_owned(),
+                CommandDisposition::ExternalUnavailable => "store backup is unavailable".to_owned(),
+                CommandDisposition::Unsupported => "store backup is unsupported".to_owned(),
+                CommandDisposition::InternalError => "store backup failed".to_owned(),
+            }),
         )),
     }
 }
