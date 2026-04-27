@@ -34,7 +34,7 @@ use crate::operation_market::MarketOperationService;
 use crate::operation_order::OrderOperationService;
 use crate::operation_runtime::RuntimeOperationService;
 use crate::output_contract::OutputEnvelope;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::logging::initialize_logging;
 use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
 
@@ -337,7 +337,25 @@ fn validate_request_contract(
             message: format!("`{}` does not support --dry-run", spec.cli_path),
         });
     }
+    validate_signer_mode_contract(request, config)?;
     validate_network_contract(request, config)?;
+    Ok(())
+}
+
+fn validate_signer_mode_contract(
+    request: &TargetOperationRequest,
+    config: &RuntimeConfig,
+) -> Result<(), OperationAdapterError> {
+    if matches!(config.signer.backend, SignerBackend::Myc) {
+        let spec = request.spec();
+        return Err(OperationAdapterError::SignerModeDeferred {
+            operation_id: spec.operation_id.to_owned(),
+            message: format!(
+                "`{}` cannot run with signer mode `myc`; use signer mode `local`",
+                spec.cli_path
+            ),
+        });
+    }
     Ok(())
 }
 

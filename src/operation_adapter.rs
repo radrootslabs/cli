@@ -334,6 +334,11 @@ pub enum OperationAdapterError {
         operation_id: String,
         message: String,
     },
+    #[error("signer mode deferred for `{operation_id}`: {message}")]
+    SignerModeDeferred {
+        operation_id: String,
+        message: String,
+    },
     #[error("provider unconfigured for `{operation_id}`: {message}")]
     ProviderUnconfigured {
         operation_id: String,
@@ -442,6 +447,16 @@ impl OperationAdapterError {
                 message,
             } => runtime_output_error(
                 "signer_unavailable",
+                operation_id,
+                "signer",
+                message,
+                CliExitCode::SignerUnavailable,
+            ),
+            Self::SignerModeDeferred {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "signer_mode_deferred",
                 operation_id,
                 "signer",
                 message,
@@ -1324,6 +1339,15 @@ mod tests {
                 "provider_unavailable",
                 "provider",
                 3,
+            ),
+            (
+                OperationAdapterError::SignerModeDeferred {
+                    operation_id: "signer.status.get".to_owned(),
+                    message: "signer mode `myc` is deferred".to_owned(),
+                },
+                "signer_mode_deferred",
+                "signer",
+                7,
             ),
             (
                 OperationAdapterError::unconfigured(

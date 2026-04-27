@@ -756,18 +756,12 @@ fn binding_error_publish_view(
         ActorWriteBindingError::Unconfigured(reason) => (
             "unconfigured".to_owned(),
             reason,
-            vec![
-                "set RADROOTS_SIGNER=myc and run radroots signer status get".to_owned(),
-                "configure signer.remote_nip46 capability binding".to_owned(),
-            ],
+            vec!["run radroots signer status get".to_owned()],
         ),
         ActorWriteBindingError::Unavailable(reason) => (
             "unavailable".to_owned(),
             reason,
-            vec![
-                "RADROOTS_SIGNER=myc radroots signer status get".to_owned(),
-                "verify RADROOTS_MYC_EXECUTABLE and signer.remote_nip46 binding".to_owned(),
-            ],
+            vec!["run radroots signer status get".to_owned()],
         ),
     };
     base_publish_view(
