@@ -7,7 +7,8 @@ use serde_json::{Map, Value};
 
 use crate::operation_registry::{OPERATION_REGISTRY, OperationSpec, get_operation};
 use crate::output_contract::{
-    EnvelopeContext, NextAction, OUTPUT_SCHEMA_VERSION, OutputEnvelope, OutputWarning,
+    CliExitCode, EnvelopeContext, NextAction, OUTPUT_SCHEMA_VERSION, OutputEnvelope, OutputError,
+    OutputWarning,
 };
 use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
 
@@ -298,8 +299,53 @@ pub enum OperationAdapterError {
         operation_id: String,
         message: String,
     },
+    #[error("approval required for `{operation_id}`: {message}")]
+    ApprovalRequired {
+        operation_id: String,
+        message: String,
+    },
     #[error("operation runtime error: {0}")]
     Runtime(String),
+}
+
+impl OperationAdapterError {
+    pub fn approval_required(operation_id: &str) -> Self {
+        Self::ApprovalRequired {
+            operation_id: operation_id.to_owned(),
+            message: "missing required `approval_token` input".to_owned(),
+        }
+    }
+
+    pub fn to_output_error(&self) -> OutputError {
+        match self {
+            Self::ApprovalRequired { message, .. } => OutputError::new(
+                "approval_required",
+                message.clone(),
+                CliExitCode::ApprovalRequiredOrDenied,
+            ),
+            Self::InvalidInput { message, .. } => {
+                OutputError::new("invalid_input", message.clone(), CliExitCode::InvalidInput)
+            }
+            Self::UnknownOperation(operation_id) => OutputError::new(
+                "unknown_operation",
+                format!("unknown operation `{operation_id}`"),
+                CliExitCode::InvalidInput,
+            ),
+            Self::RequestTypeMismatch { .. } | Self::ResultTypeMismatch { .. } => OutputError::new(
+                "contract_mismatch",
+                self.to_string(),
+                CliExitCode::InternalError,
+            ),
+            Self::Serialization(message) => OutputError::new(
+                "serialization_failed",
+                message.clone(),
+                CliExitCode::InternalError,
+            ),
+            Self::Runtime(message) => {
+                OutputError::new("runtime_error", message.clone(), CliExitCode::InternalError)
+            }
+        }
+    }
 }
 
 macro_rules! mvp_operation_contracts {
@@ -538,9 +584,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        MvpOperationRequest, OperationAdapter, OperationContext, OperationInputMode,
-        OperationNetworkMode, OperationOutputFormat, OperationRequest, OperationResult,
-        OperationService, WorkspaceGetRequest, WorkspaceGetResult,
+        MvpOperationRequest, OperationAdapter, OperationAdapterError, OperationContext,
+        OperationInputMode, OperationNetworkMode, OperationOutputFormat, OperationRequest,
+        OperationResult, OperationService, WorkspaceGetRequest, WorkspaceGetResult,
         adapter_registry_linkage_is_valid,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
@@ -653,5 +699,15 @@ mod tests {
         assert_eq!(envelope.kind, "workspace.get");
         assert_eq!(envelope.request_id, "req_test");
         assert_eq!(envelope.result, json!({}));
+    }
+
+    #[test]
+    fn approval_errors_map_to_structured_exit_code() {
+        let error = OperationAdapterError::approval_required("order.submit");
+        let output_error = error.to_output_error();
+
+        assert_eq!(output_error.code, "approval_required");
+        assert_eq!(output_error.exit_code, 6);
+        assert!(output_error.message.contains("approval_token"));
     }
 }

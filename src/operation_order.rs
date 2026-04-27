@@ -31,10 +31,9 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
         request: OperationRequest<OrderSubmitRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if !request.context.dry_run && request.context.approval_token.is_none() {
-            return Err(OperationAdapterError::InvalidInput {
-                operation_id: request.operation_id().to_owned(),
-                message: "missing required `approval_token` input".to_owned(),
-            });
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
         }
 
         let key = required_order_key(&request)?;
@@ -294,6 +293,8 @@ mod tests {
         let error = service.execute(submit).expect_err("approval required");
 
         assert!(format!("{error}").contains("approval_token"));
+        assert_eq!(error.to_output_error().code, "approval_required");
+        assert_eq!(error.to_output_error().exit_code, 6);
     }
 
     #[test]

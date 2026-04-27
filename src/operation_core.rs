@@ -228,6 +228,11 @@ impl OperationService<AccountImportRequest> for CoreOperationService<'_> {
                 "default": make_default,
             }));
         }
+        if request.context.approval_token.is_none() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
 
         let account = map_runtime(import_public_identity(
             self.config,
@@ -303,6 +308,11 @@ impl OperationService<AccountRemoveRequest> for CoreOperationService<'_> {
                 "state": "dry_run",
                 "selector": selector,
             }));
+        }
+        if request.context.approval_token.is_none() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
         }
 
         let result = map_runtime(remove_account(self.config, selector.as_str()))?;
@@ -556,12 +566,14 @@ mod tests {
 
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
+    use serde_json::{Map, Value};
     use tempfile::tempdir;
 
     use super::CoreOperationService;
     use crate::operation_adapter::{
-        AccountCreateRequest, AccountListRequest, OperationAdapter, OperationContext,
-        OperationRequest, StoreStatusGetRequest, WorkspaceGetRequest,
+        AccountCreateRequest, AccountImportRequest, AccountListRequest, AccountRemoveRequest,
+        OperationAdapter, OperationContext, OperationData, OperationRequest, StoreStatusGetRequest,
+        WorkspaceGetRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -656,6 +668,34 @@ mod tests {
         assert_eq!(list_envelope.result["accounts"][0]["is_default"], true);
     }
 
+    #[test]
+    fn core_required_account_approvals_return_approval_error() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let logging = LoggingState {
+            initialized: false,
+            current_file: None,
+        };
+        let service = OperationAdapter::new(CoreOperationService::new(&config, &logging));
+        let import = OperationRequest::new(
+            OperationContext::default(),
+            AccountImportRequest::from_data(data(&[("path", "account.json")])),
+        )
+        .expect("account import request");
+        let import_error = service.execute(import).expect_err("approval required");
+        assert_eq!(import_error.to_output_error().code, "approval_required");
+        assert_eq!(import_error.to_output_error().exit_code, 6);
+
+        let remove = OperationRequest::new(
+            OperationContext::default(),
+            AccountRemoveRequest::from_data(data(&[("selector", "acct_test")])),
+        )
+        .expect("account remove request");
+        let remove_error = service.execute(remove).expect_err("approval required");
+        assert_eq!(remove_error.to_output_error().code, "approval_required");
+        assert_eq!(remove_error.to_output_error().exit_code, 6);
+    }
+
     fn sample_config(root: &Path) -> RuntimeConfig {
         let data = root.join("data");
         let logs = root.join("logs");
@@ -747,5 +787,12 @@ mod tests {
             },
             capability_bindings: Vec::new(),
         }
+    }
+
+    fn data(entries: &[(&str, &str)]) -> OperationData {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), Value::String((*value).to_owned())))
+            .collect::<Map<String, Value>>()
     }
 }
