@@ -1,11 +1,8 @@
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::LocalExportFormatArg;
 use crate::operation_adapter::{
     AccountCreateRequest, AccountCreateResult, AccountGetRequest, AccountGetResult,
     AccountImportRequest, AccountImportResult, AccountListRequest, AccountListResult,
@@ -27,6 +24,7 @@ use crate::runtime::accounts::{
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
+use crate::runtime_args::LocalExportFormatArg;
 
 pub struct CoreOperationService<'a> {
     config: &'a RuntimeConfig,

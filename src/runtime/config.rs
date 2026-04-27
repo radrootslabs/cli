@@ -12,10 +12,10 @@ use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
 use serde::Deserialize;
 use url::Url;
 
-use crate::cli::CliArgs;
 use crate::runtime::RuntimeError;
 pub use crate::runtime::paths::PathsConfig;
 use crate::runtime::paths::{ENV_CLI_PATHS_PROFILE, ENV_CLI_PATHS_REPO_LOCAL_ROOT, resolve_paths};
+use crate::runtime_args::RuntimeInvocationArgs;
 
 const DEFAULT_LOG_FILTER: &str = "info";
 const DEFAULT_ENV_PATH: &str = ".env";
@@ -470,7 +470,7 @@ impl Environment for SystemEnvironment {
 }
 
 impl RuntimeConfig {
-    pub fn from_system(args: &CliArgs) -> Result<Self, RuntimeError> {
+    pub fn from_system(args: &RuntimeInvocationArgs) -> Result<Self, RuntimeError> {
         let system = SystemEnvironment;
         let env_file_path = resolve_env_file_path(args, &system);
         let env_file = load_env_file_values(env_file_path.as_deref())?;
@@ -478,7 +478,7 @@ impl RuntimeConfig {
     }
 
     fn resolve_with_env_file(
-        args: &CliArgs,
+        args: &RuntimeInvocationArgs,
         env: &dyn Environment,
         env_file: &EnvFileValues,
     ) -> Result<Self, RuntimeError> {
@@ -904,7 +904,7 @@ fn normalize_binding_ref(value: Option<&str>) -> Option<String> {
 }
 
 fn resolve_relay_config(
-    args: &CliArgs,
+    args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
     user_config: Option<&CliConfigFile>,
@@ -957,7 +957,7 @@ fn resolve_relay_config(
 }
 
 fn resolve_signer_config(
-    args: &CliArgs,
+    args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
     user_config: Option<&CliConfigFile>,
@@ -985,7 +985,7 @@ fn resolve_signer_config(
 }
 
 fn resolve_myc_config(
-    args: &CliArgs,
+    args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
     user_config: Option<&CliConfigFile>,
@@ -1020,7 +1020,7 @@ fn resolve_myc_config(
 }
 
 fn resolve_myc_status_timeout_ms(
-    args: &CliArgs,
+    args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
     user_config: Option<&CliConfigFile>,
@@ -1064,7 +1064,7 @@ fn validate_myc_status_timeout_ms(source: &str, value: u64) -> Result<u64, Runti
 }
 
 fn resolve_hyf_enabled(
-    args: &CliArgs,
+    args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
     user_config: Option<&CliConfigFile>,
@@ -1103,7 +1103,7 @@ fn resolve_hyf_enabled(
 }
 
 fn resolve_hyf_executable(
-    args: &CliArgs,
+    args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
     user_config: Option<&CliConfigFile>,
@@ -1221,7 +1221,7 @@ fn validate_relay_url(value: &str, source: &str) -> Result<String, RuntimeError>
     Ok(trimmed.to_owned())
 }
 
-fn resolve_env_file_path(args: &CliArgs, env: &dyn Environment) -> Option<PathBuf> {
+fn resolve_env_file_path(args: &RuntimeInvocationArgs, env: &dyn Environment) -> Option<PathBuf> {
     args.env_file
         .clone()
         .or_else(|| env.var(ENV_FILE_PATH).map(PathBuf::from))
@@ -1232,7 +1232,7 @@ fn resolve_env_file_path(args: &CliArgs, env: &dyn Environment) -> Option<PathBu
 }
 
 fn resolve_output_format(
-    args: &CliArgs,
+    args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
 ) -> Result<OutputFormat, RuntimeError> {
@@ -1260,7 +1260,7 @@ fn resolve_output_format(
     }
 }
 
-fn resolve_verbosity(args: &CliArgs) -> Result<Verbosity, RuntimeError> {
+fn resolve_verbosity(args: &RuntimeInvocationArgs) -> Result<Verbosity, RuntimeError> {
     let selected = [args.quiet, args.verbose, args.trace]
         .into_iter()
         .filter(|selected| *selected)
@@ -1282,7 +1282,10 @@ fn resolve_verbosity(args: &CliArgs) -> Result<Verbosity, RuntimeError> {
     }
 }
 
-fn resolve_interaction_config(args: &CliArgs, env: &dyn Environment) -> InteractionConfig {
+fn resolve_interaction_config(
+    args: &RuntimeInvocationArgs,
+    env: &dyn Environment,
+) -> InteractionConfig {
     let stdin_tty = env.stdin_is_tty();
     let stdout_tty = env.stdout_is_tty();
     let input_enabled = !args.no_input;
@@ -1436,7 +1439,7 @@ fn parse_signer_mode(source: &str, value: String) -> Result<SignerBackend, Runti
 }
 
 fn resolve_account_secret_backend(
-    _args: &CliArgs,
+    _args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
 ) -> Result<Option<RadrootsSecretBackend>, RuntimeError> {
@@ -1446,7 +1449,7 @@ fn resolve_account_secret_backend(
 }
 
 fn resolve_account_secret_fallback(
-    _args: &CliArgs,
+    _args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
 ) -> Result<Option<Option<RadrootsSecretBackend>>, RuntimeError> {
@@ -1505,7 +1508,7 @@ mod tests {
         PathsConfig, RelayConfigSource, RelayPublishPolicy, RuntimeConfig, SignerBackend,
         Verbosity, parse_env_file_values,
     };
-    use crate::cli::CliArgs;
+    use crate::runtime_args::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
     use radroots_runtime_paths::{RadrootsHostEnvironment, RadrootsPathResolver, RadrootsPlatform};
     use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
     use std::collections::BTreeMap;
@@ -1597,36 +1600,28 @@ mod tests {
         }
     }
 
+    fn runtime_args() -> RuntimeInvocationArgs {
+        RuntimeInvocationArgs::default()
+    }
+
     #[test]
     fn flags_override_environment_values() {
-        let args = CliArgs::parse_from([
-            "radroots",
-            "--output",
-            "human",
-            "--verbose",
-            "--dry-run",
-            "--no-color",
-            "--log-filter",
-            "debug",
-            "--log-stdout",
-            "--identity-path",
-            "custom-identity.json",
-            "--signer",
-            "local",
-            "--relay",
-            "wss://relay.one",
-            "--relay",
-            "wss://relay.two",
-            "--myc-executable",
-            "bin/myc-cli",
-            "--myc-status-timeout-ms",
-            "2500",
-            "--hyf-enabled",
-            "--hyf-executable",
-            "bin/hyfd-cli",
-            "config",
-            "show",
-        ]);
+        let args = RuntimeInvocationArgs {
+            output_format: Some(RuntimeOutputFormatArg::Human),
+            verbose: true,
+            dry_run: true,
+            no_color: true,
+            log_filter: Some("debug".to_owned()),
+            log_stdout: true,
+            identity_path: Some(PathBuf::from("custom-identity.json")),
+            signer: Some("local".to_owned()),
+            relay: vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()],
+            myc_executable: Some(PathBuf::from("bin/myc-cli")),
+            myc_status_timeout_ms: Some(2500),
+            hyf_enabled: true,
+            hyf_executable: Some(PathBuf::from("bin/hyfd-cli")),
+            ..runtime_args()
+        };
         let env = MapEnvironment::new(BTreeMap::from([
             ("RADROOTS_OUTPUT".to_owned(), "human".to_owned()),
             ("RADROOTS_LOG_FILTER".to_owned(), "trace".to_owned()),
@@ -1746,7 +1741,7 @@ mod tests {
 
     #[test]
     fn environment_values_fill_missing_flags() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([
             ("RADROOTS_OUTPUT".to_owned(), "json".to_owned()),
             (
@@ -1831,25 +1826,21 @@ mod tests {
 
     #[test]
     fn conflicting_boolean_flags_fail() {
-        let args = CliArgs::parse_from([
-            "radroots",
-            "--log-stdout",
-            "--no-log-stdout",
-            "config",
-            "show",
-        ]);
+        let args = RuntimeInvocationArgs {
+            log_stdout: true,
+            no_log_stdout: true,
+            ..runtime_args()
+        };
         let env = MapEnvironment::new(BTreeMap::new());
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("conflicting flags");
         assert!(error.to_string().contains("cannot be used together"));
 
-        let hyf_args = CliArgs::parse_from([
-            "radroots",
-            "--hyf-enabled",
-            "--no-hyf-enabled",
-            "config",
-            "show",
-        ]);
+        let hyf_args = RuntimeInvocationArgs {
+            hyf_enabled: true,
+            no_hyf_enabled: true,
+            ..runtime_args()
+        };
         let error =
             RuntimeConfig::resolve_with_env_file(&hyf_args, &env, &EnvFileValues::default())
                 .expect_err("conflicting hyf flags");
@@ -1860,8 +1851,11 @@ mod tests {
     fn conflicting_output_and_verbosity_flags_fail() {
         let env = MapEnvironment::new(BTreeMap::new());
 
-        let conflicting_output =
-            CliArgs::parse_from(["radroots", "--json", "--ndjson", "config", "show"]);
+        let conflicting_output = RuntimeInvocationArgs {
+            json: true,
+            ndjson: true,
+            ..runtime_args()
+        };
         let error = RuntimeConfig::resolve_with_env_file(
             &conflicting_output,
             &env,
@@ -1870,8 +1864,11 @@ mod tests {
         .expect_err("conflicting output flags");
         assert!(error.to_string().contains("--json and --ndjson"));
 
-        let conflicting_verbosity =
-            CliArgs::parse_from(["radroots", "--quiet", "--trace", "config", "show"]);
+        let conflicting_verbosity = RuntimeInvocationArgs {
+            quiet: true,
+            trace: true,
+            ..runtime_args()
+        };
         let error = RuntimeConfig::resolve_with_env_file(
             &conflicting_verbosity,
             &env,
@@ -1884,8 +1881,11 @@ mod tests {
                 .contains("--quiet, --verbose, and --trace")
         );
 
-        let conflicting_aliases =
-            CliArgs::parse_from(["radroots", "--output", "json", "--json", "config", "show"]);
+        let conflicting_aliases = RuntimeInvocationArgs {
+            output_format: Some(RuntimeOutputFormatArg::Json),
+            json: true,
+            ..runtime_args()
+        };
         let error = RuntimeConfig::resolve_with_env_file(
             &conflicting_aliases,
             &env,
@@ -1899,8 +1899,11 @@ mod tests {
     fn machine_output_rejects_stdout_logging_flags() {
         let env = MapEnvironment::new(BTreeMap::new());
 
-        let json_args =
-            CliArgs::parse_from(["radroots", "--json", "--log-stdout", "config", "show"]);
+        let json_args = RuntimeInvocationArgs {
+            json: true,
+            log_stdout: true,
+            ..runtime_args()
+        };
         let error =
             RuntimeConfig::resolve_with_env_file(&json_args, &env, &EnvFileValues::default())
                 .expect_err("json stdout logging should fail");
@@ -1909,8 +1912,11 @@ mod tests {
         assert!(message.contains("json output"));
         assert!(message.contains("--no-log-stdout"));
 
-        let ndjson_args =
-            CliArgs::parse_from(["radroots", "--ndjson", "--log-stdout", "find", "eggs"]);
+        let ndjson_args = RuntimeInvocationArgs {
+            ndjson: true,
+            log_stdout: true,
+            ..runtime_args()
+        };
         let error =
             RuntimeConfig::resolve_with_env_file(&ndjson_args, &env, &EnvFileValues::default())
                 .expect_err("ndjson stdout logging should fail");
@@ -1921,7 +1927,10 @@ mod tests {
 
     #[test]
     fn machine_output_rejects_stdout_logging_environment() {
-        let json_args = CliArgs::parse_from(["radroots", "--json", "config", "show"]);
+        let json_args = RuntimeInvocationArgs {
+            json: true,
+            ..runtime_args()
+        };
         let env = MapEnvironment::new(BTreeMap::from([(
             "RADROOTS_CLI_LOGGING_STDOUT".to_owned(),
             "true".to_owned(),
@@ -1933,7 +1942,7 @@ mod tests {
         assert!(message.contains("RADROOTS_CLI_LOGGING_STDOUT"));
         assert!(message.contains("RADROOTS_LOG_STDOUT"));
 
-        let ndjson_env_args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let ndjson_env_args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([
             ("RADROOTS_OUTPUT".to_owned(), "ndjson".to_owned()),
             ("RADROOTS_LOG_STDOUT".to_owned(), "true".to_owned()),
@@ -1946,7 +1955,11 @@ mod tests {
 
     #[test]
     fn no_log_stdout_overrides_environment_for_machine_output() {
-        let args = CliArgs::parse_from(["radroots", "--json", "--no-log-stdout", "config", "show"]);
+        let args = RuntimeInvocationArgs {
+            json: true,
+            no_log_stdout: true,
+            ..runtime_args()
+        };
         let env = MapEnvironment::new(BTreeMap::from([(
             "RADROOTS_LOG_STDOUT".to_owned(),
             "true".to_owned(),
@@ -1960,7 +1973,7 @@ mod tests {
 
     #[test]
     fn invalid_environment_value_fails() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([(
             "RADROOTS_LOG_STDOUT".to_owned(),
             "maybe".to_owned(),
@@ -1977,8 +1990,10 @@ mod tests {
             .expect_err("invalid myc timeout");
         assert!(error.to_string().contains("RADROOTS_MYC_STATUS_TIMEOUT_MS"));
 
-        let args =
-            CliArgs::parse_from(["radroots", "--myc-status-timeout-ms", "0", "config", "show"]);
+        let args = RuntimeInvocationArgs {
+            myc_status_timeout_ms: Some(0),
+            ..runtime_args()
+        };
         let env = MapEnvironment::new(BTreeMap::new());
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("zero myc timeout");
@@ -1987,7 +2002,7 @@ mod tests {
 
     #[test]
     fn env_file_values_fill_missing_flags() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::new());
         let env_file = parse_env_file_values(
             r#"
@@ -2035,7 +2050,10 @@ RADROOTS_HYF_EXECUTABLE=bin/hyfd
 
     #[test]
     fn explicit_output_flag_overrides_environment_output() {
-        let args = CliArgs::parse_from(["radroots", "--output", "ndjson", "find", "eggs"]);
+        let args = RuntimeInvocationArgs {
+            output_format: Some(RuntimeOutputFormatArg::Ndjson),
+            ..runtime_args()
+        };
         let env = MapEnvironment::new(BTreeMap::from([(
             "RADROOTS_OUTPUT".to_owned(),
             "json".to_owned(),
@@ -2048,7 +2066,11 @@ RADROOTS_HYF_EXECUTABLE=bin/hyfd
 
     #[test]
     fn interaction_config_reflects_tty_and_flags() {
-        let args = CliArgs::parse_from(["radroots", "--no-input", "--yes", "config", "show"]);
+        let args = RuntimeInvocationArgs {
+            no_input: true,
+            yes: true,
+            ..runtime_args()
+        };
         let env = MapEnvironment::new(BTreeMap::new()).with_tty(true, true);
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
@@ -2065,7 +2087,7 @@ RADROOTS_HYF_EXECUTABLE=bin/hyfd
             }
         );
 
-        let interactive_args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let interactive_args = runtime_args();
         let interactive = RuntimeConfig::resolve_with_env_file(
             &interactive_args,
             &env,
@@ -2087,7 +2109,7 @@ RADROOTS_HYF_EXECUTABLE=bin/hyfd
 
     #[test]
     fn process_environment_overrides_env_file_values() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([
             ("RADROOTS_LOG_FILTER".to_owned(), "info".to_owned()),
             ("RADROOTS_LOG_STDOUT".to_owned(), "true".to_owned()),
@@ -2150,7 +2172,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             stdin_tty: false,
             stdout_tty: false,
         };
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve config");
@@ -2207,7 +2229,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             stdin_tty: false,
             stdout_tty: false,
         };
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve config");
@@ -2262,7 +2284,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             stdin_tty: false,
             stdout_tty: false,
         };
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve config");
@@ -2290,7 +2312,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         .expect("write user config");
 
         let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve config");
@@ -2317,7 +2339,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             user_home,
             BTreeMap::from([("RADROOTS_SIGNER".to_owned(), "myc".to_owned())]),
         );
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve config");
@@ -2338,7 +2360,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         .expect("write workspace config");
 
         let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
 
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("invalid signer mode");
@@ -2401,7 +2423,7 @@ target = "bin/user-hyfd"
             stdin_tty: false,
             stdout_tty: false,
         };
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve config");
@@ -2463,7 +2485,7 @@ target = "https://rpc.workspace.test/jsonrpc"
             stdin_tty: false,
             stdout_tty: false,
         };
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
 
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("invalid capability binding provider");
@@ -2476,13 +2498,10 @@ target = "https://rpc.workspace.test/jsonrpc"
 
     #[test]
     fn invalid_relay_url_fails() {
-        let args = CliArgs::parse_from([
-            "radroots",
-            "--relay",
-            "https://not-a-websocket.example.com",
-            "relay",
-            "ls",
-        ]);
+        let args = RuntimeInvocationArgs {
+            relay: vec!["https://not-a-websocket.example.com".to_owned()],
+            ..runtime_args()
+        };
         let env = MapEnvironment::new(BTreeMap::new());
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("invalid relay url");
@@ -2491,7 +2510,7 @@ target = "https://rpc.workspace.test/jsonrpc"
 
     #[test]
     fn state_roots_are_resolved_from_home_and_workspace() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::new());
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve runtime config");
@@ -2527,7 +2546,7 @@ target = "https://rpc.workspace.test/jsonrpc"
 
     #[test]
     fn windows_roots_use_native_user_directories() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment {
             values: BTreeMap::new(),
             current_dir: PathBuf::from(r"C:\workspaces\radroots-cli"),
@@ -2584,7 +2603,7 @@ target = "https://rpc.workspace.test/jsonrpc"
 
     #[test]
     fn repo_local_profile_uses_explicit_repo_local_root() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([
             (
                 "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
@@ -2649,7 +2668,7 @@ target = "https://rpc.workspace.test/jsonrpc"
 
     #[test]
     fn repo_local_profile_requires_explicit_root() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([(
             "RADROOTS_CLI_PATHS_PROFILE".to_owned(),
             "repo_local".to_owned(),
@@ -2666,7 +2685,7 @@ target = "https://rpc.workspace.test/jsonrpc"
 
     #[test]
     fn env_file_can_select_repo_local_profile() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::new());
         let env_file = parse_env_file_values(
             r#"
@@ -2708,7 +2727,7 @@ RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT=.local/radroots/dev
 
     #[test]
     fn env_output_accepts_ndjson() {
-        let args = CliArgs::parse_from(["radroots", "config", "show"]);
+        let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([(
             "RADROOTS_OUTPUT".to_owned(),
             "ndjson".to_owned(),

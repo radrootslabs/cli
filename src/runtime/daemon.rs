@@ -7,26 +7,19 @@ use radroots_events::trade::RadrootsTradeOrder;
 use radroots_sdk::{
     RadrootsSdkConfig, RadrootsdAuth, SdkPublishError, SdkRadrootsdFarmPublishOptions,
     SdkRadrootsdListingPublishOptions, SdkRadrootsdProfilePublishOptions,
-    SdkRadrootsdSignerAuthority, SdkRadrootsdSignerSessionConnectRequest,
-    SdkRadrootsdSignerSessionHandle, SdkRadrootsdSignerSessionRef, SdkRadrootsdSignerSessionRole,
-    SdkRadrootsdSignerSessionView, SdkTransportMode, SignerConfig,
+    SdkRadrootsdSignerAuthority, SdkRadrootsdSignerSessionRef, SdkTransportMode, SignerConfig,
 };
 use reqwest::blocking::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::domain::runtime::{
-    CommandOutput, CommandView, JobDetailView, JobSummaryView, RpcSessionView, RpcSessionsView,
-    RpcStatusView, SignerSessionActionView,
-};
+use crate::domain::runtime::{JobDetailView, JobSummaryView};
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::provider;
-use crate::runtime::signer::{ActorWriteSignerAuthority, configured_myc_signer_authority};
+use crate::runtime::signer::ActorWriteSignerAuthority;
 
-const RPC_SOURCE: &str = "daemon rpc · durable write plane";
 const BRIDGE_SOURCE: &str = "daemon bridge · durable write plane";
-const SIGNER_SESSION_SOURCE: &str = "daemon signer session rpc · durable write plane";
 const RPC_TIMEOUT_SECS: u64 = 2;
 
 #[derive(Debug)]
@@ -74,27 +67,6 @@ struct JsonRpcResponseError {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct BridgeStatusRemote {
-    enabled: bool,
-    ready: bool,
-    auth_mode: String,
-    signer_mode: String,
-    default_signer_mode: String,
-    #[serde(default)]
-    supported_signer_modes: Vec<String>,
-    available_nip46_signer_sessions: usize,
-    relay_count: usize,
-    job_status_retention: usize,
-    retained_jobs: usize,
-    accepted_jobs: usize,
-    published_jobs: usize,
-    failed_jobs: usize,
-    recovered_failed_jobs: usize,
-    #[serde(default)]
-    methods: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct BridgeJobRemote {
     job_id: String,
     command: String,
@@ -122,17 +94,10 @@ struct BridgeJobRemote {
 #[derive(Debug, Clone, Deserialize)]
 struct Nip46SessionRemote {
     session_id: String,
-    role: String,
-    client_pubkey: String,
-    signer_pubkey: String,
     user_pubkey: Option<String>,
     #[serde(default)]
-    relays: Vec<String>,
-    #[serde(default)]
     permissions: Vec<String>,
-    auth_required: bool,
     authorized: bool,
-    expires_in_secs: Option<u64>,
     #[serde(default)]
     signer_authority: Option<ActorWriteSignerAuthority>,
 }
@@ -173,376 +138,6 @@ pub struct BridgeOrderRequestResult {
     pub signer_session_id: Option<String>,
     pub event_id: Option<String>,
     pub event_addr: Option<String>,
-}
-
-pub fn status(config: &RuntimeConfig) -> CommandOutput {
-    match bridge_status(config) {
-        Ok(status) => CommandOutput::success(CommandView::RpcStatus(RpcStatusView {
-            state: if status.ready {
-                "ready".to_owned()
-            } else {
-                "degraded".to_owned()
-            },
-            source: RPC_SOURCE.to_owned(),
-            url: config.rpc.url.clone(),
-            reason: if status.ready {
-                None
-            } else {
-                Some("bridge is reachable but not ready for durable publish traffic".to_owned())
-            },
-            auth_mode: Some(status.auth_mode),
-            signer_mode: Some(status.signer_mode),
-            default_signer_mode: Some(status.default_signer_mode),
-            supported_signer_modes: status.supported_signer_modes,
-            bridge_enabled: Some(status.enabled),
-            bridge_ready: Some(status.ready),
-            relay_count: Some(status.relay_count),
-            available_nip46_signer_sessions: Some(status.available_nip46_signer_sessions),
-            job_status_retention: Some(status.job_status_retention),
-            retained_jobs: Some(status.retained_jobs),
-            accepted_jobs: Some(status.accepted_jobs),
-            published_jobs: Some(status.published_jobs),
-            failed_jobs: Some(status.failed_jobs),
-            recovered_failed_jobs: Some(status.recovered_failed_jobs),
-            session_surface_enabled: status
-                .methods
-                .iter()
-                .any(|method| method == "nip46.session.list"),
-            methods_count: status.methods.len(),
-            actions: if status.ready {
-                Vec::new()
-            } else {
-                vec!["radroots relay list".to_owned()]
-            },
-        })),
-        Err(DaemonRpcError::Unconfigured(reason))
-        | Err(DaemonRpcError::Unauthorized(reason))
-        | Err(DaemonRpcError::MethodUnavailable(reason)) => {
-            CommandOutput::unconfigured(CommandView::RpcStatus(RpcStatusView {
-                state: "unconfigured".to_owned(),
-                source: RPC_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                reason: Some(reason),
-                auth_mode: None,
-                signer_mode: None,
-                default_signer_mode: None,
-                supported_signer_modes: Vec::new(),
-                bridge_enabled: None,
-                bridge_ready: None,
-                relay_count: None,
-                available_nip46_signer_sessions: None,
-                job_status_retention: None,
-                retained_jobs: None,
-                accepted_jobs: None,
-                published_jobs: None,
-                failed_jobs: None,
-                recovered_failed_jobs: None,
-                session_surface_enabled: false,
-                methods_count: 0,
-                actions: vec![
-                    "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell".to_owned(),
-                    "start radrootsd with bridge ingress enabled".to_owned(),
-                ],
-            }))
-        }
-        Err(DaemonRpcError::External(reason)) => {
-            CommandOutput::external_unavailable(CommandView::RpcStatus(RpcStatusView {
-                state: "unavailable".to_owned(),
-                source: RPC_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                reason: Some(reason),
-                auth_mode: None,
-                signer_mode: None,
-                default_signer_mode: None,
-                supported_signer_modes: Vec::new(),
-                bridge_enabled: None,
-                bridge_ready: None,
-                relay_count: None,
-                available_nip46_signer_sessions: None,
-                job_status_retention: None,
-                retained_jobs: None,
-                accepted_jobs: None,
-                published_jobs: None,
-                failed_jobs: None,
-                recovered_failed_jobs: None,
-                session_surface_enabled: false,
-                methods_count: 0,
-                actions: vec!["start radrootsd and verify the rpc url".to_owned()],
-            }))
-        }
-        Err(DaemonRpcError::InvalidResponse(reason)) | Err(DaemonRpcError::Remote(reason)) => {
-            CommandOutput::internal_error(CommandView::RpcStatus(RpcStatusView {
-                state: "error".to_owned(),
-                source: RPC_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                reason: Some(reason),
-                auth_mode: None,
-                signer_mode: None,
-                default_signer_mode: None,
-                supported_signer_modes: Vec::new(),
-                bridge_enabled: None,
-                bridge_ready: None,
-                relay_count: None,
-                available_nip46_signer_sessions: None,
-                job_status_retention: None,
-                retained_jobs: None,
-                accepted_jobs: None,
-                published_jobs: None,
-                failed_jobs: None,
-                recovered_failed_jobs: None,
-                session_surface_enabled: false,
-                methods_count: 0,
-                actions: vec!["inspect the daemon rpc response contract".to_owned()],
-            }))
-        }
-        Err(DaemonRpcError::UnknownJob(reason)) => {
-            CommandOutput::internal_error(CommandView::RpcStatus(RpcStatusView {
-                state: "error".to_owned(),
-                source: RPC_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                reason: Some(reason),
-                auth_mode: None,
-                signer_mode: None,
-                default_signer_mode: None,
-                supported_signer_modes: Vec::new(),
-                bridge_enabled: None,
-                bridge_ready: None,
-                relay_count: None,
-                available_nip46_signer_sessions: None,
-                job_status_retention: None,
-                retained_jobs: None,
-                accepted_jobs: None,
-                published_jobs: None,
-                failed_jobs: None,
-                recovered_failed_jobs: None,
-                session_surface_enabled: false,
-                methods_count: 0,
-                actions: Vec::new(),
-            }))
-        }
-    }
-}
-
-pub fn sessions(config: &RuntimeConfig) -> CommandOutput {
-    match nip46_sessions(config) {
-        Ok(sessions) => {
-            let entries = sessions
-                .into_iter()
-                .map(map_session_view)
-                .collect::<Vec<_>>();
-            let state = if entries.is_empty() { "empty" } else { "ready" };
-            CommandOutput::success(CommandView::RpcSessions(RpcSessionsView {
-                state: state.to_owned(),
-                source: RPC_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                count: entries.len(),
-                reason: None,
-                sessions: entries,
-                actions: Vec::new(),
-            }))
-        }
-        Err(DaemonRpcError::MethodUnavailable(reason)) => {
-            CommandOutput::unconfigured(CommandView::RpcSessions(RpcSessionsView {
-                state: "unconfigured".to_owned(),
-                source: RPC_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                count: 0,
-                reason: Some(reason),
-                sessions: Vec::new(),
-                actions: vec!["enable nip46.public_jsonrpc_enabled in radrootsd".to_owned()],
-            }))
-        }
-        Err(DaemonRpcError::External(reason)) => {
-            CommandOutput::external_unavailable(CommandView::RpcSessions(RpcSessionsView {
-                state: "unavailable".to_owned(),
-                source: RPC_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                count: 0,
-                reason: Some(reason),
-                sessions: Vec::new(),
-                actions: vec!["start radrootsd and verify the rpc url".to_owned()],
-            }))
-        }
-        Err(DaemonRpcError::Unconfigured(reason))
-        | Err(DaemonRpcError::Unauthorized(reason))
-        | Err(DaemonRpcError::InvalidResponse(reason))
-        | Err(DaemonRpcError::Remote(reason))
-        | Err(DaemonRpcError::UnknownJob(reason)) => {
-            CommandOutput::internal_error(CommandView::RpcSessions(RpcSessionsView {
-                state: "error".to_owned(),
-                source: RPC_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                count: 0,
-                reason: Some(reason),
-                sessions: Vec::new(),
-                actions: Vec::new(),
-            }))
-        }
-    }
-}
-
-pub fn signer_sessions(config: &RuntimeConfig) -> CommandOutput {
-    match signer_session_views(config) {
-        Ok((url, sessions)) => {
-            let entries = sessions
-                .into_iter()
-                .map(map_sdk_session_view)
-                .collect::<Vec<_>>();
-            let state = if entries.is_empty() { "empty" } else { "ready" };
-            CommandOutput::success(CommandView::RpcSessions(RpcSessionsView {
-                state: state.to_owned(),
-                source: SIGNER_SESSION_SOURCE.to_owned(),
-                url,
-                count: entries.len(),
-                reason: None,
-                sessions: entries,
-                actions: Vec::new(),
-            }))
-        }
-        Err(DaemonRpcError::External(reason)) => {
-            CommandOutput::external_unavailable(CommandView::RpcSessions(RpcSessionsView {
-                state: "unavailable".to_owned(),
-                source: SIGNER_SESSION_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                count: 0,
-                reason: Some(reason),
-                sessions: Vec::new(),
-                actions: vec![
-                    "start radrootsd and verify the actor write-plane endpoint".to_owned(),
-                ],
-            }))
-        }
-        Err(DaemonRpcError::Unconfigured(reason))
-        | Err(DaemonRpcError::Unauthorized(reason))
-        | Err(DaemonRpcError::MethodUnavailable(reason)) => {
-            CommandOutput::unconfigured(CommandView::RpcSessions(RpcSessionsView {
-                state: "unconfigured".to_owned(),
-                source: SIGNER_SESSION_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                count: 0,
-                reason: Some(reason),
-                sessions: Vec::new(),
-                actions: vec!["configure the radrootsd actor write-plane binding".to_owned()],
-            }))
-        }
-        Err(DaemonRpcError::InvalidResponse(reason))
-        | Err(DaemonRpcError::Remote(reason))
-        | Err(DaemonRpcError::UnknownJob(reason)) => {
-            CommandOutput::internal_error(CommandView::RpcSessions(RpcSessionsView {
-                state: "error".to_owned(),
-                source: SIGNER_SESSION_SOURCE.to_owned(),
-                url: config.rpc.url.clone(),
-                count: 0,
-                reason: Some(reason),
-                sessions: Vec::new(),
-                actions: Vec::new(),
-            }))
-        }
-    }
-}
-
-pub fn signer_session_connect_bunker(
-    config: &RuntimeConfig,
-    url: &str,
-) -> Result<SignerSessionActionView, DaemonRpcError> {
-    let mut request = SdkRadrootsdSignerSessionConnectRequest::bunker(url.to_owned());
-    if let Some(authority) = configured_myc_signer_authority(config) {
-        request = request.with_signer_authority(sdk_signer_authority(&authority));
-    }
-    signer_session_connect(config, "connect_bunker", &request)
-}
-
-pub fn signer_session_connect_nostrconnect(
-    config: &RuntimeConfig,
-    url: &str,
-    client_secret_key: &str,
-) -> Result<SignerSessionActionView, DaemonRpcError> {
-    let mut request = SdkRadrootsdSignerSessionConnectRequest::nostrconnect(
-        url.to_owned(),
-        client_secret_key.to_owned(),
-    );
-    if let Some(authority) = configured_myc_signer_authority(config) {
-        request = request.with_signer_authority(sdk_signer_authority(&authority));
-    }
-    signer_session_connect(config, "connect_nostrconnect", &request)
-}
-
-pub fn signer_session_show(
-    config: &RuntimeConfig,
-    session_id: &str,
-) -> Result<SignerSessionActionView, DaemonRpcError> {
-    let sdk = actor_write_sdk_client(config)?;
-    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
-    let session = block_on_sdk(sdk.radrootsd().signer_sessions().status(&session_ref))?
-        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
-    Ok(signer_session_view_action("show", session))
-}
-
-pub fn signer_session_public_key(
-    config: &RuntimeConfig,
-    session_id: &str,
-) -> Result<SignerSessionActionView, DaemonRpcError> {
-    let sdk = actor_write_sdk_client(config)?;
-    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
-    let public_key = block_on_sdk(
-        sdk.radrootsd()
-            .signer_sessions()
-            .get_public_key(&session_ref),
-    )?
-    .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
-    let mut view = signer_session_action("public_key", "ready");
-    view.session_id = Some(session_id.to_owned());
-    view.pubkey = Some(public_key.pubkey);
-    Ok(view)
-}
-
-pub fn signer_session_authorize(
-    config: &RuntimeConfig,
-    session_id: &str,
-) -> Result<SignerSessionActionView, DaemonRpcError> {
-    let sdk = actor_write_sdk_client(config)?;
-    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
-    let result = block_on_sdk(sdk.radrootsd().signer_sessions().authorize(&session_ref))?
-        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
-    let mut view = signer_session_action("authorize", "ready");
-    view.session_id = Some(session_id.to_owned());
-    view.authorized = Some(result.authorized);
-    view.replayed = Some(result.replayed);
-    Ok(view)
-}
-
-pub fn signer_session_require_auth(
-    config: &RuntimeConfig,
-    session_id: &str,
-    auth_url: &str,
-) -> Result<SignerSessionActionView, DaemonRpcError> {
-    let sdk = actor_write_sdk_client(config)?;
-    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
-    let result = block_on_sdk(
-        sdk.radrootsd()
-            .signer_sessions()
-            .require_auth(&session_ref, auth_url),
-    )?
-    .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
-    let mut view = signer_session_action("require_auth", "ready");
-    view.session_id = Some(session_id.to_owned());
-    view.required = Some(result.required);
-    view.auth_url = Some(auth_url.to_owned());
-    Ok(view)
-}
-
-pub fn signer_session_close(
-    config: &RuntimeConfig,
-    session_id: &str,
-) -> Result<SignerSessionActionView, DaemonRpcError> {
-    let sdk = actor_write_sdk_client(config)?;
-    let session_ref = SdkRadrootsdSignerSessionRef::from_session_id(session_id.to_owned());
-    let result = block_on_sdk(sdk.radrootsd().signer_sessions().close(&session_ref))?
-        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
-    let mut view = signer_session_action("close", "ready");
-    view.session_id = Some(session_id.to_owned());
-    view.closed = Some(result.closed);
-    Ok(view)
 }
 
 pub fn bridge_job_list(config: &RuntimeConfig) -> Result<Vec<JobSummaryView>, DaemonRpcError> {
@@ -698,15 +293,6 @@ pub fn bridge_order_request(
     map_order_request_receipt(receipt, idempotency_key)
 }
 
-fn bridge_status(config: &RuntimeConfig) -> Result<BridgeStatusRemote, DaemonRpcError> {
-    call(
-        &default_target(config),
-        "bridge.status",
-        None,
-        RpcAuthMode::BridgeBearer,
-    )
-}
-
 fn bridge_jobs(config: &RuntimeConfig) -> Result<Vec<BridgeJobRemote>, DaemonRpcError> {
     call(
         &default_target(config),
@@ -726,10 +312,6 @@ fn bridge_job_status(
         Some(serde_json::json!({ "job_id": job_id })),
         RpcAuthMode::BridgeBearer,
     )
-}
-
-fn nip46_sessions(config: &RuntimeConfig) -> Result<Vec<Nip46SessionRemote>, DaemonRpcError> {
-    nip46_sessions_with_target(&default_target(config))
 }
 
 fn nip46_sessions_with_target(
@@ -824,83 +406,6 @@ fn sdk_signer_authority(value: &ActorWriteSignerAuthority) -> SdkRadrootsdSigner
         account_identity_id: value.account_identity_id.clone(),
         provider_signer_session_id: value.provider_signer_session_id.clone(),
     }
-}
-
-fn signer_session_views(
-    config: &RuntimeConfig,
-) -> Result<(String, Vec<SdkRadrootsdSignerSessionView>), DaemonRpcError> {
-    let target = actor_write_target(config)?;
-    let sdk = radrootsd_sdk_client(&target)?;
-    let sessions = block_on_sdk(sdk.radrootsd().signer_sessions().list())?
-        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
-    Ok((target.url, sessions))
-}
-
-fn signer_session_connect(
-    config: &RuntimeConfig,
-    action: &str,
-    request: &SdkRadrootsdSignerSessionConnectRequest,
-) -> Result<SignerSessionActionView, DaemonRpcError> {
-    let sdk = actor_write_sdk_client(config)?;
-    let handle = block_on_sdk(sdk.radrootsd().signer_sessions().connect(request))?
-        .map_err(|error| DaemonRpcError::Remote(error.to_string()))?;
-    Ok(signer_session_handle_action(action, handle))
-}
-
-fn signer_session_action(action: &str, state: &str) -> SignerSessionActionView {
-    SignerSessionActionView {
-        action: action.to_owned(),
-        state: state.to_owned(),
-        source: SIGNER_SESSION_SOURCE.to_owned(),
-        session_id: None,
-        mode: None,
-        remote_signer_pubkey: None,
-        client_pubkey: None,
-        signer_pubkey: None,
-        user_pubkey: None,
-        relays: Vec::new(),
-        permissions: Vec::new(),
-        auth_required: None,
-        authorized: None,
-        auth_url: None,
-        expires_in_secs: None,
-        pubkey: None,
-        replayed: None,
-        required: None,
-        closed: None,
-        reason: None,
-    }
-}
-
-fn signer_session_handle_action(
-    action: &str,
-    handle: SdkRadrootsdSignerSessionHandle,
-) -> SignerSessionActionView {
-    let mut view = signer_session_action(action, "ready");
-    view.session_id = Some(handle.session().session_id().to_owned());
-    view.mode = Some(format!("{:?}", handle.mode()));
-    view.remote_signer_pubkey = Some(handle.remote_signer_pubkey().to_owned());
-    view.client_pubkey = Some(handle.client_pubkey().to_owned());
-    view.relays = handle.relays().to_vec();
-    view
-}
-
-fn signer_session_view_action(
-    action: &str,
-    session: SdkRadrootsdSignerSessionView,
-) -> SignerSessionActionView {
-    let mut view = signer_session_action(action, "ready");
-    view.session_id = Some(session.session().session_id().to_owned());
-    view.signer_pubkey = Some(session.signer_pubkey);
-    view.user_pubkey = session.user_pubkey;
-    view.client_pubkey = Some(session.client_pubkey);
-    view.relays = session.relays;
-    view.permissions = session.permissions;
-    view.auth_required = Some(session.auth_required);
-    view.authorized = Some(session.authorized);
-    view.auth_url = session.auth_url;
-    view.expires_in_secs = session.expires_in_secs;
-    view
 }
 
 fn map_sdk_publish_error(error: SdkPublishError) -> DaemonRpcError {
@@ -1319,43 +824,6 @@ fn map_job_detail_view(job: BridgeJobRemote) -> JobDetailView {
         attempt_count: job.attempt_count,
         relay_outcome_summary: job.relay_outcome_summary,
         attempt_summaries: job.attempt_summaries,
-    }
-}
-
-fn map_session_view(session: Nip46SessionRemote) -> RpcSessionView {
-    RpcSessionView {
-        session_id: session.session_id,
-        role: session.role,
-        client_pubkey: session.client_pubkey,
-        signer_pubkey: session.signer_pubkey,
-        user_pubkey: session.user_pubkey,
-        relay_count: session.relays.len(),
-        permissions_count: session.permissions.len(),
-        auth_required: session.auth_required,
-        authorized: session.authorized,
-        expires_in_secs: session.expires_in_secs,
-    }
-}
-
-fn map_sdk_session_view(session: SdkRadrootsdSignerSessionView) -> RpcSessionView {
-    RpcSessionView {
-        session_id: session.session().session_id().to_owned(),
-        role: sdk_session_role(session.role).to_owned(),
-        client_pubkey: session.client_pubkey,
-        signer_pubkey: session.signer_pubkey,
-        user_pubkey: session.user_pubkey,
-        relay_count: session.relays.len(),
-        permissions_count: session.permissions.len(),
-        auth_required: session.auth_required,
-        authorized: session.authorized,
-        expires_in_secs: session.expires_in_secs,
-    }
-}
-
-fn sdk_session_role(role: SdkRadrootsdSignerSessionRole) -> &'static str {
-    match role {
-        SdkRadrootsdSignerSessionRole::InboundLocalSigner => "inbound_local_signer",
-        SdkRadrootsdSignerSessionRole::OutboundRemoteSigner => "outbound_remote_signer",
     }
 }
 

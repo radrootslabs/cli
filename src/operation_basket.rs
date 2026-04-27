@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,7 +6,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::cli::OrderNewArgs;
 use crate::domain::runtime::OrderNewView;
 use crate::operation_adapter::{
     BasketCreateRequest, BasketCreateResult, BasketGetRequest, BasketGetResult,
@@ -20,6 +17,7 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime_args::OrderDraftCreateArgs;
 
 const BASKET_KIND: &str = "basket_v1";
 const BASKET_SOURCE: &str = "local baskets - local first";
@@ -373,7 +371,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
 
         let order = map_runtime(crate::runtime::order::scaffold(
             self.config,
-            &OrderNewArgs {
+            &OrderDraftCreateArgs {
                 listing: item.listing.clone(),
                 listing_addr: item.listing_addr.clone(),
                 bin_id: Some(item.bin_id.clone()),

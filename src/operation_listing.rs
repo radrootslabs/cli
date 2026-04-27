@@ -1,11 +1,8 @@
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::{ListingFileArgs, ListingMutationArgs, ListingNewArgs, RecordKeyArgs};
 use crate::domain::runtime::{CommandDisposition, ListingMutationView};
 use crate::operation_adapter::{
     ListingArchiveRequest, ListingArchiveResult, ListingCreateRequest, ListingCreateResult,
@@ -17,6 +14,9 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime_args::{
+    ListingCreateArgs, ListingFileArgs, ListingMutationArgs, RecordLookupArgs,
+};
 
 pub struct ListingOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -35,7 +35,7 @@ impl OperationService<ListingCreateRequest> for ListingOperationService<'_> {
         &self,
         request: OperationRequest<ListingCreateRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = ListingNewArgs {
+        let args = ListingCreateArgs {
             output: optional_path(&request, "output"),
             key: string_input(&request, "key"),
             title: string_input(&request, "title"),
@@ -72,7 +72,7 @@ impl OperationService<ListingGetRequest> for ListingOperationService<'_> {
         &self,
         request: OperationRequest<ListingGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = RecordKeyArgs {
+        let args = RecordLookupArgs {
             key: required_string(&request, "key")?,
         };
         let view = map_runtime(crate::runtime::listing::get(self.config, &args))?;

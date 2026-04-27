@@ -23,7 +23,6 @@ use rhi::rhi::{Rhi, start_subscriber};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::cli::{OrderNewArgs, OrderSubmitArgs, OrderWatchArgs, RecordKeyArgs};
 use crate::domain::runtime::{
     OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView, OrderHistoryView,
     OrderIssueView, OrderJobView, OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView,
@@ -36,6 +35,9 @@ use crate::runtime::config::{
 };
 use crate::runtime::daemon::{self, DaemonRpcError};
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
+use crate::runtime_args::{
+    OrderDraftCreateArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
+};
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
@@ -152,7 +154,10 @@ struct ResolvedOrderListing {
     seller_pubkey: String,
 }
 
-pub fn scaffold(config: &RuntimeConfig, args: &OrderNewArgs) -> Result<OrderNewView, RuntimeError> {
+pub fn scaffold(
+    config: &RuntimeConfig,
+    args: &OrderDraftCreateArgs,
+) -> Result<OrderNewView, RuntimeError> {
     validate_scaffold_args(args)?;
 
     let listing_lookup = normalize_optional(args.listing.as_deref());
@@ -226,7 +231,7 @@ pub fn scaffold(config: &RuntimeConfig, args: &OrderNewArgs) -> Result<OrderNewV
     Ok(view)
 }
 
-pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<OrderGetView, RuntimeError> {
+pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetView, RuntimeError> {
     let lookup = args.key.clone();
     let file = draft_lookup_path(config, lookup.as_str());
     if !file.exists() {
@@ -821,7 +826,7 @@ pub fn history(config: &RuntimeConfig) -> Result<OrderHistoryView, RuntimeError>
 
 pub fn cancel(
     config: &RuntimeConfig,
-    args: &RecordKeyArgs,
+    args: &RecordLookupArgs,
 ) -> Result<OrderCancelView, RuntimeError> {
     let file = draft_lookup_path(config, args.key.as_str());
     if !file.exists() {
@@ -887,7 +892,7 @@ pub fn cancel(
     })
 }
 
-fn validate_scaffold_args(args: &OrderNewArgs) -> Result<(), RuntimeError> {
+fn validate_scaffold_args(args: &OrderDraftCreateArgs) -> Result<(), RuntimeError> {
     match (normalize_optional(args.bin_id.as_deref()), args.bin_count) {
         (None, Some(_)) => Err(RuntimeError::Config(
             "`--qty` requires `--bin` when creating an order draft".to_owned(),

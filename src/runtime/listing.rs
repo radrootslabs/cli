@@ -25,15 +25,10 @@ use radroots_trade::listing::publish::validate_listing_for_seller;
 use radroots_trade::listing::validation::validate_listing_event;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{
-    ListingFileArgs, ListingMutationArgs, ListingNewArgs, RecordKeyArgs, SellAddArgs,
-    SellRepriceArgs, SellRestockArgs, SellShowArgs,
-};
 use crate::domain::runtime::{
     FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView,
     ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
-    ListingValidateView, ListingValidationIssueView, SellAddView, SellCheckView,
-    SellDraftMutationView, SellMutationView, SellShowView, SyncFreshnessView,
+    ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -43,6 +38,9 @@ use crate::runtime::daemon::DaemonRpcError;
 use crate::runtime::farm_config;
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::freshness_from_executor;
+use crate::runtime_args::{
+    ListingCreateArgs, ListingFileArgs, ListingMutationArgs, RecordLookupArgs,
+};
 
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
@@ -157,33 +155,6 @@ struct ListingAuthoringDefaults {
 }
 
 #[derive(Debug, Clone)]
-struct DraftSummary {
-    product_key: Option<String>,
-    title: Option<String>,
-    category: Option<String>,
-    offer: Option<String>,
-    price: Option<String>,
-    stock: Option<String>,
-    delivery_method: Option<String>,
-    location_primary: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct ParsedQuantityExpr {
-    amount: String,
-    unit: String,
-    label: String,
-}
-
-#[derive(Debug, Clone)]
-struct ParsedPriceExpr {
-    amount: String,
-    currency: String,
-    per_amount: String,
-    per_unit: String,
-}
-
-#[derive(Debug, Clone)]
 struct CanonicalListingDraft {
     listing_id: String,
     seller_pubkey: String,
@@ -210,7 +181,7 @@ impl ListingMutationOperation {
 
 pub fn scaffold(
     config: &RuntimeConfig,
-    args: &ListingNewArgs,
+    args: &ListingCreateArgs,
 ) -> Result<ListingNewView, RuntimeError> {
     let (draft, defaults) = build_listing_draft(config, args)?;
     let output_path = default_listing_output_path(args.output.as_ref(), &draft.listing.d_tag)?;
@@ -242,209 +213,9 @@ pub fn scaffold(
     })
 }
 
-pub fn sell_add(config: &RuntimeConfig, args: &SellAddArgs) -> Result<SellAddView, RuntimeError> {
-    let listing_args = listing_args_from_sell_add(args)?;
-    let (draft, defaults) = build_listing_draft(config, &listing_args)?;
-    let output_path = listing_args
-        .output
-        .clone()
-        .expect("sell add always sets an explicit output path");
-    write_listing_draft(&output_path, &draft, false)?;
-
-    let summary = summarize_draft(&draft);
-    let mut actions = vec![format!(
-        "radroots listing validate {}",
-        output_path.display()
-    )];
-    if defaults.selected_account_pubkey.is_some() && defaults.selected_farm_d_tag.is_some() {
-        actions.push(format!(
-            "radroots listing publish {}",
-            output_path.display()
-        ));
-    }
-    if defaults.selected_account_pubkey.is_none() {
-        actions.push("radroots account create".to_owned());
-    }
-    if let Some(action) = &defaults.farm_next_action {
-        actions.push(action.clone());
-    }
-
-    Ok(SellAddView {
-        state: "draft_saved".to_owned(),
-        source: LISTING_SOURCE.to_owned(),
-        file: output_path.display().to_string(),
-        product_key: summary.product_key,
-        title: summary.title,
-        offer: summary.offer,
-        price: summary.price,
-        stock: summary.stock,
-        farm_name: defaults.farm_name,
-        delivery_method: summary.delivery_method,
-        location_primary: summary.location_primary,
-        reason: defaults.farm_reason,
-        actions,
-    })
-}
-
-pub fn sell_show(
-    _config: &RuntimeConfig,
-    args: &SellShowArgs,
-) -> Result<SellShowView, RuntimeError> {
-    let draft = read_listing_draft(&args.file)?;
-    let summary = summarize_draft(&draft);
-    Ok(SellShowView {
-        state: "ready".to_owned(),
-        source: LISTING_SOURCE.to_owned(),
-        file: args.file.display().to_string(),
-        product_key: summary.product_key,
-        title: summary.title,
-        category: summary.category,
-        offer: summary.offer,
-        price: summary.price,
-        stock: summary.stock,
-        delivery_method: summary.delivery_method,
-        location_primary: summary.location_primary,
-        reason: None,
-        actions: vec![
-            format!("radroots listing validate {}", args.file.display()),
-            format!("radroots listing publish {}", args.file.display()),
-        ],
-    })
-}
-
-pub fn sell_reprice(
-    _config: &RuntimeConfig,
-    args: &SellRepriceArgs,
-) -> Result<SellDraftMutationView, RuntimeError> {
-    let mut draft = read_listing_draft(&args.file)?;
-    let parsed = parse_price_expr(args.price_expr.as_str())?;
-    draft.primary_bin.price_amount = parsed.amount;
-    draft.primary_bin.price_currency = parsed.currency;
-    draft.primary_bin.price_per_amount = parsed.per_amount;
-    draft.primary_bin.price_per_unit = parsed.per_unit;
-    write_listing_draft(&args.file, &draft, true)?;
-
-    let summary = summarize_draft(&draft);
-    Ok(SellDraftMutationView {
-        state: "updated".to_owned(),
-        operation: "reprice".to_owned(),
-        source: LISTING_SOURCE.to_owned(),
-        file: args.file.display().to_string(),
-        product_key: summary.product_key,
-        changed_label: "Price".to_owned(),
-        changed_value: summary
-            .price
-            .unwrap_or_else(|| args.price_expr.trim().to_owned()),
-        actions: vec![
-            format!("radroots listing validate {}", args.file.display()),
-            format!("radroots listing update {}", args.file.display()),
-        ],
-    })
-}
-
-pub fn sell_restock(
-    _config: &RuntimeConfig,
-    args: &SellRestockArgs,
-) -> Result<SellDraftMutationView, RuntimeError> {
-    let mut draft = read_listing_draft(&args.file)?;
-    parse_decimal_string(args.available.as_str(), "`sell restock <available>`")?;
-    draft.inventory.available = args.available.trim().to_owned();
-    write_listing_draft(&args.file, &draft, true)?;
-
-    let summary = summarize_draft(&draft);
-    Ok(SellDraftMutationView {
-        state: "updated".to_owned(),
-        operation: "restock".to_owned(),
-        source: LISTING_SOURCE.to_owned(),
-        file: args.file.display().to_string(),
-        product_key: summary.product_key,
-        changed_label: "Stock".to_owned(),
-        changed_value: summary
-            .stock
-            .unwrap_or_else(|| format!("{} available", args.available.trim())),
-        actions: vec![
-            format!("radroots listing validate {}", args.file.display()),
-            format!("radroots listing update {}", args.file.display()),
-        ],
-    })
-}
-
-pub fn sell_check(
-    config: &RuntimeConfig,
-    args: &ListingFileArgs,
-) -> Result<SellCheckView, RuntimeError> {
-    let view = validate(config, args)?;
-    let summary = read_listing_draft(&args.file)
-        .ok()
-        .map(|draft| summarize_draft(&draft));
-    let actions = if view.valid {
-        vec![format!("radroots listing publish {}", args.file.display())]
-    } else {
-        vec![
-            format!("edit {}", args.file.display()),
-            format!("radroots listing validate {}", args.file.display()),
-            "Edit the draft file and run the command again".to_owned(),
-        ]
-    };
-
-    Ok(SellCheckView {
-        state: if view.valid {
-            "ready".to_owned()
-        } else {
-            "invalid".to_owned()
-        },
-        source: view.source,
-        file: view.file,
-        valid: view.valid,
-        product_key: summary
-            .as_ref()
-            .and_then(|summary| summary.product_key.clone()),
-        seller_pubkey: view.seller_pubkey,
-        farm_ref: view.farm_d_tag,
-        issues: view.issues,
-        actions,
-    })
-}
-
-pub fn sell_publish(
-    config: &RuntimeConfig,
-    args: &ListingMutationArgs,
-) -> Result<SellMutationView, RuntimeError> {
-    let view = publish(config, args)?;
-    Ok(sell_mutation_from_listing(
-        view,
-        args.file.as_path(),
-        "publish",
-    ))
-}
-
-pub fn sell_update(
-    config: &RuntimeConfig,
-    args: &ListingMutationArgs,
-) -> Result<SellMutationView, RuntimeError> {
-    let view = update(config, args)?;
-    Ok(sell_mutation_from_listing(
-        view,
-        args.file.as_path(),
-        "update",
-    ))
-}
-
-pub fn sell_pause(
-    config: &RuntimeConfig,
-    args: &ListingMutationArgs,
-) -> Result<SellMutationView, RuntimeError> {
-    let view = archive(config, args)?;
-    Ok(sell_mutation_from_listing(
-        view,
-        args.file.as_path(),
-        "pause",
-    ))
-}
-
 fn build_listing_draft(
     config: &RuntimeConfig,
-    args: &ListingNewArgs,
+    args: &ListingCreateArgs,
 ) -> Result<(ListingDraftDocument, ListingAuthoringDefaults), RuntimeError> {
     let defaults = authoring_defaults(config)?;
     let quantity_unit = args.quantity_unit.clone().unwrap_or_else(|| "g".to_owned());
@@ -509,52 +280,6 @@ fn build_listing_draft(
     Ok((draft, defaults))
 }
 
-fn listing_args_from_sell_add(args: &SellAddArgs) -> Result<ListingNewArgs, RuntimeError> {
-    let product_key = slugify_ascii(args.product.as_str());
-    if product_key.is_empty() {
-        return Err(RuntimeError::Config(
-            "`sell add <product>` requires at least one ASCII letter or digit".to_owned(),
-        ));
-    }
-
-    let title = args
-        .title
-        .clone()
-        .unwrap_or_else(|| title_case_ascii(args.product.as_str()));
-    let category = args.category.clone().unwrap_or_else(|| title.clone());
-    let pack = args.pack.as_deref().map(parse_quantity_expr).transpose()?;
-    let price = args
-        .price_expr
-        .as_deref()
-        .map(parse_price_expr)
-        .transpose()?;
-    let output = Some(match &args.file {
-        Some(path) => path.clone(),
-        None => std::path::PathBuf::from(format!("listing-{product_key}.toml")),
-    });
-
-    Ok(ListingNewArgs {
-        output,
-        key: Some(product_key),
-        title: Some(title.clone()),
-        category: Some(category),
-        summary: Some(
-            args.summary
-                .clone()
-                .unwrap_or_else(|| format!("Listing for {title}")),
-        ),
-        bin_id: None,
-        quantity_amount: pack.as_ref().map(|pack| pack.amount.clone()),
-        quantity_unit: pack.as_ref().map(|pack| pack.unit.clone()),
-        price_amount: price.as_ref().map(|price| price.amount.clone()),
-        price_currency: price.as_ref().map(|price| price.currency.clone()),
-        price_per_amount: price.as_ref().map(|price| price.per_amount.clone()),
-        price_per_unit: price.as_ref().map(|price| price.per_unit.clone()),
-        available: args.stock.clone(),
-        label: pack.as_ref().map(|pack| pack.label.clone()),
-    })
-}
-
 fn default_listing_output_path(
     explicit: Option<&std::path::PathBuf>,
     listing_id: &str,
@@ -581,268 +306,6 @@ fn write_listing_draft(
     }
     fs::write(output_path, scaffold_contents(draft)?)?;
     Ok(())
-}
-
-fn read_listing_draft(path: &Path) -> Result<ListingDraftDocument, RuntimeError> {
-    let contents = fs::read_to_string(path)?;
-    toml::from_str::<ListingDraftDocument>(&contents).map_err(|error| {
-        RuntimeError::Config(format!(
-            "failed to parse listing draft {}: {error}",
-            path.display()
-        ))
-    })
-}
-
-fn successful_sell_mutation_actions(operation: &str, product_key: Option<&str>) -> Vec<String> {
-    match operation {
-        "publish" => {
-            let mut actions = Vec::new();
-            if let Some(product_key) = product_key {
-                actions.push(format!("radroots market listing get {product_key}"));
-                actions.push(format!("radroots listing create --key {product_key}"));
-            }
-            actions
-        }
-        "update" => product_key
-            .map(|product_key| vec![format!("radroots market listing get {product_key}")])
-            .unwrap_or_default(),
-        "pause" => product_key
-            .map(|product_key| vec![format!("radroots listing create --key {product_key}")])
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    }
-}
-
-fn summarize_draft(draft: &ListingDraftDocument) -> DraftSummary {
-    DraftSummary {
-        product_key: non_empty(draft.product.key.clone()),
-        title: non_empty(draft.product.title.clone()),
-        category: non_empty(draft.product.category.clone()),
-        offer: draft_offer_text(draft),
-        price: draft_price_text(draft),
-        stock: draft_stock_text(draft),
-        delivery_method: non_empty(draft.delivery.method.clone()),
-        location_primary: non_empty(draft.location.primary.clone()),
-    }
-}
-
-fn sell_mutation_from_listing(
-    view: ListingMutationView,
-    file: &Path,
-    operation: &str,
-) -> SellMutationView {
-    let summary = read_listing_draft(file)
-        .ok()
-        .map(|draft| summarize_draft(&draft));
-    let product_key = summary
-        .as_ref()
-        .and_then(|summary| summary.product_key.clone());
-    let actions = match view.state.as_str() {
-        "published" | "deduplicated" => {
-            successful_sell_mutation_actions(operation, product_key.as_deref())
-        }
-        _ => view.actions,
-    };
-
-    SellMutationView {
-        state: view.state,
-        operation: operation.to_owned(),
-        source: view.source,
-        file: view.file,
-        product_key,
-        listing_addr: view.listing_addr,
-        dry_run: view.dry_run,
-        deduplicated: view.deduplicated,
-        publish_mode: Some("runtime_bridge".to_owned()),
-        job_id: view.job_id,
-        job_status: view.job_status,
-        event_id: view.event_id,
-        reason: view.reason,
-        actions,
-    }
-}
-
-fn draft_offer_text(draft: &ListingDraftDocument) -> Option<String> {
-    non_empty(draft.primary_bin.label.clone()).or_else(|| {
-        let amount = draft.primary_bin.quantity_amount.trim();
-        let unit = draft.primary_bin.quantity_unit.trim();
-        if amount.is_empty() || unit.is_empty() {
-            None
-        } else {
-            Some(format!("{} {}", trim_decimal_string(amount), unit))
-        }
-    })
-}
-
-fn draft_price_text(draft: &ListingDraftDocument) -> Option<String> {
-    let amount = non_empty(draft.primary_bin.price_amount.clone())?;
-    let currency = non_empty(draft.primary_bin.price_currency.clone())?;
-    let per_amount = non_empty(draft.primary_bin.price_per_amount.clone())?;
-    let per_unit = non_empty(draft.primary_bin.price_per_unit.clone())?;
-    let denominator = if per_unit == "each"
-        && numeric_strings_equal(
-            per_amount.as_str(),
-            draft.primary_bin.quantity_amount.trim(),
-        )
-        && !draft.primary_bin.label.trim().is_empty()
-    {
-        draft.primary_bin.label.trim().to_owned()
-    } else if per_amount == "1" {
-        per_unit.to_owned()
-    } else {
-        format!("{} {}", trim_decimal_string(&per_amount), per_unit)
-    };
-    Some(format!(
-        "{} {}/{}",
-        trim_decimal_string(&amount),
-        currency.to_ascii_uppercase(),
-        denominator
-    ))
-}
-
-fn draft_stock_text(draft: &ListingDraftDocument) -> Option<String> {
-    non_empty(draft.inventory.available.clone())
-        .map(|available| format!("{} available", trim_decimal_string(&available)))
-}
-
-fn parse_quantity_expr(expr: &str) -> Result<ParsedQuantityExpr, RuntimeError> {
-    let trimmed = expr.trim();
-    if trimmed.is_empty() {
-        return Err(RuntimeError::Config(
-            "quantity expression must not be empty".to_owned(),
-        ));
-    }
-    if trimmed.eq_ignore_ascii_case("dozen") {
-        return Ok(ParsedQuantityExpr {
-            amount: "12".to_owned(),
-            unit: "each".to_owned(),
-            label: "dozen".to_owned(),
-        });
-    }
-
-    let parts = trimmed.split_whitespace().collect::<Vec<_>>();
-    if parts.is_empty() {
-        return Err(RuntimeError::Config(
-            "quantity expression must not be empty".to_owned(),
-        ));
-    }
-
-    let (amount, unit) = if parse_decimal_string(parts[0], "quantity amount").is_ok() {
-        let Some(unit) = parts.get(1) else {
-            return Err(RuntimeError::Config(
-                "quantity expression must include a unit, for example `1 kg`".to_owned(),
-            ));
-        };
-        (parts[0].trim().to_owned(), unit.trim().to_ascii_lowercase())
-    } else {
-        ("1".to_owned(), parts[0].trim().to_ascii_lowercase())
-    };
-
-    unit.parse::<RadrootsCoreUnit>().map_err(|_| {
-        RuntimeError::Config(format!(
-            "quantity expression uses unsupported unit `{unit}`"
-        ))
-    })?;
-
-    Ok(ParsedQuantityExpr {
-        amount,
-        unit,
-        label: trimmed.to_owned(),
-    })
-}
-
-fn parse_price_expr(expr: &str) -> Result<ParsedPriceExpr, RuntimeError> {
-    let trimmed = expr.trim();
-    if trimmed.is_empty() {
-        return Err(RuntimeError::Config(
-            "price expression must not be empty".to_owned(),
-        ));
-    }
-
-    let segments = trimmed.split_whitespace().collect::<Vec<_>>();
-    if segments.len() < 2 {
-        return Err(RuntimeError::Config(
-            "price expression must look like `10 USD/kg`".to_owned(),
-        ));
-    }
-
-    parse_decimal_string(segments[0], "price amount")?;
-    let remainder = segments[1..].join(" ");
-    let Some((currency, per_expr)) = remainder.split_once('/') else {
-        return Err(RuntimeError::Config(
-            "price expression must include a `/`, for example `10 USD/kg`".to_owned(),
-        ));
-    };
-    let per = parse_quantity_expr(per_expr)?;
-    RadrootsCoreCurrency::from_str_upper(currency.trim().to_ascii_uppercase().as_str()).map_err(
-        |_| {
-            RuntimeError::Config(format!(
-                "price expression uses unsupported currency `{}`",
-                currency.trim()
-            ))
-        },
-    )?;
-
-    Ok(ParsedPriceExpr {
-        amount: segments[0].trim().to_owned(),
-        currency: currency.trim().to_ascii_uppercase(),
-        per_amount: per.amount,
-        per_unit: per.unit,
-    })
-}
-
-fn parse_decimal_string(value: &str, label: &str) -> Result<RadrootsCoreDecimal, RuntimeError> {
-    value
-        .trim()
-        .parse::<RadrootsCoreDecimal>()
-        .map_err(|_| RuntimeError::Config(format!("{label} must be a valid decimal value")))
-}
-
-fn slugify_ascii(value: &str) -> String {
-    let mut slug = String::new();
-    let mut last_was_dash = false;
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-            last_was_dash = false;
-        } else if !slug.is_empty() && !last_was_dash {
-            slug.push('-');
-            last_was_dash = true;
-        }
-    }
-    slug.trim_matches('-').to_owned()
-}
-
-fn title_case_ascii(value: &str) -> String {
-    value
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|segment| !segment.is_empty())
-        .map(capitalize_ascii_word)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn capitalize_ascii_word(word: &str) -> String {
-    let mut chars = word.chars();
-    let Some(first) = chars.next() else {
-        return String::new();
-    };
-    let mut rendered = String::new();
-    rendered.push(first.to_ascii_uppercase());
-    rendered.push_str(chars.as_str());
-    rendered
-}
-
-fn numeric_strings_equal(lhs: &str, rhs: &str) -> bool {
-    trim_decimal_string(lhs) == trim_decimal_string(rhs)
-}
-
-fn trim_decimal_string(value: &str) -> String {
-    if let Ok(parsed) = value.trim().parse::<RadrootsCoreDecimal>() {
-        parsed.to_string()
-    } else {
-        value.trim().to_owned()
-    }
 }
 
 pub fn validate(
@@ -930,7 +393,10 @@ pub fn validate(
     }
 }
 
-pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<ListingGetView, RuntimeError> {
+pub fn get(
+    config: &RuntimeConfig,
+    args: &RecordLookupArgs,
+) -> Result<ListingGetView, RuntimeError> {
     let freshness = if config.local.replica_db_path.exists() {
         let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
         freshness_from_executor(&executor)?

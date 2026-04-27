@@ -1,11 +1,6 @@
-#![allow(dead_code)]
-
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::{
-    FarmFieldArg, FarmInitArgs, FarmPublishArgs, FarmScopeArg, FarmScopedArgs, FarmSetArgs,
-};
 use crate::operation_adapter::{
     FarmCreateRequest, FarmCreateResult, FarmFulfillmentUpdateRequest, FarmFulfillmentUpdateResult,
     FarmGetRequest, FarmGetResult, FarmLocationUpdateRequest, FarmLocationUpdateResult,
@@ -16,6 +11,9 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime_args::{
+    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmScopeArg, FarmScopedArgs, FarmUpdateArgs,
+};
 
 pub struct FarmOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -34,7 +32,7 @@ impl OperationService<FarmCreateRequest> for FarmOperationService<'_> {
         &self,
         request: OperationRequest<FarmCreateRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = FarmInitArgs {
+        let args = FarmCreateArgs {
             scope: scope_input(&request)?,
             farm_d_tag: string_input(&request, "farm_d_tag"),
             name: string_input(&request, "name"),
@@ -172,7 +170,7 @@ where
     R: OperationResultData,
 {
     let value = required_string(request, "value")?;
-    let args = FarmSetArgs {
+    let args = FarmUpdateArgs {
         scope: scope_input(request)?,
         field,
         value: vec![value.clone()],

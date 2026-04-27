@@ -1,11 +1,8 @@
-#![allow(dead_code)]
-
 use radroots_events::kinds::KIND_LISTING;
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::{FindArgs, RecordKeyArgs};
 use crate::domain::runtime::{FindView, ListingGetView, SyncActionView};
 use crate::operation_adapter::{
     MarketListingGetRequest, MarketListingGetResult, MarketProductSearchRequest,
@@ -15,6 +12,7 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime_args::{FindQueryArgs, RecordLookupArgs};
 
 pub struct MarketOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -53,7 +51,7 @@ impl OperationService<MarketProductSearchRequest> for MarketOperationService<'_>
         &self,
         request: OperationRequest<MarketProductSearchRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = FindArgs {
+        let args = FindQueryArgs {
             query: required_query_terms(&request)?,
         };
         let view = market_product_search_view(map_runtime(crate::runtime::find::search(
@@ -71,7 +69,7 @@ impl OperationService<MarketListingGetRequest> for MarketOperationService<'_> {
         &self,
         request: OperationRequest<MarketListingGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = RecordKeyArgs {
+        let args = RecordLookupArgs {
             key: required_lookup(&request)?,
         };
         let view = market_listing_get_view(map_runtime(crate::runtime::listing::get(

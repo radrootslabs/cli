@@ -8,57 +8,6 @@ use radroots_events::profile::RadrootsProfile;
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
 use serde::Serialize;
 
-#[derive(Debug, Clone)]
-pub struct CommandOutput {
-    disposition: CommandDisposition,
-    view: CommandView,
-}
-
-impl CommandOutput {
-    pub fn success(view: CommandView) -> Self {
-        Self {
-            disposition: CommandDisposition::Success,
-            view,
-        }
-    }
-
-    pub fn unconfigured(view: CommandView) -> Self {
-        Self {
-            disposition: CommandDisposition::Unconfigured,
-            view,
-        }
-    }
-
-    pub fn external_unavailable(view: CommandView) -> Self {
-        Self {
-            disposition: CommandDisposition::ExternalUnavailable,
-            view,
-        }
-    }
-
-    pub fn unsupported(view: CommandView) -> Self {
-        Self {
-            disposition: CommandDisposition::Unsupported,
-            view,
-        }
-    }
-
-    pub fn internal_error(view: CommandView) -> Self {
-        Self {
-            disposition: CommandDisposition::InternalError,
-            view,
-        }
-    }
-
-    pub fn exit_code(&self) -> ExitCode {
-        self.disposition.exit_code()
-    }
-
-    pub fn view(&self) -> &CommandView {
-        &self.view
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandDisposition {
     Success,
@@ -78,69 +27,6 @@ impl CommandDisposition {
             Self::InternalError => ExitCode::from(1),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum CommandView {
-    AccountClearDefault(AccountClearDefaultView),
-    AccountImport(AccountImportView),
-    AccountList(AccountListView),
-    AccountNew(AccountNewView),
-    AccountRemove(AccountRemoveView),
-    AccountUse(AccountUseView),
-    AccountWhoami(AccountWhoamiView),
-    ConfigShow(ConfigShowView),
-    Doctor(DoctorView),
-    FarmGet(FarmGetView),
-    FarmPublish(FarmPublishView),
-    FarmSet(FarmSetView),
-    FarmSetup(FarmSetupView),
-    FarmStatus(FarmStatusView),
-    Find(FindView),
-    JobGet(JobGetView),
-    JobList(JobListView),
-    JobWatch(JobWatchView),
-    ListingGet(ListingGetView),
-    ListingMutation(ListingMutationView),
-    ListingNew(ListingNewView),
-    ListingValidate(ListingValidateView),
-    LocalBackup(LocalBackupView),
-    LocalExport(LocalExportView),
-    LocalInit(LocalInitView),
-    LocalStatus(LocalStatusView),
-    MarketSearch(FindView),
-    MarketUpdate(SyncActionView),
-    MarketView(ListingGetView),
-    MycStatus(MycStatusView),
-    NetStatus(NetStatusView),
-    OrderCancel(OrderCancelView),
-    OrderGet(OrderGetView),
-    OrderHistory(OrderHistoryView),
-    OrderList(OrderListView),
-    OrderNew(OrderNewView),
-    OrderSubmit(OrderSubmitView),
-    OrderSubmitWatch(OrderSubmitWatchView),
-    OrderWatch(OrderWatchView),
-    RpcSessions(RpcSessionsView),
-    RpcStatus(RpcStatusView),
-    RelayList(RelayListView),
-    RuntimeAction(RuntimeActionView),
-    RuntimeConfigShow(RuntimeManagedConfigView),
-    RuntimeLogs(RuntimeLogsView),
-    RuntimeStatus(RuntimeStatusView),
-    SellAdd(SellAddView),
-    SellCheck(SellCheckView),
-    SellDraftMutation(SellDraftMutationView),
-    SellMutation(SellMutationView),
-    SellShow(SellShowView),
-    Setup(SetupView),
-    SignerSessionAction(SignerSessionActionView),
-    SignerStatus(SignerStatusView),
-    Status(StatusView),
-    SyncPull(SyncActionView),
-    SyncPush(SyncActionView),
-    SyncStatus(SyncStatusView),
-    SyncWatch(SyncWatchView),
 }
 
 #[derive(Debug, Clone, Serialize)]

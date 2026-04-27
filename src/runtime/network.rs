@@ -1,6 +1,4 @@
-use crate::domain::runtime::{NetStatusView, RelayEntryView, RelayListView};
-use crate::runtime::RuntimeError;
-use crate::runtime::accounts;
+use crate::domain::runtime::{RelayEntryView, RelayListView};
 use crate::runtime::config::RuntimeConfig;
 
 pub fn relay_list(config: &RuntimeConfig) -> RelayListView {
@@ -33,33 +31,6 @@ pub fn relay_list(config: &RuntimeConfig) -> RelayListView {
         relays,
         actions: relay_actions(config),
     }
-}
-
-pub fn net_status(config: &RuntimeConfig) -> Result<NetStatusView, RuntimeError> {
-    let account_resolution = accounts::resolve_account_resolution(config)?;
-    let relay_count = config.relay.urls.len();
-    let configured = relay_count > 0;
-
-    Ok(NetStatusView {
-        state: if configured {
-            "configured".to_owned()
-        } else {
-            "unconfigured".to_owned()
-        },
-        source: config.relay.source.as_str().to_owned(),
-        session: if configured {
-            "not_started".to_owned()
-        } else {
-            "not_configured".to_owned()
-        },
-        relay_count,
-        publish_policy: config.relay.publish_policy.as_str().to_owned(),
-        signer_mode: config.signer.backend.as_str().to_owned(),
-        account_resolution: accounts::account_resolution_view(&account_resolution),
-        reason: (!configured)
-            .then_some("no relays are configured for this operator session".to_owned()),
-        actions: relay_actions(config),
-    })
 }
 
 fn relay_actions(config: &RuntimeConfig) -> Vec<String> {

@@ -1,7 +1,6 @@
 use radroots_replica_db::ReplicaSql;
 use radroots_sql_core::SqliteExecutor;
 
-use crate::cli::FindArgs;
 use crate::domain::runtime::{
     FindHyfView, FindPriceView, FindQuantityView, FindResultHyfView, FindResultProvenanceView,
     FindResultView, FindView, SyncFreshnessView,
@@ -10,6 +9,7 @@ use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::hyf::{self, HyfQueryRewriteRequest, HyfRequestContext};
 use crate::runtime::sync::freshness_from_executor;
+use crate::runtime_args::FindQueryArgs;
 
 const FIND_SOURCE: &str = "local replica · local first";
 const FIND_HYF_SOURCE: &str = "hyf query_rewrite · local first";
@@ -40,7 +40,7 @@ impl AppliedQueryRewrite {
     }
 }
 
-pub fn search(config: &RuntimeConfig, args: &FindArgs) -> Result<FindView, RuntimeError> {
+pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, RuntimeError> {
     let query = args.query.join(" ");
     if !config.local.replica_db_path.exists() {
         return Ok(FindView {

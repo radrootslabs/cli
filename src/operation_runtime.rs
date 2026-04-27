@@ -1,9 +1,6 @@
-#![allow(dead_code)]
-
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::SyncWatchArgs;
 use crate::operation_adapter::{
     JobGetRequest, JobGetResult, JobListRequest, JobListResult, JobWatchRequest, JobWatchResult,
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
@@ -21,6 +18,7 @@ use crate::runtime::daemon::{self, DaemonRpcError};
 use crate::runtime::management::{
     RuntimeLifecycleAction, inspect_action, inspect_config_show, inspect_logs, inspect_status,
 };
+use crate::runtime_args::SyncWatchArgs;
 
 const DEFAULT_RUNTIME_ID: &str = "radrootsd";
 

@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-mod cli;
 mod domain;
 mod operation_adapter;
 mod operation_basket;
@@ -13,6 +12,7 @@ mod operation_registry;
 mod operation_runtime;
 mod output_contract;
 mod runtime;
+mod runtime_args;
 mod target_cli;
 
 use std::io::Write;
@@ -20,7 +20,6 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use crate::cli::{CliArgs, Command, ConfigArgs, ConfigCommand, OutputFormatArg};
 use crate::operation_adapter::{
     OperationAdapter, OperationAdapterError, OperationNetworkMode, OperationOutputFormat,
     OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
@@ -36,6 +35,7 @@ use crate::operation_runtime::RuntimeOperationService;
 use crate::output_contract::OutputEnvelope;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::logging::initialize_logging;
+use crate::runtime_args::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
 use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
 
 fn main() -> ExitCode {
@@ -52,7 +52,7 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
     debug_assert!(operation_registry::registry_linkage_is_valid());
     debug_assert!(operation_adapter::adapter_registry_linkage_is_valid());
     let args = TargetCliArgs::parse();
-    let config = RuntimeConfig::from_system(&config_args_from_target(&args)?)?;
+    let config = RuntimeConfig::from_system(&runtime_args_from_target(&args))?;
     let logging = initialize_logging(&config.logging)?;
     let request =
         TargetOperationRequest::from_target_args(&args).map_err(operation_config_error)?;
@@ -64,12 +64,12 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
     Ok(envelope_exit_code(&envelope))
 }
 
-fn config_args_from_target(args: &TargetCliArgs) -> Result<CliArgs, runtime::RuntimeError> {
-    Ok(CliArgs {
+fn runtime_args_from_target(args: &TargetCliArgs) -> RuntimeInvocationArgs {
+    RuntimeInvocationArgs {
         output_format: Some(match args.format {
-            TargetOutputFormat::Human => OutputFormatArg::Human,
-            TargetOutputFormat::Json => OutputFormatArg::Json,
-            TargetOutputFormat::Ndjson => OutputFormatArg::Ndjson,
+            TargetOutputFormat::Human => RuntimeOutputFormatArg::Human,
+            TargetOutputFormat::Json => RuntimeOutputFormatArg::Json,
+            TargetOutputFormat::Ndjson => RuntimeOutputFormatArg::Ndjson,
         }),
         json: false,
         ndjson: false,
@@ -94,10 +94,7 @@ fn config_args_from_target(args: &TargetCliArgs) -> Result<CliArgs, runtime::Run
         hyf_enabled: false,
         no_hyf_enabled: false,
         hyf_executable: None,
-        command: Command::Config(ConfigArgs {
-            command: ConfigCommand::Show,
-        }),
-    })
+    }
 }
 
 fn execute_request(

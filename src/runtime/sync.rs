@@ -5,13 +5,13 @@ use radroots_replica_db::ReplicaSql;
 use radroots_replica_sync::radroots_replica_sync_status;
 use radroots_sql_core::SqliteExecutor;
 
-use crate::cli::SyncWatchArgs;
 use crate::domain::runtime::{
     SyncActionView, SyncFreshnessView, SyncQueueView, SyncStatusView, SyncWatchFrameView,
     SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime_args::SyncWatchArgs;
 
 const SYNC_SOURCE: &str = "local replica · local first";
 const RELAY_SETUP_ACTION: &str = "radroots --relay wss://relay.example.com relay list";

@@ -9,10 +9,6 @@ use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::farm::encode::to_wire_parts_with_kind;
 use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
 
-use crate::cli::{
-    FarmFieldArg, FarmInitArgs, FarmPublishArgs, FarmScopeArg, FarmScopedArgs, FarmSetArgs,
-    FarmSetupArgs,
-};
 use crate::domain::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
     FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishJobView,
@@ -27,12 +23,15 @@ use crate::runtime::farm_config::{
     FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
 };
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
+use crate::runtime_args::{
+    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmScopeArg, FarmScopedArgs, FarmUpdateArgs,
+};
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub fn init(config: &RuntimeConfig, args: &FarmInitArgs) -> Result<FarmSetupView, RuntimeError> {
+pub fn init(config: &RuntimeConfig, args: &FarmCreateArgs) -> Result<FarmSetupView, RuntimeError> {
     let scope = scope_from_arg(args.scope);
     let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
     let Some(selected_account) = selected_account_for_draft(config)? else {
@@ -51,26 +50,7 @@ pub fn init(config: &RuntimeConfig, args: &FarmInitArgs) -> Result<FarmSetupView
     )
 }
 
-pub fn setup(config: &RuntimeConfig, args: &FarmSetupArgs) -> Result<FarmSetupView, RuntimeError> {
-    let scope = scope_from_arg(args.scope);
-    let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
-    let Some(selected_account) = selected_account_for_draft(config)? else {
-        return Ok(missing_selected_account_setup_view());
-    };
-    let existing = farm_config::load(config, Some(resolved_scope))?;
-    let document = setup_document(args, resolved_scope, &selected_account, existing.as_ref())?;
-    save_draft_view(
-        "configured",
-        resolved_scope,
-        &selected_account,
-        &document,
-        None,
-        farm_setup_actions(&document),
-        config,
-    )
-}
-
-pub fn set(config: &RuntimeConfig, args: &FarmSetArgs) -> Result<FarmSetView, RuntimeError> {
+pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView, RuntimeError> {
     let scope = scope_from_arg(args.scope);
     let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
     let path = farm_config::config_path(&config.paths, resolved_scope)?;
@@ -989,7 +969,7 @@ fn init_document(
     scope: FarmConfigScope,
     account: &AccountRecordView,
     existing: Option<&ResolvedFarmConfig>,
-    args: &FarmInitArgs,
+    args: &FarmCreateArgs,
 ) -> Result<FarmConfigDocument, RuntimeError> {
     let existing_document = existing.map(|resolved| &resolved.document);
     let farm_d_tag = match args.farm_d_tag.as_deref() {
@@ -1273,123 +1253,6 @@ fn publication_for_document(
         })
         .map(|document| document.publication.clone())
         .unwrap_or_default()
-}
-
-fn setup_document(
-    args: &FarmSetupArgs,
-    scope: FarmConfigScope,
-    account: &AccountRecordView,
-    existing: Option<&ResolvedFarmConfig>,
-) -> Result<FarmConfigDocument, RuntimeError> {
-    let existing_document = existing.map(|resolved| &resolved.document);
-    let name = required_text(args.name.as_str(), "farm.name")?;
-    let location_primary = required_text(args.location.as_str(), "farm.location.primary")?;
-    let delivery_method = required_text(
-        args.delivery_method.as_str(),
-        "listing_defaults.delivery_method",
-    )?;
-    let farm_d_tag = match args.farm_d_tag.as_deref() {
-        Some(value) => required_d_tag(value, "farm_d_tag")?,
-        None => existing_document
-            .map(|document| document.farm.d_tag.clone())
-            .unwrap_or_else(generate_d_tag),
-    };
-    if !is_d_tag_base64url(farm_d_tag.as_str()) {
-        return Err(RuntimeError::Config(
-            "farm_d_tag must be a 22-character base64url identifier".to_owned(),
-        ));
-    }
-
-    let about = optional_arg_or_existing(
-        args.about.as_ref(),
-        existing_document.and_then(|document| document.profile.about.as_ref()),
-    );
-    let website = optional_arg_or_existing(
-        args.website.as_ref(),
-        existing_document.and_then(|document| document.profile.website.as_ref()),
-    );
-    let picture = optional_arg_or_existing(
-        args.picture.as_ref(),
-        existing_document.and_then(|document| document.profile.picture.as_ref()),
-    );
-    let banner = optional_arg_or_existing(
-        args.banner.as_ref(),
-        existing_document.and_then(|document| document.profile.banner.as_ref()),
-    );
-    let display_name = optional_arg_or_existing(
-        args.display_name.as_ref(),
-        existing_document.and_then(|document| document.profile.display_name.as_ref()),
-    )
-    .or_else(|| Some(name.clone()));
-    let city = optional_arg_or_existing(
-        args.city.as_ref(),
-        existing_document
-            .and_then(|document| document.farm.location.as_ref())
-            .and_then(|location| location.city.as_ref()),
-    );
-    let region = optional_arg_or_existing(
-        args.region.as_ref(),
-        existing_document
-            .and_then(|document| document.farm.location.as_ref())
-            .and_then(|location| location.region.as_ref()),
-    );
-    let country = optional_arg_or_existing(
-        args.country.as_ref(),
-        existing_document
-            .and_then(|document| document.farm.location.as_ref())
-            .and_then(|location| location.country.as_ref()),
-    );
-    let publication = publication_for_document(existing_document, account, farm_d_tag.as_str());
-
-    Ok(FarmConfigDocument {
-        version: SUPPORTED_FARM_CONFIG_VERSION,
-        selection: FarmConfigSelection {
-            scope,
-            account: account.record.account_id.to_string(),
-            farm_d_tag: farm_d_tag.clone(),
-        },
-        profile: RadrootsProfile {
-            name: name.clone(),
-            display_name,
-            nip05: None,
-            about: about.clone(),
-            website: website.clone(),
-            picture: picture.clone(),
-            banner: banner.clone(),
-            lud06: None,
-            lud16: None,
-            bot: None,
-        },
-        farm: RadrootsFarm {
-            d_tag: farm_d_tag,
-            name,
-            about,
-            website,
-            picture,
-            banner,
-            location: Some(RadrootsFarmLocation {
-                primary: Some(location_primary.clone()),
-                city: city.clone(),
-                region: region.clone(),
-                country: country.clone(),
-                gcs: None,
-            }),
-            tags: None,
-        },
-        listing_defaults: FarmListingDefaults {
-            delivery_method,
-            location: RadrootsListingLocation {
-                primary: location_primary,
-                city,
-                region,
-                country,
-                lat: None,
-                lng: None,
-                geohash: None,
-            },
-        },
-        publication,
-    })
 }
 
 fn configured_account(

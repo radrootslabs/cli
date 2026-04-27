@@ -1,9 +1,6 @@
-#![allow(dead_code)]
-
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cli::{OrderSubmitArgs, OrderWatchArgs, RecordKeyArgs};
 use crate::domain::runtime::{CommandDisposition, OrderSubmitView};
 use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
@@ -13,6 +10,7 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime_args::{OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs};
 
 pub struct OrderOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -40,7 +38,6 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
         let key = required_order_key(&request)?;
         let args = OrderSubmitArgs {
             key,
-            watch: bool_input(&request, "watch").unwrap_or(false),
             idempotency_key: request
                 .context
                 .idempotency_key
@@ -68,7 +65,7 @@ impl OperationService<OrderGetRequest> for OrderOperationService<'_> {
         &self,
         request: OperationRequest<OrderGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = RecordKeyArgs {
+        let args = RecordLookupArgs {
             key: required_order_key(&request)?,
         };
         let view = map_runtime(crate::runtime::order::get(self.config, &args))?;
@@ -189,13 +186,6 @@ where
         .get(key)
         .and_then(Value::as_str)
         .map(str::to_owned)
-}
-
-fn bool_input<P>(request: &OperationRequest<P>, key: &str) -> Option<bool>
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    request.payload.input().get(key).and_then(Value::as_bool)
 }
 
 fn usize_input<P>(request: &OperationRequest<P>, key: &str) -> Option<usize>
