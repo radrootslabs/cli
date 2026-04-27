@@ -1,5 +1,8 @@
 mod support;
 
+use std::path::Path;
+
+use serde_json::Value;
 use support::RadrootsCliSandbox;
 
 #[test]
@@ -49,19 +52,91 @@ fn local_signer_status_reports_ready_after_account_create() {
     assert_eq!(status["result"]["binding"]["state"], "disabled");
 }
 
-#[cfg(unix)]
 #[test]
-fn harness_runs_myc_signer_status_with_fake_executable() {
+fn myc_signer_status_reports_unavailable_for_missing_executable() {
     let sandbox = RadrootsCliSandbox::new();
-    let myc = sandbox.write_fake_myc("myc-invalid-json", "printf 'not json\\n'");
-    sandbox.write_app_config(&format!(
-        "[signer]\nmode = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
-        myc.display()
-    ));
+    let missing_myc = sandbox.root().join("bin/missing-myc");
+    configure_myc_mode(&sandbox, &missing_myc);
 
     let value = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
 
     assert_eq!(value["operation_id"], "signer.status.get");
     assert_eq!(value["result"]["mode"], "myc");
+    assert_eq!(value["result"]["state"], "unavailable");
     assert_eq!(value["result"]["myc"]["state"], "unavailable");
+    assert_contains(&value["result"]["myc"]["reason"], "not found");
+}
+
+#[cfg(unix)]
+#[test]
+fn myc_signer_status_reports_unavailable_for_command_failure() {
+    let sandbox = RadrootsCliSandbox::new();
+    let myc = sandbox.write_fake_myc("myc-failure", "printf 'fake myc failed\\n' >&2\nexit 42");
+    configure_myc_mode(&sandbox, &myc);
+
+    let value = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+
+    assert_eq!(value["operation_id"], "signer.status.get");
+    assert_eq!(value["result"]["mode"], "myc");
+    assert_eq!(value["result"]["state"], "unavailable");
+    assert_eq!(value["result"]["myc"]["state"], "unavailable");
+    assert_contains(&value["result"]["myc"]["reason"], "status code 42");
+    assert_contains(&value["result"]["myc"]["reason"], "fake myc failed");
+}
+
+#[cfg(unix)]
+#[test]
+fn myc_signer_status_reports_unavailable_for_invalid_json() {
+    let sandbox = RadrootsCliSandbox::new();
+    let myc = sandbox.write_fake_myc("myc-invalid-json", "printf 'not json\\n'");
+    configure_myc_mode(&sandbox, &myc);
+
+    let value = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+
+    assert_eq!(value["operation_id"], "signer.status.get");
+    assert_eq!(value["result"]["mode"], "myc");
+    assert_eq!(value["result"]["state"], "unavailable");
+    assert_eq!(value["result"]["myc"]["state"], "unavailable");
+    assert_contains(&value["result"]["myc"]["reason"], "not valid JSON");
+}
+
+#[cfg(unix)]
+#[test]
+fn myc_signer_status_reports_unconfigured_when_ready_without_binding() {
+    let sandbox = RadrootsCliSandbox::new();
+    let myc = sandbox.write_fake_myc(
+        "myc-ready-no-binding",
+        r#"printf '%s\n' '{"status_contract_version":1,"status":"ready","ready":true,"signer_backend":{"remote_session_count":0,"remote_sessions":[]}}'"#,
+    );
+    configure_myc_mode(&sandbox, &myc);
+
+    let value = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+
+    assert_eq!(value["operation_id"], "signer.status.get");
+    assert_eq!(value["result"]["mode"], "myc");
+    assert_eq!(value["result"]["state"], "unconfigured");
+    assert_eq!(value["result"]["myc"]["state"], "ready");
+    assert_eq!(value["result"]["myc"]["ready"], true);
+    assert_eq!(value["result"]["myc"]["remote_session_count"], 0);
+    assert_eq!(value["result"]["binding"]["state"], "unconfigured");
+    assert_contains(&value["result"]["binding"]["reason"], "signer.remote_nip46");
+}
+
+fn configure_myc_mode(sandbox: &RadrootsCliSandbox, executable: &Path) {
+    sandbox.write_app_config(&format!(
+        "[signer]\nmode = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
+        toml_string(executable.display().to_string().as_str())
+    ));
+}
+
+fn toml_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn assert_contains(value: &Value, needle: &str) {
+    let value = value.as_str().expect("string value");
+    assert!(
+        value.contains(needle),
+        "expected `{value}` to contain `{needle}`"
+    );
 }
