@@ -239,7 +239,10 @@ fn myc_signer_status_reports_unavailable_for_missing_executable() {
 #[test]
 fn myc_signer_status_reports_unavailable_for_command_failure() {
     let sandbox = RadrootsCliSandbox::new();
-    let myc = sandbox.write_fake_myc("myc-failure", "printf 'fake myc failed\\n' >&2\nexit 42");
+    let myc = sandbox.write_fake_myc(
+        "myc-failure",
+        myc_status_body("printf 'fake myc failed\\n' >&2\nexit 42").as_str(),
+    );
     configure_myc_mode(&sandbox, &myc);
 
     let value = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
@@ -256,7 +259,10 @@ fn myc_signer_status_reports_unavailable_for_command_failure() {
 #[test]
 fn myc_signer_status_reports_unavailable_for_invalid_json() {
     let sandbox = RadrootsCliSandbox::new();
-    let myc = sandbox.write_fake_myc("myc-invalid-json", "printf 'not json\\n'");
+    let myc = sandbox.write_fake_myc(
+        "myc-invalid-json",
+        myc_status_body("printf 'not json\\n'").as_str(),
+    );
     configure_myc_mode(&sandbox, &myc);
 
     let value = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
@@ -266,6 +272,34 @@ fn myc_signer_status_reports_unavailable_for_invalid_json() {
     assert_eq!(value["result"]["state"], "unavailable");
     assert_eq!(value["result"]["myc"]["state"], "unavailable");
     assert_contains(&value["result"]["myc"]["reason"], "not valid JSON");
+}
+
+#[cfg(unix)]
+#[test]
+fn myc_signer_status_invokes_exact_status_view_argv() {
+    let sandbox = RadrootsCliSandbox::new();
+    let argv_log = sandbox.root().join("myc-argv.txt");
+    let payload = ready_myc_payload(Vec::new());
+    let raw = serde_json::to_string(&payload).expect("myc status payload");
+    let body = format!(
+        "printf '%s\\n' \"$*\" > '{}'\nprintf '%s\\n' '{}'",
+        shell_single_quoted(argv_log.to_string_lossy().as_ref()),
+        shell_single_quoted(raw.as_str())
+    );
+    let myc = sandbox.write_fake_myc(
+        "myc-exact-status-argv",
+        myc_status_body(body.as_str()).as_str(),
+    );
+    configure_myc_mode(&sandbox, &myc);
+
+    let value = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+
+    assert_eq!(value["operation_id"], "signer.status.get");
+    assert_eq!(value["result"]["mode"], "myc");
+    assert_eq!(
+        fs::read_to_string(argv_log).expect("myc argv log"),
+        "status --view signer\n"
+    );
 }
 
 #[cfg(unix)]
@@ -596,9 +630,14 @@ fn write_fake_myc_status(
     payload: Value,
 ) -> std::path::PathBuf {
     let raw = serde_json::to_string(&payload).expect("myc status payload");
-    sandbox.write_fake_myc(
-        name,
-        format!("printf '%s\\n' '{}'", shell_single_quoted(raw.as_str())).as_str(),
+    let body = format!("printf '%s\\n' '{}'", shell_single_quoted(raw.as_str()));
+    sandbox.write_fake_myc(name, myc_status_body(body.as_str()).as_str())
+}
+
+#[cfg(unix)]
+fn myc_status_body(body: &str) -> String {
+    format!(
+        "if [ \"$#\" -ne 3 ] || [ \"$1\" != 'status' ] || [ \"$2\" != '--view' ] || [ \"$3\" != 'signer' ]; then\nprintf '%s\\n' \"unexpected myc argv: $*\" >&2\nexit 64\nfi\n{body}"
     )
 }
 
