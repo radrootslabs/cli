@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::domain::runtime::{CommandDisposition, ListingMutationView};
 use crate::operation_adapter::{
@@ -52,12 +52,11 @@ impl OperationService<ListingCreateRequest> for ListingOperationService<'_> {
             label: string_input(&request, "label"),
         };
         if request.context.dry_run {
-            return json_operation_result::<ListingCreateResult>(json!({
-                "state": "dry_run",
-                "output": args.output.as_ref().map(|path| path.display().to_string()),
-                "key": args.key,
-                "title": args.title,
-            }));
+            let view = map_runtime(
+                request.operation_id(),
+                crate::runtime::listing::scaffold_preflight(self.config, &args),
+            )?;
+            return serialized_operation_result::<ListingCreateResult, _>(&view);
         }
 
         let view = map_runtime(
@@ -244,13 +243,6 @@ where
             }),
         )),
     }
-}
-
-fn json_operation_result<R>(value: Value) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    OperationResult::new(R::from_value(value))
 }
 
 fn map_runtime<T>(

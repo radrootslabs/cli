@@ -50,6 +50,38 @@ pub fn init(config: &RuntimeConfig, args: &FarmCreateArgs) -> Result<FarmSetupVi
     )
 }
 
+pub fn init_preflight(
+    config: &RuntimeConfig,
+    args: &FarmCreateArgs,
+) -> Result<FarmSetupView, RuntimeError> {
+    let scope = scope_from_arg(args.scope);
+    let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
+    let Some(selected_account) = selected_account_for_draft(config)? else {
+        return Ok(missing_selected_account_setup_view());
+    };
+    let existing = farm_config::load(config, Some(resolved_scope))?;
+    let document = init_document(resolved_scope, &selected_account, existing.as_ref(), args)?;
+    let path = farm_config::config_path(&config.paths, resolved_scope)?;
+    Ok(FarmSetupView {
+        state: "dry_run".to_owned(),
+        source: FARM_CONFIG_SOURCE.to_owned(),
+        config: Some(summary_view(
+            resolved_scope,
+            path.display().to_string(),
+            &document,
+            Some(
+                selected_account
+                    .record
+                    .public_identity
+                    .public_key_hex
+                    .as_str(),
+            ),
+        )),
+        reason: Some("dry run requested; farm draft was not written".to_owned()),
+        actions: farm_setup_actions(&document),
+    })
+}
+
 pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView, RuntimeError> {
     let scope = scope_from_arg(args.scope);
     let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
@@ -87,6 +119,49 @@ pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView,
             account_pubkey,
         )),
         reason: None,
+        actions: vec!["radroots farm readiness check".to_owned()],
+    })
+}
+
+pub fn set_preflight(
+    config: &RuntimeConfig,
+    args: &FarmUpdateArgs,
+) -> Result<FarmSetView, RuntimeError> {
+    let scope = scope_from_arg(args.scope);
+    let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
+    let path = farm_config::config_path(&config.paths, resolved_scope)?;
+    let Some(mut resolved) = farm_config::load(config, Some(resolved_scope))? else {
+        return Ok(FarmSetView {
+            state: "unconfigured".to_owned(),
+            source: FARM_CONFIG_SOURCE.to_owned(),
+            field: human_field_name(args.field).to_owned(),
+            value: human_field_value(args.field, args.value.join(" ").trim()).to_owned(),
+            config: None,
+            reason: Some(format!("no farm draft found at {}", path.display())),
+            actions: vec!["radroots farm create".to_owned()],
+        });
+    };
+
+    let raw_value = args.value.join(" ");
+    let field_value = required_text(raw_value.as_str(), "farm set value")?;
+    apply_field_update(&mut resolved.document, args.field, field_value.as_str())?;
+    let configured_account = configured_account(config, &resolved.document.selection.account)?;
+    let account_pubkey = configured_account
+        .as_ref()
+        .map(|account| account.record.public_identity.public_key_hex.as_str());
+
+    Ok(FarmSetView {
+        state: "dry_run".to_owned(),
+        source: FARM_CONFIG_SOURCE.to_owned(),
+        field: human_field_name(args.field).to_owned(),
+        value: human_field_value(args.field, field_value.as_str()).to_owned(),
+        config: Some(summary_view(
+            resolved.scope,
+            path.display().to_string(),
+            &resolved.document,
+            account_pubkey,
+        )),
+        reason: Some("dry run requested; farm draft was not written".to_owned()),
         actions: vec!["radroots farm readiness check".to_owned()],
     })
 }

@@ -144,13 +144,13 @@ impl TargetCommand {
                 FarmCommand::Create(_) => "farm.create",
                 FarmCommand::Get => "farm.get",
                 FarmCommand::Profile(profile) => match profile.command {
-                    FarmProfileCommand::Update => "farm.profile.update",
+                    FarmProfileCommand::Update(_) => "farm.profile.update",
                 },
                 FarmCommand::Location(location) => match location.command {
-                    FarmLocationCommand::Update => "farm.location.update",
+                    FarmLocationCommand::Update(_) => "farm.location.update",
                 },
                 FarmCommand::Fulfillment(fulfillment) => match fulfillment.command {
-                    FarmFulfillmentCommand::Update => "farm.fulfillment.update",
+                    FarmFulfillmentCommand::Update(_) => "farm.fulfillment.update",
                 },
                 FarmCommand::Readiness(readiness) => match readiness.command {
                     FarmReadinessCommand::Check => "farm.readiness.check",
@@ -512,9 +512,17 @@ pub struct FarmProfileArgs {
     pub command: FarmProfileCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum FarmProfileCommand {
-    Update,
+    Update(FarmProfileUpdateArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmProfileUpdateArgs {
+    #[arg(long)]
+    pub field: Option<String>,
+    #[arg(long)]
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -523,9 +531,17 @@ pub struct FarmLocationArgs {
     pub command: FarmLocationCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum FarmLocationCommand {
-    Update,
+    Update(FarmLocationUpdateArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmLocationUpdateArgs {
+    #[arg(long)]
+    pub field: Option<String>,
+    #[arg(long)]
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -534,9 +550,15 @@ pub struct FarmFulfillmentArgs {
     pub command: FarmFulfillmentCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum FarmFulfillmentCommand {
-    Update,
+    Update(FarmFulfillmentUpdateArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmFulfillmentUpdateArgs {
+    #[arg(long)]
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::domain::runtime::{CommandDisposition, FarmPublishView};
 use crate::operation_adapter::{
@@ -49,12 +49,8 @@ impl OperationService<FarmCreateRequest> for FarmOperationService<'_> {
             delivery_method: string_input(&request, "delivery_method"),
         };
         if request.context.dry_run {
-            return json_operation_result::<FarmCreateResult>(json!({
-                "state": "dry_run",
-                "scope": args.scope.map(scope_name),
-                "name": args.name,
-                "location": args.location,
-            }));
+            let view = map_runtime(crate::runtime::farm::init_preflight(self.config, &args))?;
+            return serialized_operation_result::<FarmCreateResult, _>(&view);
         }
 
         let view = map_runtime(crate::runtime::farm::init(self.config, &args))?;
@@ -171,11 +167,8 @@ where
         value: vec![value.clone()],
     };
     if request.context.dry_run {
-        return json_operation_result::<R>(json!({
-            "state": "dry_run",
-            "field": field_name(field),
-            "value": value,
-        }));
+        let view = map_runtime(crate::runtime::farm::set_preflight(config, &args))?;
+        return serialized_operation_result::<R, _>(&view);
     }
 
     let view = map_runtime(crate::runtime::farm::set(config, &args))?;
@@ -243,13 +236,6 @@ fn farm_publish_result(
     }
 }
 
-fn json_operation_result<R>(value: Value) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    OperationResult::new(R::from_value(value))
-}
-
 fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
     result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
 }
@@ -312,29 +298,6 @@ fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
     }
 }
 
-fn scope_name(scope: FarmScopeArg) -> &'static str {
-    match scope {
-        FarmScopeArg::User => "user",
-        FarmScopeArg::Workspace => "workspace",
-    }
-}
-
-fn field_name(field: FarmFieldArg) -> &'static str {
-    match field {
-        FarmFieldArg::Name => "name",
-        FarmFieldArg::DisplayName => "display_name",
-        FarmFieldArg::About => "about",
-        FarmFieldArg::Website => "website",
-        FarmFieldArg::Picture => "picture",
-        FarmFieldArg::Banner => "banner",
-        FarmFieldArg::Location => "location",
-        FarmFieldArg::City => "city",
-        FarmFieldArg::Region => "region",
-        FarmFieldArg::Country => "country",
-        FarmFieldArg::Delivery => "delivery",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -394,7 +357,7 @@ mod tests {
 
         assert_eq!(envelope.operation_id, "farm.create");
         assert_eq!(envelope.dry_run, true);
-        assert_eq!(envelope.result["state"], "dry_run");
+        assert_eq!(envelope.result["state"], "unconfigured");
 
         let readiness = OperationRequest::new(
             OperationContext::default(),

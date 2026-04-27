@@ -619,6 +619,163 @@ fn runtime_lifecycle_dry_runs_inspect_without_changing_runtime_status() {
 }
 
 #[test]
+fn seller_dry_runs_preflight_without_mutating_farm_or_listing_files() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+
+    let farm_dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_path = farm_dry_run["result"]["config"]["path"]
+        .as_str()
+        .expect("farm path");
+    assert_eq!(farm_dry_run["operation_id"], "farm.create");
+    assert_eq!(farm_dry_run["result"]["state"], "dry_run");
+    assert!(!Path::new(farm_path).exists());
+
+    let missing_update = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "farm",
+        "profile",
+        "update",
+        "--value",
+        "Dry Name",
+    ]);
+    assert_eq!(missing_update["operation_id"], "farm.profile.update");
+    assert_eq!(missing_update["result"]["state"], "unconfigured");
+    assert!(!Path::new(farm_path).exists());
+
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_path = farm["result"]["config"]["path"]
+        .as_str()
+        .expect("farm path");
+    let farm_before = fs::read_to_string(farm_path).expect("farm before");
+    let farm_update = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "farm",
+        "profile",
+        "update",
+        "--value",
+        "Dry Name",
+    ]);
+    assert_eq!(farm_update["operation_id"], "farm.profile.update");
+    assert_eq!(farm_update["result"]["state"], "dry_run");
+    assert_eq!(farm_update["result"]["config"]["name"], "Dry Name");
+    assert_eq!(
+        fs::read_to_string(farm_path).expect("farm after dry-run"),
+        farm_before
+    );
+
+    let listing_path = sandbox.root().join("dry-listing.toml");
+    let listing_path_arg = listing_path.to_string_lossy();
+    let listing_dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "create",
+        "--output",
+        listing_path_arg.as_ref(),
+        "--key",
+        "eggs",
+        "--title",
+        "Eggs",
+        "--category",
+        "eggs",
+        "--summary",
+        "Fresh eggs",
+        "--bin-id",
+        "bin-1",
+        "--quantity-amount",
+        "1",
+        "--quantity-unit",
+        "each",
+        "--price-amount",
+        "6",
+        "--price-currency",
+        "USD",
+        "--price-per-amount",
+        "1",
+        "--price-per-unit",
+        "each",
+        "--available",
+        "10",
+    ]);
+    assert_eq!(listing_dry_run["operation_id"], "listing.create");
+    assert_eq!(listing_dry_run["result"]["state"], "dry_run");
+    assert_eq!(listing_dry_run["result"]["file"], listing_path_arg.as_ref());
+    assert!(!listing_path.exists());
+
+    fs::write(&listing_path, "existing").expect("existing listing path");
+    let (collision_output, collision) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "create",
+        "--output",
+        listing_path_arg.as_ref(),
+        "--key",
+        "eggs",
+    ]);
+    assert!(!collision_output.status.success());
+    assert_eq!(collision["operation_id"], "listing.create");
+    assert_eq!(collision["errors"][0]["code"], "validation_failed");
+
+    let listing_file = create_listing_draft(&sandbox, "seller-dry-run");
+    make_listing_publishable(
+        &listing_file,
+        farm["result"]["config"]["farm_d_tag"]
+            .as_str()
+            .expect("farm d tag"),
+    );
+    let listing_before = fs::read_to_string(&listing_file).expect("listing before");
+    let listing_update = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "update",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+    assert_eq!(listing_update["operation_id"], "listing.update");
+    assert_eq!(listing_update["result"]["state"], "dry_run");
+    assert_eq!(
+        fs::read_to_string(&listing_file).expect("listing after dry-run"),
+        listing_before
+    );
+}
+
+#[test]
 fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
     let sandbox = RadrootsCliSandbox::new();
     let public_identity = identity_public(61);

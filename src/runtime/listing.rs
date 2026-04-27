@@ -222,6 +222,40 @@ pub fn scaffold(
     })
 }
 
+pub fn scaffold_preflight(
+    config: &RuntimeConfig,
+    args: &ListingCreateArgs,
+) -> Result<ListingNewView, RuntimeError> {
+    let (draft, defaults) = build_listing_draft(config, args)?;
+    let output_path = listing_output_path(config, args.output.as_ref(), &draft.listing.d_tag)?;
+    validate_listing_output_target(&output_path)?;
+
+    let mut actions = vec![format!(
+        "radroots listing validate {}",
+        output_path.display()
+    )];
+    if defaults.selected_account_pubkey.is_none() {
+        actions.push("radroots account create".to_owned());
+    }
+    if let Some(action) = &defaults.farm_next_action {
+        actions.push(action.clone());
+    }
+
+    Ok(ListingNewView {
+        state: "dry_run".to_owned(),
+        source: LISTING_SOURCE.to_owned(),
+        file: output_path.display().to_string(),
+        listing_id: draft.listing.d_tag,
+        selected_account_id: defaults.selected_account_id,
+        seller_pubkey: defaults.selected_account_pubkey,
+        farm_d_tag: defaults.selected_farm_d_tag,
+        delivery_method: non_empty(draft.delivery.method.clone()),
+        location_primary: non_empty(draft.location.primary.clone()),
+        reason: Some("dry run requested; listing draft was not written".to_owned()),
+        actions,
+    })
+}
+
 fn build_listing_draft(
     config: &RuntimeConfig,
     args: &ListingCreateArgs,
@@ -305,16 +339,31 @@ fn write_listing_draft(
     draft: &ListingDraftDocument,
     overwrite: bool,
 ) -> Result<(), RuntimeError> {
-    if output_path.exists() && !overwrite {
-        return Err(RuntimeError::Config(format!(
-            "listing draft output {} already exists",
-            output_path.display()
-        )));
+    if !overwrite {
+        validate_listing_output_target(output_path)?;
     }
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(output_path, scaffold_contents(draft)?)?;
+    Ok(())
+}
+
+fn validate_listing_output_target(output_path: &Path) -> Result<(), RuntimeError> {
+    if output_path.exists() {
+        return Err(RuntimeError::Config(format!(
+            "listing draft output {} must not already exist",
+            output_path.display()
+        )));
+    }
+    if let Some(parent) = output_path.parent() {
+        if parent.exists() && !parent.is_dir() {
+            return Err(RuntimeError::Config(format!(
+                "listing draft parent {} is not a directory",
+                parent.display()
+            )));
+        }
+    }
     Ok(())
 }
 
