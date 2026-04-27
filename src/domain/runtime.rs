@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::process::ExitCode;
 
 use radroots_events::farm::RadrootsFarm;

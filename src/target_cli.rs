@@ -12,7 +12,7 @@ pub enum TargetOutputFormat {
 }
 
 #[derive(Debug, Parser, Clone)]
-#[command(name = "radroots")]
+#[command(name = "radroots", disable_help_subcommand = true)]
 pub struct TargetCliArgs {
     #[arg(long = "format", global = true, value_enum, default_value = "human")]
     pub format: TargetOutputFormat,

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod accounts;
 pub mod config;
 pub mod daemon;
