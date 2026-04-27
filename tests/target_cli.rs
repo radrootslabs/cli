@@ -560,6 +560,21 @@ fn required_approval_missing_token_returns_structured_error() {
 fn buyer_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
 
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    assert_eq!(account["operation_id"], "account.create");
+    assert_eq!(account["result"]["account"]["signer"], "local");
+    assert_no_removed_command_reference(&account, &["account", "create"]);
+
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    assert_eq!(signer["operation_id"], "signer.status.get");
+    assert_eq!(signer["result"]["mode"], "local");
+    assert_eq!(signer["result"]["state"], "ready");
+    assert_eq!(signer["result"]["signer_account_id"], account_id);
+    assert_no_removed_command_reference(&signer, &["signer", "status", "get"]);
+
     let search = sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
     assert_eq!(search["operation_id"], "market.product.search");
     assert_eq!(search["errors"].as_array().expect("errors").len(), 0);
@@ -602,32 +617,30 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     let order_id = quote["result"]["quote"]["order_id"]
         .as_str()
         .expect("order id");
+    assert_eq!(quote["result"]["quote"]["ready_for_submit"], true);
+    assert_eq!(quote["result"]["order"]["buyer_account_id"], account_id);
 
     let orders = sandbox.json_success(&["--format", "json", "order", "list"]);
     assert_eq!(orders["operation_id"], "order.list");
     assert_eq!(orders["result"]["state"], "ready");
     assert_eq!(orders["result"]["count"], 1);
     assert_eq!(orders["result"]["orders"][0]["id"], order_id);
-    assert_eq!(orders["result"]["orders"][0]["ready_for_submit"], false);
+    assert_eq!(orders["result"]["orders"][0]["ready_for_submit"], true);
     assert_eq!(
-        orders["result"]["orders"][0]["issues"][0]["field"],
-        "buyer_account_id"
+        orders["result"]["orders"][0]["buyer_account_id"],
+        account_id
     );
+    assert_eq!(orders["result"]["orders"][0]["issues"], Value::Null);
     assert_no_removed_command_reference(&orders, &["order", "list"]);
 
     let submit =
         sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
     assert_eq!(submit["operation_id"], "order.submit");
     assert_eq!(submit["dry_run"], true);
-    assert_eq!(submit["result"]["state"], "unconfigured");
+    assert_eq!(submit["result"]["state"], "dry_run");
     assert_eq!(submit["result"]["dry_run"], true);
     assert_eq!(submit["result"]["order_id"], order_id);
-    assert!(
-        submit["result"]["reason"]
-            .as_str()
-            .expect("submit reason")
-            .contains("not ready for durable submit")
-    );
+    assert_eq!(submit["result"]["buyer_account_id"], account_id);
     assert_eq!(submit["errors"].as_array().expect("errors").len(), 0);
     assert_no_removed_command_reference(&submit, &["order", "submit", "--dry-run"]);
 }
@@ -706,13 +719,21 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
 #[test]
 fn seller_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
-    let listing_file = sandbox.root().join("listing.toml");
-    let listing_file = listing_file.to_string_lossy().into_owned();
 
     let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
     assert_eq!(account["operation_id"], "account.create");
     assert_eq!(account["result"]["account"]["signer"], "local");
     assert_no_removed_command_reference(&account, &["account", "create"]);
+
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    assert_eq!(signer["operation_id"], "signer.status.get");
+    assert_eq!(signer["result"]["mode"], "local");
+    assert_eq!(signer["result"]["state"], "ready");
+    assert_eq!(signer["result"]["signer_account_id"], account_id);
+    assert_no_removed_command_reference(&signer, &["signer", "status", "get"]);
 
     let farm = sandbox.json_success(&[
         "--format",
@@ -723,6 +744,8 @@ fn seller_target_flow_acceptance_uses_target_operations() {
         "Green Farm",
         "--location",
         "farmstand",
+        "--country",
+        "US",
         "--delivery-method",
         "pickup",
     ]);
@@ -735,8 +758,6 @@ fn seller_target_flow_acceptance_uses_target_operations() {
         "json",
         "listing",
         "create",
-        "--output",
-        listing_file.as_str(),
         "--key",
         "eggs",
         "--title",
@@ -762,17 +783,23 @@ fn seller_target_flow_acceptance_uses_target_operations() {
         "--available",
         "10",
     ]);
+    let listing_file = create["result"]["file"].as_str().expect("listing file");
     assert_eq!(create["operation_id"], "listing.create");
-    assert_eq!(create["result"]["file"], listing_file);
+    assert!(Path::new(listing_file).exists());
     assert_no_removed_command_reference(&create, &["listing", "create"]);
 
-    let validate = sandbox.json_success(&[
-        "--format",
-        "json",
-        "listing",
-        "validate",
-        listing_file.as_str(),
-    ]);
+    let list = sandbox.json_success(&["--format", "json", "listing", "list"]);
+    assert_eq!(list["operation_id"], "listing.list");
+    assert_eq!(list["result"]["state"], "ready");
+    assert_eq!(list["result"]["count"], 1);
+    assert_eq!(
+        list["result"]["listings"][0]["id"],
+        create["result"]["listing_id"]
+    );
+    assert_eq!(list["result"]["listings"][0]["state"], "ready");
+    assert_no_removed_command_reference(&list, &["listing", "list"]);
+
+    let validate = sandbox.json_success(&["--format", "json", "listing", "validate", listing_file]);
     assert_eq!(validate["operation_id"], "listing.validate");
     assert_eq!(validate["result"]["valid"], true);
     assert_eq!(validate["result"]["issues"], Value::Null);
@@ -784,11 +811,24 @@ fn seller_target_flow_acceptance_uses_target_operations() {
         "--dry-run",
         "listing",
         "publish",
-        listing_file.as_str(),
+        listing_file,
     ]);
     assert_eq!(publish["operation_id"], "listing.publish");
     assert_eq!(publish["result"]["state"], "dry_run");
     assert_no_removed_command_reference(&publish, &["listing", "publish", "--dry-run"]);
+
+    let archive = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "archive",
+        listing_file,
+    ]);
+    assert_eq!(archive["operation_id"], "listing.archive");
+    assert_eq!(archive["result"]["state"], "dry_run");
+    assert_eq!(archive["result"]["operation"], "archive");
+    assert_no_removed_command_reference(&archive, &["listing", "archive", "--dry-run"]);
 
     let signed = sandbox.json_success(&[
         "--format",
@@ -797,7 +837,7 @@ fn seller_target_flow_acceptance_uses_target_operations() {
         "approve",
         "listing",
         "publish",
-        listing_file.as_str(),
+        listing_file,
     ]);
     assert_eq!(signed["operation_id"], "listing.publish");
     assert_eq!(signed["result"]["state"], "signed");
