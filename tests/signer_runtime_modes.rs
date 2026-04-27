@@ -289,6 +289,27 @@ fn local_listing_publish_fails_without_local_account_authority() {
 }
 
 #[test]
+fn local_listing_publish_dry_run_validates_local_account_authority() {
+    let sandbox = RadrootsCliSandbox::new();
+    let listing_file = create_listing_draft(&sandbox, "local-dry-run-no-account");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "account_unresolved");
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
+}
+
+#[test]
 fn local_listing_publish_signs_with_selected_account_without_remote_fallback() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -339,6 +360,29 @@ fn local_listing_publish_signs_with_selected_account_without_remote_fallback() {
                 .is_some_and(|items| items.first() == Some(&json!("d"))
                     && items.get(1) == Some(&value["result"]["listing_id"])))
     );
+}
+
+#[test]
+fn local_listing_publish_dry_run_does_not_sign_matching_listing() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let listing_file = create_listing_draft(&sandbox, "local-dry-run");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(value["result"]["dry_run"], true);
+    assert_eq!(value["result"]["event_id"], serde_json::Value::Null);
 }
 
 #[test]

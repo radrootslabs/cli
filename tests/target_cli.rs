@@ -2,7 +2,10 @@ mod support;
 
 use serde_json::Value;
 
-use support::{RadrootsCliSandbox, assert_no_removed_command_reference, radroots};
+use support::{
+    RadrootsCliSandbox, assert_no_removed_command_reference, create_listing_draft,
+    make_listing_publishable, radroots,
+};
 
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
@@ -189,8 +192,9 @@ fn offline_forbids_external_network_operations() {
 #[test]
 fn offline_allows_supported_external_dry_run() {
     let sandbox = RadrootsCliSandbox::new();
-    let listing_file = sandbox.root().join("listing.toml");
-    let listing_file = listing_file.to_string_lossy().into_owned();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let listing_file = create_listing_draft(&sandbox, "offline-dry-run");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
 
     let publish = sandbox.json_success(&[
         "--format",
@@ -199,11 +203,30 @@ fn offline_allows_supported_external_dry_run() {
         "--dry-run",
         "listing",
         "publish",
-        listing_file.as_str(),
+        listing_file.to_string_lossy().as_ref(),
     ]);
 
     assert_eq!(publish["operation_id"], "listing.publish");
     assert_eq!(publish["result"]["state"], "dry_run");
+}
+
+#[test]
+fn listing_publish_dry_run_validates_missing_file() {
+    let sandbox = RadrootsCliSandbox::new();
+    let missing = sandbox.root().join("missing-listing.toml");
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "publish",
+        missing.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "runtime_error");
 }
 
 #[test]
@@ -310,6 +333,7 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(submit["operation_id"], "order.submit");
     assert_eq!(submit["dry_run"], true);
     assert_eq!(submit["result"]["state"], "unconfigured");
+    assert_eq!(submit["result"]["dry_run"], true);
     assert_eq!(submit["result"]["order_id"], order_id);
     assert!(
         submit["result"]["reason"]

@@ -1085,6 +1085,13 @@ fn mutate(
 
     let (event_preview, listing_addr) = build_listing_event_preview(&canonical)?;
 
+    if config.output.dry_run
+        && matches!(operation, ListingMutationOperation::Publish)
+        && matches!(config.signer.backend, SignerBackend::Local)
+    {
+        validate_local_listing_signer(config, &canonical)?;
+    }
+
     if config.output.dry_run {
         return Ok(ListingMutationView {
             state: "dry_run".to_owned(),
@@ -1788,6 +1795,27 @@ fn sign_listing_event(
     config: &RuntimeConfig,
     canonical: &CanonicalListingDraft,
 ) -> Result<radroots_nostr::prelude::RadrootsNostrEvent, RuntimeError> {
+    let signing = resolve_listing_signing_identity(config, canonical)?;
+    let parts = to_wire_parts_with_kind(&canonical.listing, KIND_LISTING)
+        .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
+    let event = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+        .map_err(|error| RuntimeError::Config(format!("build local listing event: {error}")))?
+        .sign_with_keys(signing.identity.keys())
+        .map_err(|error| RuntimeError::Config(format!("sign local listing event: {error}")))?;
+    Ok(event)
+}
+
+fn validate_local_listing_signer(
+    config: &RuntimeConfig,
+    canonical: &CanonicalListingDraft,
+) -> Result<(), RuntimeError> {
+    resolve_listing_signing_identity(config, canonical).map(|_| ())
+}
+
+fn resolve_listing_signing_identity(
+    config: &RuntimeConfig,
+    canonical: &CanonicalListingDraft,
+) -> Result<accounts::AccountSigningIdentity, RuntimeError> {
     let signing = accounts::resolve_local_signing_identity(config)?;
     let account_pubkey = signing
         .account
@@ -1801,13 +1829,7 @@ fn sign_listing_event(
             canonical.seller_pubkey
         )));
     }
-    let parts = to_wire_parts_with_kind(&canonical.listing, KIND_LISTING)
-        .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
-    let event = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
-        .map_err(|error| RuntimeError::Config(format!("build local listing event: {error}")))?
-        .sign_with_keys(signing.identity.keys())
-        .map_err(|error| RuntimeError::Config(format!("sign local listing event: {error}")))?;
-    Ok(event)
+    Ok(signing)
 }
 
 fn signed_listing_event_view(

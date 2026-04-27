@@ -105,11 +105,9 @@ impl OperationService<ListingUpdateRequest> for ListingOperationService<'_> {
         &self,
         request: OperationRequest<ListingUpdateRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        if request.context.dry_run {
-            return mutation_dry_run::<ListingUpdateResult>(&request, "update");
-        }
         let args = mutation_args(&request)?;
-        let view = map_runtime(crate::runtime::listing::update(self.config, &args))?;
+        let config = mutation_config(self.config, &request);
+        let view = map_runtime(crate::runtime::listing::update(&config, &args))?;
         serialized_operation_result::<ListingUpdateResult, _>(&view)
     }
 }
@@ -136,12 +134,12 @@ impl OperationService<ListingPublishRequest> for ListingOperationService<'_> {
         &self,
         request: OperationRequest<ListingPublishRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        if request.context.dry_run {
-            return mutation_dry_run::<ListingPublishResult>(&request, "publish");
+        if !request.context.dry_run {
+            require_approval(&request)?;
         }
-        require_approval(&request)?;
         let args = mutation_args(&request)?;
-        let view = crate::runtime::listing::publish(self.config, &args)
+        let config = mutation_config(self.config, &request);
+        let view = crate::runtime::listing::publish(&config, &args)
             .map_err(|error| publish_runtime_error(request.operation_id(), error))?;
         mutation_result::<ListingPublishResult>(request.operation_id(), &view)
     }
@@ -154,14 +152,25 @@ impl OperationService<ListingArchiveRequest> for ListingOperationService<'_> {
         &self,
         request: OperationRequest<ListingArchiveRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        if request.context.dry_run {
-            return mutation_dry_run::<ListingArchiveResult>(&request, "archive");
+        if !request.context.dry_run {
+            require_approval(&request)?;
         }
-        require_approval(&request)?;
         let args = mutation_args(&request)?;
-        let view = map_runtime(crate::runtime::listing::archive(self.config, &args))?;
+        let config = mutation_config(self.config, &request);
+        let view = map_runtime(crate::runtime::listing::archive(&config, &args))?;
         mutation_result::<ListingArchiveResult>(request.operation_id(), &view)
     }
+}
+
+fn mutation_config<P>(config: &RuntimeConfig, request: &OperationRequest<P>) -> RuntimeConfig
+where
+    P: OperationRequestPayload,
+{
+    let mut config = config.clone();
+    if request.context.dry_run {
+        config.output.dry_run = true;
+    }
+    config
 }
 
 fn mutation_args<P>(
@@ -181,22 +190,6 @@ where
         print_job: bool_input(request, "print_job").unwrap_or(false),
         print_event: bool_input(request, "print_event").unwrap_or(false),
     })
-}
-
-fn mutation_dry_run<R>(
-    request: &OperationRequest<impl OperationRequestPayload + OperationRequestData>,
-    action: &str,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    json_operation_result::<R>(json!({
-        "state": "dry_run",
-        "action": action,
-        "file": optional_path(request, "file").map(|path| path.display().to_string()),
-        "idempotency_key": request.context.idempotency_key,
-        "signer_session_id": string_input(request, "signer_session_id"),
-    }))
 }
 
 fn require_approval<P>(request: &OperationRequest<P>) -> Result<(), OperationAdapterError>
@@ -441,13 +434,8 @@ mod tests {
             ListingArchiveRequest::from_data(data(&[("file", "listing.toml")])),
         )
         .expect("listing archive request");
-        let archive_envelope = service
-            .execute(archive)
-            .expect("archive dry run")
-            .to_envelope(context.envelope_context("req_listing_archive"))
-            .expect("archive envelope");
-        assert_eq!(archive_envelope.operation_id, "listing.archive");
-        assert_eq!(archive_envelope.result["state"], "dry_run");
+        let archive_error = service.execute(archive).expect_err("archive preflight");
+        assert!(!format!("{archive_error}").contains("approval_token"));
     }
 
     fn sample_config(root: &Path) -> RuntimeConfig {
