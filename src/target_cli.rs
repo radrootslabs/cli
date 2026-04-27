@@ -141,7 +141,7 @@ impl TargetCommand {
                 JobCommand::Watch => "job.watch",
             },
             Self::Farm(args) => match &args.command {
-                FarmCommand::Create => "farm.create",
+                FarmCommand::Create(_) => "farm.create",
                 FarmCommand::Get => "farm.get",
                 FarmCommand::Profile(profile) => match profile.command {
                     FarmProfileCommand::Update => "farm.profile.update",
@@ -469,13 +469,41 @@ pub struct FarmArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum FarmCommand {
-    Create,
+    Create(FarmCreateArgs),
     Get,
     Profile(FarmProfileArgs),
     Location(FarmLocationArgs),
     Fulfillment(FarmFulfillmentArgs),
     Readiness(FarmReadinessArgs),
     Publish,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmCreateArgs {
+    #[arg(long = "farm-d-tag")]
+    pub farm_d_tag: Option<String>,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long = "display-name")]
+    pub display_name: Option<String>,
+    #[arg(long)]
+    pub about: Option<String>,
+    #[arg(long)]
+    pub website: Option<String>,
+    #[arg(long)]
+    pub picture: Option<String>,
+    #[arg(long)]
+    pub banner: Option<String>,
+    #[arg(long)]
+    pub location: Option<String>,
+    #[arg(long)]
+    pub city: Option<String>,
+    #[arg(long)]
+    pub region: Option<String>,
+    #[arg(long)]
+    pub country: Option<String>,
+    #[arg(long = "delivery-method")]
+    pub delivery_method: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

@@ -302,6 +302,28 @@ fn seller_mvp_flow_acceptance_uses_target_operations() {
     let listing_file = sandbox.root().join("listing.toml");
     let listing_file = listing_file.to_string_lossy().into_owned();
 
+    let account = json_success(&sandbox, &["--format", "json", "account", "create"]);
+    assert_eq!(account["operation_id"], "account.create");
+    assert_eq!(account["result"]["account"]["signer"], "local");
+
+    let farm = json_success(
+        &sandbox,
+        &[
+            "--format",
+            "json",
+            "farm",
+            "create",
+            "--name",
+            "Green Farm",
+            "--location",
+            "farmstand",
+            "--delivery-method",
+            "pickup",
+        ],
+    );
+    assert_eq!(farm["operation_id"], "farm.create");
+    assert_eq!(farm["result"]["state"], "saved");
+
     let create = json_success(
         &sandbox,
         &[
@@ -315,12 +337,16 @@ fn seller_mvp_flow_acceptance_uses_target_operations() {
             "eggs",
             "--title",
             "Eggs",
+            "--category",
+            "eggs",
+            "--summary",
+            "Fresh eggs",
             "--bin-id",
             "bin-1",
             "--quantity-amount",
             "1",
             "--quantity-unit",
-            "dozen",
+            "each",
             "--price-amount",
             "6",
             "--price-currency",
@@ -328,7 +354,7 @@ fn seller_mvp_flow_acceptance_uses_target_operations() {
             "--price-per-amount",
             "1",
             "--price-per-unit",
-            "dozen",
+            "each",
             "--available",
             "10",
         ],
@@ -347,7 +373,8 @@ fn seller_mvp_flow_acceptance_uses_target_operations() {
         ],
     );
     assert_eq!(validate["operation_id"], "listing.validate");
-    assert!(validate["result"]["valid"].is_boolean());
+    assert_eq!(validate["result"]["valid"], true);
+    assert_eq!(validate["result"]["issues"], Value::Null);
 
     let publish = json_success(
         &sandbox,
@@ -363,7 +390,24 @@ fn seller_mvp_flow_acceptance_uses_target_operations() {
     assert_eq!(publish["operation_id"], "listing.publish");
     assert_eq!(publish["result"]["state"], "dry_run");
 
-    let orders = json_success(&sandbox, &["--format", "json", "order", "list"]);
-    assert_eq!(orders["operation_id"], "order.list");
-    assert_eq!(orders["errors"].as_array().expect("errors").len(), 0);
+    let signed = json_success(
+        &sandbox,
+        &[
+            "--format",
+            "json",
+            "--approval-token",
+            "approve",
+            "listing",
+            "publish",
+            listing_file.as_str(),
+        ],
+    );
+    assert_eq!(signed["operation_id"], "listing.publish");
+    assert_eq!(signed["result"]["state"], "signed");
+    assert_eq!(signed["result"]["signer_mode"], "local");
+    assert_eq!(
+        signed["result"]["event"]["author"],
+        signed["result"]["seller_pubkey"]
+    );
+    assert!(signed["result"]["event"]["signature"].is_string());
 }

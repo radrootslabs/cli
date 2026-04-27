@@ -775,7 +775,7 @@ fn value_to_data(value: Value) -> OperationData {
 fn target_operation_input(command: &crate::target_cli::TargetCommand) -> OperationData {
     use crate::target_cli::{
         AccountCommand, AccountSelectionCommand, BasketCommand, BasketItemCommand,
-        BasketQuoteCommand, ListingCommand, MarketCommand, MarketListingCommand,
+        BasketQuoteCommand, FarmCommand, ListingCommand, MarketCommand, MarketListingCommand,
         MarketProductCommand, OrderCommand, OrderEventCommand, TargetCommand,
     };
 
@@ -797,6 +797,28 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 AccountSelectionCommand::Get | AccountSelectionCommand::Clear => {}
             },
             AccountCommand::Create | AccountCommand::List => {}
+        },
+        TargetCommand::Farm(args) => match &args.command {
+            FarmCommand::Create(args) => {
+                insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
+                insert_string(&mut input, "name", &args.name);
+                insert_string(&mut input, "display_name", &args.display_name);
+                insert_string(&mut input, "about", &args.about);
+                insert_string(&mut input, "website", &args.website);
+                insert_string(&mut input, "picture", &args.picture);
+                insert_string(&mut input, "banner", &args.banner);
+                insert_string(&mut input, "location", &args.location);
+                insert_string(&mut input, "city", &args.city);
+                insert_string(&mut input, "region", &args.region);
+                insert_string(&mut input, "country", &args.country);
+                insert_string(&mut input, "delivery_method", &args.delivery_method);
+            }
+            FarmCommand::Get
+            | FarmCommand::Profile(_)
+            | FarmCommand::Location(_)
+            | FarmCommand::Fulfillment(_)
+            | FarmCommand::Readiness(_)
+            | FarmCommand::Publish => {}
         },
         TargetCommand::Listing(args) => match &args.command {
             ListingCommand::Create(args) => {
