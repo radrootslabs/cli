@@ -5,8 +5,9 @@ use std::path::Path;
 use radroots_events::kinds::KIND_LISTING;
 use serde_json::json;
 use support::{
-    RadrootsCliSandbox, assert_contains, assert_hex_len, create_listing_draft, identity_public,
-    make_listing_publishable, shell_single_quoted, toml_string, write_public_identity_profile,
+    RadrootsCliSandbox, assert_contains, assert_hex_len, assert_no_removed_command_reference,
+    create_listing_draft, identity_public, make_listing_publishable, shell_single_quoted,
+    toml_string, write_public_identity_profile,
 };
 
 #[test]
@@ -236,6 +237,7 @@ fn myc_signer_status_returns_deferred_signer_error() {
     assert_eq!(value["errors"][0]["exit_code"], 7);
     assert_eq!(value["errors"][0]["detail"]["class"], "signer");
     assert_contains(&value["errors"][0]["message"], "signer mode `myc`");
+    assert_no_removed_command_reference(&value, &["signer", "status", "get"]);
 }
 
 #[cfg(unix)]
@@ -307,6 +309,7 @@ fn local_listing_publish_dry_run_validates_local_account_authority() {
     assert_eq!(value["result"], serde_json::Value::Null);
     assert_eq!(value["errors"][0]["code"], "account_unresolved");
     assert_eq!(value["errors"][0]["detail"]["class"], "account");
+    assert_no_removed_command_reference(&value, &["listing", "publish", "--dry-run"]);
 }
 
 #[test]
@@ -360,6 +363,7 @@ fn local_listing_publish_signs_with_selected_account_without_remote_fallback() {
                 .is_some_and(|items| items.first() == Some(&json!("d"))
                     && items.get(1) == Some(&value["result"]["listing_id"])))
     );
+    assert_no_removed_command_reference(&value, &["listing", "publish"]);
 }
 
 #[test]
@@ -383,6 +387,7 @@ fn local_listing_publish_dry_run_does_not_sign_matching_listing() {
     assert_eq!(value["result"]["state"], "dry_run");
     assert_eq!(value["result"]["dry_run"], true);
     assert_eq!(value["result"]["event_id"], serde_json::Value::Null);
+    assert_no_removed_command_reference(&value, &["listing", "publish", "--dry-run"]);
 }
 
 #[test]
@@ -422,6 +427,7 @@ fn local_listing_publish_fails_when_selected_account_does_not_match_seller() {
         &value["errors"][0]["message"],
         "cannot sign listing seller_pubkey",
     );
+    assert_no_removed_command_reference(&value, &["listing", "publish", "account mismatch"]);
 }
 
 #[test]

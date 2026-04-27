@@ -636,12 +636,7 @@ fn quote_actions(order: &OrderNewView) -> Vec<String> {
         vec![format!("radroots order submit {}", order.order_id)]
     } else {
         let mut actions = vec![format!("radroots order get {}", order.order_id)];
-        actions.extend(order.actions.iter().map(|action| match action.as_str() {
-            "radroots account new" | "radroots account create" => {
-                "radroots account create".to_owned()
-            }
-            other => other.to_owned(),
-        }));
+        actions.extend(order.actions.iter().cloned());
         actions
     }
 }

@@ -63,7 +63,7 @@ pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, RuntimeError> {
                 pending_count: 0,
             },
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots local init".to_owned()],
+            actions: vec!["radroots store init".to_owned()],
         });
     }
 
@@ -100,7 +100,7 @@ pub fn backup(config: &RuntimeConfig, output: &Path) -> Result<LocalBackupView, 
             backup_format_version: String::new(),
             replica_db_version: String::new(),
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots local init".to_owned()],
+            actions: vec!["radroots store init".to_owned()],
         });
     }
 
@@ -140,7 +140,7 @@ pub fn export(
             export_version: String::new(),
             schema_hash: String::new(),
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots local init".to_owned()],
+            actions: vec!["radroots store init".to_owned()],
         });
     }
 

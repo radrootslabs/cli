@@ -122,10 +122,7 @@ where
     R: OperationResultData,
     T: Serialize,
 {
-    let mut value = serde_json::to_value(value)
-        .map_err(|error| OperationAdapterError::Serialization(error.to_string()))?;
-    translate_actions_in_value(&mut value);
-    OperationResult::new(R::from_value(value))
+    OperationResult::new(R::from_serializable(value)?)
 }
 
 fn submit_result<R>(
@@ -165,42 +162,6 @@ fn disposition_error(
             message,
         },
         CommandDisposition::InternalError => OperationAdapterError::Runtime(message),
-    }
-}
-
-fn translate_actions_in_value(value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            if let Some(Value::Array(actions)) = object.get_mut("actions") {
-                for action in actions {
-                    if let Value::String(action) = action {
-                        *action = target_action(action);
-                    }
-                }
-            }
-            for nested in object.values_mut() {
-                translate_actions_in_value(nested);
-            }
-        }
-        Value::Array(values) => {
-            for nested in values {
-                translate_actions_in_value(nested);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn target_action(action: &str) -> String {
-    match action {
-        "radroots order ls" => "radroots order list".to_owned(),
-        "radroots order new" | "radroots order create" => "radroots basket create".to_owned(),
-        "radroots order history" => "radroots order event list".to_owned(),
-        "radroots rpc status" => "radroots runtime status get".to_owned(),
-        other if other.starts_with("radroots order watch ") => {
-            other.replacen("radroots order watch ", "radroots order event watch ", 1)
-        }
-        other => other.to_owned(),
     }
 }
 

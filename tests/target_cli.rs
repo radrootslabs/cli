@@ -227,6 +227,10 @@ fn listing_publish_dry_run_validates_missing_file() {
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"], Value::Null);
     assert_eq!(value["errors"][0]["code"], "runtime_error");
+    assert_no_removed_command_reference(
+        &value,
+        &["listing", "publish", "--dry-run", "missing-listing.toml"],
+    );
 }
 
 #[test]
@@ -281,10 +285,12 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     let search = sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
     assert_eq!(search["operation_id"], "market.product.search");
     assert_eq!(search["errors"].as_array().expect("errors").len(), 0);
+    assert_no_removed_command_reference(&search, &["market", "product", "search"]);
 
     let create = sandbox.json_success(&["--format", "json", "basket", "create", "basket_flow"]);
     assert_eq!(create["operation_id"], "basket.create");
     assert_eq!(create["result"]["basket_id"], "basket_flow");
+    assert_no_removed_command_reference(&create, &["basket", "create"]);
 
     let add = sandbox.json_success(&[
         "--format",
@@ -302,6 +308,7 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     ]);
     assert_eq!(add["operation_id"], "basket.item.add");
     assert_eq!(add["result"]["ready_for_quote"], true);
+    assert_no_removed_command_reference(&add, &["basket", "item", "add"]);
 
     let quote = sandbox.json_success(&[
         "--format",
@@ -313,6 +320,7 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     ]);
     assert_eq!(quote["operation_id"], "basket.quote.create");
     assert_eq!(quote["result"]["state"], "quoted");
+    assert_no_removed_command_reference(&quote, &["basket", "quote", "create"]);
     let order_id = quote["result"]["quote"]["order_id"]
         .as_str()
         .expect("order id");
@@ -327,6 +335,7 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         orders["result"]["orders"][0]["issues"][0]["field"],
         "buyer_account_id"
     );
+    assert_no_removed_command_reference(&orders, &["order", "list"]);
 
     let submit =
         sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
@@ -342,6 +351,7 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
             .contains("not ready for durable submit")
     );
     assert_eq!(submit["errors"].as_array().expect("errors").len(), 0);
+    assert_no_removed_command_reference(&submit, &["order", "submit", "--dry-run"]);
 }
 
 #[test]
@@ -353,6 +363,7 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     let account = sandbox.json_success(&["--format", "json", "account", "create"]);
     assert_eq!(account["operation_id"], "account.create");
     assert_eq!(account["result"]["account"]["signer"], "local");
+    assert_no_removed_command_reference(&account, &["account", "create"]);
 
     let farm = sandbox.json_success(&[
         "--format",
@@ -368,6 +379,7 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     ]);
     assert_eq!(farm["operation_id"], "farm.create");
     assert_eq!(farm["result"]["state"], "saved");
+    assert_no_removed_command_reference(&farm, &["farm", "create"]);
 
     let create = sandbox.json_success(&[
         "--format",
@@ -403,6 +415,7 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     ]);
     assert_eq!(create["operation_id"], "listing.create");
     assert_eq!(create["result"]["file"], listing_file);
+    assert_no_removed_command_reference(&create, &["listing", "create"]);
 
     let validate = sandbox.json_success(&[
         "--format",
@@ -414,6 +427,7 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     assert_eq!(validate["operation_id"], "listing.validate");
     assert_eq!(validate["result"]["valid"], true);
     assert_eq!(validate["result"]["issues"], Value::Null);
+    assert_no_removed_command_reference(&validate, &["listing", "validate"]);
 
     let publish = sandbox.json_success(&[
         "--format",
@@ -425,6 +439,7 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     ]);
     assert_eq!(publish["operation_id"], "listing.publish");
     assert_eq!(publish["result"]["state"], "dry_run");
+    assert_no_removed_command_reference(&publish, &["listing", "publish", "--dry-run"]);
 
     let signed = sandbox.json_success(&[
         "--format",
@@ -443,4 +458,5 @@ fn seller_target_flow_acceptance_uses_target_operations() {
         signed["result"]["seller_pubkey"]
     );
     assert!(signed["result"]["event"]["signature"].is_string());
+    assert_no_removed_command_reference(&signed, &["listing", "publish"]);
 }

@@ -221,7 +221,7 @@ pub fn scaffold(
         output_path.display()
     )];
     if defaults.selected_account_pubkey.is_none() {
-        actions.push("radroots account new".to_owned());
+        actions.push("radroots account create".to_owned());
     }
     if let Some(action) = &defaults.farm_next_action {
         actions.push(action.clone());
@@ -252,9 +252,15 @@ pub fn sell_add(config: &RuntimeConfig, args: &SellAddArgs) -> Result<SellAddVie
     write_listing_draft(&output_path, &draft, false)?;
 
     let summary = summarize_draft(&draft);
-    let mut actions = vec![format!("radroots sell check {}", output_path.display())];
+    let mut actions = vec![format!(
+        "radroots listing validate {}",
+        output_path.display()
+    )];
     if defaults.selected_account_pubkey.is_some() && defaults.selected_farm_d_tag.is_some() {
-        actions.push(format!("radroots sell publish {}", output_path.display()));
+        actions.push(format!(
+            "radroots listing publish {}",
+            output_path.display()
+        ));
     }
     if defaults.selected_account_pubkey.is_none() {
         actions.push("radroots account create".to_owned());
@@ -300,8 +306,8 @@ pub fn sell_show(
         location_primary: summary.location_primary,
         reason: None,
         actions: vec![
-            format!("radroots sell check {}", args.file.display()),
-            format!("radroots sell publish {}", args.file.display()),
+            format!("radroots listing validate {}", args.file.display()),
+            format!("radroots listing publish {}", args.file.display()),
         ],
     })
 }
@@ -330,8 +336,8 @@ pub fn sell_reprice(
             .price
             .unwrap_or_else(|| args.price_expr.trim().to_owned()),
         actions: vec![
-            format!("radroots sell check {}", args.file.display()),
-            format!("radroots sell update {}", args.file.display()),
+            format!("radroots listing validate {}", args.file.display()),
+            format!("radroots listing update {}", args.file.display()),
         ],
     })
 }
@@ -357,8 +363,8 @@ pub fn sell_restock(
             .stock
             .unwrap_or_else(|| format!("{} available", args.available.trim())),
         actions: vec![
-            format!("radroots sell check {}", args.file.display()),
-            format!("radroots sell update {}", args.file.display()),
+            format!("radroots listing validate {}", args.file.display()),
+            format!("radroots listing update {}", args.file.display()),
         ],
     })
 }
@@ -372,10 +378,11 @@ pub fn sell_check(
         .ok()
         .map(|draft| summarize_draft(&draft));
     let actions = if view.valid {
-        vec![format!("radroots sell publish {}", args.file.display())]
+        vec![format!("radroots listing publish {}", args.file.display())]
     } else {
         vec![
-            format!("radroots sell show {}", args.file.display()),
+            format!("edit {}", args.file.display()),
+            format!("radroots listing validate {}", args.file.display()),
             "Edit the draft file and run the command again".to_owned(),
         ]
     };
@@ -586,35 +593,21 @@ fn read_listing_draft(path: &Path) -> Result<ListingDraftDocument, RuntimeError>
     })
 }
 
-fn translate_sell_actions(actions: &[String]) -> Vec<String> {
-    actions
-        .iter()
-        .map(|action| {
-            action
-                .replace("radroots listing validate ", "radroots sell check ")
-                .replace("radroots listing publish ", "radroots sell publish ")
-                .replace("radroots listing update ", "radroots sell update ")
-                .replace("radroots listing archive ", "radroots sell pause ")
-                .replace("radroots account new", "radroots account create")
-        })
-        .collect()
-}
-
 fn successful_sell_mutation_actions(operation: &str, product_key: Option<&str>) -> Vec<String> {
     match operation {
         "publish" => {
             let mut actions = Vec::new();
             if let Some(product_key) = product_key {
-                actions.push(format!("radroots market view {product_key}"));
-                actions.push(format!("radroots sell add {product_key}"));
+                actions.push(format!("radroots market listing get {product_key}"));
+                actions.push(format!("radroots listing create --key {product_key}"));
             }
             actions
         }
         "update" => product_key
-            .map(|product_key| vec![format!("radroots market view {product_key}")])
+            .map(|product_key| vec![format!("radroots market listing get {product_key}")])
             .unwrap_or_default(),
         "pause" => product_key
-            .map(|product_key| vec![format!("radroots sell add {product_key}")])
+            .map(|product_key| vec![format!("radroots listing create --key {product_key}")])
             .unwrap_or_default(),
         _ => Vec::new(),
     }
@@ -648,7 +641,7 @@ fn sell_mutation_from_listing(
         "published" | "deduplicated" => {
             successful_sell_mutation_actions(operation, product_key.as_deref())
         }
-        _ => translate_sell_actions(view.actions.as_slice()),
+        _ => view.actions,
     };
 
     SellMutationView {
@@ -971,7 +964,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<ListingGetVie
             price: None,
             provenance,
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots local init".to_owned()],
+            actions: vec!["radroots store init".to_owned()],
         });
     }
 
@@ -998,7 +991,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<ListingGetVie
             )),
             actions: vec![
                 "radroots sync pull".to_owned(),
-                format!("radroots find {}", args.key),
+                format!("radroots market product search {}", args.key),
             ],
         });
     };
@@ -1197,7 +1190,7 @@ fn mutate(
                 if let Some(job_id) = &Some(result.job_id.clone()) {
                     actions.push(format!("radroots job get {job_id}"));
                 }
-                actions.push("radroots rpc status".to_owned());
+                actions.push("radroots runtime status get".to_owned());
             } else {
                 actions.push(format!("radroots job get {}", result.job_id));
                 actions.push(format!("radroots job watch {}", result.job_id));
@@ -1550,7 +1543,7 @@ fn invalid_validation_view(
 ) -> ListingValidateView {
     let mut actions = vec![format!("edit {}", file.display())];
     if context.selected_account_id.is_none() {
-        actions.push("radroots account new".to_owned());
+        actions.push("radroots account create".to_owned());
     }
     if context.selected_farm_d_tag.is_none() {
         actions.push(context.farm_setup_action.clone());
@@ -2017,7 +2010,7 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
         defaults.farm_next_action = None;
         defaults.farm_reason = None;
     } else {
-        defaults.farm_next_action = Some("radroots farm check".to_owned());
+        defaults.farm_next_action = Some("radroots farm readiness check".to_owned());
         defaults.farm_reason = Some(
             "selected farm draft is missing delivery or location defaults; those fields were left blank"
                 .to_owned(),
@@ -2048,7 +2041,7 @@ fn draft_location_from_model(location: &RadrootsListingLocation) -> ListingDraft
 }
 
 fn farm_setup_action(_config: &RuntimeConfig) -> Result<String, RuntimeError> {
-    Ok("radroots farm init".to_owned())
+    Ok("radroots farm create".to_owned())
 }
 
 fn configured_account(

@@ -64,7 +64,7 @@ pub fn net_status(config: &RuntimeConfig) -> Result<NetStatusView, RuntimeError>
 
 fn relay_actions(config: &RuntimeConfig) -> Vec<String> {
     if config.relay.urls.is_empty() {
-        vec!["radroots relay ls --relay wss://relay.example.com".to_owned()]
+        vec!["radroots --relay wss://relay.example.com relay list".to_owned()]
     } else {
         Vec::new()
     }

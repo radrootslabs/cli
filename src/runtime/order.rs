@@ -249,8 +249,8 @@ pub fn get(config: &RuntimeConfig, args: &RecordKeyArgs) -> Result<OrderGetView,
             reason: Some(format!("order draft `{lookup}` was not found")),
             issues: Vec::new(),
             actions: vec![
-                "radroots order ls".to_owned(),
-                "radroots order new".to_owned(),
+                "radroots order list".to_owned(),
+                "radroots basket create".to_owned(),
             ],
         });
     }
@@ -288,7 +288,7 @@ pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
             source: ORDER_SOURCE.to_owned(),
             count: 0,
             orders: Vec::new(),
-            actions: vec!["radroots order new".to_owned()],
+            actions: vec!["radroots basket create".to_owned()],
         });
     }
 
@@ -320,7 +320,7 @@ pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
         "ready"
     };
     let actions = if orders.is_empty() {
-        vec!["radroots order new".to_owned()]
+        vec!["radroots basket create".to_owned()]
     } else {
         Vec::new()
     };
@@ -360,8 +360,8 @@ pub fn submit(
             job: None,
             issues: Vec::new(),
             actions: vec![
-                "radroots order ls".to_owned(),
-                "radroots order new".to_owned(),
+                "radroots order list".to_owned(),
+                "radroots basket create".to_owned(),
             ],
         });
     }
@@ -395,8 +395,11 @@ pub fn submit(
 
     if let Some(job) = submission_job_view(config, &loaded.document, true) {
         let mut actions = vec![
-            format!("radroots order watch {}", loaded.document.order.order_id),
-            format!("radroots order history"),
+            format!(
+                "radroots order event watch {}",
+                loaded.document.order.order_id
+            ),
+            "radroots order event list".to_owned(),
         ];
         actions.push(format!("radroots job get {}", job.job_id));
         return Ok(OrderSubmitView {
@@ -536,12 +539,15 @@ pub fn submit(
             let mut actions = Vec::new();
             if failed {
                 actions.push(format!("radroots job get {}", result.job_id));
-                actions.push("radroots rpc status".to_owned());
-                actions.push("radroots order history".to_owned());
+                actions.push("radroots runtime status get".to_owned());
+                actions.push("radroots order event list".to_owned());
             } else {
-                actions.push(format!("radroots order watch {}", updated.order.order_id));
+                actions.push(format!(
+                    "radroots order event watch {}",
+                    updated.order.order_id
+                ));
                 actions.push(format!("radroots job get {}", result.job_id));
-                actions.push("radroots order history".to_owned());
+                actions.push("radroots order event list".to_owned());
             }
 
             Ok(OrderSubmitView {
@@ -609,7 +615,7 @@ pub fn watch(
             reason: Some(format!("order draft `{}` was not found", args.key)),
             workflow: None,
             frames: Vec::new(),
-            actions: vec!["radroots order ls".to_owned()],
+            actions: vec!["radroots order list".to_owned()],
         });
     }
 
@@ -685,7 +691,7 @@ pub fn watch(
                                     reason: Some(reason.clone()),
                                     workflow: Some(workflow),
                                     frames,
-                                    actions: vec!["radroots order history".to_owned()],
+                                    actions: vec!["radroots order event list".to_owned()],
                                 });
                             }
                         }
@@ -711,7 +717,7 @@ pub fn watch(
                         reason: None,
                         workflow,
                         frames,
-                        actions: vec!["radroots order history".to_owned()],
+                        actions: vec!["radroots order event list".to_owned()],
                     });
                 }
             }
@@ -725,7 +731,7 @@ pub fn watch(
                     reason: Some("recorded job id was not found in radrootsd".to_owned()),
                     workflow: None,
                     frames,
-                    actions: vec!["radroots order history".to_owned()],
+                    actions: vec!["radroots order event list".to_owned()],
                 });
             }
             Err(error) => return Ok(order_watch_error_view(&loaded, args, job_id, frames, error)),
@@ -744,7 +750,7 @@ pub fn history(config: &RuntimeConfig) -> Result<OrderHistoryView, RuntimeError>
             count: 0,
             reason: Some("no submitted order drafts recorded yet".to_owned()),
             orders: Vec::new(),
-            actions: vec!["radroots order ls".to_owned()],
+            actions: vec!["radroots order list".to_owned()],
         });
     }
 
@@ -806,7 +812,7 @@ pub fn history(config: &RuntimeConfig) -> Result<OrderHistoryView, RuntimeError>
         reason,
         orders,
         actions: if state == "empty" {
-            vec!["radroots order new".to_owned()]
+            vec!["radroots basket create".to_owned()]
         } else {
             Vec::new()
         },
@@ -826,7 +832,7 @@ pub fn cancel(
             order_id: None,
             reason: Some(format!("order draft `{}` was not found", args.key)),
             job: None,
-            actions: vec!["radroots order ls".to_owned()],
+            actions: vec!["radroots order list".to_owned()],
         });
     }
 
@@ -875,7 +881,7 @@ pub fn cancel(
         ),
         job: Some(job),
         actions: vec![
-            "radroots order history".to_owned(),
+            "radroots order event list".to_owned(),
             format!("radroots job get {}", job_id.unwrap_or_default()),
         ],
     })
@@ -914,7 +920,7 @@ fn resolve_order_listing(
 
     if !config.local.replica_db_path.exists() {
         return Err(RuntimeError::Config(format!(
-            "order listing lookup `{listing_lookup}` requires local market data; run `radroots local init` and `radroots market update` before creating an order from a listing"
+            "order listing lookup `{listing_lookup}` requires local market data; run `radroots store init` and `radroots market refresh` before creating an order from a listing"
         )));
     }
 
@@ -922,23 +928,23 @@ fn resolve_order_listing(
     let rows = db.trade_product_lookup(listing_lookup)?;
     match rows.len() {
         0 => Err(RuntimeError::Config(format!(
-            "listing `{listing_lookup}` is not available in the local replica; run `radroots market update` or pass `--listing-addr`"
+            "listing `{listing_lookup}` is not available in the local replica; run `radroots market refresh` or pass `--listing-addr`"
         ))),
         1 => {
             let row = rows.into_iter().next().expect("one row");
             let listing_addr = normalize_optional(row.listing_addr.as_deref()).ok_or_else(|| {
                 RuntimeError::Config(format!(
-                    "listing `{listing_lookup}` is missing a canonical listing address; run `radroots market update` or pass `--listing-addr`"
+                    "listing `{listing_lookup}` is missing a canonical listing address; run `radroots market refresh` or pass `--listing-addr`"
                 ))
             })?;
             let parsed = parse_listing_addr(listing_addr.as_str()).map_err(|error| {
                 RuntimeError::Config(format!(
-                    "listing `{listing_lookup}` has invalid listing_addr: {error}; run `radroots market update` or pass `--listing-addr`"
+                    "listing `{listing_lookup}` has invalid listing_addr: {error}; run `radroots market refresh` or pass `--listing-addr`"
                 ))
             })?;
             if parsed.kind != KIND_LISTING {
                 return Err(RuntimeError::Config(format!(
-                    "listing `{listing_lookup}` listing_addr must reference a public NIP-99 listing; run `radroots market update` or pass `--listing-addr`"
+                    "listing `{listing_lookup}` listing_addr must reference a public NIP-99 listing; run `radroots market refresh` or pass `--listing-addr`"
                 )));
             }
 
@@ -975,7 +981,7 @@ fn view_from_loaded(
         actions_for_document(&loaded.document, loaded.file.as_path(), issues.as_slice());
     if let Some(job) = &job {
         actions.push(format!("radroots job get {}", job.job_id));
-        actions.push("radroots order history".to_owned());
+        actions.push("radroots order event list".to_owned());
     }
 
     OrderGetView {
@@ -1217,7 +1223,7 @@ fn actions_for_document(
         file.display()
     ));
     if document.buyer_account_id.is_none() && document.order.buyer_pubkey.trim().is_empty() {
-        actions.push("radroots account new".to_owned());
+        actions.push("radroots account create".to_owned());
     }
     if document.order.items.is_empty()
         || issues

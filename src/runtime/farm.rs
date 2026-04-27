@@ -82,7 +82,7 @@ pub fn set(config: &RuntimeConfig, args: &FarmSetArgs) -> Result<FarmSetView, Ru
             value: human_field_value(args.field, args.value.join(" ").trim()).to_owned(),
             config: None,
             reason: Some(format!("no farm draft found at {}", path.display())),
-            actions: vec!["radroots farm init".to_owned()],
+            actions: vec!["radroots farm create".to_owned()],
         });
     };
 
@@ -107,7 +107,7 @@ pub fn set(config: &RuntimeConfig, args: &FarmSetArgs) -> Result<FarmSetView, Ru
             account_pubkey,
         )),
         reason: None,
-        actions: vec!["radroots farm check".to_owned()],
+        actions: vec!["radroots farm readiness check".to_owned()],
     })
 }
 
@@ -131,7 +131,7 @@ pub fn status(
             config: None,
             missing: vec!["Farm draft".to_owned()],
             reason: Some(format!("no farm config found at {}", path.display())),
-            actions: vec!["radroots farm init".to_owned()],
+            actions: vec!["radroots farm create".to_owned()],
         });
     };
 
@@ -212,7 +212,7 @@ pub fn get(config: &RuntimeConfig, args: &FarmScopedArgs) -> Result<FarmGetView,
             config_present: false,
             document: None,
             reason: Some(format!("no farm config found at {}", path.display())),
-            actions: vec!["radroots farm init".to_owned()],
+            actions: vec!["radroots farm create".to_owned()],
         });
     };
 
@@ -242,7 +242,7 @@ pub fn publish(
             args,
             format!("no farm config found at {}", path.display()),
             vec!["Farm draft".to_owned()],
-            vec!["radroots farm init".to_owned()],
+            vec!["radroots farm create".to_owned()],
             false,
             String::new(),
             String::new(),
@@ -897,7 +897,7 @@ fn persist_publication_and_view(
         actions.push(format!("radroots job watch {job_id}"));
     }
     if actions.is_empty() {
-        actions.push("radroots rpc status".to_owned());
+        actions.push("radroots runtime status get".to_owned());
     }
     let reason = (state == "partial" || state == "unavailable" || state == "error")
         .then(|| "farm publish did not complete for both profile and farm record".to_owned());
@@ -1115,7 +1115,7 @@ fn save_draft_view(
 }
 
 fn farm_setup_actions(document: &FarmConfigDocument) -> Vec<String> {
-    let mut actions = vec!["radroots farm check".to_owned()];
+    let mut actions = vec!["radroots farm readiness check".to_owned()];
     if farm_config::missing_fields(document).is_empty() {
         actions.push("radroots farm publish".to_owned());
     }

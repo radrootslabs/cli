@@ -14,7 +14,7 @@ use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 
 const SYNC_SOURCE: &str = "local replica · local first";
-const RELAY_SETUP_ACTION: &str = "radroots relay ls --relay wss://relay.example.com";
+const RELAY_SETUP_ACTION: &str = "radroots --relay wss://relay.example.com relay list";
 
 #[derive(Debug, Clone)]
 struct SyncSnapshot {
@@ -122,7 +122,7 @@ fn narrowed_action(
         });
     }
 
-    let mut actions = vec!["radroots sync status".to_owned()];
+    let mut actions = vec!["radroots sync status get".to_owned()];
     actions.extend(snapshot.actions);
 
     Ok(SyncActionView {
@@ -160,7 +160,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
                 pending_count: 0,
             },
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots local init".to_owned()],
+            actions: vec!["radroots store init".to_owned()],
         });
     }
 

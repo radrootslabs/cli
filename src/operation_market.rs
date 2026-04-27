@@ -98,11 +98,11 @@ fn market_refresh_view(mut view: SyncActionView) -> SyncActionView {
                 actions.push("radroots relay list".to_owned());
             }
             if actions.is_empty() {
-                actions.extend(target_actions(view.actions.as_slice()));
+                actions.extend(std::mem::take(&mut view.actions));
             }
             actions
         }
-        _ => target_actions(view.actions.as_slice()),
+        _ => std::mem::take(&mut view.actions),
     };
     view
 }
@@ -132,7 +132,7 @@ fn market_product_search_view(mut view: FindView) -> FindView {
             "radroots store init".to_owned(),
             "radroots market refresh".to_owned(),
         ],
-        _ => target_actions(view.actions.as_slice()),
+        _ => std::mem::take(&mut view.actions),
     };
     view
 }
@@ -162,34 +162,9 @@ fn market_listing_get_view(mut view: ListingGetView) -> ListingGetView {
             "radroots store init".to_owned(),
             "radroots market refresh".to_owned(),
         ],
-        _ => target_actions(view.actions.as_slice()),
+        _ => std::mem::take(&mut view.actions),
     };
     view
-}
-
-fn target_actions(actions: &[String]) -> Vec<String> {
-    actions
-        .iter()
-        .map(|action| match action.as_str() {
-            "radroots local init" => "radroots store init".to_owned(),
-            "radroots sync status" => "radroots sync status get".to_owned(),
-            "radroots sync pull" => "radroots market refresh".to_owned(),
-            "radroots market update" => "radroots market refresh".to_owned(),
-            "radroots market search eggs" => "radroots market product search eggs".to_owned(),
-            "radroots market search tomatoes" => {
-                "radroots market product search tomatoes".to_owned()
-            }
-            other if other.starts_with("radroots market view ") => {
-                other.replacen("radroots market view ", "radroots market listing get ", 1)
-            }
-            other if other.starts_with("radroots order create --listing ") => other.replacen(
-                "radroots order create --listing ",
-                "radroots basket item add ",
-                1,
-            ),
-            other => other.to_owned(),
-        })
-        .collect()
 }
 
 fn listing_addr_can_back_basket(listing_addr: Option<&str>) -> bool {

@@ -52,7 +52,7 @@ pub fn setup(config: &RuntimeConfig, role: SetupRoleArg) -> Result<SetupView, Ru
 
         match role {
             SetupRoleArg::Buyer | SetupRoleArg::Both if relay_configured => {
-                push_next(&mut next, Some("radroots market search tomatoes"));
+                push_next(&mut next, Some("radroots market product search tomatoes"));
             }
             _ => {}
         }
@@ -61,7 +61,7 @@ pub fn setup(config: &RuntimeConfig, role: SetupRoleArg) -> Result<SetupView, Ru
             push_next(&mut next, Some(RELAY_SETUP_ACTION));
         }
 
-        push_next(&mut next, Some("radroots status"));
+        push_next(&mut next, Some("radroots health status get"));
     }
 
     Ok(SetupView {
@@ -119,21 +119,23 @@ pub fn status(config: &RuntimeConfig) -> Result<StatusView, RuntimeError> {
 
         if relay_configured {
             match farm.state {
-                "draft" | "published" => push_next(&mut next, Some("radroots sell add tomatoes")),
-                "missing" => push_next(&mut next, Some("radroots market search tomatoes")),
+                "draft" | "published" => {
+                    push_next(&mut next, Some("radroots listing create --key tomatoes"))
+                }
+                "missing" => push_next(&mut next, Some("radroots market product search tomatoes")),
                 _ => {}
             }
         }
     } else if account_resolution.resolved_account.is_some() {
-        push_next(&mut next, Some("radroots setup buyer"));
-        push_next(&mut next, Some("radroots setup seller"));
+        push_next(&mut next, Some("radroots basket create"));
+        push_next(&mut next, Some("radroots farm create"));
         if account_resolution.resolved_account.is_some()
             && local_status.state == "ready"
             && !relay_configured
         {
             next.clear();
             push_next(&mut next, Some(RELAY_SETUP_ACTION));
-            push_next(&mut next, Some("radroots status"));
+            push_next(&mut next, Some("radroots health status get"));
         }
     }
 
@@ -276,9 +278,9 @@ fn unresolved_account_resolution_state(
 
 fn setup_command(role: SetupRoleArg) -> &'static str {
     match role {
-        SetupRoleArg::Seller => "radroots setup seller",
-        SetupRoleArg::Buyer => "radroots setup buyer",
-        SetupRoleArg::Both => "radroots setup both",
+        SetupRoleArg::Seller => "radroots farm create",
+        SetupRoleArg::Buyer => "radroots basket create",
+        SetupRoleArg::Both => "radroots workspace init",
     }
 }
 

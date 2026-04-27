@@ -59,7 +59,7 @@ pub fn search(config: &RuntimeConfig, args: &FindArgs) -> Result<FindView, Runti
             results: Vec::new(),
             hyf: None,
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots local init".to_owned()],
+            actions: vec!["radroots store init".to_owned()],
         });
     }
 
@@ -108,7 +108,7 @@ pub fn search(config: &RuntimeConfig, args: &FindArgs) -> Result<FindView, Runti
 
     let (state, reason, actions) = if results.is_empty() {
         let actions = if freshness.state == "never" {
-            vec!["radroots sync status".to_owned()]
+            vec!["radroots sync status get".to_owned()]
         } else {
             Vec::new()
         };

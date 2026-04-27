@@ -212,7 +212,7 @@ pub fn status(config: &RuntimeConfig) -> CommandOutput {
             actions: if status.ready {
                 Vec::new()
             } else {
-                vec!["radroots relay ls".to_owned()]
+                vec!["radroots relay list".to_owned()]
             },
         })),
         Err(DaemonRpcError::Unconfigured(reason))
