@@ -22,9 +22,9 @@ use clap::Parser;
 
 use crate::cli::{CliArgs, Command, ConfigArgs, ConfigCommand, OutputFormatArg};
 use crate::operation_adapter::{
-    MvpOperationRequest, OperationAdapter, OperationAdapterError, OperationNetworkMode,
-    OperationOutputFormat, OperationRequest, OperationRequestPayload, OperationResultPayload,
-    OperationService,
+    OperationAdapter, OperationAdapterError, OperationNetworkMode, OperationOutputFormat,
+    OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
+    TargetOperationRequest,
 };
 use crate::operation_basket::BasketOperationService;
 use crate::operation_core::CoreOperationService;
@@ -54,7 +54,8 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
     let args = TargetCliArgs::parse();
     let config = RuntimeConfig::from_system(&config_args_from_target(&args)?)?;
     let logging = initialize_logging(&config.logging)?;
-    let request = MvpOperationRequest::from_target_args(&args).map_err(operation_config_error)?;
+    let request =
+        TargetOperationRequest::from_target_args(&args).map_err(operation_config_error)?;
     let envelope = match validate_request_contract(&request, &config) {
         Ok(()) => execute_request(request, &config, &logging),
         Err(error) => failure_envelope(&request, error),
@@ -100,195 +101,195 @@ fn config_args_from_target(args: &TargetCliArgs) -> Result<CliArgs, runtime::Run
 }
 
 fn execute_request(
-    request: MvpOperationRequest,
+    request: TargetOperationRequest,
     config: &RuntimeConfig,
     logging: &runtime::logging::LoggingState,
 ) -> OutputEnvelope {
     match request {
-        MvpOperationRequest::WorkspaceInit(request) => {
+        TargetOperationRequest::WorkspaceInit(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::WorkspaceGet(request) => {
+        TargetOperationRequest::WorkspaceGet(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::HealthStatusGet(request) => {
+        TargetOperationRequest::HealthStatusGet(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::HealthCheckRun(request) => {
+        TargetOperationRequest::HealthCheckRun(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::ConfigGet(request) => {
+        TargetOperationRequest::ConfigGet(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::AccountCreate(request) => {
+        TargetOperationRequest::AccountCreate(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::AccountImport(request) => {
+        TargetOperationRequest::AccountImport(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::AccountGet(request) => {
+        TargetOperationRequest::AccountGet(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::AccountList(request) => {
+        TargetOperationRequest::AccountList(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::AccountRemove(request) => {
+        TargetOperationRequest::AccountRemove(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::AccountSelectionGet(request) => {
+        TargetOperationRequest::AccountSelectionGet(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::AccountSelectionUpdate(request) => {
+        TargetOperationRequest::AccountSelectionUpdate(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::AccountSelectionClear(request) => {
+        TargetOperationRequest::AccountSelectionClear(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::StoreInit(request) => {
+        TargetOperationRequest::StoreInit(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::StoreStatusGet(request) => {
+        TargetOperationRequest::StoreStatusGet(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::StoreExport(request) => {
+        TargetOperationRequest::StoreExport(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::StoreBackupCreate(request) => {
+        TargetOperationRequest::StoreBackupCreate(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        MvpOperationRequest::SignerStatusGet(request) => {
+        TargetOperationRequest::SignerStatusGet(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::RelayList(request) => {
+        TargetOperationRequest::RelayList(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::SyncStatusGet(request) => {
+        TargetOperationRequest::SyncStatusGet(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::SyncPull(request) => {
+        TargetOperationRequest::SyncPull(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::SyncPush(request) => {
+        TargetOperationRequest::SyncPush(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::SyncWatch(request) => {
+        TargetOperationRequest::SyncWatch(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::RuntimeStatusGet(request) => {
+        TargetOperationRequest::RuntimeStatusGet(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::RuntimeStart(request) => {
+        TargetOperationRequest::RuntimeStart(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::RuntimeStop(request) => {
+        TargetOperationRequest::RuntimeStop(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::RuntimeRestart(request) => {
+        TargetOperationRequest::RuntimeRestart(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::RuntimeLogWatch(request) => {
+        TargetOperationRequest::RuntimeLogWatch(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::RuntimeConfigGet(request) => {
+        TargetOperationRequest::RuntimeConfigGet(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::JobGet(request) => {
+        TargetOperationRequest::JobGet(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::JobList(request) => {
+        TargetOperationRequest::JobList(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::JobWatch(request) => {
+        TargetOperationRequest::JobWatch(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        MvpOperationRequest::FarmCreate(request) => {
+        TargetOperationRequest::FarmCreate(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        MvpOperationRequest::FarmGet(request) => {
+        TargetOperationRequest::FarmGet(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        MvpOperationRequest::FarmProfileUpdate(request) => {
+        TargetOperationRequest::FarmProfileUpdate(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        MvpOperationRequest::FarmLocationUpdate(request) => {
+        TargetOperationRequest::FarmLocationUpdate(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        MvpOperationRequest::FarmFulfillmentUpdate(request) => {
+        TargetOperationRequest::FarmFulfillmentUpdate(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        MvpOperationRequest::FarmReadinessCheck(request) => {
+        TargetOperationRequest::FarmReadinessCheck(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        MvpOperationRequest::FarmPublish(request) => {
+        TargetOperationRequest::FarmPublish(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        MvpOperationRequest::ListingCreate(request) => {
+        TargetOperationRequest::ListingCreate(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        MvpOperationRequest::ListingGet(request) => {
+        TargetOperationRequest::ListingGet(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        MvpOperationRequest::ListingList(request) => {
+        TargetOperationRequest::ListingList(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        MvpOperationRequest::ListingUpdate(request) => {
+        TargetOperationRequest::ListingUpdate(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        MvpOperationRequest::ListingValidate(request) => {
+        TargetOperationRequest::ListingValidate(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        MvpOperationRequest::ListingPublish(request) => {
+        TargetOperationRequest::ListingPublish(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        MvpOperationRequest::ListingArchive(request) => {
+        TargetOperationRequest::ListingArchive(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        MvpOperationRequest::MarketRefresh(request) => {
+        TargetOperationRequest::MarketRefresh(request) => {
             execute_with(MarketOperationService::new(config), request)
         }
-        MvpOperationRequest::MarketProductSearch(request) => {
+        TargetOperationRequest::MarketProductSearch(request) => {
             execute_with(MarketOperationService::new(config), request)
         }
-        MvpOperationRequest::MarketListingGet(request) => {
+        TargetOperationRequest::MarketListingGet(request) => {
             execute_with(MarketOperationService::new(config), request)
         }
-        MvpOperationRequest::BasketCreate(request) => {
+        TargetOperationRequest::BasketCreate(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        MvpOperationRequest::BasketGet(request) => {
+        TargetOperationRequest::BasketGet(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        MvpOperationRequest::BasketList(request) => {
+        TargetOperationRequest::BasketList(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        MvpOperationRequest::BasketItemAdd(request) => {
+        TargetOperationRequest::BasketItemAdd(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        MvpOperationRequest::BasketItemUpdate(request) => {
+        TargetOperationRequest::BasketItemUpdate(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        MvpOperationRequest::BasketItemRemove(request) => {
+        TargetOperationRequest::BasketItemRemove(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        MvpOperationRequest::BasketValidate(request) => {
+        TargetOperationRequest::BasketValidate(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        MvpOperationRequest::BasketQuoteCreate(request) => {
+        TargetOperationRequest::BasketQuoteCreate(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        MvpOperationRequest::OrderSubmit(request) => {
+        TargetOperationRequest::OrderSubmit(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
-        MvpOperationRequest::OrderGet(request) => {
+        TargetOperationRequest::OrderGet(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
-        MvpOperationRequest::OrderList(request) => {
+        TargetOperationRequest::OrderList(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
-        MvpOperationRequest::OrderEventList(request) => {
+        TargetOperationRequest::OrderEventList(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
-        MvpOperationRequest::OrderEventWatch(request) => {
+        TargetOperationRequest::OrderEventWatch(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
     }
@@ -316,7 +317,7 @@ where
 }
 
 fn validate_request_contract(
-    request: &MvpOperationRequest,
+    request: &TargetOperationRequest,
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
@@ -341,7 +342,7 @@ fn validate_request_contract(
 }
 
 fn validate_network_contract(
-    request: &MvpOperationRequest,
+    request: &TargetOperationRequest,
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
@@ -391,7 +392,10 @@ fn external_network_operation(operation_id: &str) -> bool {
     )
 }
 
-fn failure_envelope(request: &MvpOperationRequest, error: OperationAdapterError) -> OutputEnvelope {
+fn failure_envelope(
+    request: &TargetOperationRequest,
+    error: OperationAdapterError,
+) -> OutputEnvelope {
     OutputEnvelope::failure(
         request.operation_id(),
         error.to_output_error(),

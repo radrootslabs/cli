@@ -12,7 +12,7 @@ fn json_success(sandbox: &RadrootsCliSandbox, args: &[&str]) -> Value {
 }
 
 #[test]
-fn root_help_exposes_only_mvp_namespaces() {
+fn root_help_exposes_only_target_namespaces() {
     let output = radroots().arg("--help").output().expect("run root help");
 
     assert!(output.status.success());
@@ -93,6 +93,53 @@ fn removed_command_families_are_rejected_publicly() {
         assert!(!output.status.success(), "`{command}` should be rejected");
         let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
         assert!(stderr.contains("unrecognized subcommand"));
+    }
+}
+
+#[test]
+fn target_outputs_do_not_suggest_removed_command_families() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    for args in [
+        ["--format", "json", "market", "product", "search", "eggs"].as_slice(),
+        ["--format", "json", "market", "listing", "get", "eggs"].as_slice(),
+        ["--format", "json", "listing", "get", "eggs"].as_slice(),
+        ["--format", "json", "sync", "status", "get"].as_slice(),
+        [
+            "--format",
+            "json",
+            "order",
+            "get",
+            "ord_AAAAAAAAAAAAAAAAAAAAAA",
+        ]
+        .as_slice(),
+    ] {
+        let value = json_success(&sandbox, args);
+        assert_no_removed_command_reference(&value, args);
+    }
+}
+
+fn assert_no_removed_command_reference(value: &Value, args: &[&str]) {
+    let raw = serde_json::to_string(value).expect("json value");
+    for removed in [
+        "radroots setup",
+        "radroots status",
+        "radroots doctor",
+        "radroots sell",
+        "radroots find",
+        "radroots local",
+        "radroots net",
+        "radroots myc",
+        "radroots rpc",
+        "radroots product",
+        "radroots message",
+        "radroots approval",
+        "radroots agent",
+    ] {
+        assert!(
+            !raw.contains(removed),
+            "`{args:?}` output should not contain removed command reference `{removed}`: {raw}"
+        );
     }
 }
 
@@ -233,7 +280,7 @@ fn required_approval_missing_token_returns_structured_error() {
 }
 
 #[test]
-fn buyer_mvp_flow_acceptance_uses_target_operations() {
+fn buyer_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
 
     let search = json_success(
@@ -316,7 +363,7 @@ fn buyer_mvp_flow_acceptance_uses_target_operations() {
 }
 
 #[test]
-fn seller_mvp_flow_acceptance_uses_target_operations() {
+fn seller_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
     let listing_file = sandbox.root().join("listing.toml");
     let listing_file = listing_file.to_string_lossy().into_owned();

@@ -221,6 +221,9 @@ impl<P: OperationResultPayload> OperationResult<P> {
         &self,
         context: EnvelopeContext,
     ) -> Result<OutputEnvelope, OperationAdapterError> {
+        let mut result = serde_json::to_value(&self.payload)
+            .map_err(|error| OperationAdapterError::Serialization(error.to_string()))?;
+        translate_target_command_references(&mut result);
         Ok(OutputEnvelope {
             schema_version: OUTPUT_SCHEMA_VERSION,
             operation_id: self.operation_id().to_owned(),
@@ -230,8 +233,7 @@ impl<P: OperationResultPayload> OperationResult<P> {
             idempotency_key: context.idempotency_key,
             dry_run: context.dry_run,
             actor: context.actor,
-            result: serde_json::to_value(&self.payload)
-                .map_err(|error| OperationAdapterError::Serialization(error.to_string()))?,
+            result,
             warnings: self.warnings.clone(),
             errors: Vec::new(),
             next_actions: self.next_actions.clone(),
@@ -604,14 +606,156 @@ fn runtime_output_error(
     error
 }
 
-macro_rules! mvp_operation_contracts {
+fn translate_target_command_references(value: &mut Value) {
+    match value {
+        Value::String(value) => {
+            let translated = target_command_reference(value.as_str());
+            if translated != *value {
+                *value = translated;
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                translate_target_command_references(nested);
+            }
+        }
+        Value::Object(object) => {
+            for nested in object.values_mut() {
+                translate_target_command_references(nested);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn target_command_reference(value: &str) -> String {
+    let action = target_command_action(value);
+    if action != value {
+        return action;
+    }
+
+    let mut translated = value.to_owned();
+    for (legacy, target) in [
+        ("radroots config show", "radroots config get"),
+        (
+            "radroots runtime config show",
+            "radroots runtime config get",
+        ),
+        ("radroots local init", "radroots store init"),
+        ("radroots local status", "radroots store status get"),
+        ("radroots local export", "radroots store export"),
+        ("radroots local backup", "radroots store backup create"),
+        ("radroots market update", "radroots market refresh"),
+        ("radroots market search", "radroots market product search"),
+        ("radroots market view", "radroots market listing get"),
+        ("radroots sync status", "radroots sync status get"),
+        ("radroots order ls", "radroots order list"),
+        ("radroots order history", "radroots order event list"),
+        ("radroots order watch", "radroots order event watch"),
+        (
+            "radroots order create --listing",
+            "radroots basket item add",
+        ),
+        ("radroots order new", "radroots basket create"),
+        ("radroots order create", "radroots basket create"),
+        ("radroots rpc status", "radroots runtime status get"),
+        ("radroots rpc sessions", "radroots job list"),
+        ("radroots net status", "radroots relay list"),
+        ("radroots myc status", "radroots signer status get"),
+        ("radroots doctor", "radroots health check run"),
+        ("radroots status", "radroots health status get"),
+        ("radroots setup seller", "radroots farm create"),
+        ("radroots setup buyer", "radroots basket create"),
+        ("radroots setup both", "radroots workspace init"),
+        ("radroots sell add", "radroots listing create"),
+        ("radroots sell check", "radroots listing validate"),
+        ("radroots sell publish", "radroots listing publish"),
+        ("radroots sell update", "radroots listing update"),
+        ("radroots sell pause", "radroots listing archive"),
+        ("radroots sell show", "radroots listing get"),
+    ] {
+        translated = translated.replace(legacy, target);
+    }
+    translated
+}
+
+fn target_command_action(action: &str) -> String {
+    match action {
+        "radroots config show" => "radroots config get".to_owned(),
+        "radroots runtime config show" => "radroots runtime config get".to_owned(),
+        "radroots local init" => "radroots store init".to_owned(),
+        "radroots local status" => "radroots store status get".to_owned(),
+        "radroots local export" => "radroots store export".to_owned(),
+        "radroots local backup" => "radroots store backup create".to_owned(),
+        "radroots market update" => "radroots market refresh".to_owned(),
+        "radroots sync status" => "radroots sync status get".to_owned(),
+        "radroots order ls" => "radroots order list".to_owned(),
+        "radroots order history" => "radroots order event list".to_owned(),
+        "radroots order new" | "radroots order create" => "radroots basket create".to_owned(),
+        "radroots rpc status" => "radroots runtime status get".to_owned(),
+        "radroots rpc sessions" => "radroots job list".to_owned(),
+        "radroots net status" => "radroots relay list".to_owned(),
+        "radroots myc status" => "radroots signer status get".to_owned(),
+        "radroots doctor" => "radroots health check run".to_owned(),
+        "radroots status" => "radroots health status get".to_owned(),
+        "radroots setup seller" => "radroots farm create".to_owned(),
+        "radroots setup buyer" => "radroots basket create".to_owned(),
+        "radroots setup both" => "radroots workspace init".to_owned(),
+        other if other.starts_with("radroots local export ") => {
+            other.replacen("radroots local export ", "radroots store export ", 1)
+        }
+        other if other.starts_with("radroots local backup ") => {
+            other.replacen("radroots local backup ", "radroots store backup create ", 1)
+        }
+        other if other.starts_with("radroots market search ") => other.replacen(
+            "radroots market search ",
+            "radroots market product search ",
+            1,
+        ),
+        other if other.starts_with("radroots market view ") => {
+            other.replacen("radroots market view ", "radroots market listing get ", 1)
+        }
+        other if other.starts_with("radroots order watch ") => {
+            other.replacen("radroots order watch ", "radroots order event watch ", 1)
+        }
+        other if other.starts_with("radroots order create --listing ") => other.replacen(
+            "radroots order create --listing ",
+            "radroots basket item add ",
+            1,
+        ),
+        other if other.starts_with("radroots find ") => {
+            other.replacen("radroots find ", "radroots market product search ", 1)
+        }
+        other if other.starts_with("radroots sell add ") => {
+            other.replacen("radroots sell add ", "radroots listing create ", 1)
+        }
+        other if other.starts_with("radroots sell check ") => {
+            other.replacen("radroots sell check ", "radroots listing validate ", 1)
+        }
+        other if other.starts_with("radroots sell publish ") => {
+            other.replacen("radroots sell publish ", "radroots listing publish ", 1)
+        }
+        other if other.starts_with("radroots sell update ") => {
+            other.replacen("radroots sell update ", "radroots listing update ", 1)
+        }
+        other if other.starts_with("radroots sell pause ") => {
+            other.replacen("radroots sell pause ", "radroots listing archive ", 1)
+        }
+        other if other.starts_with("radroots sell show ") => {
+            other.replacen("radroots sell show ", "radroots listing get ", 1)
+        }
+        other => other.to_owned(),
+    }
+}
+
+macro_rules! target_operation_contracts {
     ($( $variant:ident => ($request:ident, $result:ident, $operation_id:literal) ),+ $(,)?) => {
         #[derive(Debug, Clone, PartialEq)]
-        pub enum MvpOperationRequest {
+        pub enum TargetOperationRequest {
             $( $variant(OperationRequest<$request>), )+
         }
 
-        impl MvpOperationRequest {
+        impl TargetOperationRequest {
             pub fn from_target_args(args: &TargetCliArgs) -> Result<Self, OperationAdapterError> {
                 Self::from_operation_id_with_input(
                     args.command.operation_id(),
@@ -671,11 +815,11 @@ macro_rules! mvp_operation_contracts {
         }
 
         #[derive(Debug, Clone, PartialEq)]
-        pub enum MvpOperationResult {
+        pub enum TargetOperationResult {
             $( $variant(OperationResult<$result>), )+
         }
 
-        impl MvpOperationResult {
+        impl TargetOperationResult {
             pub fn operation_id(&self) -> &'static str {
                 match self {
                     $( Self::$variant(result) => result.operation_id(), )+
@@ -939,7 +1083,7 @@ fn insert_path(input: &mut OperationData, key: &str, value: &Option<std::path::P
     }
 }
 
-mvp_operation_contracts! {
+target_operation_contracts! {
     WorkspaceInit => (WorkspaceInitRequest, WorkspaceInitResult, "workspace.init"),
     WorkspaceGet => (WorkspaceGetRequest, WorkspaceGetResult, "workspace.get"),
     HealthStatusGet => (HealthStatusGetRequest, HealthStatusGetResult, "health.status.get"),
@@ -1006,9 +1150,9 @@ mvp_operation_contracts! {
 
 pub fn adapter_registry_linkage_is_valid() -> bool {
     OPERATION_REGISTRY.iter().all(|operation| {
-        MvpOperationRequest::request_type_for_operation(operation.operation_id)
+        TargetOperationRequest::request_type_for_operation(operation.operation_id)
             == Some(operation.rust_request)
-            && MvpOperationResult::result_type_for_operation(operation.operation_id)
+            && TargetOperationResult::result_type_for_operation(operation.operation_id)
                 == Some(operation.rust_result)
     })
 }
@@ -1019,9 +1163,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        MvpOperationRequest, OperationAdapter, OperationAdapterError, OperationContext,
-        OperationInputMode, OperationNetworkMode, OperationOutputFormat, OperationRequest,
-        OperationResult, OperationService, WorkspaceGetRequest, WorkspaceGetResult,
+        OperationAdapter, OperationAdapterError, OperationContext, OperationInputMode,
+        OperationNetworkMode, OperationOutputFormat, OperationRequest, OperationResult,
+        OperationService, TargetOperationRequest, WorkspaceGetRequest, WorkspaceGetResult,
         adapter_registry_linkage_is_valid,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
@@ -1036,14 +1180,14 @@ mod tests {
                 .unwrap_or_else(|error| {
                     panic!("{} failed to parse: {error}", operation.cli_path);
                 });
-            let request = MvpOperationRequest::from_target_args(&parsed)
+            let request = TargetOperationRequest::from_target_args(&parsed)
                 .expect("operation request from target args");
 
             assert_eq!(request.operation_id(), operation.operation_id);
             assert_eq!(request.spec().mcp_tool, operation.mcp_tool);
             assert_eq!(request.request_type_name(), operation.rust_request);
             assert_eq!(
-                MvpOperationRequest::request_type_for_operation(operation.operation_id),
+                TargetOperationRequest::request_type_for_operation(operation.operation_id),
                 Some(operation.rust_request)
             );
         }
@@ -1077,7 +1221,7 @@ mod tests {
         ])
         .expect("target args parse");
 
-        let request = MvpOperationRequest::from_target_args(&parsed)
+        let request = TargetOperationRequest::from_target_args(&parsed)
             .expect("operation request from target args");
         let context = request.context();
 

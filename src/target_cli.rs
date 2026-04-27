@@ -782,7 +782,7 @@ mod tests {
     use crate::operation_registry::OPERATION_REGISTRY;
 
     #[test]
-    fn target_parser_accepts_every_mvp_registry_path() {
+    fn target_parser_accepts_every_target_registry_path() {
         for operation in OPERATION_REGISTRY {
             let parsed = TargetCliArgs::try_parse_from(operation.cli_path.split_whitespace())
                 .unwrap_or_else(|error| {
@@ -793,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    fn target_parser_exposes_only_mvp_top_level_namespaces() {
+    fn target_parser_exposes_only_target_top_level_namespaces() {
         let actual = TargetCliArgs::command()
             .get_subcommands()
             .map(|command| command.get_name().to_owned())

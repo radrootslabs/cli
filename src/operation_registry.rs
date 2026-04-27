@@ -1095,7 +1095,7 @@ mod tests {
     ];
 
     #[test]
-    fn registry_contains_exact_mvp_operation_set() {
+    fn registry_contains_exact_target_operation_set() {
         let actual = operation_ids();
         let expected = EXPECTED_OPERATION_IDS
             .iter()
