@@ -29,6 +29,24 @@ pub fn json_from_stdout(output: &Output) -> Value {
     })
 }
 
+pub fn ndjson_from_stdout(output: &Output) -> Vec<Value> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let frames = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap_or_else(|error| {
+                panic!(
+                    "stdout line was not json: {error}; stderr `{}`; line `{line}`; stdout `{stdout}`",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(!frames.is_empty(), "stdout should contain ndjson frames");
+    frames
+}
+
 pub struct RadrootsCliSandbox {
     root: TempDir,
 }

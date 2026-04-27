@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub const OUTPUT_SCHEMA_VERSION: &str = "radroots.cli.output.v1";
 
@@ -91,6 +91,43 @@ impl OutputEnvelope {
             errors: vec![error],
             next_actions: Vec::new(),
         }
+    }
+
+    pub fn to_ndjson_frames(&self) -> Vec<NdjsonFrame> {
+        let started = NdjsonFrame::new(
+            self.operation_id.clone(),
+            self.request_id.clone(),
+            0,
+            NdjsonFrameType::Started,
+            json!({
+                "state": "started",
+                "dry_run": self.dry_run,
+                "correlation_id": &self.correlation_id,
+                "idempotency_key": &self.idempotency_key,
+                "actor": &self.actor,
+            }),
+        );
+        let mut terminal = NdjsonFrame::new(
+            self.operation_id.clone(),
+            self.request_id.clone(),
+            1,
+            if self.errors.is_empty() {
+                NdjsonFrameType::Completed
+            } else {
+                NdjsonFrameType::Error
+            },
+            json!({
+                "result": &self.result,
+                "next_actions": &self.next_actions,
+                "dry_run": self.dry_run,
+                "correlation_id": &self.correlation_id,
+                "idempotency_key": &self.idempotency_key,
+                "actor": &self.actor,
+            }),
+        );
+        terminal.warnings = self.warnings.clone();
+        terminal.errors = self.errors.clone();
+        vec![started, terminal]
     }
 }
 

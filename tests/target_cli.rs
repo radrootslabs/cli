@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use support::{
     RadrootsCliSandbox, assert_no_removed_command_reference, create_listing_draft,
-    make_listing_publishable, radroots,
+    make_listing_publishable, ndjson_from_stdout, radroots,
 };
 
 const LISTING_ADDR: &str =
@@ -171,6 +171,77 @@ fn target_command_outputs_standard_json_envelope() {
 }
 
 #[test]
+fn request_ids_are_invocation_unique_and_preserve_caller_fields() {
+    let first = radroots()
+        .args([
+            "--format",
+            "json",
+            "--correlation-id",
+            "corr_test",
+            "--idempotency-key",
+            "idem_test",
+            "workspace",
+            "get",
+        ])
+        .output()
+        .expect("run first workspace get");
+    let second = radroots()
+        .args([
+            "--format",
+            "json",
+            "--correlation-id",
+            "corr_test",
+            "--idempotency-key",
+            "idem_test",
+            "workspace",
+            "get",
+        ])
+        .output()
+        .expect("run second workspace get");
+
+    assert!(first.status.success());
+    assert!(second.status.success());
+    let first: Value = serde_json::from_slice(&first.stdout).expect("first json envelope");
+    let second: Value = serde_json::from_slice(&second.stdout).expect("second json envelope");
+
+    assert_eq!(first["correlation_id"], "corr_test");
+    assert_eq!(first["idempotency_key"], "idem_test");
+    assert_eq!(second["correlation_id"], "corr_test");
+    assert_eq!(second["idempotency_key"], "idem_test");
+    assert!(
+        first["request_id"]
+            .as_str()
+            .expect("first request id")
+            .starts_with("req_workspace_get_")
+    );
+    assert_ne!(first["request_id"], second["request_id"]);
+}
+
+#[test]
+fn supported_ndjson_outputs_started_and_completed_frames() {
+    let sandbox = RadrootsCliSandbox::new();
+    let output = sandbox
+        .command()
+        .args(["--format", "ndjson", "account", "list"])
+        .output()
+        .expect("run account list ndjson");
+
+    assert!(output.status.success());
+    let frames = ndjson_from_stdout(&output);
+
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["schema_version"], "radroots.cli.output.v1");
+    assert_eq!(frames[0]["operation_id"], "account.list");
+    assert_eq!(frames[0]["frame_type"], "started");
+    assert_eq!(frames[0]["sequence"], 0);
+    assert_eq!(frames[1]["operation_id"], "account.list");
+    assert_eq!(frames[1]["frame_type"], "completed");
+    assert_eq!(frames[1]["sequence"], 1);
+    assert_eq!(frames[1]["errors"].as_array().expect("errors").len(), 0);
+    assert_eq!(frames[0]["request_id"], frames[1]["request_id"]);
+}
+
+#[test]
 fn unsupported_ndjson_returns_structured_invalid_input() {
     let output = radroots()
         .args(["--format", "ndjson", "workspace", "get"])
@@ -178,11 +249,15 @@ fn unsupported_ndjson_returns_structured_invalid_input() {
         .expect("run workspace get ndjson");
 
     assert_eq!(output.status.code(), Some(2));
-    let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
+    let frames = ndjson_from_stdout(&output);
 
-    assert_eq!(value["operation_id"], "workspace.get");
-    assert_eq!(value["errors"][0]["code"], "invalid_input");
-    assert_eq!(value["errors"][0]["exit_code"], 2);
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0]["operation_id"], "workspace.get");
+    assert_eq!(frames[0]["frame_type"], "started");
+    assert_eq!(frames[1]["operation_id"], "workspace.get");
+    assert_eq!(frames[1]["frame_type"], "error");
+    assert_eq!(frames[1]["errors"][0]["code"], "invalid_input");
+    assert_eq!(frames[1]["errors"][0]["exit_code"], 2);
 }
 
 #[test]

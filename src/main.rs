@@ -17,6 +17,8 @@ mod target_cli;
 
 use std::io::Write;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 
@@ -37,6 +39,8 @@ use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::logging::initialize_logging;
 use crate::runtime_args::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
 use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
+
+static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn main() -> ExitCode {
     match run() {
@@ -301,7 +305,7 @@ where
     let operation_id = request.operation_id().to_owned();
     let envelope_context = request
         .context
-        .envelope_context(format!("req_{}", operation_id.replace('.', "_")));
+        .envelope_context(next_request_id(&operation_id));
     match OperationAdapter::new(service)
         .execute(request)
         .and_then(|result| result.to_envelope(envelope_context.clone()))
@@ -416,7 +420,22 @@ fn failure_envelope(
         error.to_output_error(),
         request
             .context()
-            .envelope_context(format!("req_{}", request.operation_id().replace('.', "_"))),
+            .envelope_context(next_request_id(request.operation_id())),
+    )
+}
+
+fn next_request_id(operation_id: &str) -> String {
+    let sequence = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!(
+        "req_{}_{}_{}_{}",
+        operation_id.replace('.', "_"),
+        std::process::id(),
+        timestamp,
+        sequence
     )
 }
 
@@ -431,7 +450,11 @@ fn render_envelope(
             serde_json::to_writer_pretty(&mut handle, envelope)?;
         }
         TargetOutputFormat::Ndjson => {
-            serde_json::to_writer(&mut handle, envelope)?;
+            for frame in envelope.to_ndjson_frames() {
+                serde_json::to_writer(&mut handle, &frame)?;
+                writeln!(handle)?;
+            }
+            return Ok(());
         }
     }
     writeln!(handle)?;
