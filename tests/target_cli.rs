@@ -1,5 +1,7 @@
 mod support;
 
+use std::fs;
+
 use serde_json::Value;
 
 use support::{
@@ -345,11 +347,34 @@ fn listing_publish_dry_run_validates_missing_file() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "runtime_error");
+    assert_eq!(value["errors"][0]["code"], "not_found");
+    assert_eq!(value["errors"][0]["exit_code"], 4);
     assert_no_removed_command_reference(
         &value,
         &["listing", "publish", "--dry-run", "missing-listing.toml"],
     );
+}
+
+#[test]
+fn listing_publish_invalid_draft_returns_validation_failure() {
+    let sandbox = RadrootsCliSandbox::new();
+    let invalid = sandbox.root().join("invalid-listing.toml");
+    fs::write(&invalid, "listing = [").expect("write invalid listing");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "publish",
+        invalid.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "validation_failed");
+    assert_eq!(value["errors"][0]["exit_code"], 10);
 }
 
 #[test]

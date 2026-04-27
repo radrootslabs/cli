@@ -60,7 +60,10 @@ impl OperationService<ListingCreateRequest> for ListingOperationService<'_> {
             }));
         }
 
-        let view = map_runtime(crate::runtime::listing::scaffold(self.config, &args))?;
+        let view = map_runtime(
+            request.operation_id(),
+            crate::runtime::listing::scaffold(self.config, &args),
+        )?;
         serialized_operation_result::<ListingCreateResult, _>(&view)
     }
 }
@@ -75,7 +78,10 @@ impl OperationService<ListingGetRequest> for ListingOperationService<'_> {
         let args = RecordLookupArgs {
             key: required_string(&request, "key")?,
         };
-        let view = map_runtime(crate::runtime::listing::get(self.config, &args))?;
+        let view = map_runtime(
+            request.operation_id(),
+            crate::runtime::listing::get(self.config, &args),
+        )?;
         serialized_operation_result::<ListingGetResult, _>(&view)
     }
 }
@@ -107,7 +113,10 @@ impl OperationService<ListingUpdateRequest> for ListingOperationService<'_> {
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
-        let view = map_runtime(crate::runtime::listing::update(&config, &args))?;
+        let view = map_runtime(
+            request.operation_id(),
+            crate::runtime::listing::update(&config, &args),
+        )?;
         serialized_operation_result::<ListingUpdateResult, _>(&view)
     }
 }
@@ -122,7 +131,10 @@ impl OperationService<ListingValidateRequest> for ListingOperationService<'_> {
         let args = ListingFileArgs {
             file: required_path(&request, "file")?,
         };
-        let view = map_runtime(crate::runtime::listing::validate(self.config, &args))?;
+        let view = map_runtime(
+            request.operation_id(),
+            crate::runtime::listing::validate(self.config, &args),
+        )?;
         serialized_operation_result::<ListingValidateResult, _>(&view)
     }
 }
@@ -157,7 +169,10 @@ impl OperationService<ListingArchiveRequest> for ListingOperationService<'_> {
         }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
-        let view = map_runtime(crate::runtime::listing::archive(&config, &args))?;
+        let view = map_runtime(
+            request.operation_id(),
+            crate::runtime::listing::archive(&config, &args),
+        )?;
         mutation_result::<ListingArchiveResult>(request.operation_id(), &view)
     }
 }
@@ -262,8 +277,11 @@ where
     OperationResult::new(R::from_value(value))
 }
 
-fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
-    result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
+fn map_runtime<T>(
+    operation_id: &str,
+    result: Result<T, RuntimeError>,
+) -> Result<T, OperationAdapterError> {
+    result.map_err(|error| OperationAdapterError::runtime_failure(operation_id, error))
 }
 
 fn publish_runtime_error(operation_id: &str, error: RuntimeError) -> OperationAdapterError {
@@ -276,13 +294,7 @@ fn publish_runtime_error(operation_id: &str, error: RuntimeError) -> OperationAd
     {
         return OperationAdapterError::unconfigured(operation_id, message);
     }
-    if matches!(&error, RuntimeError::Config(_)) {
-        return OperationAdapterError::InvalidInput {
-            operation_id: operation_id.to_owned(),
-            message,
-        };
-    }
-    OperationAdapterError::Runtime(message)
+    OperationAdapterError::runtime_failure(operation_id, error)
 }
 
 fn required_string<P>(

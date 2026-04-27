@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::fmt::Debug;
+use std::io::ErrorKind;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -10,6 +11,7 @@ use crate::output_contract::{
     CliExitCode, EnvelopeActor, EnvelopeContext, NextAction, OUTPUT_SCHEMA_VERSION, OutputEnvelope,
     OutputError, OutputWarning,
 };
+use crate::runtime::RuntimeError;
 use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +300,16 @@ pub enum OperationAdapterError {
         operation_id: String,
         message: String,
     },
+    #[error("resource not found for `{operation_id}`: {message}")]
+    NotFound {
+        operation_id: String,
+        message: String,
+    },
+    #[error("validation failed for `{operation_id}`: {message}")]
+    ValidationFailed {
+        operation_id: String,
+        message: String,
+    },
     #[error("approval required for `{operation_id}`: {message}")]
     ApprovalRequired {
         operation_id: String,
@@ -386,6 +398,35 @@ impl OperationAdapterError {
         )
     }
 
+    pub fn runtime_failure(operation_id: &str, error: RuntimeError) -> Self {
+        let message = error.to_string();
+        let lowered = message.to_ascii_lowercase();
+        match &error {
+            RuntimeError::Io(io_error) if io_error.kind() == ErrorKind::NotFound => {
+                Self::NotFound {
+                    operation_id: operation_id.to_owned(),
+                    message,
+                }
+            }
+            RuntimeError::Config(_) if looks_like_not_found(&lowered) => Self::NotFound {
+                operation_id: operation_id.to_owned(),
+                message,
+            },
+            RuntimeError::Config(_) if looks_like_validation_failure(&lowered) => {
+                Self::ValidationFailed {
+                    operation_id: operation_id.to_owned(),
+                    message,
+                }
+            }
+            RuntimeError::Accounts(_) => classify_runtime_failure(
+                operation_id,
+                message,
+                RuntimeFailureAvailability::Unavailable,
+            ),
+            _ => Self::Runtime(message),
+        }
+    }
+
     pub fn to_output_error(&self) -> OutputError {
         match self {
             Self::ApprovalRequired { message, .. } => OutputError::new(
@@ -396,6 +437,26 @@ impl OperationAdapterError {
             Self::InvalidInput { message, .. } => {
                 OutputError::new("invalid_input", message.clone(), CliExitCode::InvalidInput)
             }
+            Self::NotFound {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "not_found",
+                operation_id,
+                "resource",
+                message,
+                CliExitCode::NotFound,
+            ),
+            Self::ValidationFailed {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "validation_failed",
+                operation_id,
+                "validation",
+                message,
+                CliExitCode::ValidationFailed,
+            ),
             Self::OfflineForbidden {
                 operation_id,
                 message,
@@ -631,6 +692,32 @@ fn classify_runtime_failure(
 
 fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
+}
+
+fn looks_like_not_found(value: &str) -> bool {
+    contains_any(
+        value,
+        &[
+            "not found",
+            "no such file or directory",
+            "path not found",
+            "missing file",
+        ],
+    )
+}
+
+fn looks_like_validation_failure(value: &str) -> bool {
+    contains_any(
+        value,
+        &[
+            "invalid",
+            "parse ",
+            "parse:",
+            "must not",
+            "must be",
+            "validation",
+        ],
+    )
 }
 
 fn runtime_output_error(
@@ -1056,6 +1143,8 @@ pub fn adapter_registry_linkage_is_valid() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use clap::Parser;
     use serde_json::json;
 
@@ -1066,6 +1155,7 @@ mod tests {
         adapter_registry_linkage_is_valid,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
+    use crate::runtime::RuntimeError;
     use crate::target_cli::TargetCliArgs;
 
     #[test]
@@ -1249,6 +1339,24 @@ mod tests {
                 "operation_unavailable",
                 "operation",
                 3,
+            ),
+            (
+                OperationAdapterError::runtime_failure(
+                    "listing.publish",
+                    RuntimeError::Io(io::Error::new(io::ErrorKind::NotFound, "missing draft")),
+                ),
+                "not_found",
+                "resource",
+                4,
+            ),
+            (
+                OperationAdapterError::runtime_failure(
+                    "listing.validate",
+                    RuntimeError::Config("invalid listing draft listing.toml".to_owned()),
+                ),
+                "validation_failed",
+                "validation",
+                10,
             ),
         ];
 
