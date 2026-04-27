@@ -542,6 +542,83 @@ fn store_backup_dry_run_preflights_initialized_store_without_writing_file() {
 }
 
 #[test]
+fn core_account_store_dry_runs_preflight_without_mutating_local_state() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let workspace = sandbox.json_success(&["--format", "json", "--dry-run", "workspace", "init"]);
+    let workspace_db = workspace["result"]["local"]["path"]
+        .as_str()
+        .expect("workspace db path");
+    assert_eq!(workspace["operation_id"], "workspace.init");
+    assert_eq!(workspace["dry_run"], true);
+    assert_eq!(workspace["result"]["state"], "dry_run");
+    assert_eq!(workspace["result"]["local"]["replica_db"], "missing");
+    assert!(!Path::new(workspace_db).exists());
+
+    let store = sandbox.json_success(&["--format", "json", "--dry-run", "store", "init"]);
+    let store_db = store["result"]["path"].as_str().expect("store db path");
+    assert_eq!(store["operation_id"], "store.init");
+    assert_eq!(store["dry_run"], true);
+    assert_eq!(store["result"]["state"], "dry_run");
+    assert_eq!(store["result"]["replica_db"], "missing");
+    assert!(!Path::new(store_db).exists());
+
+    let account_create =
+        sandbox.json_success(&["--format", "json", "--dry-run", "account", "create"]);
+    assert_eq!(account_create["operation_id"], "account.create");
+    assert_eq!(account_create["dry_run"], true);
+    assert_eq!(account_create["result"]["state"], "dry_run");
+    assert_eq!(account_create["result"]["secret_backend"]["state"], "ready");
+
+    let account_list = sandbox.json_success(&["--format", "json", "account", "list"]);
+    assert_eq!(account_list["result"]["count"], 0);
+
+    let created = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = created["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let clear = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "selection",
+        "clear",
+    ]);
+    assert_eq!(clear["operation_id"], "account.selection.clear");
+    assert_eq!(clear["result"]["state"], "dry_run");
+    assert_eq!(clear["result"]["cleared_account"]["id"], account_id);
+    assert_eq!(clear["result"]["remaining_account_count"], 1);
+
+    let selection = sandbox.json_success(&["--format", "json", "account", "selection", "get"]);
+    assert_eq!(
+        selection["result"]["account_resolution"]["default_account"]["id"],
+        account_id
+    );
+}
+
+#[test]
+fn runtime_lifecycle_dry_runs_inspect_without_changing_runtime_status() {
+    let sandbox = RadrootsCliSandbox::new();
+    let before = sandbox.json_success(&["--format", "json", "runtime", "status", "get"]);
+
+    for (command, operation_id, action) in [
+        ("start", "runtime.start", "start"),
+        ("stop", "runtime.stop", "stop"),
+        ("restart", "runtime.restart", "restart"),
+    ] {
+        let value = sandbox.json_success(&["--format", "json", "--dry-run", "runtime", command]);
+        assert_eq!(value["operation_id"], operation_id);
+        assert_eq!(value["dry_run"], true);
+        assert_eq!(value["result"]["action"], action);
+        assert_eq!(value["result"]["runtime_id"], "radrootsd");
+    }
+
+    let after = sandbox.json_success(&["--format", "json", "runtime", "status", "get"]);
+    assert_eq!(after["result"], before["result"]);
+}
+
+#[test]
 fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
     let sandbox = RadrootsCliSandbox::new();
     let public_identity = identity_public(61);

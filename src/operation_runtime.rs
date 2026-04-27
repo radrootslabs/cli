@@ -307,6 +307,7 @@ where
         target.runtime_id.as_str(),
         target.instance_id.as_deref(),
         action,
+        request.context.dry_run,
     ))?;
     serialized_operation_result::<R, _>(&inspection.view)
 }

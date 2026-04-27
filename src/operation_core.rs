@@ -22,7 +22,8 @@ use crate::runtime::accounts::{
     account_resolution_view, account_summary_view, clear_default_account,
     create_or_migrate_default_account, import_public_identity, preview_account_removal,
     preview_public_identity_import, remove_account, resolve_account_resolution,
-    resolve_account_selector, select_account, snapshot, unresolved_account_reason,
+    resolve_account_selector, secret_backend_status, select_account, snapshot,
+    unresolved_account_reason,
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
@@ -47,11 +48,11 @@ impl OperationService<WorkspaceInitRequest> for CoreOperationService<'_> {
         request: OperationRequest<WorkspaceInitRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if request.context.dry_run {
+            let local = map_runtime(crate::runtime::local::init_preflight(self.config))?;
             return json_operation_result::<WorkspaceInitResult>(json!({
-                "state": "dry_run",
+                "state": local.state,
                 "profile": self.config.paths.profile,
-                "local_root": self.config.local.root.display().to_string(),
-                "replica_db_path": self.config.local.replica_db_path.display().to_string(),
+                "local": local,
             }));
         }
 
@@ -195,9 +196,24 @@ impl OperationService<AccountCreateRequest> for CoreOperationService<'_> {
         request: OperationRequest<AccountCreateRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if request.context.dry_run {
+            let secret_backend = secret_backend_status(self.config);
+            if secret_backend.state != "ready" {
+                return Err(OperationAdapterError::OperationUnavailable {
+                    operation_id: request.operation_id().to_owned(),
+                    message: secret_backend
+                        .reason
+                        .unwrap_or_else(|| "account secret backend is not available".to_owned()),
+                });
+            }
             return json_operation_result::<AccountCreateResult>(json!({
                 "state": "dry_run",
                 "store_path": self.config.account.store_path.display().to_string(),
+                "secrets_dir": self.config.account.secrets_dir.display().to_string(),
+                "secret_backend": {
+                    "state": secret_backend.state,
+                    "active_backend": secret_backend.active_backend,
+                    "used_fallback": secret_backend.used_fallback,
+                },
             }));
         }
 
@@ -390,8 +406,12 @@ impl OperationService<AccountSelectionClearRequest> for CoreOperationService<'_>
         request: OperationRequest<AccountSelectionClearRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if request.context.dry_run {
+            let resolution = map_runtime(resolve_account_resolution(self.config))?;
+            let account_snapshot = map_runtime(snapshot(self.config))?;
             return json_operation_result::<AccountSelectionClearResult>(json!({
                 "state": "dry_run",
+                "cleared_account": resolution.default_account.as_ref().map(account_summary_view),
+                "remaining_account_count": account_snapshot.accounts.len(),
             }));
         }
 
@@ -412,10 +432,8 @@ impl OperationService<StoreInitRequest> for CoreOperationService<'_> {
         request: OperationRequest<StoreInitRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if request.context.dry_run {
-            return json_operation_result::<StoreInitResult>(json!({
-                "state": "dry_run",
-                "path": self.config.local.replica_db_path.display().to_string(),
-            }));
+            let view = map_runtime(crate::runtime::local::init_preflight(self.config))?;
+            return serialized_operation_result::<StoreInitResult, _>(&view);
         }
 
         let view = map_runtime(crate::runtime::local::init(self.config))?;

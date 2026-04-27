@@ -40,6 +40,33 @@ pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
     })
 }
 
+pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
+    validate_local_roots(config)?;
+    if config.local.replica_db_path.exists() {
+        let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+        let manifest = export_manifest(&executor)?;
+        return Ok(LocalInitView {
+            state: "ready".to_owned(),
+            source: LOCAL_SOURCE.to_owned(),
+            local_root: config.local.root.display().to_string(),
+            replica_db: "ready".to_owned(),
+            path: config.local.replica_db_path.display().to_string(),
+            replica_db_version: manifest.replica_db_version,
+            backup_format_version: manifest.backup_format_version,
+        });
+    }
+
+    Ok(LocalInitView {
+        state: "dry_run".to_owned(),
+        source: LOCAL_SOURCE.to_owned(),
+        local_root: config.local.root.display().to_string(),
+        replica_db: "missing".to_owned(),
+        path: config.local.replica_db_path.display().to_string(),
+        replica_db_version: String::new(),
+        backup_format_version: String::new(),
+    })
+}
+
 pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, RuntimeError> {
     if !config.local.replica_db_path.exists() {
         return Ok(LocalStatusView {
@@ -237,6 +264,34 @@ fn ensure_local_roots(config: &RuntimeConfig) -> Result<(), RuntimeError> {
     fs::create_dir_all(&config.local.backups_dir)?;
     fs::create_dir_all(&config.local.exports_dir)?;
     Ok(())
+}
+
+fn validate_local_roots(config: &RuntimeConfig) -> Result<(), RuntimeError> {
+    validate_directory_target(&config.local.root)?;
+    validate_directory_target(&config.local.backups_dir)?;
+    validate_directory_target(&config.local.exports_dir)?;
+    Ok(())
+}
+
+fn validate_directory_target(path: &Path) -> Result<(), RuntimeError> {
+    let mut candidate = path.to_path_buf();
+    loop {
+        if candidate.exists() {
+            if candidate.is_dir() {
+                return Ok(());
+            }
+            return Err(RuntimeError::Config(format!(
+                "path {} is not a directory",
+                candidate.display()
+            )));
+        }
+        if !candidate.pop() {
+            return Err(RuntimeError::Config(format!(
+                "path {} has no existing parent directory",
+                path.display()
+            )));
+        }
+    }
 }
 
 fn missing_backup_view(output: &Path) -> LocalBackupView {

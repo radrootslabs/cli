@@ -160,10 +160,11 @@ pub fn inspect_action(
     runtime_id: &str,
     instance_id: Option<&str>,
     action: RuntimeLifecycleAction,
+    dry_run: bool,
 ) -> Result<RuntimeInspection<RuntimeActionView>, RuntimeError> {
     let mut context = load_management_context(config)?;
     let target = resolve_runtime_target(&context, runtime_id, instance_id);
-    if target.runtime_group == RuntimeGroup::ActiveManagedTarget {
+    if target.runtime_group == RuntimeGroup::ActiveManagedTarget && !dry_run {
         return execute_action(config, &mut context, target, action);
     }
     let inspection = inspect_target_action(&target, action, None);
