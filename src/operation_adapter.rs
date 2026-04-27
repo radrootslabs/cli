@@ -3,7 +3,7 @@
 use std::fmt::Debug;
 
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::operation_registry::{OPERATION_REGISTRY, OperationSpec, get_operation};
 use crate::output_contract::{
@@ -312,13 +312,43 @@ pub enum OperationAdapterError {
         operation_id: String,
         message: String,
     },
-    #[error("operation runtime error: {0}")]
-    Runtime(String),
-    #[error("operation `{operation_id}` is unavailable or unconfigured: {message}")]
-    UnavailableOrUnconfigured {
+    #[error("account unresolved for `{operation_id}`: {message}")]
+    AccountUnresolved {
         operation_id: String,
         message: String,
     },
+    #[error("account is watch-only for `{operation_id}`: {message}")]
+    AccountWatchOnly {
+        operation_id: String,
+        message: String,
+    },
+    #[error("signer unconfigured for `{operation_id}`: {message}")]
+    SignerUnconfigured {
+        operation_id: String,
+        message: String,
+    },
+    #[error("signer unavailable for `{operation_id}`: {message}")]
+    SignerUnavailable {
+        operation_id: String,
+        message: String,
+    },
+    #[error("provider unconfigured for `{operation_id}`: {message}")]
+    ProviderUnconfigured {
+        operation_id: String,
+        message: String,
+    },
+    #[error("provider unavailable for `{operation_id}`: {message}")]
+    ProviderUnavailable {
+        operation_id: String,
+        message: String,
+    },
+    #[error("operation `{operation_id}` is unavailable: {message}")]
+    OperationUnavailable {
+        operation_id: String,
+        message: String,
+    },
+    #[error("operation runtime error: {0}")]
+    Runtime(String),
 }
 
 impl OperationAdapterError {
@@ -327,6 +357,22 @@ impl OperationAdapterError {
             operation_id: operation_id.to_owned(),
             message: "missing required `approval_token` input".to_owned(),
         }
+    }
+
+    pub fn unconfigured(operation_id: &str, message: String) -> Self {
+        classify_runtime_failure(
+            operation_id,
+            message,
+            RuntimeFailureAvailability::Unconfigured,
+        )
+    }
+
+    pub fn unavailable(operation_id: &str, message: String) -> Self {
+        classify_runtime_failure(
+            operation_id,
+            message,
+            RuntimeFailureAvailability::Unavailable,
+        )
     }
 
     pub fn to_output_error(&self) -> OutputError {
@@ -339,15 +385,95 @@ impl OperationAdapterError {
             Self::InvalidInput { message, .. } => {
                 OutputError::new("invalid_input", message.clone(), CliExitCode::InvalidInput)
             }
-            Self::OfflineForbidden { message, .. } => OutputError::new(
+            Self::OfflineForbidden {
+                operation_id,
+                message,
+            } => runtime_output_error(
                 "offline_forbidden",
-                message.clone(),
+                operation_id,
+                "network",
+                message,
                 CliExitCode::SyncOrNetworkFailure,
             ),
-            Self::NetworkUnavailable { message, .. } => OutputError::new(
+            Self::NetworkUnavailable {
+                operation_id,
+                message,
+            } => runtime_output_error(
                 "network_unavailable",
-                message.clone(),
+                operation_id,
+                "network",
+                message,
                 CliExitCode::SyncOrNetworkFailure,
+            ),
+            Self::AccountUnresolved {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "account_unresolved",
+                operation_id,
+                "account",
+                message,
+                CliExitCode::AuthorizationFailed,
+            ),
+            Self::AccountWatchOnly {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "account_watch_only",
+                operation_id,
+                "account",
+                message,
+                CliExitCode::SignerUnavailable,
+            ),
+            Self::SignerUnconfigured {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "signer_unconfigured",
+                operation_id,
+                "signer",
+                message,
+                CliExitCode::SignerUnavailable,
+            ),
+            Self::SignerUnavailable {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "signer_unavailable",
+                operation_id,
+                "signer",
+                message,
+                CliExitCode::SignerUnavailable,
+            ),
+            Self::ProviderUnconfigured {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "provider_unconfigured",
+                operation_id,
+                "provider",
+                message,
+                CliExitCode::RuntimeUnavailable,
+            ),
+            Self::ProviderUnavailable {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "provider_unavailable",
+                operation_id,
+                "provider",
+                message,
+                CliExitCode::RuntimeUnavailable,
+            ),
+            Self::OperationUnavailable {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "operation_unavailable",
+                operation_id,
+                "operation",
+                message,
+                CliExitCode::RuntimeUnavailable,
             ),
             Self::UnknownOperation(operation_id) => OutputError::new(
                 "unknown_operation",
@@ -367,13 +493,112 @@ impl OperationAdapterError {
             Self::Runtime(message) => {
                 OutputError::new("runtime_error", message.clone(), CliExitCode::InternalError)
             }
-            Self::UnavailableOrUnconfigured { message, .. } => OutputError::new(
-                "unavailable_or_unconfigured",
-                message.clone(),
-                CliExitCode::UnavailableOrUnconfigured,
-            ),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeFailureAvailability {
+    Unconfigured,
+    Unavailable,
+}
+
+fn classify_runtime_failure(
+    operation_id: &str,
+    message: String,
+    availability: RuntimeFailureAvailability,
+) -> OperationAdapterError {
+    let lowered = message.to_ascii_lowercase();
+    if contains_any(&lowered, &["watch_only", "watch-only", "watch only"]) {
+        return OperationAdapterError::AccountWatchOnly {
+            operation_id: operation_id.to_owned(),
+            message,
+        };
+    }
+    if contains_any(
+        &lowered,
+        &[
+            "no account",
+            "account selection",
+            "unresolved account",
+            "selected account",
+        ],
+    ) {
+        return OperationAdapterError::AccountUnresolved {
+            operation_id: operation_id.to_owned(),
+            message,
+        };
+    }
+    if contains_any(
+        &lowered,
+        &[
+            "signer",
+            "sign_event",
+            "remote_nip46",
+            "nip46",
+            "secret-backed",
+            "secret backed",
+        ],
+    ) {
+        return match availability {
+            RuntimeFailureAvailability::Unconfigured => OperationAdapterError::SignerUnconfigured {
+                operation_id: operation_id.to_owned(),
+                message,
+            },
+            RuntimeFailureAvailability::Unavailable => OperationAdapterError::SignerUnavailable {
+                operation_id: operation_id.to_owned(),
+                message,
+            },
+        };
+    }
+    if contains_any(
+        &lowered,
+        &[
+            "provider",
+            "write-plane",
+            "write plane",
+            "radrootsd",
+            "bridge",
+            "rpc",
+            "daemon",
+        ],
+    ) {
+        return match availability {
+            RuntimeFailureAvailability::Unconfigured => {
+                OperationAdapterError::ProviderUnconfigured {
+                    operation_id: operation_id.to_owned(),
+                    message,
+                }
+            }
+            RuntimeFailureAvailability::Unavailable => OperationAdapterError::ProviderUnavailable {
+                operation_id: operation_id.to_owned(),
+                message,
+            },
+        };
+    }
+    OperationAdapterError::OperationUnavailable {
+        operation_id: operation_id.to_owned(),
+        message,
+    }
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn runtime_output_error(
+    code: &str,
+    operation_id: &str,
+    class: &str,
+    message: &str,
+    exit_code: CliExitCode,
+) -> OutputError {
+    let mut error = OutputError::new(code, message.to_owned(), exit_code);
+    error.detail = Some(json!({
+        "operation_id": operation_id,
+        "class": class,
+    }));
+    error
 }
 
 macro_rules! mvp_operation_contracts {
@@ -872,5 +1097,66 @@ mod tests {
         assert_eq!(output_error.code, "approval_required");
         assert_eq!(output_error.exit_code, 6);
         assert!(output_error.message.contains("approval_token"));
+    }
+
+    #[test]
+    fn runtime_failures_map_to_specific_machine_codes() {
+        let cases = [
+            (
+                OperationAdapterError::unconfigured(
+                    "listing.publish",
+                    "no selected account for seller write".to_owned(),
+                ),
+                "account_unresolved",
+                "account",
+                5,
+            ),
+            (
+                OperationAdapterError::unconfigured(
+                    "listing.publish",
+                    "watch_only account cannot sign".to_owned(),
+                ),
+                "account_watch_only",
+                "account",
+                7,
+            ),
+            (
+                OperationAdapterError::unconfigured(
+                    "listing.publish",
+                    "signer.remote_nip46 binding is missing".to_owned(),
+                ),
+                "signer_unconfigured",
+                "signer",
+                7,
+            ),
+            (
+                OperationAdapterError::unavailable(
+                    "listing.publish",
+                    "radrootsd bridge is unavailable".to_owned(),
+                ),
+                "provider_unavailable",
+                "provider",
+                3,
+            ),
+            (
+                OperationAdapterError::unconfigured(
+                    "basket.quote.create",
+                    "quote engine not ready".to_owned(),
+                ),
+                "operation_unavailable",
+                "operation",
+                3,
+            ),
+        ];
+
+        for (error, code, class, exit_code) in cases {
+            let output = error.to_output_error();
+            assert_eq!(output.code, code);
+            assert_eq!(output.exit_code, exit_code);
+            assert_eq!(
+                output.detail.expect("detail")["class"],
+                serde_json::Value::String(class.to_owned())
+            );
+        }
     }
 }

@@ -289,8 +289,9 @@ fn myc_listing_publish_does_not_fallback_to_local_account() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"], serde_json::Value::Null);
-    assert_eq!(value["errors"][0]["code"], "unavailable_or_unconfigured");
-    assert_eq!(value["errors"][0]["exit_code"], 3);
+    assert_eq!(value["errors"][0]["code"], "signer_unconfigured");
+    assert_eq!(value["errors"][0]["exit_code"], 7);
+    assert_eq!(value["errors"][0]["detail"]["class"], "signer");
     assert_contains(&value["errors"][0]["message"], "signer.remote_nip46");
 }
 

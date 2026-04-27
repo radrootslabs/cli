@@ -247,11 +247,11 @@ fn disposition_error(
 ) -> OperationAdapterError {
     match disposition {
         CommandDisposition::Success => OperationAdapterError::Runtime(message),
-        CommandDisposition::Unconfigured | CommandDisposition::ExternalUnavailable => {
-            OperationAdapterError::UnavailableOrUnconfigured {
-                operation_id: operation_id.to_owned(),
-                message,
-            }
+        CommandDisposition::Unconfigured => {
+            OperationAdapterError::unconfigured(operation_id, message)
+        }
+        CommandDisposition::ExternalUnavailable => {
+            OperationAdapterError::unavailable(operation_id, message)
         }
         CommandDisposition::Unsupported => OperationAdapterError::InvalidInput {
             operation_id: operation_id.to_owned(),
