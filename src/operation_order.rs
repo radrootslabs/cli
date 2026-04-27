@@ -46,11 +46,7 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
                 .idempotency_key
                 .clone()
                 .or_else(|| string_input(&request, "idempotency_key")),
-            signer_session_id: request
-                .context
-                .signer_session_id
-                .clone()
-                .or_else(|| string_input(&request, "signer_session_id")),
+            signer_session_id: string_input(&request, "signer_session_id"),
         };
         let mut config = self.config.clone();
         if request.context.dry_run {

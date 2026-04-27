@@ -140,11 +140,7 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
                 .idempotency_key
                 .clone()
                 .or_else(|| string_input(&request, "idempotency_key")),
-            signer_session_id: request
-                .context
-                .signer_session_id
-                .clone()
-                .or_else(|| string_input(&request, "signer_session_id")),
+            signer_session_id: string_input(&request, "signer_session_id"),
             print_job: bool_input(&request, "print_job").unwrap_or(false),
             print_event: bool_input(&request, "print_event").unwrap_or(false),
         };

@@ -1078,10 +1078,10 @@ pub fn resolve_signer_session_id(
     match matches.len() {
         1 => Ok(matches.pop().expect("exactly one signer session")),
         0 => Err(DaemonRpcError::Unconfigured(format!(
-            "no authorized signer session matched {actor_role} pubkey `{actor_pubkey}` for sign_event:{event_kind}; connect a signer session or pass --signer-session-id"
+            "no authorized signer session matched {actor_role} pubkey `{actor_pubkey}` for sign_event:{event_kind}; configure exactly one signer session"
         ))),
         _ => Err(DaemonRpcError::Unconfigured(format!(
-            "multiple authorized signer sessions matched {actor_role} pubkey `{actor_pubkey}` for sign_event:{event_kind}; pass --signer-session-id"
+            "multiple authorized signer sessions matched {actor_role} pubkey `{actor_pubkey}` for sign_event:{event_kind}; configure exactly one signer session"
         ))),
     }
 }

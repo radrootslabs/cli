@@ -67,6 +67,9 @@ fn removed_global_flags_are_rejected_publicly() {
         ["--yes", "workspace", "get"].as_slice(),
         ["--non-interactive", "workspace", "get"].as_slice(),
         ["--signer", "myc", "workspace", "get"].as_slice(),
+        ["--farm-id", "farm_test", "workspace", "get"].as_slice(),
+        ["--profile", "repo_local", "workspace", "get"].as_slice(),
+        ["--signer-session-id", "session_test", "workspace", "get"].as_slice(),
     ] {
         let output = radroots().args(args).output().expect("run removed flag");
 
@@ -91,6 +94,28 @@ fn removed_command_families_are_rejected_publicly() {
         let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
         assert!(stderr.contains("unrecognized subcommand"));
     }
+}
+
+#[test]
+fn account_id_global_populates_envelope_actor() {
+    let output = radroots()
+        .args([
+            "--format",
+            "json",
+            "--account-id",
+            "acct_test",
+            "workspace",
+            "get",
+        ])
+        .output()
+        .expect("run workspace get");
+
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
+
+    assert_eq!(value["operation_id"], "workspace.get");
+    assert_eq!(value["actor"]["account_id"], "acct_test");
+    assert_eq!(value["actor"]["role"], "account");
 }
 
 #[test]

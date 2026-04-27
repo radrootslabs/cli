@@ -7,8 +7,8 @@ use serde_json::{Map, Value};
 
 use crate::operation_registry::{OPERATION_REGISTRY, OperationSpec, get_operation};
 use crate::output_contract::{
-    CliExitCode, EnvelopeContext, NextAction, OUTPUT_SCHEMA_VERSION, OutputEnvelope, OutputError,
-    OutputWarning,
+    CliExitCode, EnvelopeActor, EnvelopeContext, NextAction, OUTPUT_SCHEMA_VERSION, OutputEnvelope,
+    OutputError, OutputWarning,
 };
 use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
 
@@ -64,9 +64,6 @@ impl Default for OperationInputMode {
 pub struct OperationContext {
     pub output_format: OperationOutputFormat,
     pub account_id: Option<String>,
-    pub farm_id: Option<String>,
-    pub profile: Option<String>,
-    pub signer_session_id: Option<String>,
     pub relays: Vec<String>,
     pub network_mode: OperationNetworkMode,
     pub dry_run: bool,
@@ -85,9 +82,6 @@ impl OperationContext {
         Self {
             output_format: OperationOutputFormat::from(args.format),
             account_id: args.account_id.clone(),
-            farm_id: args.farm_id.clone(),
-            profile: args.profile.clone(),
-            signer_session_id: args.signer_session_id.clone(),
             relays: args.relay.clone(),
             network_mode: if args.offline {
                 OperationNetworkMode::Offline
@@ -116,6 +110,10 @@ impl OperationContext {
         let mut context = EnvelopeContext::new(request_id, self.dry_run);
         context.correlation_id = self.correlation_id.clone();
         context.idempotency_key = self.idempotency_key.clone();
+        context.actor = self.account_id.as_ref().map(|account_id| EnvelopeActor {
+            account_id: account_id.clone(),
+            role: "account".to_owned(),
+        });
         context
     }
 }
@@ -771,12 +769,6 @@ mod tests {
             "json",
             "--account-id",
             "acct_test",
-            "--farm-id",
-            "farm_test",
-            "--profile",
-            "repo_local",
-            "--signer-session-id",
-            "sess_test",
             "--relay",
             "wss://relay.one",
             "--online",
@@ -803,9 +795,6 @@ mod tests {
 
         assert_eq!(context.output_format, OperationOutputFormat::Json);
         assert_eq!(context.account_id.as_deref(), Some("acct_test"));
-        assert_eq!(context.farm_id.as_deref(), Some("farm_test"));
-        assert_eq!(context.profile.as_deref(), Some("repo_local"));
-        assert_eq!(context.signer_session_id.as_deref(), Some("sess_test"));
         assert_eq!(context.relays, vec!["wss://relay.one".to_owned()]);
         assert_eq!(context.network_mode, OperationNetworkMode::Online);
         assert!(context.dry_run);
@@ -817,6 +806,11 @@ mod tests {
         assert!(context.verbose);
         assert!(context.trace);
         assert!(!context.color);
+
+        let envelope_context = context.envelope_context("req_test");
+        let actor = envelope_context.actor.expect("account actor");
+        assert_eq!(actor.account_id, "acct_test");
+        assert_eq!(actor.role, "account");
     }
 
     #[test]

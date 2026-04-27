@@ -18,12 +18,6 @@ pub struct TargetCliArgs {
     pub format: TargetOutputFormat,
     #[arg(long = "account-id", global = true)]
     pub account_id: Option<String>,
-    #[arg(long = "farm-id", global = true)]
-    pub farm_id: Option<String>,
-    #[arg(long = "profile", global = true)]
-    pub profile: Option<String>,
-    #[arg(long = "signer-session-id", global = true)]
-    pub signer_session_id: Option<String>,
     #[arg(long = "relay", global = true)]
     pub relay: Vec<String>,
     #[arg(long = "offline", global = true, action = ArgAction::SetTrue, conflicts_with = "online")]
@@ -791,12 +785,6 @@ mod tests {
             "ndjson",
             "--account-id",
             "acct_test",
-            "--farm-id",
-            "farm_test",
-            "--profile",
-            "repo_local",
-            "--signer-session-id",
-            "sess_test",
             "--relay",
             "wss://relay.one",
             "--relay",
@@ -819,9 +807,6 @@ mod tests {
 
         assert_eq!(parsed.format, TargetOutputFormat::Ndjson);
         assert_eq!(parsed.account_id.as_deref(), Some("acct_test"));
-        assert_eq!(parsed.farm_id.as_deref(), Some("farm_test"));
-        assert_eq!(parsed.profile.as_deref(), Some("repo_local"));
-        assert_eq!(parsed.signer_session_id.as_deref(), Some("sess_test"));
         assert_eq!(
             parsed.relay,
             vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
@@ -846,6 +831,15 @@ mod tests {
             vec!["radroots", "--yes", "config", "get"],
             vec!["radroots", "--non-interactive", "config", "get"],
             vec!["radroots", "--signer", "myc", "config", "get"],
+            vec!["radroots", "--farm-id", "farm_test", "config", "get"],
+            vec!["radroots", "--profile", "repo_local", "config", "get"],
+            vec![
+                "radroots",
+                "--signer-session-id",
+                "sess_test",
+                "config",
+                "get",
+            ],
         ];
 
         for args in rejected {
