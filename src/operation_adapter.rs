@@ -519,7 +519,9 @@ fn classify_runtime_failure(
         &lowered,
         &[
             "no account",
+            "account selector",
             "account selection",
+            "did not match any local account",
             "unresolved account",
             "selected account",
         ],
@@ -771,12 +773,30 @@ fn value_to_data(value: Value) -> OperationData {
 
 fn target_operation_input(command: &crate::target_cli::TargetCommand) -> OperationData {
     use crate::target_cli::{
-        BasketCommand, BasketItemCommand, BasketQuoteCommand, ListingCommand, MarketCommand,
-        MarketListingCommand, MarketProductCommand, OrderCommand, OrderEventCommand, TargetCommand,
+        AccountCommand, AccountSelectionCommand, BasketCommand, BasketItemCommand,
+        BasketQuoteCommand, ListingCommand, MarketCommand, MarketListingCommand,
+        MarketProductCommand, OrderCommand, OrderEventCommand, TargetCommand,
     };
 
     let mut input = OperationData::new();
     match command {
+        TargetCommand::Account(args) => match &args.command {
+            AccountCommand::Import(args) => {
+                insert_path(&mut input, "path", &args.path);
+                if args.default {
+                    input.insert("default".to_owned(), Value::Bool(true));
+                }
+            }
+            AccountCommand::Get(args) => insert_string(&mut input, "selector", &args.selector),
+            AccountCommand::Remove(args) => insert_string(&mut input, "selector", &args.selector),
+            AccountCommand::Selection(args) => match &args.command {
+                AccountSelectionCommand::Update(args) => {
+                    insert_string(&mut input, "selector", &args.selector)
+                }
+                AccountSelectionCommand::Get | AccountSelectionCommand::Clear => {}
+            },
+            AccountCommand::Create | AccountCommand::List => {}
+        },
         TargetCommand::Listing(args) => match &args.command {
             ListingCommand::Create(args) => {
                 insert_path(&mut input, "output", &args.output);

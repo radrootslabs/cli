@@ -260,7 +260,9 @@ impl OperationService<AccountGetRequest> for CoreOperationService<'_> {
         } else {
             self.config
         };
-        let resolution = map_runtime(resolve_account_resolution(config))?;
+        let resolution = resolve_account_resolution(config).map_err(|error| {
+            OperationAdapterError::unconfigured(request.operation_id(), error.to_string())
+        })?;
         let reason = if resolution.resolved_account.is_some() {
             None
         } else {
@@ -315,7 +317,9 @@ impl OperationService<AccountRemoveRequest> for CoreOperationService<'_> {
             ));
         }
 
-        let result = map_runtime(remove_account(self.config, selector.as_str()))?;
+        let result = remove_account(self.config, selector.as_str()).map_err(|error| {
+            OperationAdapterError::unconfigured(request.operation_id(), error.to_string())
+        })?;
         json_operation_result::<AccountRemoveResult>(json!({
             "state": "removed",
             "removed_account": account_summary_view(&result.removed_account),
@@ -354,7 +358,9 @@ impl OperationService<AccountSelectionUpdateRequest> for CoreOperationService<'_
             }));
         }
 
-        let account = map_runtime(select_account(self.config, selector.as_str()))?;
+        let account = select_account(self.config, selector.as_str()).map_err(|error| {
+            OperationAdapterError::unconfigured(request.operation_id(), error.to_string())
+        })?;
         json_operation_result::<AccountSelectionUpdateResult>(json!({
             "state": "default",
             "account": account_summary_view(&account),

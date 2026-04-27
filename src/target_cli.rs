@@ -85,13 +85,13 @@ impl TargetCommand {
             },
             Self::Account(args) => match &args.command {
                 AccountCommand::Create => "account.create",
-                AccountCommand::Import => "account.import",
-                AccountCommand::Get => "account.get",
+                AccountCommand::Import(_) => "account.import",
+                AccountCommand::Get(_) => "account.get",
                 AccountCommand::List => "account.list",
-                AccountCommand::Remove => "account.remove",
-                AccountCommand::Selection(selection) => match selection.command {
+                AccountCommand::Remove(_) => "account.remove",
+                AccountCommand::Selection(selection) => match &selection.command {
                     AccountSelectionCommand::Get => "account.selection.get",
-                    AccountSelectionCommand::Update => "account.selection.update",
+                    AccountSelectionCommand::Update(_) => "account.selection.update",
                     AccountSelectionCommand::Clear => "account.selection.clear",
                 },
             },
@@ -268,11 +268,28 @@ pub struct AccountArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum AccountCommand {
     Create,
-    Import,
-    Get,
+    Import(AccountImportArgs),
+    Get(AccountGetArgs),
     List,
-    Remove,
+    Remove(AccountSelectorArgs),
     Selection(AccountSelectionArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountImportArgs {
+    pub path: Option<PathBuf>,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub default: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountGetArgs {
+    pub selector: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountSelectorArgs {
+    pub selector: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -281,10 +298,10 @@ pub struct AccountSelectionArgs {
     pub command: AccountSelectionCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum AccountSelectionCommand {
     Get,
-    Update,
+    Update(AccountSelectorArgs),
     Clear,
 }
 

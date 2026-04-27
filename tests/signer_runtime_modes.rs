@@ -55,6 +55,171 @@ fn local_signer_status_reports_ready_after_account_create() {
 }
 
 #[test]
+fn local_account_selection_and_invocation_override_resolve_signer_actor() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let first = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let first_account_id = first["result"]["account"]["id"]
+        .as_str()
+        .expect("first account id");
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+    assert_eq!(first["result"]["account"]["is_default"], true);
+    assert_eq!(second["result"]["account"]["is_default"], false);
+
+    let default_status = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    assert_eq!(default_status["result"]["state"], "ready");
+    assert_eq!(
+        default_status["result"]["signer_account_id"],
+        first_account_id
+    );
+    assert_eq!(
+        default_status["result"]["account_resolution"]["source"],
+        "default_account"
+    );
+
+    let override_status = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--account-id",
+        second_account_id,
+        "signer",
+        "status",
+        "get",
+    ]);
+    assert_eq!(override_status["actor"]["account_id"], second_account_id);
+    assert_eq!(override_status["actor"]["role"], "account");
+    assert_eq!(
+        override_status["result"]["signer_account_id"],
+        second_account_id
+    );
+    assert_eq!(
+        override_status["result"]["account_resolution"]["source"],
+        "invocation_override"
+    );
+    assert_eq!(
+        override_status["result"]["account_resolution"]["default_account"]["id"],
+        first_account_id
+    );
+
+    let selected = sandbox.json_success(&[
+        "--format",
+        "json",
+        "account",
+        "selection",
+        "update",
+        second_account_id,
+    ]);
+    assert_eq!(selected["operation_id"], "account.selection.update");
+    assert_eq!(selected["result"]["state"], "default");
+    assert_eq!(selected["result"]["account"]["id"], second_account_id);
+
+    let selected_status = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    assert_eq!(
+        selected_status["result"]["signer_account_id"],
+        second_account_id
+    );
+    assert_eq!(
+        selected_status["result"]["account_resolution"]["source"],
+        "default_account"
+    );
+
+    let selected_get =
+        sandbox.json_success(&["--format", "json", "account", "get", first_account_id]);
+    assert_eq!(selected_get["operation_id"], "account.get");
+    assert_eq!(
+        selected_get["result"]["account_resolution"]["source"],
+        "invocation_override"
+    );
+    assert_eq!(
+        selected_get["result"]["account_resolution"]["resolved_account"]["id"],
+        first_account_id
+    );
+}
+
+#[test]
+fn unresolved_account_override_returns_account_failure() {
+    let sandbox = RadrootsCliSandbox::new();
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--account-id",
+        "missing-account",
+        "account",
+        "get",
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "account.get");
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "account_unresolved");
+    assert_eq!(value["errors"][0]["exit_code"], 5);
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
+    assert_contains(&value["errors"][0]["message"], "account selector");
+}
+
+#[test]
+fn watch_only_import_reports_unconfigured_local_signer() {
+    let sandbox = RadrootsCliSandbox::new();
+    let public_identity = identity_public(11);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "watch-only", &public_identity);
+
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert_eq!(imported["operation_id"], "account.import");
+    assert_eq!(imported["result"]["state"], "imported");
+    assert_eq!(
+        imported["result"]["account"]["id"],
+        public_identity.id.as_str()
+    );
+    assert_eq!(imported["result"]["account"]["signer"], "watch_only");
+    assert_eq!(imported["result"]["account"]["is_default"], true);
+
+    let status = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+
+    assert_eq!(status["result"]["mode"], "local");
+    assert_eq!(status["result"]["state"], "unconfigured");
+    assert_eq!(
+        status["result"]["signer_account_id"],
+        public_identity.id.as_str()
+    );
+    assert_eq!(
+        status["result"]["account_resolution"]["source"],
+        "default_account"
+    );
+    assert_eq!(
+        status["result"]["account_resolution"]["resolved_account"]["signer"],
+        "watch_only"
+    );
+    assert_eq!(
+        status["result"]["local"]["account_id"],
+        public_identity.id.as_str()
+    );
+    assert_eq!(status["result"]["local"]["availability"], "public_only");
+    assert_eq!(status["result"]["local"]["secret_backed"], false);
+    assert_contains(&status["result"]["reason"], "not secret-backed");
+    assert!(
+        status["result"]["write_kinds"]
+            .as_array()
+            .expect("write kinds")
+            .iter()
+            .all(|kind| kind["ready"] == false)
+    );
+}
+
+#[test]
 fn myc_signer_status_reports_unavailable_for_missing_executable() {
     let sandbox = RadrootsCliSandbox::new();
     let missing_myc = sandbox.root().join("bin/missing-myc");
@@ -376,6 +541,20 @@ fn identity_public(seed: u8) -> RadrootsIdentityPublic {
     RadrootsIdentity::from_secret_key_bytes(&secret)
         .expect("fixture identity")
         .to_public()
+}
+
+fn write_public_identity_profile(
+    sandbox: &RadrootsCliSandbox,
+    name: &str,
+    identity: &RadrootsIdentityPublic,
+) -> PathBuf {
+    let path = sandbox.root().join(format!("{name}.json"));
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(identity).expect("public identity json"),
+    )
+    .expect("write public identity");
+    path
 }
 
 fn shell_single_quoted(value: &str) -> String {
