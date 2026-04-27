@@ -306,6 +306,11 @@ pub enum OperationAdapterError {
     },
     #[error("operation runtime error: {0}")]
     Runtime(String),
+    #[error("operation `{operation_id}` is unavailable or unconfigured: {message}")]
+    UnavailableOrUnconfigured {
+        operation_id: String,
+        message: String,
+    },
 }
 
 impl OperationAdapterError {
@@ -344,6 +349,11 @@ impl OperationAdapterError {
             Self::Runtime(message) => {
                 OutputError::new("runtime_error", message.clone(), CliExitCode::InternalError)
             }
+            Self::UnavailableOrUnconfigured { message, .. } => OutputError::new(
+                "unavailable_or_unconfigured",
+                message.clone(),
+                CliExitCode::UnavailableOrUnconfigured,
+            ),
         }
     }
 }

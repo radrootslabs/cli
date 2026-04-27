@@ -6,6 +6,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::cli::{ListingFileArgs, ListingMutationArgs, ListingNewArgs, RecordKeyArgs};
+use crate::domain::runtime::{CommandDisposition, ListingMutationView};
 use crate::operation_adapter::{
     ListingArchiveRequest, ListingArchiveResult, ListingCreateRequest, ListingCreateResult,
     ListingGetRequest, ListingGetResult, ListingListRequest, ListingListResult,
@@ -141,7 +142,7 @@ impl OperationService<ListingPublishRequest> for ListingOperationService<'_> {
         require_approval(&request)?;
         let args = mutation_args(&request)?;
         let view = map_runtime(crate::runtime::listing::publish(self.config, &args))?;
-        serialized_operation_result::<ListingPublishResult, _>(&view)
+        mutation_result::<ListingPublishResult>(request.operation_id(), &view)
     }
 }
 
@@ -158,7 +159,7 @@ impl OperationService<ListingArchiveRequest> for ListingOperationService<'_> {
         require_approval(&request)?;
         let args = mutation_args(&request)?;
         let view = map_runtime(crate::runtime::listing::archive(self.config, &args))?;
-        serialized_operation_result::<ListingArchiveResult, _>(&view)
+        mutation_result::<ListingArchiveResult>(request.operation_id(), &view)
     }
 }
 
@@ -219,6 +220,49 @@ where
     T: Serialize,
 {
     OperationResult::new(R::from_serializable(value)?)
+}
+
+fn mutation_result<R>(
+    operation_id: &str,
+    view: &ListingMutationView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_operation_result::<R, _>(view),
+        disposition => Err(disposition_error(
+            operation_id,
+            disposition,
+            view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "listing {} finished with state `{}`",
+                    view.operation, view.state
+                )
+            }),
+        )),
+    }
+}
+
+fn disposition_error(
+    operation_id: &str,
+    disposition: CommandDisposition,
+    message: String,
+) -> OperationAdapterError {
+    match disposition {
+        CommandDisposition::Success => OperationAdapterError::Runtime(message),
+        CommandDisposition::Unconfigured | CommandDisposition::ExternalUnavailable => {
+            OperationAdapterError::UnavailableOrUnconfigured {
+                operation_id: operation_id.to_owned(),
+                message,
+            }
+        }
+        CommandDisposition::Unsupported => OperationAdapterError::InvalidInput {
+            operation_id: operation_id.to_owned(),
+            message,
+        },
+        CommandDisposition::InternalError => OperationAdapterError::Runtime(message),
+    }
 }
 
 fn json_operation_result<R>(value: Value) -> Result<OperationResult<R>, OperationAdapterError>

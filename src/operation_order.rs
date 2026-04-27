@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli::{OrderSubmitArgs, OrderWatchArgs, RecordKeyArgs};
+use crate::domain::runtime::{CommandDisposition, OrderSubmitView};
 use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, OrderEventListRequest,
@@ -56,7 +57,11 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
             config.output.dry_run = true;
         }
         let view = map_runtime(crate::runtime::order::submit(&config, &args))?;
-        serialized_target_result::<OrderSubmitResult, _>(&view)
+        if request.context.dry_run {
+            serialized_target_result::<OrderSubmitResult, _>(&view)
+        } else {
+            submit_result::<OrderSubmitResult>(request.operation_id(), &view)
+        }
     }
 }
 
@@ -125,6 +130,46 @@ where
         .map_err(|error| OperationAdapterError::Serialization(error.to_string()))?;
     translate_actions_in_value(&mut value);
     OperationResult::new(R::from_value(value))
+}
+
+fn submit_result<R>(
+    operation_id: &str,
+    view: &OrderSubmitView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_target_result::<R, _>(view),
+        disposition => Err(disposition_error(
+            operation_id,
+            disposition,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| format!("order submit finished with state `{}`", view.state)),
+        )),
+    }
+}
+
+fn disposition_error(
+    operation_id: &str,
+    disposition: CommandDisposition,
+    message: String,
+) -> OperationAdapterError {
+    match disposition {
+        CommandDisposition::Success => OperationAdapterError::Runtime(message),
+        CommandDisposition::Unconfigured | CommandDisposition::ExternalUnavailable => {
+            OperationAdapterError::UnavailableOrUnconfigured {
+                operation_id: operation_id.to_owned(),
+                message,
+            }
+        }
+        CommandDisposition::Unsupported => OperationAdapterError::InvalidInput {
+            operation_id: operation_id.to_owned(),
+            message,
+        },
+        CommandDisposition::InternalError => OperationAdapterError::Runtime(message),
+    }
 }
 
 fn translate_actions_in_value(value: &mut Value) {

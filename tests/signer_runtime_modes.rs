@@ -1,6 +1,7 @@
 mod support;
 
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
 use serde_json::{Value, json};
@@ -235,6 +236,64 @@ fn myc_binding_reports_ready_for_one_authorized_session() {
     );
 }
 
+#[test]
+fn local_listing_publish_fails_without_local_account_authority() {
+    let sandbox = RadrootsCliSandbox::new();
+    let listing_file = create_listing_draft(&sandbox, "local-no-account");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "runtime_error");
+    assert_eq!(value["errors"][0]["exit_code"], 1);
+    assert_contains(
+        &value["errors"][0]["message"],
+        "no local account is selected",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn myc_listing_publish_does_not_fallback_to_local_account() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let listing_file = create_listing_draft(&sandbox, "myc-no-binding");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+    let myc = write_fake_myc_status(
+        &sandbox,
+        "myc-ready-no-write-binding",
+        ready_myc_payload(Vec::new()),
+    );
+    configure_myc_mode(&sandbox, &myc);
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "unavailable_or_unconfigured");
+    assert_eq!(value["errors"][0]["exit_code"], 3);
+    assert_contains(&value["errors"][0]["message"], "signer.remote_nip46");
+}
+
 fn configure_myc_mode(sandbox: &RadrootsCliSandbox, executable: &Path) {
     sandbox.write_app_config(&format!(
         "[signer]\nmode = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
@@ -332,4 +391,74 @@ fn assert_contains(value: &Value, needle: &str) {
         value.contains(needle),
         "expected `{value}` to contain `{needle}`"
     );
+}
+
+fn create_listing_draft(sandbox: &RadrootsCliSandbox, key: &str) -> PathBuf {
+    let listing_file = sandbox.root().join(format!("{key}.toml"));
+    let listing_file_arg = listing_file.to_string_lossy();
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "create",
+        "--output",
+        listing_file_arg.as_ref(),
+        "--key",
+        key,
+        "--title",
+        "Eggs",
+        "--category",
+        "eggs",
+        "--summary",
+        "Fresh eggs",
+        "--bin-id",
+        "bin-1",
+        "--quantity-amount",
+        "1",
+        "--quantity-unit",
+        "each",
+        "--price-amount",
+        "6",
+        "--price-currency",
+        "USD",
+        "--price-per-amount",
+        "1",
+        "--price-per-unit",
+        "each",
+        "--available",
+        "10",
+    ]);
+    assert_eq!(value["operation_id"], "listing.create");
+    listing_file
+}
+
+fn make_listing_publishable(path: &Path, farm_d_tag: &str) {
+    let raw = fs::read_to_string(path).expect("listing draft");
+    let mut seller_pubkey_present = false;
+    let patched = raw
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("seller_pubkey =") {
+                seller_pubkey_present = !trimmed.ends_with("\"\"");
+                line.to_owned()
+            } else if trimmed.starts_with("farm_d_tag =") {
+                format!("{}farm_d_tag = \"{}\"", line_indent(line), farm_d_tag)
+            } else if trimmed.starts_with("method =") {
+                format!("{}method = \"pickup\"", line_indent(line))
+            } else if trimmed.starts_with("primary =") {
+                format!("{}primary = \"farmstand\"", line_indent(line))
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(seller_pubkey_present, "listing draft seller pubkey");
+    fs::write(path, format!("{patched}\n")).expect("write listing draft");
+}
+
+fn line_indent(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    &line[..line.len() - trimmed.len()]
 }
