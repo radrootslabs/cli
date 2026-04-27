@@ -1094,6 +1094,40 @@ mod tests {
         "order.event.watch",
     ];
 
+    const SUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[
+        "workspace.init",
+        "account.create",
+        "account.import",
+        "account.remove",
+        "account.selection.update",
+        "account.selection.clear",
+        "store.init",
+        "store.backup.create",
+        "sync.pull",
+        "sync.push",
+        "runtime.start",
+        "runtime.stop",
+        "runtime.restart",
+        "farm.create",
+        "farm.profile.update",
+        "farm.location.update",
+        "farm.fulfillment.update",
+        "farm.publish",
+        "listing.create",
+        "listing.update",
+        "listing.publish",
+        "listing.archive",
+        "market.refresh",
+        "basket.create",
+        "basket.item.add",
+        "basket.item.update",
+        "basket.item.remove",
+        "basket.quote.create",
+        "order.submit",
+    ];
+
+    const INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[];
+
     #[test]
     fn registry_contains_exact_target_operation_set() {
         let actual = operation_ids();
@@ -1168,6 +1202,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn mutating_dry_run_registry_inventory_is_complete() {
+        let advertised = OPERATION_REGISTRY
+            .iter()
+            .filter(|operation| operation.mutates && operation.supports_dry_run)
+            .map(|operation| operation.operation_id)
+            .collect::<BTreeSet<_>>();
+        let supported = SUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let unsupported = INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let classified = supported
+            .union(&unsupported)
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(advertised, classified);
+        assert!(supported.is_disjoint(&unsupported));
     }
 
     #[test]
