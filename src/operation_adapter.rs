@@ -519,6 +519,7 @@ fn classify_runtime_failure(
         &lowered,
         &[
             "no account",
+            "no local account",
             "account selector",
             "account selection",
             "did not match any local account",

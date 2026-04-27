@@ -3,6 +3,7 @@ mod support;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use radroots_events::kinds::KIND_LISTING;
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
 use serde_json::{Value, json};
 use support::RadrootsCliSandbox;
@@ -419,12 +420,104 @@ fn local_listing_publish_fails_without_local_account_authority() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"], serde_json::Value::Null);
-    assert_eq!(value["errors"][0]["code"], "runtime_error");
-    assert_eq!(value["errors"][0]["exit_code"], 1);
+    assert_eq!(value["errors"][0]["code"], "account_unresolved");
+    assert_eq!(value["errors"][0]["exit_code"], 5);
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
     assert_contains(
         &value["errors"][0]["message"],
         "no local account is selected",
     );
+}
+
+#[test]
+fn local_listing_publish_signs_with_selected_account_without_remote_fallback() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let listing_file = create_listing_draft(&sandbox, "local-signed");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(output.status.success());
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"]["state"], "signed");
+    assert_eq!(value["result"]["signer_mode"], "local");
+    assert_eq!(
+        value["result"]["signer_session_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(value["result"]["job_id"], serde_json::Value::Null);
+    assert_eq!(value["result"]["event"]["kind"], KIND_LISTING);
+    assert_eq!(
+        value["result"]["event"]["author"],
+        value["result"]["seller_pubkey"]
+    );
+    assert_eq!(
+        value["result"]["event"]["event_id"],
+        value["result"]["event_id"]
+    );
+    assert_hex_len(&value["result"]["event_id"], 64);
+    assert_hex_len(&value["result"]["event"]["signature"], 128);
+    assert_contains(
+        &value["result"]["reason"],
+        "relay delivery was not attempted",
+    );
+    assert!(
+        value["result"]["event"]["tags"]
+            .as_array()
+            .expect("event tags")
+            .iter()
+            .any(|tag| tag
+                .as_array()
+                .is_some_and(|items| items.first() == Some(&json!("d"))
+                    && items.get(1) == Some(&value["result"]["listing_id"])))
+    );
+}
+
+#[test]
+fn watch_only_listing_publish_fails_as_account_watch_only() {
+    let sandbox = RadrootsCliSandbox::new();
+    let public_identity = identity_public(12);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "watch-only-publish", &public_identity);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let listing_file = create_listing_draft(&sandbox, "watch-only-publish");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "account_watch_only");
+    assert_eq!(value["errors"][0]["exit_code"], 7);
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
+    assert_contains(&value["errors"][0]["message"], "watch_only account");
 }
 
 #[cfg(unix)]
@@ -571,6 +664,12 @@ fn assert_contains(value: &Value, needle: &str) {
         value.contains(needle),
         "expected `{value}` to contain `{needle}`"
     );
+}
+
+fn assert_hex_len(value: &Value, expected_len: usize) {
+    let value = value.as_str().expect("hex string");
+    assert_eq!(value.len(), expected_len);
+    assert!(value.chars().all(|ch| ch.is_ascii_hexdigit()));
 }
 
 fn create_listing_draft(sandbox: &RadrootsCliSandbox, key: &str) -> PathBuf {

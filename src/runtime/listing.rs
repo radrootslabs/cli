@@ -18,6 +18,7 @@ use radroots_events::listing::{
 use radroots_events::trade::RadrootsTradeListingValidationError;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
+use radroots_nostr::prelude::radroots_nostr_build_event;
 use radroots_replica_db::ReplicaSql;
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::listing::publish::validate_listing_for_seller;
@@ -36,7 +37,7 @@ use crate::domain::runtime::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::daemon;
 use crate::runtime::daemon::DaemonRpcError;
 use crate::runtime::farm_config;
@@ -47,6 +48,7 @@ const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
 const LISTING_WRITE_SOURCE: &str = "daemon bridge · durable write plane";
+const LISTING_LOCAL_SIGNED_SOURCE: &str = "local account signer · signed event artifact";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1122,6 +1124,19 @@ fn mutate(
         });
     }
 
+    if matches!(operation, ListingMutationOperation::Publish)
+        && matches!(config.signer.backend, SignerBackend::Local)
+    {
+        return local_signed_view(
+            config,
+            args,
+            operation,
+            &canonical,
+            listing_addr,
+            event_preview,
+        );
+    }
+
     let signer_authority =
         match resolve_actor_write_authority(config, "seller", canonical.seller_pubkey.as_str()) {
             Ok(authority) => authority,
@@ -1562,9 +1577,11 @@ fn build_listing_event_preview(
         ListingMutationEventView {
             kind: KIND_LISTING,
             author: canonical.seller_pubkey.clone(),
+            created_at: None,
             content: parts.content,
             tags: parts.tags,
             event_id: None,
+            signature: None,
             event_addr: validated.listing_addr.clone(),
         },
         validated.listing_addr,
@@ -1684,6 +1701,132 @@ fn daemon_error_view(
             event: args.print_event.then_some(event_preview),
             actions: vec!["inspect the daemon rpc response contract".to_owned()],
         },
+    }
+}
+
+fn local_signed_view(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+    canonical: &CanonicalListingDraft,
+    listing_addr: String,
+    event_preview: ListingMutationEventView,
+) -> Result<ListingMutationView, RuntimeError> {
+    let signed_event = match sign_listing_event(config, canonical) {
+        Ok(event) => event,
+        Err(error) => {
+            return Ok(ListingMutationView {
+                state: "unconfigured".to_owned(),
+                operation: operation.as_str().to_owned(),
+                source: LISTING_LOCAL_SIGNED_SOURCE.to_owned(),
+                file: args.file.display().to_string(),
+                listing_id: canonical.listing_id.clone(),
+                listing_addr,
+                seller_pubkey: canonical.seller_pubkey.clone(),
+                event_kind: KIND_LISTING,
+                dry_run: false,
+                deduplicated: false,
+                job_id: None,
+                job_status: None,
+                signer_mode: Some(config.signer.backend.as_str().to_owned()),
+                event_id: None,
+                event_addr: None,
+                idempotency_key: args.idempotency_key.clone(),
+                signer_session_id: None,
+                requested_signer_session_id: args.signer_session_id.clone(),
+                reason: Some(error.to_string()),
+                job: args.print_job.then(|| ListingMutationJobView {
+                    rpc_method: "local.listing.sign".to_owned(),
+                    state: "unconfigured".to_owned(),
+                    job_id: None,
+                    idempotency_key: args.idempotency_key.clone(),
+                    requested_signer_session_id: args.signer_session_id.clone(),
+                    signer_mode: Some(config.signer.backend.as_str().to_owned()),
+                    signer_session_id: None,
+                }),
+                event: args.print_event.then_some(event_preview),
+                actions: vec!["radroots signer status get".to_owned()],
+            });
+        }
+    };
+    let event_view = signed_listing_event_view(&signed_event, listing_addr.as_str());
+    Ok(ListingMutationView {
+        state: "signed".to_owned(),
+        operation: operation.as_str().to_owned(),
+        source: LISTING_LOCAL_SIGNED_SOURCE.to_owned(),
+        file: args.file.display().to_string(),
+        listing_id: canonical.listing_id.clone(),
+        listing_addr: listing_addr.clone(),
+        seller_pubkey: canonical.seller_pubkey.clone(),
+        event_kind: KIND_LISTING,
+        dry_run: false,
+        deduplicated: false,
+        job_id: None,
+        job_status: None,
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        event_id: event_view.event_id.clone(),
+        event_addr: Some(listing_addr),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_session_id: None,
+        requested_signer_session_id: args.signer_session_id.clone(),
+        reason: Some("signed locally; relay delivery was not attempted".to_owned()),
+        job: args.print_job.then(|| ListingMutationJobView {
+            rpc_method: "local.listing.sign".to_owned(),
+            state: "not_submitted".to_owned(),
+            job_id: None,
+            idempotency_key: args.idempotency_key.clone(),
+            requested_signer_session_id: args.signer_session_id.clone(),
+            signer_mode: Some(config.signer.backend.as_str().to_owned()),
+            signer_session_id: None,
+        }),
+        event: Some(event_view),
+        actions: Vec::new(),
+    })
+}
+
+fn sign_listing_event(
+    config: &RuntimeConfig,
+    canonical: &CanonicalListingDraft,
+) -> Result<radroots_nostr::prelude::RadrootsNostrEvent, RuntimeError> {
+    let signing = accounts::resolve_local_signing_identity(config)?;
+    let account_pubkey = signing
+        .account
+        .record
+        .public_identity
+        .public_key_hex
+        .as_str();
+    if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
+        return Err(RuntimeError::Config(format!(
+            "selected local account pubkey `{account_pubkey}` cannot sign listing seller_pubkey `{}`",
+            canonical.seller_pubkey
+        )));
+    }
+    let parts = to_wire_parts_with_kind(&canonical.listing, KIND_LISTING)
+        .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
+    let event = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+        .map_err(|error| RuntimeError::Config(format!("build local listing event: {error}")))?
+        .sign_with_keys(signing.identity.keys())
+        .map_err(|error| RuntimeError::Config(format!("sign local listing event: {error}")))?;
+    Ok(event)
+}
+
+fn signed_listing_event_view(
+    event: &radroots_nostr::prelude::RadrootsNostrEvent,
+    listing_addr: &str,
+) -> ListingMutationEventView {
+    ListingMutationEventView {
+        kind: event.kind.as_u16() as u32,
+        author: event.pubkey.to_string(),
+        created_at: Some(u32::try_from(event.created_at.as_secs()).unwrap_or(u32::MAX)),
+        content: event.content.clone(),
+        tags: event
+            .tags
+            .iter()
+            .map(|tag| tag.as_slice().to_vec())
+            .collect(),
+        event_id: Some(event.id.to_string()),
+        signature: Some(event.sig.to_string()),
+        event_addr: listing_addr.to_owned(),
     }
 }
 

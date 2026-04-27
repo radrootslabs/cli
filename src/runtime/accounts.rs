@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use radroots_identity::{IdentityError, load_identity_profile};
+use radroots_identity::{IdentityError, RadrootsIdentity, load_identity_profile};
 use radroots_nostr_accounts::prelude::{
     RadrootsNostrAccountRecord, RadrootsNostrAccountStatus, RadrootsNostrAccountsError,
     RadrootsNostrAccountsManager,
@@ -89,6 +89,12 @@ pub struct AccountResolution {
     pub source: AccountResolutionSource,
     pub resolved_account: Option<AccountRecordView>,
     pub default_account: Option<AccountRecordView>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountSigningIdentity {
+    pub account: AccountRecordView,
+    pub identity: RadrootsIdentity,
 }
 
 pub fn create_or_migrate_default_account(
@@ -257,6 +263,25 @@ pub fn resolved_account_signing_status(
             },
         },
     )
+}
+
+pub fn resolve_local_signing_identity(
+    config: &RuntimeConfig,
+) -> Result<AccountSigningIdentity, RuntimeError> {
+    let manager = account_manager(config)?;
+    let resolution = resolve_account_resolution(config)?;
+    let Some(account) = resolution.resolved_account else {
+        return Err(RuntimeError::Config(
+            "no local account is selected for signing".to_owned(),
+        ));
+    };
+    let Some(identity) = manager.get_signing_identity(&account.record.account_id)? else {
+        return Err(RuntimeError::Config(format!(
+            "watch_only account {} is present but not secret-backed",
+            account.record.account_id
+        )));
+    };
+    Ok(AccountSigningIdentity { account, identity })
 }
 
 pub fn account_summary_view(account: &AccountRecordView) -> AccountSummaryView {
