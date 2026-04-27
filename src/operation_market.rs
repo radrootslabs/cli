@@ -117,7 +117,6 @@ fn market_product_search_view(mut view: FindView) -> FindView {
                 )];
                 if listing_addr_can_back_basket(result.listing_addr.as_deref()) {
                     actions.push("radroots basket create".to_owned());
-                    actions.push(format!("radroots basket item add {}", result.product_key));
                 }
                 actions
             })
@@ -138,16 +137,8 @@ fn market_product_search_view(mut view: FindView) -> FindView {
 fn market_listing_get_view(mut view: ListingGetView) -> ListingGetView {
     view.actions = match view.state.as_str() {
         "ready" => {
-            let listing_key = view
-                .product_key
-                .as_deref()
-                .unwrap_or(view.lookup.as_str())
-                .to_owned();
             if listing_addr_can_back_basket(view.listing_addr.as_deref()) {
-                vec![
-                    "radroots basket create".to_owned(),
-                    format!("radroots basket item add {listing_key}"),
-                ]
+                vec!["radroots basket create".to_owned()]
             } else {
                 Vec::new()
             }
@@ -282,7 +273,11 @@ mod tests {
     use serde_json::{Map, Value};
     use tempfile::tempdir;
 
-    use super::MarketOperationService;
+    use super::{MarketOperationService, market_listing_get_view, market_product_search_view};
+    use crate::domain::runtime::{
+        FindPriceView, FindQuantityView, FindResultProvenanceView, FindResultView, FindView,
+        ListingGetView, SyncFreshnessView,
+    };
     use crate::operation_adapter::{
         MarketListingGetRequest, MarketProductSearchRequest, MarketRefreshRequest,
         OperationAdapter, OperationContext, OperationData, OperationRequest,
@@ -293,6 +288,8 @@ mod tests {
         PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
         SignerBackend, SignerConfig, Verbosity,
     };
+
+    const LISTING_ADDR: &str = "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
 
     #[test]
     fn market_refresh_preserves_unconfigured_ingest_truth() {
@@ -390,6 +387,105 @@ mod tests {
         assert_eq!(envelope.operation_id, "market.listing.get");
         assert_eq!(envelope.result["state"], "unconfigured");
         assert_eq!(envelope.result["actions"][0], "radroots store init");
+    }
+
+    #[test]
+    fn market_ready_actions_do_not_emit_incomplete_basket_item_add_commands() {
+        let search = market_product_search_view(FindView {
+            state: "ready".to_owned(),
+            source: "test".to_owned(),
+            query: "eggs".to_owned(),
+            count: 1,
+            relay_count: 1,
+            replica_db: "ready".to_owned(),
+            freshness: freshness(),
+            results: vec![FindResultView {
+                id: "listing_eggs".to_owned(),
+                product_key: "eggs".to_owned(),
+                listing_addr: Some(LISTING_ADDR.to_owned()),
+                title: "Eggs".to_owned(),
+                category: "eggs".to_owned(),
+                summary: None,
+                location_primary: None,
+                available: quantity(),
+                price: price(),
+                provenance: provenance(),
+                hyf: None,
+            }],
+            hyf: None,
+            reason: None,
+            actions: Vec::new(),
+        });
+
+        assert_eq!(
+            search.actions,
+            vec![
+                "radroots market listing get eggs".to_owned(),
+                "radroots basket create".to_owned()
+            ]
+        );
+
+        let listing = market_listing_get_view(ListingGetView {
+            state: "ready".to_owned(),
+            source: "test".to_owned(),
+            lookup: "eggs".to_owned(),
+            listing_id: Some("listing_eggs".to_owned()),
+            product_key: Some("eggs".to_owned()),
+            listing_addr: Some(LISTING_ADDR.to_owned()),
+            title: Some("Eggs".to_owned()),
+            category: Some("eggs".to_owned()),
+            description: None,
+            location_primary: None,
+            available: Some(quantity()),
+            price: Some(price()),
+            provenance: provenance(),
+            reason: None,
+            actions: Vec::new(),
+        });
+
+        assert_eq!(listing.actions, vec!["radroots basket create".to_owned()]);
+        assert!(
+            search
+                .actions
+                .iter()
+                .chain(listing.actions.iter())
+                .all(|action| !action.starts_with("radroots basket item add "))
+        );
+    }
+
+    fn freshness() -> SyncFreshnessView {
+        SyncFreshnessView {
+            state: "fresh".to_owned(),
+            display: "fresh".to_owned(),
+            age_seconds: Some(0),
+            last_event_at: Some(0),
+        }
+    }
+
+    fn provenance() -> FindResultProvenanceView {
+        FindResultProvenanceView {
+            origin: "fixture".to_owned(),
+            freshness: "fresh".to_owned(),
+            relay_count: 1,
+        }
+    }
+
+    fn quantity() -> FindQuantityView {
+        FindQuantityView {
+            total_amount: 1,
+            total_unit: "each".to_owned(),
+            label: None,
+            available_amount: Some(1),
+        }
+    }
+
+    fn price() -> FindPriceView {
+        FindPriceView {
+            amount: 6.0,
+            currency: "USD".to_owned(),
+            per_amount: 1,
+            per_unit: "each".to_owned(),
+        }
     }
 
     fn sample_config(root: &Path) -> RuntimeConfig {

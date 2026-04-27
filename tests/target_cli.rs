@@ -119,6 +119,7 @@ fn target_outputs_do_not_suggest_removed_command_families() {
         ["--format", "json", "market", "listing", "get", "eggs"].as_slice(),
         ["--format", "json", "listing", "get", "eggs"].as_slice(),
         ["--format", "json", "sync", "status", "get"].as_slice(),
+        ["--format", "json", "runtime", "start"].as_slice(),
         [
             "--format",
             "json",

@@ -348,8 +348,8 @@ fn execute_config_set(
             &target,
             RuntimeLifecycleAction::ConfigSet,
             format!(
-                "managed runtime `{}` instance `{}` is not installed; run `radroots runtime install {}` first",
-                target.runtime_id, target.instance_id, target.runtime_id
+                "managed runtime `{}` instance `{}` is not installed in local runtime state; run `radroots runtime status get` for current status",
+                target.runtime_id, target.instance_id
             ),
         ));
     };
@@ -504,8 +504,8 @@ fn start_managed_radrootsd(
             &target,
             RuntimeLifecycleAction::Start,
             format!(
-                "managed runtime `{}` instance `{}` is not installed; run `radroots runtime install {}` first",
-                target.runtime_id, target.instance_id, target.runtime_id
+                "managed runtime `{}` instance `{}` is not installed in local runtime state; run `radroots runtime status get` for current status",
+                target.runtime_id, target.instance_id
             ),
         ));
     };
