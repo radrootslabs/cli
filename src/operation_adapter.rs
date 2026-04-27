@@ -324,6 +324,11 @@ pub enum OperationAdapterError {
         operation_id: String,
         message: String,
     },
+    #[error("account mismatch for `{operation_id}`: {message}")]
+    AccountMismatch {
+        operation_id: String,
+        message: String,
+    },
     #[error("signer unconfigured for `{operation_id}`: {message}")]
     SignerUnconfigured {
         operation_id: String,
@@ -432,6 +437,16 @@ impl OperationAdapterError {
                 message,
                 CliExitCode::SignerUnavailable,
             ),
+            Self::AccountMismatch {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "account_mismatch",
+                operation_id,
+                "account",
+                message,
+                CliExitCode::AuthorizationFailed,
+            ),
             Self::SignerUnconfigured {
                 operation_id,
                 message,
@@ -528,6 +543,19 @@ fn classify_runtime_failure(
     let lowered = message.to_ascii_lowercase();
     if contains_any(&lowered, &["watch_only", "watch-only", "watch only"]) {
         return OperationAdapterError::AccountWatchOnly {
+            operation_id: operation_id.to_owned(),
+            message,
+        };
+    }
+    if contains_any(
+        &lowered,
+        &[
+            "account mismatch",
+            "selected local account",
+            "cannot sign listing seller_pubkey",
+        ],
+    ) {
+        return OperationAdapterError::AccountMismatch {
             operation_id: operation_id.to_owned(),
             message,
         };
@@ -1321,6 +1349,16 @@ mod tests {
                 "account_watch_only",
                 "account",
                 7,
+            ),
+            (
+                OperationAdapterError::unconfigured(
+                    "listing.publish",
+                    "selected local account pubkey `b` cannot sign listing seller_pubkey `a`"
+                        .to_owned(),
+                ),
+                "account_mismatch",
+                "account",
+                5,
             ),
             (
                 OperationAdapterError::unconfigured(

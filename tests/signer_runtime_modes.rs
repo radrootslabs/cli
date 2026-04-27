@@ -342,6 +342,45 @@ fn local_listing_publish_signs_with_selected_account_without_remote_fallback() {
 }
 
 #[test]
+fn local_listing_publish_fails_when_selected_account_does_not_match_seller() {
+    let sandbox = RadrootsCliSandbox::new();
+    let first = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let first_account_id = first["result"]["account"]["id"]
+        .as_str()
+        .expect("first account id");
+    let listing_file = create_listing_draft(&sandbox, "local-mismatch");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+    assert_ne!(first_account_id, second_account_id);
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--account-id",
+        second_account_id,
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "account_mismatch");
+    assert_eq!(value["errors"][0]["exit_code"], 5);
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
+    assert_contains(
+        &value["errors"][0]["message"],
+        "cannot sign listing seller_pubkey",
+    );
+}
+
+#[test]
 fn watch_only_listing_publish_fails_as_account_watch_only() {
     let sandbox = RadrootsCliSandbox::new();
     let public_identity = identity_public(12);
