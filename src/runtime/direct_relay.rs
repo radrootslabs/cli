@@ -17,6 +17,8 @@ pub struct DirectRelayFailure {
 #[derive(Debug, Clone)]
 pub struct DirectRelayPublishReceipt {
     pub event_id: String,
+    pub created_at: u32,
+    pub signature: String,
     pub target_relays: Vec<String>,
     pub acknowledged_relays: Vec<String>,
     pub failed_relays: Vec<DirectRelayFailure>,
@@ -74,6 +76,8 @@ async fn publish_parts_with_identity_async(
         .sign_with_keys(identity.keys())
         .map_err(|error| DirectRelayPublishError::Sign(error.into()))?;
     let event_id = event.id.to_hex();
+    let created_at = event_created_at_u32(&event);
+    let signature = event.sig.to_string();
     let client = RadrootsNostrClient::from_identity(identity);
 
     for relay_url in relay_urls {
@@ -110,6 +114,8 @@ async fn publish_parts_with_identity_async(
 
     Ok(DirectRelayPublishReceipt {
         event_id,
+        created_at,
+        signature,
         target_relays: relay_urls.to_vec(),
         acknowledged_relays: publish_output
             .success
@@ -143,6 +149,10 @@ fn summarize_failures(failed_relays: &[DirectRelayFailure]) -> String {
         .map(|failure| format!("{}: {}", failure.relay, failure.reason))
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+fn event_created_at_u32(event: &radroots_nostr::prelude::RadrootsNostrEvent) -> u32 {
+    u32::try_from(event.created_at.as_secs()).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]

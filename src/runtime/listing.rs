@@ -18,6 +18,7 @@ use radroots_events::listing::{
 use radroots_events::trade::RadrootsTradeListingValidationError;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
+use radroots_events_codec::wire::WireEventParts;
 use radroots_replica_db::ReplicaSql;
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::listing::publish::validate_listing_for_seller;
@@ -27,11 +28,14 @@ use serde::{Deserialize, Serialize};
 use crate::domain::runtime::{
     FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
     ListingMutationEventView, ListingMutationView, ListingNewView, ListingSummaryView,
-    ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
+    ListingValidateView, ListingValidationIssueView, RelayFailureView, SyncFreshnessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
+use crate::runtime::direct_relay::{
+    DirectRelayFailure, DirectRelayPublishReceipt, publish_parts_with_identity,
+};
 use crate::runtime::farm_config;
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::freshness_from_executor;
@@ -42,9 +46,9 @@ use crate::runtime_args::{
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
-const LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · pending implementation";
+const LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
 const DIRECT_RELAY_UNAVAILABLE_REASON: &str =
-    "direct Nostr relay publishing is not implemented for listing mutations";
+    "direct Nostr relay publishing is not implemented for listing update";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -159,6 +163,12 @@ struct CanonicalListingDraft {
     seller_pubkey: String,
     farm_d_tag: String,
     listing: RadrootsListing,
+}
+
+#[derive(Debug, Clone)]
+struct ListingMutationEventDraft {
+    event: ListingMutationEventView,
+    parts: WireEventParts,
 }
 
 #[derive(Debug, Clone)]
@@ -772,7 +782,7 @@ fn mutate(
         });
     }
 
-    let (event_preview, listing_addr) = build_listing_event_preview(&canonical)?;
+    let (event_draft, listing_addr) = build_listing_event_draft(&canonical)?;
 
     if config.output.dry_run
         && matches!(
@@ -796,6 +806,9 @@ fn mutate(
             event_kind: KIND_LISTING,
             dry_run: true,
             deduplicated: false,
+            target_relays: Vec::new(),
+            acknowledged_relays: Vec::new(),
+            failed_relays: Vec::new(),
             job_id: None,
             job_status: None,
             signer_mode: None,
@@ -806,7 +819,7 @@ fn mutate(
             requested_signer_session_id: args.signer_session_id.clone(),
             reason: Some("dry run requested; relay publish skipped".to_owned()),
             job: None,
-            event: args.print_event.then_some(event_preview),
+            event: args.print_event.then_some(event_draft.event),
             actions: vec![format!(
                 "radroots listing {} {}",
                 operation.as_str(),
@@ -815,11 +828,34 @@ fn mutate(
         });
     }
 
-    if matches!(config.signer.backend, SignerBackend::Local) {
-        validate_local_listing_signer(config, &canonical)?;
+    if matches!(operation, ListingMutationOperation::Update) {
+        return Ok(direct_relay_unavailable_view(
+            config,
+            args,
+            operation,
+            &canonical,
+            listing_addr,
+            event_draft.event,
+        ));
+    }
+
+    let signing = if matches!(config.signer.backend, SignerBackend::Local) {
+        resolve_listing_signing_identity(config, &canonical)?
     } else {
         match resolve_actor_write_authority(config, "seller", canonical.seller_pubkey.as_str()) {
-            Ok(_) => {}
+            Ok(_) => {
+                return Ok(binding_error_view(
+                    config,
+                    args,
+                    operation,
+                    &canonical,
+                    listing_addr,
+                    event_draft.event,
+                    ActorWriteBindingError::Unconfigured(
+                        "listing publish requires signer mode `local`".to_owned(),
+                    ),
+                ));
+            }
             Err(error) => {
                 return Ok(binding_error_view(
                     config,
@@ -827,20 +863,25 @@ fn mutate(
                     operation,
                     &canonical,
                     listing_addr,
-                    event_preview,
+                    event_draft.event,
                     error,
                 ));
             }
         }
-    }
+    };
 
-    Ok(direct_relay_unavailable_view(
+    let receipt =
+        publish_parts_with_identity(&signing.identity, &config.relay.urls, event_draft.parts)
+            .map_err(|error| RuntimeError::Network(error.to_string()))?;
+
+    Ok(published_mutation_view(
         config,
         args,
         operation,
         &canonical,
         listing_addr,
-        event_preview,
+        event_draft.event,
+        receipt,
     ))
 }
 
@@ -1150,9 +1191,9 @@ fn invalid_validation_view(
     }
 }
 
-fn build_listing_event_preview(
+fn build_listing_event_draft(
     canonical: &CanonicalListingDraft,
-) -> Result<(ListingMutationEventView, String), RuntimeError> {
+) -> Result<(ListingMutationEventDraft, String), RuntimeError> {
     let parts = to_wire_parts_with_kind(&canonical.listing, KIND_LISTING)
         .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
     let validated = validate_listing_for_seller(
@@ -1162,15 +1203,18 @@ fn build_listing_event_preview(
     )
     .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
     Ok((
-        ListingMutationEventView {
-            kind: KIND_LISTING,
-            author: canonical.seller_pubkey.clone(),
-            created_at: None,
-            content: parts.content,
-            tags: parts.tags,
-            event_id: None,
-            signature: None,
-            event_addr: validated.listing_addr.clone(),
+        ListingMutationEventDraft {
+            event: ListingMutationEventView {
+                kind: KIND_LISTING,
+                author: canonical.seller_pubkey.clone(),
+                created_at: None,
+                content: parts.content.clone(),
+                tags: parts.tags.clone(),
+                event_id: None,
+                signature: None,
+                event_addr: validated.listing_addr.clone(),
+            },
+            parts,
         },
         validated.listing_addr,
     ))
@@ -1195,6 +1239,9 @@ fn direct_relay_unavailable_view(
         event_kind: KIND_LISTING,
         dry_run: false,
         deduplicated: false,
+        target_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
@@ -1265,6 +1312,9 @@ fn binding_error_view(
         event_kind: KIND_LISTING,
         dry_run: false,
         deduplicated: false,
+        target_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
@@ -1278,6 +1328,69 @@ fn binding_error_view(
         event: args.print_event.then_some(event_preview),
         actions,
     }
+}
+
+fn published_mutation_view(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+    canonical: &CanonicalListingDraft,
+    listing_addr: String,
+    mut event: ListingMutationEventView,
+    receipt: DirectRelayPublishReceipt,
+) -> ListingMutationView {
+    let DirectRelayPublishReceipt {
+        event_id,
+        created_at,
+        signature,
+        target_relays,
+        acknowledged_relays,
+        failed_relays,
+    } = receipt;
+    event.event_id = Some(event_id.clone());
+    event.created_at = Some(created_at);
+    event.signature = Some(signature);
+    ListingMutationView {
+        state: match operation {
+            ListingMutationOperation::Archive => "archived",
+            ListingMutationOperation::Publish | ListingMutationOperation::Update => "published",
+        }
+        .to_owned(),
+        operation: operation.as_str().to_owned(),
+        source: LISTING_WRITE_SOURCE.to_owned(),
+        file: args.file.display().to_string(),
+        listing_id: canonical.listing_id.clone(),
+        listing_addr: listing_addr.clone(),
+        seller_pubkey: canonical.seller_pubkey.clone(),
+        event_kind: KIND_LISTING,
+        dry_run: false,
+        deduplicated: false,
+        target_relays,
+        acknowledged_relays,
+        failed_relays: relay_failures(failed_relays),
+        job_id: None,
+        job_status: None,
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        signer_session_id: None,
+        event_id: Some(event_id),
+        event_addr: Some(listing_addr),
+        idempotency_key: args.idempotency_key.clone(),
+        requested_signer_session_id: args.signer_session_id.clone(),
+        reason: None,
+        job: None,
+        event: args.print_event.then_some(event),
+        actions: Vec::new(),
+    }
+}
+
+fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
+    failures
+        .into_iter()
+        .map(|failure| RelayFailureView {
+            relay: failure.relay,
+            reason: failure.reason,
+        })
+        .collect()
 }
 
 fn issue_from_trade_validation(
