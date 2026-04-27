@@ -75,10 +75,7 @@ impl OperationService<MarketListingGetRequest> for MarketOperationService<'_> {
 fn market_refresh_view(mut view: SyncActionView) -> SyncActionView {
     view.actions = match view.state.as_str() {
         "ready" => vec!["radroots market product search tomatoes".to_owned()],
-        "unavailable" => vec![
-            "radroots runtime status get".to_owned(),
-            "radroots sync status get".to_owned(),
-        ],
+        "unavailable" => vec!["radroots sync status get".to_owned()],
         "unconfigured" => {
             let mut actions = Vec::new();
             if view.replica_db == "missing" {
