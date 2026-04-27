@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Mutex;
 
 use assert_cmd::prelude::*;
 use serde_json::Value;
@@ -10,6 +11,8 @@ use tempfile::TempDir;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+
+static COMMAND_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn radroots() -> Command {
     Command::cargo_bin("radroots").expect("binary")
@@ -47,6 +50,7 @@ impl RadrootsCliSandbox {
     }
 
     pub fn json_success(&self, args: &[&str]) -> Value {
+        let _guard = COMMAND_LOCK.lock().expect("cli command lock");
         let output = self.command().args(args).output().expect("run command");
         assert!(
             output.status.success(),
@@ -58,6 +62,7 @@ impl RadrootsCliSandbox {
     }
 
     pub fn json_output(&self, args: &[&str]) -> (Output, Value) {
+        let _guard = COMMAND_LOCK.lock().expect("cli command lock");
         let output = self.command().args(args).output().expect("run command");
         let value = json_from_stdout(&output);
         (output, value)
