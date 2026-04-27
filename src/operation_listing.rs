@@ -91,16 +91,13 @@ impl OperationService<ListingListRequest> for ListingOperationService<'_> {
 
     fn execute(
         &self,
-        _request: OperationRequest<ListingListRequest>,
+        request: OperationRequest<ListingListRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        json_operation_result::<ListingListResult>(json!({
-            "state": "empty",
-            "source": "local draft - local first",
-            "count": 0,
-            "listings": [],
-            "reason": null,
-            "actions": ["radroots listing create"],
-        }))
+        let view = map_runtime(
+            request.operation_id(),
+            crate::runtime::listing::list(self.config),
+        )?;
+        serialized_operation_result::<ListingListResult, _>(&view)
     }
 }
 

@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,9 +26,9 @@ use radroots_trade::listing::validation::validate_listing_event;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
-    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView,
+    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
     ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
-    ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
+    ListingSummaryView, ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -47,6 +47,7 @@ const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
 const LISTING_WRITE_SOURCE: &str = "daemon bridge · durable write plane";
 const LISTING_LOCAL_SIGNED_SOURCE: &str = "local account signer · signed event artifact";
+const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -162,6 +163,14 @@ struct CanonicalListingDraft {
     listing: RadrootsListing,
 }
 
+#[derive(Debug, Clone)]
+struct LoadedListingDraft {
+    file: PathBuf,
+    updated_at_unix: u64,
+    contents: String,
+    document: ListingDraftDocument,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum ListingMutationOperation {
     Publish,
@@ -184,7 +193,7 @@ pub fn scaffold(
     args: &ListingCreateArgs,
 ) -> Result<ListingNewView, RuntimeError> {
     let (draft, defaults) = build_listing_draft(config, args)?;
-    let output_path = default_listing_output_path(args.output.as_ref(), &draft.listing.d_tag)?;
+    let output_path = listing_output_path(config, args.output.as_ref(), &draft.listing.d_tag)?;
     write_listing_draft(&output_path, &draft, false)?;
 
     let mut actions = vec![format!(
@@ -280,13 +289,14 @@ fn build_listing_draft(
     Ok((draft, defaults))
 }
 
-fn default_listing_output_path(
+fn listing_output_path(
+    config: &RuntimeConfig,
     explicit: Option<&std::path::PathBuf>,
     listing_id: &str,
 ) -> Result<std::path::PathBuf, RuntimeError> {
     match explicit {
         Some(path) => Ok(path.clone()),
-        None => Ok(std::env::current_dir()?.join(format!("listing-{listing_id}.toml"))),
+        None => Ok(drafts_dir(config).join(format!("{listing_id}.toml"))),
     }
 }
 
@@ -390,6 +400,177 @@ pub fn validate(
             &context,
             issue,
         )),
+    }
+}
+
+pub fn list(config: &RuntimeConfig) -> Result<ListingListView, RuntimeError> {
+    let dir = drafts_dir(config);
+    if !dir.exists() {
+        return Ok(ListingListView {
+            state: "empty".to_owned(),
+            source: LISTING_SOURCE.to_owned(),
+            count: 0,
+            draft_dir: dir.display().to_string(),
+            listings: Vec::new(),
+            actions: vec!["radroots listing create".to_owned()],
+        });
+    }
+
+    let context = validation_context(config).map_err(|error| error.to_string());
+    let mut listings = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+            continue;
+        }
+        match load_listing_draft(path.as_path()) {
+            Ok(loaded) => listings.push(summary_from_loaded(&loaded, context.as_ref())),
+            Err(issue) => listings.push(summary_for_invalid_file(path.as_path(), issue)),
+        }
+    }
+
+    listings.sort_by(|left, right| {
+        right
+            .updated_at_unix
+            .cmp(&left.updated_at_unix)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let state = if listings.is_empty() {
+        "empty"
+    } else if listings.iter().any(|listing| listing.state == "error") {
+        "degraded"
+    } else {
+        "ready"
+    };
+    let actions = if listings.is_empty() {
+        vec!["radroots listing create".to_owned()]
+    } else {
+        Vec::new()
+    };
+
+    Ok(ListingListView {
+        state: state.to_owned(),
+        source: LISTING_SOURCE.to_owned(),
+        count: listings.len(),
+        draft_dir: dir.display().to_string(),
+        listings,
+        actions,
+    })
+}
+
+fn load_listing_draft(path: &Path) -> Result<LoadedListingDraft, ListingValidationIssueView> {
+    let contents = fs::read_to_string(path).map_err(|error| ListingValidationIssueView {
+        field: "file".to_owned(),
+        message: format!("read listing draft {}: {error}", path.display()),
+        line: None,
+    })?;
+    let document = toml::from_str::<ListingDraftDocument>(contents.as_str()).map_err(|error| {
+        ListingValidationIssueView {
+            field: "toml".to_owned(),
+            message: error.to_string(),
+            line: error
+                .span()
+                .map(|span| line_for_offset(contents.as_str(), span.start + 1)),
+        }
+    })?;
+    Ok(LoadedListingDraft {
+        file: path.to_path_buf(),
+        updated_at_unix: modified_unix(path).unwrap_or_default(),
+        contents,
+        document,
+    })
+}
+
+fn summary_from_loaded(
+    loaded: &LoadedListingDraft,
+    context: Result<&ListingValidationContext, &String>,
+) -> ListingSummaryView {
+    let mut seller_pubkey = non_empty(loaded.document.listing.seller_pubkey.clone());
+    let mut farm_d_tag = non_empty(loaded.document.listing.farm_d_tag.clone());
+    let mut issues = Vec::new();
+    let mut state = "draft";
+
+    match context {
+        Ok(context) => {
+            match canonicalize_draft(&loaded.document, loaded.contents.as_str(), context) {
+                Ok(canonical) => {
+                    seller_pubkey = Some(canonical.seller_pubkey.clone());
+                    farm_d_tag = Some(canonical.farm_d_tag.clone());
+                    issues = listing_ready_issues(&canonical, loaded.contents.as_str());
+                    if issues.is_empty() {
+                        state = "ready";
+                    }
+                }
+                Err(issue) => issues.push(issue),
+            }
+        }
+        Err(reason) => issues.push(ListingValidationIssueView {
+            field: "context".to_owned(),
+            message: reason.to_string(),
+            line: None,
+        }),
+    }
+
+    ListingSummaryView {
+        id: non_empty(loaded.document.listing.d_tag.clone())
+            .unwrap_or_else(|| file_stem(loaded.file.as_path())),
+        state: state.to_owned(),
+        file: loaded.file.display().to_string(),
+        product_key: non_empty(loaded.document.product.key.clone()),
+        title: non_empty(loaded.document.product.title.clone()),
+        category: non_empty(loaded.document.product.category.clone()),
+        seller_pubkey,
+        farm_d_tag,
+        location_primary: non_empty(loaded.document.location.primary.clone()),
+        updated_at_unix: loaded.updated_at_unix,
+        issues,
+    }
+}
+
+fn listing_ready_issues(
+    canonical: &CanonicalListingDraft,
+    contents: &str,
+) -> Vec<ListingValidationIssueView> {
+    let parts = match to_wire_parts_with_kind(&canonical.listing, KIND_LISTING_DRAFT) {
+        Ok(parts) => parts,
+        Err(error) => {
+            return vec![ListingValidationIssueView {
+                field: "listing".to_owned(),
+                message: format!("invalid listing contract: {error}"),
+                line: None,
+            }];
+        }
+    };
+    let event = RadrootsNostrEvent {
+        id: String::new(),
+        author: canonical.seller_pubkey.clone(),
+        created_at: 0,
+        kind: KIND_LISTING_DRAFT,
+        tags: parts.tags,
+        content: parts.content,
+        sig: String::new(),
+    };
+    match validate_listing_event(&event) {
+        Ok(_) => Vec::new(),
+        Err(error) => vec![issue_from_trade_validation(error, contents)],
+    }
+}
+
+fn summary_for_invalid_file(path: &Path, issue: ListingValidationIssueView) -> ListingSummaryView {
+    ListingSummaryView {
+        id: file_stem(path),
+        state: "error".to_owned(),
+        file: path.display().to_string(),
+        product_key: None,
+        title: None,
+        category: None,
+        seller_pubkey: None,
+        farm_d_tag: None,
+        location_primary: None,
+        updated_at_unix: modified_unix(path).unwrap_or_default(),
+        issues: vec![issue],
     }
 }
 
@@ -1511,6 +1692,25 @@ fn draft_location_from_model(location: &RadrootsListingLocation) -> ListingDraft
 
 fn farm_setup_action(_config: &RuntimeConfig) -> Result<String, RuntimeError> {
     Ok("radroots farm create".to_owned())
+}
+
+fn drafts_dir(config: &RuntimeConfig) -> PathBuf {
+    config.paths.app_data_root.join(LISTING_DRAFTS_DIR)
+}
+
+fn file_stem(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+fn modified_unix(path: &Path) -> Option<u64> {
+    let modified = fs::metadata(path).ok()?.modified().ok()?;
+    modified
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|value| value.as_secs())
 }
 
 fn configured_account(

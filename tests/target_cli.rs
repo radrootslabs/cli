@@ -118,6 +118,7 @@ fn target_outputs_do_not_suggest_removed_command_families() {
         ["--format", "json", "market", "product", "search", "eggs"].as_slice(),
         ["--format", "json", "market", "listing", "get", "eggs"].as_slice(),
         ["--format", "json", "listing", "get", "eggs"].as_slice(),
+        ["--format", "json", "listing", "list"].as_slice(),
         ["--format", "json", "sync", "status", "get"].as_slice(),
         ["--format", "json", "runtime", "start"].as_slice(),
         [
@@ -132,6 +133,99 @@ fn target_outputs_do_not_suggest_removed_command_families() {
         let value = sandbox.json_success(args);
         assert_no_removed_command_reference(&value, args);
     }
+}
+
+#[test]
+fn listing_list_reports_empty_local_draft_state_truthfully() {
+    let sandbox = RadrootsCliSandbox::new();
+    let value = sandbox.json_success(&["--format", "json", "listing", "list"]);
+
+    assert_eq!(value["operation_id"], "listing.list");
+    assert_eq!(value["result"]["state"], "empty");
+    assert_eq!(value["result"]["count"], 0);
+    assert_eq!(
+        value["result"]["listings"]
+            .as_array()
+            .expect("listings")
+            .len(),
+        0
+    );
+    assert!(
+        value["result"]["draft_dir"]
+            .as_str()
+            .expect("draft dir")
+            .ends_with("listings/drafts")
+    );
+    assert_no_removed_command_reference(&value, &["listing", "list"]);
+}
+
+#[test]
+fn listing_list_reports_default_local_drafts() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let create = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "create",
+        "--key",
+        "eggs",
+        "--title",
+        "Eggs",
+        "--category",
+        "eggs",
+        "--summary",
+        "Fresh eggs",
+        "--bin-id",
+        "bin-1",
+        "--quantity-amount",
+        "1",
+        "--quantity-unit",
+        "each",
+        "--price-amount",
+        "6",
+        "--price-currency",
+        "USD",
+        "--price-per-amount",
+        "1",
+        "--price-per-unit",
+        "each",
+        "--available",
+        "10",
+    ]);
+    let listing_file = create["result"]["file"].as_str().expect("listing file");
+    assert!(Path::new(listing_file).exists());
+
+    let value = sandbox.json_success(&["--format", "json", "listing", "list"]);
+    let listing = &value["result"]["listings"][0];
+
+    assert_eq!(value["operation_id"], "listing.list");
+    assert_eq!(value["result"]["state"], "ready");
+    assert_eq!(value["result"]["count"], 1);
+    assert_eq!(listing["id"], create["result"]["listing_id"]);
+    assert_eq!(listing["state"], "ready");
+    assert_eq!(listing["file"], listing_file);
+    assert_eq!(listing["product_key"], "eggs");
+    assert_eq!(listing["title"], "Eggs");
+    assert_eq!(listing["category"], "eggs");
+    assert_eq!(listing["location_primary"], "farmstand");
+    assert!(listing["seller_pubkey"].is_string());
+    assert!(listing["farm_d_tag"].is_string());
+    assert_no_removed_command_reference(&value, &["listing", "list"]);
 }
 
 #[test]
