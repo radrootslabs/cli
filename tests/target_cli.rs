@@ -287,12 +287,31 @@ fn buyer_mvp_flow_acceptance_uses_target_operations() {
         .as_str()
         .expect("order id");
 
+    let orders = json_success(&sandbox, &["--format", "json", "order", "list"]);
+    assert_eq!(orders["operation_id"], "order.list");
+    assert_eq!(orders["result"]["state"], "ready");
+    assert_eq!(orders["result"]["count"], 1);
+    assert_eq!(orders["result"]["orders"][0]["id"], order_id);
+    assert_eq!(orders["result"]["orders"][0]["ready_for_submit"], false);
+    assert_eq!(
+        orders["result"]["orders"][0]["issues"][0]["field"],
+        "buyer_account_id"
+    );
+
     let submit = json_success(
         &sandbox,
         &["--format", "json", "--dry-run", "order", "submit", order_id],
     );
     assert_eq!(submit["operation_id"], "order.submit");
     assert_eq!(submit["dry_run"], true);
+    assert_eq!(submit["result"]["state"], "unconfigured");
+    assert_eq!(submit["result"]["order_id"], order_id);
+    assert!(
+        submit["result"]["reason"]
+            .as_str()
+            .expect("submit reason")
+            .contains("not ready for durable submit")
+    );
     assert_eq!(submit["errors"].as_array().expect("errors").len(), 0);
 }
 
