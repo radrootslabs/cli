@@ -152,6 +152,72 @@ fn unsupported_ndjson_returns_structured_invalid_input() {
 }
 
 #[test]
+fn offline_forbids_external_network_operations() {
+    let output = radroots()
+        .args(["--format", "json", "--offline", "sync", "pull"])
+        .output()
+        .expect("run offline sync pull");
+
+    assert!(!output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
+
+    assert_eq!(value["operation_id"], "sync.pull");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "offline_forbidden");
+    assert_eq!(value["errors"][0]["exit_code"], 8);
+}
+
+#[test]
+fn offline_allows_supported_external_dry_run() {
+    let sandbox = RadrootsCliSandbox::new();
+    let listing_file = sandbox.root().join("listing.toml");
+    let listing_file = listing_file.to_string_lossy().into_owned();
+
+    let publish = json_success(
+        &sandbox,
+        &[
+            "--format",
+            "json",
+            "--offline",
+            "--dry-run",
+            "listing",
+            "publish",
+            listing_file.as_str(),
+        ],
+    );
+
+    assert_eq!(publish["operation_id"], "listing.publish");
+    assert_eq!(publish["result"]["state"], "dry_run");
+}
+
+#[test]
+fn online_requires_relay_for_external_network_operations() {
+    let output = radroots()
+        .args(["--format", "json", "--online", "market", "refresh"])
+        .output()
+        .expect("run online market refresh");
+
+    assert!(!output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
+
+    assert_eq!(value["operation_id"], "market.refresh");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(value["errors"][0]["exit_code"], 8);
+}
+
+#[test]
+fn online_allows_local_diagnostics() {
+    let value = json_success(
+        &RadrootsCliSandbox::new(),
+        &["--format", "json", "--online", "workspace", "get"],
+    );
+
+    assert_eq!(value["operation_id"], "workspace.get");
+    assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
+}
+
+#[test]
 fn required_approval_missing_token_returns_structured_error() {
     let output = radroots()
         .args(["--format", "json", "order", "submit"])

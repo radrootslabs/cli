@@ -302,6 +302,16 @@ pub enum OperationAdapterError {
         operation_id: String,
         message: String,
     },
+    #[error("operation `{operation_id}` is forbidden while offline: {message}")]
+    OfflineForbidden {
+        operation_id: String,
+        message: String,
+    },
+    #[error("operation `{operation_id}` cannot run online: {message}")]
+    NetworkUnavailable {
+        operation_id: String,
+        message: String,
+    },
     #[error("operation runtime error: {0}")]
     Runtime(String),
     #[error("operation `{operation_id}` is unavailable or unconfigured: {message}")]
@@ -329,6 +339,16 @@ impl OperationAdapterError {
             Self::InvalidInput { message, .. } => {
                 OutputError::new("invalid_input", message.clone(), CliExitCode::InvalidInput)
             }
+            Self::OfflineForbidden { message, .. } => OutputError::new(
+                "offline_forbidden",
+                message.clone(),
+                CliExitCode::SyncOrNetworkFailure,
+            ),
+            Self::NetworkUnavailable { message, .. } => OutputError::new(
+                "network_unavailable",
+                message.clone(),
+                CliExitCode::SyncOrNetworkFailure,
+            ),
             Self::UnknownOperation(operation_id) => OutputError::new(
                 "unknown_operation",
                 format!("unknown operation `{operation_id}`"),

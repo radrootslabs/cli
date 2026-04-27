@@ -22,8 +22,9 @@ use clap::Parser;
 
 use crate::cli::{CliArgs, Command, ConfigArgs, ConfigCommand, OutputFormatArg};
 use crate::operation_adapter::{
-    MvpOperationRequest, OperationAdapter, OperationAdapterError, OperationOutputFormat,
-    OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
+    MvpOperationRequest, OperationAdapter, OperationAdapterError, OperationNetworkMode,
+    OperationOutputFormat, OperationRequest, OperationRequestPayload, OperationResultPayload,
+    OperationService,
 };
 use crate::operation_basket::BasketOperationService;
 use crate::operation_core::CoreOperationService;
@@ -54,7 +55,7 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
     let config = RuntimeConfig::from_system(&config_args_from_target(&args)?)?;
     let logging = initialize_logging(&config.logging)?;
     let request = MvpOperationRequest::from_target_args(&args).map_err(operation_config_error)?;
-    let envelope = match validate_request_contract(&request) {
+    let envelope = match validate_request_contract(&request, &config) {
         Ok(()) => execute_request(request, &config, &logging),
         Err(error) => failure_envelope(&request, error),
     };
@@ -314,7 +315,10 @@ where
     }
 }
 
-fn validate_request_contract(request: &MvpOperationRequest) -> Result<(), OperationAdapterError> {
+fn validate_request_contract(
+    request: &MvpOperationRequest,
+    config: &RuntimeConfig,
+) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
     if matches!(
         request.context().output_format,
@@ -332,7 +336,59 @@ fn validate_request_contract(request: &MvpOperationRequest) -> Result<(), Operat
             message: format!("`{}` does not support --dry-run", spec.cli_path),
         });
     }
+    validate_network_contract(request, config)?;
     Ok(())
+}
+
+fn validate_network_contract(
+    request: &MvpOperationRequest,
+    config: &RuntimeConfig,
+) -> Result<(), OperationAdapterError> {
+    let spec = request.spec();
+    let external = external_network_operation(spec.operation_id);
+    match request.context().network_mode {
+        OperationNetworkMode::Default => Ok(()),
+        OperationNetworkMode::Offline => {
+            if external && !request.context().dry_run {
+                return Err(OperationAdapterError::OfflineForbidden {
+                    operation_id: spec.operation_id.to_owned(),
+                    message: format!(
+                        "`{}` requires relay, provider, or workflow network access",
+                        spec.cli_path
+                    ),
+                });
+            }
+            Ok(())
+        }
+        OperationNetworkMode::Online => {
+            if external && !request.context().dry_run && config.relay.urls.is_empty() {
+                return Err(OperationAdapterError::NetworkUnavailable {
+                    operation_id: spec.operation_id.to_owned(),
+                    message: format!(
+                        "`{}` requires at least one configured relay for online execution",
+                        spec.cli_path
+                    ),
+                });
+            }
+            Ok(())
+        }
+    }
+}
+
+fn external_network_operation(operation_id: &str) -> bool {
+    matches!(
+        operation_id,
+        "sync.pull"
+            | "sync.push"
+            | "sync.watch"
+            | "market.refresh"
+            | "farm.publish"
+            | "listing.publish"
+            | "listing.archive"
+            | "order.submit"
+            | "order.event.watch"
+            | "job.watch"
+    )
 }
 
 fn failure_envelope(request: &MvpOperationRequest, error: OperationAdapterError) -> OutputEnvelope {
