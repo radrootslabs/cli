@@ -50,7 +50,7 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
             config.output.dry_run = true;
         }
         let view = map_runtime(crate::runtime::order::submit(&config, &args))?;
-        if request.context.dry_run {
+        if request.context.dry_run && view.state == "unconfigured" && !view.issues.is_empty() {
             serialized_target_result::<OrderSubmitResult, _>(&view)
         } else {
             submit_result::<OrderSubmitResult>(request.operation_id(), &view)

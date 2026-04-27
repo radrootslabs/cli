@@ -499,6 +499,77 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
 }
 
 #[test]
+fn ready_order_submit_dry_run_validates_local_buyer_authority() {
+    let sandbox = RadrootsCliSandbox::new();
+    let first = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let first_account_id = first["result"]["account"]["id"]
+        .as_str()
+        .expect("first account id");
+    sandbox.json_success(&["--format", "json", "basket", "create", "ready_order"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "ready_order",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "ready_order",
+    ]);
+    let order_id = quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id");
+    assert_eq!(quote["result"]["quote"]["ready_for_submit"], true);
+    assert_eq!(
+        quote["result"]["order"]["buyer_account_id"],
+        first_account_id
+    );
+
+    let dry_run =
+        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+
+    assert_eq!(dry_run["operation_id"], "order.submit");
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["result"]["state"], "dry_run");
+    assert_eq!(dry_run["result"]["dry_run"], true);
+    assert_eq!(dry_run["result"]["buyer_account_id"], first_account_id);
+
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+    let (output, mismatch) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--account-id",
+        second_account_id,
+        "--dry-run",
+        "order",
+        "submit",
+        order_id,
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(5));
+    assert_eq!(mismatch["operation_id"], "order.submit");
+    assert_eq!(mismatch["errors"][0]["code"], "account_mismatch");
+    assert_eq!(mismatch["errors"][0]["detail"]["class"], "account");
+    assert_no_removed_command_reference(&mismatch, &["order", "submit", "--dry-run"]);
+}
+
+#[test]
 fn seller_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
     let listing_file = sandbox.root().join("listing.toml");

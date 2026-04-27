@@ -412,6 +412,23 @@ impl OperationAdapterError {
                 operation_id: operation_id.to_owned(),
                 message,
             },
+            RuntimeError::Config(_)
+                if contains_any(
+                    &lowered,
+                    &[
+                        "no local account",
+                        "watch_only",
+                        "not secret-backed",
+                        "selected local account",
+                    ],
+                ) =>
+            {
+                classify_runtime_failure(
+                    operation_id,
+                    message,
+                    RuntimeFailureAvailability::Unconfigured,
+                )
+            }
             RuntimeError::Config(_) if looks_like_validation_failure(&lowered) => {
                 Self::ValidationFailed {
                     operation_id: operation_id.to_owned(),
@@ -1357,6 +1374,18 @@ mod tests {
                 "validation_failed",
                 "validation",
                 10,
+            ),
+            (
+                OperationAdapterError::runtime_failure(
+                    "listing.archive",
+                    RuntimeError::Config(
+                        "selected local account pubkey `b` cannot sign listing seller_pubkey `a`"
+                            .to_owned(),
+                    ),
+                ),
+                "account_mismatch",
+                "account",
+                5,
             ),
         ];
 

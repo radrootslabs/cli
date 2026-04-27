@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::domain::runtime::{CommandDisposition, FarmPublishView};
 use crate::operation_adapter::{
     FarmCreateRequest, FarmCreateResult, FarmFulfillmentUpdateRequest, FarmFulfillmentUpdateResult,
     FarmGetRequest, FarmGetResult, FarmLocationUpdateRequest, FarmLocationUpdateResult,
@@ -142,22 +143,16 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
             print_job: bool_input(&request, "print_job").unwrap_or(false),
             print_event: bool_input(&request, "print_event").unwrap_or(false),
         };
-        if request.context.dry_run {
-            return json_operation_result::<FarmPublishResult>(json!({
-                "state": "dry_run",
-                "scope": args.scope.map(scope_name),
-                "idempotency_key": args.idempotency_key,
-                "signer_session_id": args.signer_session_id,
-            }));
-        }
-        if request.context.approval_token.is_none() {
+        if !request.context.dry_run && request.context.approval_token.is_none() {
             return Err(OperationAdapterError::approval_required(
                 request.operation_id(),
             ));
         }
 
-        let view = map_runtime(crate::runtime::farm::publish(self.config, &args))?;
-        serialized_operation_result::<FarmPublishResult, _>(&view)
+        let view = crate::runtime::farm::publish(self.config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
+        farm_publish_result(request.operation_id(), &view)
     }
 }
 
@@ -225,6 +220,39 @@ where
     T: Serialize,
 {
     OperationResult::new(R::from_serializable(value)?)
+}
+
+fn farm_publish_result(
+    operation_id: &str,
+    view: &FarmPublishView,
+) -> Result<OperationResult<FarmPublishResult>, OperationAdapterError> {
+    match view.disposition() {
+        CommandDisposition::Success => serialized_operation_result::<FarmPublishResult, _>(view),
+        CommandDisposition::Unconfigured => Err(OperationAdapterError::unconfigured(
+            operation_id,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| "farm publish is unconfigured".to_owned()),
+        )),
+        CommandDisposition::ExternalUnavailable => Err(OperationAdapterError::unavailable(
+            operation_id,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| "farm publish is unavailable".to_owned()),
+        )),
+        CommandDisposition::Unsupported => Err(OperationAdapterError::InvalidInput {
+            operation_id: operation_id.to_owned(),
+            message: view
+                .reason
+                .clone()
+                .unwrap_or_else(|| "farm publish is unsupported".to_owned()),
+        }),
+        CommandDisposition::InternalError => Err(OperationAdapterError::Runtime(
+            view.reason
+                .clone()
+                .unwrap_or_else(|| "farm publish failed".to_owned()),
+        )),
+    }
 }
 
 fn json_operation_result<R>(value: Value) -> Result<OperationResult<R>, OperationAdapterError>

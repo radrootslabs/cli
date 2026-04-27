@@ -223,6 +223,7 @@ pub fn publish(
             format!("no farm config found at {}", path.display()),
             vec!["Farm draft".to_owned()],
             vec!["radroots farm create".to_owned()],
+            config.output.dry_run,
             false,
             String::new(),
             String::new(),
@@ -241,6 +242,7 @@ pub fn publish(
             ),
             vec!["Selected account".to_owned()],
             vec!["radroots account create".to_owned()],
+            config.output.dry_run,
             true,
             resolved.document.selection.account.clone(),
             String::new(),
@@ -256,6 +258,7 @@ pub fn publish(
             "farm draft is missing required fields".to_owned(),
             missing_field_labels(draft_missing.as_slice()),
             missing_field_actions(draft_missing.as_slice()),
+            config.output.dry_run,
             true,
             resolved.document.selection.account.clone(),
             account.record.public_identity.public_key_hex.clone(),
@@ -266,6 +269,22 @@ pub fn publish(
     let previews = build_publish_previews(&resolved.document, account_pubkey.as_str())?;
     let profile_idempotency_key = component_idempotency_key(args, "profile")?;
     let farm_idempotency_key = component_idempotency_key(args, "farm")?;
+
+    let signer_authority = match resolve_farm_write_authority(config, account_pubkey.as_str()) {
+        Ok(authority) => authority,
+        Err(error) => {
+            return Ok(binding_error_publish_view(
+                config,
+                args,
+                &resolved,
+                &account_pubkey,
+                previews,
+                profile_idempotency_key,
+                farm_idempotency_key,
+                error,
+            ));
+        }
+    };
 
     if config.output.dry_run {
         return Ok(base_publish_view(
@@ -295,23 +314,6 @@ pub fn publish(
             )],
         ));
     }
-
-    let signer_authority =
-        match resolve_actor_write_authority(config, "farm", account_pubkey.as_str()) {
-            Ok(authority) => authority,
-            Err(error) => {
-                return Ok(binding_error_publish_view(
-                    config,
-                    args,
-                    &resolved,
-                    &account_pubkey,
-                    previews,
-                    profile_idempotency_key,
-                    farm_idempotency_key,
-                    error,
-                ));
-            }
-        };
     let profile_signer_session_id = match daemon::resolve_signer_session_id(
         config,
         "farm profile",
@@ -470,6 +472,7 @@ fn missing_publish_view(
     reason: String,
     missing: Vec<String>,
     actions: Vec<String>,
+    dry_run: bool,
     config_present: bool,
     selected_account_id: String,
     selected_account_pubkey: String,
@@ -481,7 +484,7 @@ fn missing_publish_view(
         scope: scope.as_str().to_owned(),
         path,
         config_present,
-        dry_run: false,
+        dry_run,
         selected_account_id,
         selected_account_pubkey,
         farm_d_tag,
@@ -492,6 +495,32 @@ fn missing_publish_view(
         reason: Some(reason),
         actions,
     }
+}
+
+fn resolve_farm_write_authority(
+    config: &RuntimeConfig,
+    account_pubkey: &str,
+) -> Result<Option<crate::runtime::signer::ActorWriteSignerAuthority>, ActorWriteBindingError> {
+    if !matches!(
+        config.signer.backend,
+        crate::runtime::config::SignerBackend::Local
+    ) {
+        return resolve_actor_write_authority(config, "farm", account_pubkey);
+    }
+    let signing = accounts::resolve_local_signing_identity(config)
+        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+    let selected_pubkey = signing
+        .account
+        .record
+        .public_identity
+        .public_key_hex
+        .as_str();
+    if !selected_pubkey.eq_ignore_ascii_case(account_pubkey) {
+        return Err(ActorWriteBindingError::Unconfigured(format!(
+            "selected local account pubkey `{selected_pubkey}` cannot sign farm pubkey `{account_pubkey}`"
+        )));
+    }
+    Ok(None)
 }
 
 fn base_publish_view(

@@ -545,7 +545,10 @@ fn mutate(
     let (event_preview, listing_addr) = build_listing_event_preview(&canonical)?;
 
     if config.output.dry_run
-        && matches!(operation, ListingMutationOperation::Publish)
+        && matches!(
+            operation,
+            ListingMutationOperation::Publish | ListingMutationOperation::Archive
+        )
         && matches!(config.signer.backend, SignerBackend::Local)
     {
         validate_local_listing_signer(config, &canonical)?;

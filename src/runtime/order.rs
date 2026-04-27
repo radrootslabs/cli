@@ -31,7 +31,7 @@ use crate::domain::runtime::{
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::{
-    CapabilityBindingTargetKind, RuntimeConfig, WORKFLOW_TRADE_CAPABILITY,
+    CapabilityBindingTargetKind, RuntimeConfig, SignerBackend, WORKFLOW_TRADE_CAPABILITY,
 };
 use crate::runtime::daemon::{self, DaemonRpcError};
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
@@ -461,6 +461,12 @@ pub fn submit(
     }
 
     if config.output.dry_run {
+        if let Err(error) = validate_local_order_write_authority(
+            config,
+            loaded.document.order.buyer_pubkey.as_str(),
+        ) {
+            return Ok(order_binding_error_view(config, &loaded, args, error));
+        }
         return Ok(OrderSubmitView {
             state: "dry_run".to_owned(),
             source: ORDER_LIFECYCLE_SOURCE.to_owned(),
@@ -1425,7 +1431,7 @@ fn order_binding_error_view(
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
-        dry_run: false,
+        dry_run: config.output.dry_run,
         deduplicated: false,
         idempotency_key: args.idempotency_key.clone(),
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
@@ -1436,6 +1442,29 @@ fn order_binding_error_view(
         issues: Vec::new(),
         actions,
     }
+}
+
+fn validate_local_order_write_authority(
+    config: &RuntimeConfig,
+    buyer_pubkey: &str,
+) -> Result<(), ActorWriteBindingError> {
+    if !matches!(config.signer.backend, SignerBackend::Local) {
+        return Ok(());
+    }
+    let signing = accounts::resolve_local_signing_identity(config)
+        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+    let selected_pubkey = signing
+        .account
+        .record
+        .public_identity
+        .public_key_hex
+        .as_str();
+    if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
+        return Err(ActorWriteBindingError::Unconfigured(format!(
+            "selected local account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
+        )));
+    }
+    Ok(())
 }
 
 fn order_watch_error_view(

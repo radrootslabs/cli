@@ -391,6 +391,34 @@ fn local_listing_publish_dry_run_does_not_sign_matching_listing() {
 }
 
 #[test]
+fn local_listing_archive_dry_run_validates_local_account_authority() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let listing_file = create_listing_draft(&sandbox, "local-archive-mismatch");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--account-id",
+        second_account_id,
+        "--dry-run",
+        "listing",
+        "archive",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.archive");
+    assert_eq!(value["errors"][0]["code"], "account_mismatch");
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
+}
+
+#[test]
 fn local_listing_publish_fails_when_selected_account_does_not_match_seller() {
     let sandbox = RadrootsCliSandbox::new();
     let first = sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -428,6 +456,73 @@ fn local_listing_publish_fails_when_selected_account_does_not_match_seller() {
         "cannot sign listing seller_pubkey",
     );
     assert_no_removed_command_reference(&value, &["listing", "publish", "account mismatch"]);
+}
+
+#[test]
+fn local_farm_publish_dry_run_validates_secret_backed_account() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+
+    let value = sandbox.json_success(&["--format", "json", "--dry-run", "farm", "publish"]);
+
+    assert_eq!(value["operation_id"], "farm.publish");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(value["result"]["dry_run"], true);
+}
+
+#[test]
+fn watch_only_farm_publish_dry_run_fails_as_account_watch_only() {
+    let sandbox = RadrootsCliSandbox::new();
+    let public_identity = identity_public(13);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "watch-only-farm", &public_identity);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+
+    let (output, value) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "farm", "publish"]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "farm.publish");
+    assert_eq!(value["errors"][0]["code"], "account_watch_only");
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
 }
 
 #[test]
