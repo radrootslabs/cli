@@ -6,8 +6,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use support::{
-    RadrootsCliSandbox, assert_no_removed_command_reference, create_listing_draft,
-    make_listing_publishable, ndjson_from_stdout, radroots,
+    RadrootsCliSandbox, assert_no_removed_command_reference, create_listing_draft, identity_public,
+    make_listing_publishable, ndjson_from_stdout, radroots, write_public_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -542,18 +542,58 @@ fn store_backup_dry_run_preflights_initialized_store_without_writing_file() {
 }
 
 #[test]
-fn required_approval_missing_token_returns_structured_error() {
-    let output = radroots()
-        .args(["--format", "json", "order", "submit"])
-        .output()
-        .expect("run order submit");
+fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
+    let sandbox = RadrootsCliSandbox::new();
+    let public_identity = identity_public(61);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "approval-import", &public_identity);
+    let public_identity_path = public_identity_file.to_string_lossy();
 
-    assert_eq!(output.status.code(), Some(6));
-    let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "account.import",
+        &["account", "import", public_identity_path.as_ref()],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "account.remove",
+        &["account", "remove", "acct_missing"],
+    );
+    assert_required_approval_token_rejected(&sandbox, "farm.publish", &["farm", "publish"]);
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "listing.publish",
+        &["listing", "publish", "missing-listing.toml"],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "listing.archive",
+        &["listing", "archive", "missing-listing.toml"],
+    );
+    assert_required_approval_token_rejected(&sandbox, "order.submit", &["order", "submit"]);
+}
 
-    assert_eq!(value["operation_id"], "order.submit");
-    assert_eq!(value["errors"][0]["code"], "approval_required");
-    assert_eq!(value["errors"][0]["exit_code"], 6);
+fn assert_required_approval_token_rejected(
+    sandbox: &RadrootsCliSandbox,
+    operation_id: &str,
+    command_args: &[&str],
+) {
+    for token in [None, Some(""), Some(" \t ")] {
+        let mut args = vec!["--format", "json"];
+        if let Some(token) = token {
+            args.push("--approval-token");
+            args.push(token);
+        }
+        args.extend_from_slice(command_args);
+
+        let (output, value) = sandbox.json_output(&args);
+
+        assert_eq!(output.status.code(), Some(6), "`{args:?}` should fail");
+        assert_eq!(value["operation_id"], operation_id);
+        assert_eq!(value["errors"][0]["code"], "approval_required");
+        assert_eq!(value["errors"][0]["exit_code"], 6);
+        assert_no_removed_command_reference(&value, &args);
+    }
 }
 
 #[test]

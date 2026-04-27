@@ -143,7 +143,7 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
             print_job: bool_input(&request, "print_job").unwrap_or(false),
             print_event: bool_input(&request, "print_event").unwrap_or(false),
         };
-        if !request.context.dry_run && request.context.approval_token.is_none() {
+        if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
                 request.operation_id(),
             ));

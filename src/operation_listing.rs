@@ -208,7 +208,7 @@ fn require_approval<P>(request: &OperationRequest<P>) -> Result<(), OperationAda
 where
     P: OperationRequestPayload + OperationRequestData,
 {
-    if request.context.approval_token.is_none() {
+    if request.context.requires_approval_token() {
         return Err(OperationAdapterError::approval_required(
             request.operation_id(),
         ));

@@ -118,6 +118,16 @@ impl OperationContext {
         });
         context
     }
+
+    pub fn requires_approval_token(&self) -> bool {
+        !self.dry_run && !self.has_approval_token()
+    }
+
+    pub fn has_approval_token(&self) -> bool {
+        self.approval_token
+            .as_deref()
+            .is_some_and(|token| !token.trim().is_empty())
+    }
 }
 
 pub type OperationData = Map<String, Value>;

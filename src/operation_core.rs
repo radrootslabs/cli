@@ -233,7 +233,7 @@ impl OperationService<AccountImportRequest> for CoreOperationService<'_> {
                 "account": account_summary_view(&account),
             }));
         }
-        if request.context.approval_token.is_none() {
+        if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
                 request.operation_id(),
             ));
@@ -321,7 +321,7 @@ impl OperationService<AccountRemoveRequest> for CoreOperationService<'_> {
                 "remaining_account_count": preview.remaining_account_count,
             }));
         }
-        if request.context.approval_token.is_none() {
+        if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
                 request.operation_id(),
             ));

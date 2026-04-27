@@ -29,7 +29,7 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
         &self,
         request: OperationRequest<OrderSubmitRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        if !request.context.dry_run && request.context.approval_token.is_none() {
+        if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
                 request.operation_id(),
             ));
