@@ -30,7 +30,7 @@ radroots_events_codec = { path = "../lib/crates/events_codec", features = ["nost
 radroots_identity = { path = "../lib/crates/identity" }
 radroots_log = { path = "../lib/crates/log" }
 radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts", features = ["os-keyring"] }
-radroots_nostr = { path = "../lib/crates/nostr" }
+radroots_nostr = { path = "../lib/crates/nostr", features = ["client"] }
 radroots_nostr_signer = { path = "../lib/crates/nostr_signer" }
 radroots_protected_store = { path = "../lib/crates/protected_store", features = ["std"] }
 radroots_replica_db = { path = "../lib/crates/replica_db" }
@@ -42,6 +42,7 @@ radroots_trade = { path = "../lib/crates/trade" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 toml = "0.8"
 url = "2.5"
 zeroize = "1.8"
