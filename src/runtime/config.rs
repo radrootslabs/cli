@@ -408,7 +408,6 @@ struct CapabilityBindingSpec {
 }
 
 pub(crate) const SIGNER_REMOTE_NIP46_CAPABILITY: &str = "signer.remote_nip46";
-pub(crate) const WRITE_PLANE_TRADE_JSONRPC_CAPABILITY: &str = "write_plane.trade_jsonrpc";
 pub(crate) const WORKFLOW_TRADE_CAPABILITY: &str = "workflow.trade";
 pub(crate) const INFERENCE_HYF_STDIO_CAPABILITY: &str = "inference.hyf_stdio";
 
@@ -417,16 +416,6 @@ const CAPABILITY_BINDING_SPECS: &[CapabilityBindingSpec] = &[
         capability_id: SIGNER_REMOTE_NIP46_CAPABILITY,
         provider_runtime_id: "myc",
         binding_model: "session_authorized_remote_signer",
-    },
-    CapabilityBindingSpec {
-        capability_id: WRITE_PLANE_TRADE_JSONRPC_CAPABILITY,
-        provider_runtime_id: "radrootsd",
-        binding_model: "daemon_backed_jsonrpc",
-    },
-    CapabilityBindingSpec {
-        capability_id: WORKFLOW_TRADE_CAPABILITY,
-        provider_runtime_id: "rhi",
-        binding_model: "out_of_process_worker",
     },
     CapabilityBindingSpec {
         capability_id: INFERENCE_HYF_STDIO_CAPABILITY,
@@ -2444,7 +2433,7 @@ target = "bin/user-hyfd"
     }
 
     #[test]
-    fn invalid_capability_binding_provider_fails() {
+    fn daemon_and_workflow_capability_bindings_are_rejected() {
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
         let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
@@ -2456,7 +2445,7 @@ target = "bin/user-hyfd"
             r#"
 [[capability_binding]]
 capability = "write_plane.trade_jsonrpc"
-provider = "hyf"
+provider = "radrootsd"
 target_kind = "explicit_endpoint"
 target = "https://rpc.workspace.test/jsonrpc"
 "#,
@@ -2488,11 +2477,31 @@ target = "https://rpc.workspace.test/jsonrpc"
         let args = runtime_args();
 
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
-            .expect_err("invalid capability binding provider");
+            .expect_err("rejected daemon capability binding");
         assert!(
             error
                 .to_string()
-                .contains("must use provider `radrootsd`, got `hyf`")
+                .contains("unknown capability_binding capability `write_plane.trade_jsonrpc`")
+        );
+
+        fs::write(
+            repo_local_root.join("config.toml"),
+            r#"
+[[capability_binding]]
+capability = "workflow.trade"
+provider = "rhi"
+target_kind = "managed_instance"
+target = "workflow-default"
+"#,
+        )
+        .expect("write workflow config");
+
+        let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect_err("rejected workflow capability binding");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown capability_binding capability `workflow.trade`")
         );
     }
 
