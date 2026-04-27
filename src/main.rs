@@ -446,7 +446,10 @@ fn render_envelope(
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     match format {
-        TargetOutputFormat::Human | TargetOutputFormat::Json => {
+        TargetOutputFormat::Human => {
+            render_human_envelope(&mut handle, envelope)?;
+        }
+        TargetOutputFormat::Json => {
             serde_json::to_writer_pretty(&mut handle, envelope)?;
         }
         TargetOutputFormat::Ndjson => {
@@ -459,6 +462,41 @@ fn render_envelope(
     }
     writeln!(handle)?;
     Ok(())
+}
+
+fn render_human_envelope(
+    handle: &mut impl Write,
+    envelope: &OutputEnvelope,
+) -> Result<(), runtime::RuntimeError> {
+    writeln!(
+        handle,
+        "{}: {}",
+        envelope.operation_id,
+        human_envelope_status(envelope)
+    )?;
+    writeln!(handle, "request_id: {}", envelope.request_id)?;
+    if let Some(error) = envelope.errors.first() {
+        writeln!(handle, "error: {}", error.code)?;
+        writeln!(handle, "message: {}", error.message)?;
+    }
+    Ok(())
+}
+
+fn human_envelope_status(envelope: &OutputEnvelope) -> &str {
+    if !envelope.errors.is_empty() {
+        return "error";
+    }
+    if let Some(state) = envelope
+        .result
+        .get("state")
+        .and_then(|value| value.as_str())
+    {
+        return state;
+    }
+    if envelope.dry_run {
+        return "dry_run";
+    }
+    "ok"
 }
 
 fn envelope_exit_code(envelope: &OutputEnvelope) -> ExitCode {
