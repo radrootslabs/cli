@@ -1,26 +1,16 @@
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::operation_adapter::{
-    JobGetRequest, JobGetResult, JobListRequest, JobListResult, JobWatchRequest, JobWatchResult,
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, RelayListRequest, RelayListResult,
-    RuntimeConfigGetRequest, RuntimeConfigGetResult, RuntimeLogWatchRequest, RuntimeLogWatchResult,
-    RuntimeRestartRequest, RuntimeRestartResult, RuntimeStartRequest, RuntimeStartResult,
-    RuntimeStatusGetRequest, RuntimeStatusGetResult, RuntimeStopRequest, RuntimeStopResult,
     SignerStatusGetRequest, SignerStatusGetResult, SyncPullRequest, SyncPullResult,
     SyncPushRequest, SyncPushResult, SyncStatusGetRequest, SyncStatusGetResult, SyncWatchRequest,
     SyncWatchResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::daemon::{self, DaemonRpcError};
-use crate::runtime::management::{
-    RuntimeLifecycleAction, inspect_action, inspect_config_show, inspect_logs, inspect_status,
-};
 use crate::runtime_args::SyncWatchArgs;
-
-const DEFAULT_RUNTIME_ID: &str = "radrootsd";
 
 pub struct RuntimeOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -108,251 +98,6 @@ impl OperationService<SyncWatchRequest> for RuntimeOperationService<'_> {
     }
 }
 
-impl OperationService<RuntimeStatusGetRequest> for RuntimeOperationService<'_> {
-    type Result = RuntimeStatusGetResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<RuntimeStatusGetRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let target = runtime_target(&request);
-        let inspection = map_runtime(inspect_status(
-            self.config,
-            target.runtime_id.as_str(),
-            target.instance_id.as_deref(),
-        ))?;
-        serialized_operation_result::<RuntimeStatusGetResult, _>(&inspection.view)
-    }
-}
-
-impl OperationService<RuntimeStartRequest> for RuntimeOperationService<'_> {
-    type Result = RuntimeStartResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<RuntimeStartRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        runtime_action::<RuntimeStartResult>(self.config, &request, RuntimeLifecycleAction::Start)
-    }
-}
-
-impl OperationService<RuntimeStopRequest> for RuntimeOperationService<'_> {
-    type Result = RuntimeStopResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<RuntimeStopRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        runtime_action::<RuntimeStopResult>(self.config, &request, RuntimeLifecycleAction::Stop)
-    }
-}
-
-impl OperationService<RuntimeRestartRequest> for RuntimeOperationService<'_> {
-    type Result = RuntimeRestartResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<RuntimeRestartRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        runtime_action::<RuntimeRestartResult>(
-            self.config,
-            &request,
-            RuntimeLifecycleAction::Restart,
-        )
-    }
-}
-
-impl OperationService<RuntimeLogWatchRequest> for RuntimeOperationService<'_> {
-    type Result = RuntimeLogWatchResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<RuntimeLogWatchRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let target = runtime_target(&request);
-        let inspection = map_runtime(inspect_logs(
-            self.config,
-            target.runtime_id.as_str(),
-            target.instance_id.as_deref(),
-        ))?;
-        serialized_operation_result::<RuntimeLogWatchResult, _>(&inspection.view)
-    }
-}
-
-impl OperationService<RuntimeConfigGetRequest> for RuntimeOperationService<'_> {
-    type Result = RuntimeConfigGetResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<RuntimeConfigGetRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let target = runtime_target(&request);
-        let inspection = map_runtime(inspect_config_show(
-            self.config,
-            target.runtime_id.as_str(),
-            target.instance_id.as_deref(),
-        ))?;
-        serialized_operation_result::<RuntimeConfigGetResult, _>(&inspection.view)
-    }
-}
-
-impl OperationService<JobListRequest> for RuntimeOperationService<'_> {
-    type Result = JobListResult;
-
-    fn execute(
-        &self,
-        _request: OperationRequest<JobListRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        match daemon::bridge_job_list(self.config) {
-            Ok(jobs) => json_operation_result::<JobListResult>(json!({
-                "state": if jobs.is_empty() { "empty" } else { "ready" },
-                "source": daemon::bridge_source(),
-                "rpc_url": self.config.rpc.url,
-                "count": jobs.len(),
-                "reason": null,
-                "jobs": jobs,
-                "actions": [],
-            })),
-            Err(error) => job_error_result::<JobListResult>(self.config, error, None),
-        }
-    }
-}
-
-impl OperationService<JobGetRequest> for RuntimeOperationService<'_> {
-    type Result = JobGetResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<JobGetRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let job_id = required_string(&request, "job_id")?;
-        match daemon::bridge_job(self.config, job_id.as_str()) {
-            Ok(Some(job)) => json_operation_result::<JobGetResult>(json!({
-                "state": "ready",
-                "source": daemon::bridge_source(),
-                "rpc_url": self.config.rpc.url,
-                "lookup": job_id,
-                "reason": null,
-                "job": job,
-                "actions": [],
-            })),
-            Ok(None) => json_operation_result::<JobGetResult>(json!({
-                "state": "missing",
-                "source": daemon::bridge_source(),
-                "rpc_url": self.config.rpc.url,
-                "lookup": job_id,
-                "reason": format!("job `{job_id}` was not found in radrootsd"),
-                "job": null,
-                "actions": ["radroots job list"],
-            })),
-            Err(error) => job_error_result::<JobGetResult>(self.config, error, Some(job_id)),
-        }
-    }
-}
-
-impl OperationService<JobWatchRequest> for RuntimeOperationService<'_> {
-    type Result = JobWatchResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<JobWatchRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let job_id = required_string(&request, "job_id")?;
-        let interval_ms = u64_input(&request, "interval_ms").unwrap_or(1_000);
-        match daemon::bridge_job(self.config, job_id.as_str()) {
-            Ok(Some(job)) => json_operation_result::<JobWatchResult>(json!({
-                "state": if job.terminal { job.state.as_str() } else { "watching" },
-                "source": daemon::bridge_source(),
-                "rpc_url": self.config.rpc.url,
-                "job_id": job_id,
-                "interval_ms": interval_ms,
-                "reason": null,
-                "frames": [{
-                    "sequence": 1,
-                    "observed_at_unix": job.completed_at_unix.unwrap_or(job.requested_at_unix),
-                    "state": job.state,
-                    "terminal": job.terminal,
-                    "signer": job.signer,
-                    "signer_session_id": job.signer_session_id,
-                    "summary": job.relay_outcome_summary,
-                }],
-                "actions": [],
-            })),
-            Ok(None) => json_operation_result::<JobWatchResult>(json!({
-                "state": "missing",
-                "source": daemon::bridge_source(),
-                "rpc_url": self.config.rpc.url,
-                "job_id": job_id,
-                "interval_ms": interval_ms,
-                "reason": format!("job `{job_id}` was not found in radrootsd"),
-                "frames": [],
-                "actions": ["radroots job list"],
-            })),
-            Err(error) => job_error_result::<JobWatchResult>(self.config, error, Some(job_id)),
-        }
-    }
-}
-
-fn runtime_action<R>(
-    config: &RuntimeConfig,
-    request: &OperationRequest<impl OperationRequestPayload + OperationRequestData>,
-    action: RuntimeLifecycleAction,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    let target = runtime_target(request);
-    let inspection = map_runtime(inspect_action(
-        config,
-        target.runtime_id.as_str(),
-        target.instance_id.as_deref(),
-        action,
-        request.context.dry_run,
-    ))?;
-    serialized_operation_result::<R, _>(&inspection.view)
-}
-
-fn job_error_result<R>(
-    config: &RuntimeConfig,
-    error: DaemonRpcError,
-    lookup: Option<String>,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    let (state, reason, actions) = match error {
-        DaemonRpcError::Unconfigured(reason)
-        | DaemonRpcError::Unauthorized(reason)
-        | DaemonRpcError::MethodUnavailable(reason) => (
-            "unconfigured",
-            reason,
-            vec![
-                "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell",
-                "start radrootsd with bridge ingress enabled",
-            ],
-        ),
-        DaemonRpcError::External(reason) => (
-            "unavailable",
-            reason,
-            vec!["start radrootsd and verify the rpc url"],
-        ),
-        DaemonRpcError::InvalidResponse(reason)
-        | DaemonRpcError::Remote(reason)
-        | DaemonRpcError::UnknownJob(reason) => ("error", reason, Vec::new()),
-    };
-    json_operation_result::<R>(json!({
-        "state": state,
-        "source": daemon::bridge_source(),
-        "rpc_url": config.rpc.url,
-        "lookup": lookup,
-        "reason": reason,
-        "count": 0,
-        "jobs": [],
-        "job": null,
-        "actions": actions,
-    }))
-}
-
 fn serialized_operation_result<R, T>(value: &T) -> Result<OperationResult<R>, OperationAdapterError>
 where
     R: OperationResultData,
@@ -361,57 +106,8 @@ where
     OperationResult::new(R::from_serializable(value)?)
 }
 
-fn json_operation_result<R>(value: Value) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    OperationResult::new(R::from_value(value))
-}
-
 fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
     result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RuntimeTargetInput {
-    runtime_id: String,
-    instance_id: Option<String>,
-}
-
-fn runtime_target<P>(request: &OperationRequest<P>) -> RuntimeTargetInput
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    RuntimeTargetInput {
-        runtime_id: string_input(request, "runtime_id")
-            .unwrap_or_else(|| DEFAULT_RUNTIME_ID.into()),
-        instance_id: string_input(request, "instance_id"),
-    }
-}
-
-fn required_string<P>(
-    request: &OperationRequest<P>,
-    key: &str,
-) -> Result<String, OperationAdapterError>
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    string_input(request, key).ok_or_else(|| OperationAdapterError::InvalidInput {
-        operation_id: request.operation_id().to_owned(),
-        message: format!("missing required `{key}` input"),
-    })
-}
-
-fn string_input<P>(request: &OperationRequest<P>, key: &str) -> Option<String>
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    request
-        .payload
-        .input()
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::to_owned)
 }
 
 fn usize_input<P>(request: &OperationRequest<P>, key: &str) -> Option<usize>
@@ -443,8 +139,8 @@ mod tests {
 
     use super::RuntimeOperationService;
     use crate::operation_adapter::{
-        JobListRequest, OperationAdapter, OperationContext, OperationRequest, RelayListRequest,
-        RuntimeStatusGetRequest, SignerStatusGetRequest, SyncStatusGetRequest,
+        OperationAdapter, OperationContext, OperationRequest, RelayListRequest,
+        SignerStatusGetRequest, SyncStatusGetRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -485,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_service_backs_sync_and_job_unavailable_states() {
+    fn runtime_service_backs_sync_status() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), Vec::new());
         let service = OperationAdapter::new(RuntimeOperationService::new(&config));
@@ -500,38 +196,6 @@ mod tests {
             .expect("sync envelope");
         assert_eq!(sync_envelope.operation_id, "sync.status.get");
         assert_eq!(sync_envelope.result["state"], "unconfigured");
-
-        let job = OperationRequest::new(OperationContext::default(), JobListRequest::default())
-            .expect("job list request");
-        let job_envelope = service
-            .execute(job)
-            .expect("job list result")
-            .to_envelope(OperationContext::default().envelope_context("req_job"))
-            .expect("job envelope");
-        assert_eq!(job_envelope.operation_id, "job.list");
-        assert_eq!(job_envelope.result["state"], "unconfigured");
-        assert!(job_envelope.result["reason"].is_string());
-    }
-
-    #[test]
-    fn runtime_service_backs_runtime_status_default_target() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path(), Vec::new());
-        let service = OperationAdapter::new(RuntimeOperationService::new(&config));
-        let request = OperationRequest::new(
-            OperationContext::default(),
-            RuntimeStatusGetRequest::default(),
-        )
-        .expect("runtime status request");
-        let envelope = service
-            .execute(request)
-            .expect("runtime status result")
-            .to_envelope(OperationContext::default().envelope_context("req_runtime"))
-            .expect("runtime envelope");
-
-        assert_eq!(envelope.operation_id, "runtime.status.get");
-        assert_eq!(envelope.result["runtime_id"], "radrootsd");
-        assert!(envelope.result["state"].is_string());
     }
 
     fn sample_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {

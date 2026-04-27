@@ -28,8 +28,6 @@ fn root_help_exposes_only_target_namespaces() {
         "relay",
         "store",
         "sync",
-        "runtime",
-        "job",
         "farm",
         "listing",
         "market",
@@ -44,7 +42,7 @@ fn root_help_exposes_only_target_namespaces() {
 
     for removed in [
         "setup", "status", "doctor", "sell", "find", "local", "net", "myc", "rpc", "product",
-        "message", "approval", "agent",
+        "runtime", "job", "message", "approval", "agent",
     ] {
         assert!(
             !help_lists(&stdout, removed),
@@ -97,7 +95,7 @@ fn removed_order_submit_watch_flag_is_rejected_publicly() {
 fn removed_command_families_are_rejected_publicly() {
     for command in [
         "setup", "status", "doctor", "sell", "find", "local", "net", "myc", "rpc", "product",
-        "message", "approval", "agent",
+        "runtime", "job", "message", "approval", "agent",
     ] {
         let output = radroots()
             .arg(command)
@@ -120,7 +118,6 @@ fn target_outputs_do_not_suggest_removed_command_families() {
         ["--format", "json", "listing", "get", "eggs"].as_slice(),
         ["--format", "json", "listing", "list"].as_slice(),
         ["--format", "json", "sync", "status", "get"].as_slice(),
-        ["--format", "json", "runtime", "start"].as_slice(),
         [
             "--format",
             "json",
@@ -595,27 +592,6 @@ fn core_account_store_dry_runs_preflight_without_mutating_local_state() {
         selection["result"]["account_resolution"]["default_account"]["id"],
         account_id
     );
-}
-
-#[test]
-fn runtime_lifecycle_dry_runs_inspect_without_changing_runtime_status() {
-    let sandbox = RadrootsCliSandbox::new();
-    let before = sandbox.json_success(&["--format", "json", "runtime", "status", "get"]);
-
-    for (command, operation_id, action) in [
-        ("start", "runtime.start", "start"),
-        ("stop", "runtime.stop", "stop"),
-        ("restart", "runtime.restart", "restart"),
-    ] {
-        let value = sandbox.json_success(&["--format", "json", "--dry-run", "runtime", command]);
-        assert_eq!(value["operation_id"], operation_id);
-        assert_eq!(value["dry_run"], true);
-        assert_eq!(value["result"]["action"], action);
-        assert_eq!(value["result"]["runtime_id"], "radrootsd");
-    }
-
-    let after = sandbox.json_success(&["--format", "json", "runtime", "status", "get"]);
-    assert_eq!(after["result"], before["result"]);
 }
 
 #[test]

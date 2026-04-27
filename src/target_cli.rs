@@ -56,8 +56,6 @@ pub enum TargetCommand {
     Relay(RelayArgs),
     Store(StoreArgs),
     Sync(SyncArgs),
-    Runtime(RuntimeArgs),
-    Job(JobArgs),
     Farm(FarmArgs),
     Listing(ListingArgs),
     Market(MarketArgs),
@@ -120,25 +118,6 @@ impl TargetCommand {
                 SyncCommand::Pull => "sync.pull",
                 SyncCommand::Push => "sync.push",
                 SyncCommand::Watch => "sync.watch",
-            },
-            Self::Runtime(args) => match &args.command {
-                RuntimeCommand::Status(status) => match status.command {
-                    RuntimeStatusCommand::Get => "runtime.status.get",
-                },
-                RuntimeCommand::Start => "runtime.start",
-                RuntimeCommand::Stop => "runtime.stop",
-                RuntimeCommand::Restart => "runtime.restart",
-                RuntimeCommand::Log(log) => match log.command {
-                    RuntimeLogCommand::Watch => "runtime.log.watch",
-                },
-                RuntimeCommand::Config(config) => match config.command {
-                    RuntimeConfigCommand::Get => "runtime.config.get",
-                },
-            },
-            Self::Job(args) => match args.command {
-                JobCommand::Get => "job.get",
-                JobCommand::List => "job.list",
-                JobCommand::Watch => "job.watch",
             },
             Self::Farm(args) => match &args.command {
                 FarmCommand::Create(_) => "farm.create",
@@ -397,68 +376,6 @@ pub struct SyncStatusArgs {
 #[derive(Debug, Clone, Copy, Subcommand)]
 pub enum SyncStatusCommand {
     Get,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct RuntimeArgs {
-    #[command(subcommand)]
-    pub command: RuntimeCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum RuntimeCommand {
-    Status(RuntimeStatusArgs),
-    Start,
-    Stop,
-    Restart,
-    Log(RuntimeLogArgs),
-    Config(RuntimeConfigArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct RuntimeStatusArgs {
-    #[command(subcommand)]
-    pub command: RuntimeStatusCommand,
-}
-
-#[derive(Debug, Clone, Copy, Subcommand)]
-pub enum RuntimeStatusCommand {
-    Get,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct RuntimeLogArgs {
-    #[command(subcommand)]
-    pub command: RuntimeLogCommand,
-}
-
-#[derive(Debug, Clone, Copy, Subcommand)]
-pub enum RuntimeLogCommand {
-    Watch,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct RuntimeConfigArgs {
-    #[command(subcommand)]
-    pub command: RuntimeConfigCommand,
-}
-
-#[derive(Debug, Clone, Copy, Subcommand)]
-pub enum RuntimeConfigCommand {
-    Get,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct JobArgs {
-    #[command(subcommand)]
-    pub command: JobCommand,
-}
-
-#[derive(Debug, Clone, Copy, Subcommand)]
-pub enum JobCommand {
-    Get,
-    List,
-    Watch,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -827,8 +744,6 @@ mod tests {
             "relay",
             "store",
             "sync",
-            "runtime",
-            "job",
             "farm",
             "listing",
             "market",

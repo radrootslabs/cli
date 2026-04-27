@@ -176,33 +176,6 @@ fn execute_request(
         TargetOperationRequest::SyncWatch(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::RuntimeStatusGet(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::RuntimeStart(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::RuntimeStop(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::RuntimeRestart(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::RuntimeLogWatch(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::RuntimeConfigGet(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::JobGet(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::JobList(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::JobWatch(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
         TargetOperationRequest::FarmCreate(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
@@ -407,7 +380,6 @@ fn external_network_operation(operation_id: &str) -> bool {
             | "listing.archive"
             | "order.submit"
             | "order.event.watch"
-            | "job.watch"
     )
 }
 

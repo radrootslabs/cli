@@ -422,141 +422,6 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false
     ),
     operation!(
-        "runtime.status.get",
-        "radroots runtime status get",
-        "runtime",
-        "runtime_status_get",
-        "RuntimeStatusGetRequest",
-        "RuntimeStatusGetResult",
-        "Get runtime status.",
-        Any,
-        false,
-        None,
-        Low,
-        false,
-        false
-    ),
-    operation!(
-        "runtime.start",
-        "radroots runtime start",
-        "runtime",
-        "runtime_start",
-        "RuntimeStartRequest",
-        "RuntimeStartResult",
-        "Start runtime.",
-        Any,
-        true,
-        None,
-        Medium,
-        false,
-        true
-    ),
-    operation!(
-        "runtime.stop",
-        "radroots runtime stop",
-        "runtime",
-        "runtime_stop",
-        "RuntimeStopRequest",
-        "RuntimeStopResult",
-        "Stop runtime.",
-        Any,
-        true,
-        None,
-        Medium,
-        false,
-        true
-    ),
-    operation!(
-        "runtime.restart",
-        "radroots runtime restart",
-        "runtime",
-        "runtime_restart",
-        "RuntimeRestartRequest",
-        "RuntimeRestartResult",
-        "Restart runtime.",
-        Any,
-        true,
-        None,
-        Medium,
-        false,
-        true
-    ),
-    operation!(
-        "runtime.log.watch",
-        "radroots runtime log watch",
-        "runtime",
-        "runtime_log_watch",
-        "RuntimeLogWatchRequest",
-        "RuntimeLogWatchResult",
-        "Stream runtime logs.",
-        Any,
-        false,
-        None,
-        Low,
-        true,
-        false
-    ),
-    operation!(
-        "runtime.config.get",
-        "radroots runtime config get",
-        "runtime",
-        "runtime_config_get",
-        "RuntimeConfigGetRequest",
-        "RuntimeConfigGetResult",
-        "Read runtime configuration.",
-        Any,
-        false,
-        None,
-        Low,
-        false,
-        false
-    ),
-    operation!(
-        "job.get",
-        "radroots job get",
-        "job",
-        "job_get",
-        "JobGetRequest",
-        "JobGetResult",
-        "Get job details.",
-        Any,
-        false,
-        None,
-        Low,
-        false,
-        false
-    ),
-    operation!(
-        "job.list",
-        "radroots job list",
-        "job",
-        "job_list",
-        "JobListRequest",
-        "JobListResult",
-        "List jobs.",
-        Any,
-        false,
-        None,
-        Low,
-        true,
-        false
-    ),
-    operation!(
-        "job.watch",
-        "radroots job watch",
-        "job",
-        "job_watch",
-        "JobWatchRequest",
-        "JobWatchResult",
-        "Stream job events.",
-        Any,
-        false,
-        None,
-        Low,
-        true,
-        false
-    ),
-    operation!(
         "farm.create",
         "radroots farm create",
         "farm",
@@ -1053,15 +918,6 @@ mod tests {
         "sync.pull",
         "sync.push",
         "sync.watch",
-        "runtime.status.get",
-        "runtime.start",
-        "runtime.stop",
-        "runtime.restart",
-        "runtime.log.watch",
-        "runtime.config.get",
-        "job.get",
-        "job.list",
-        "job.watch",
         "farm.create",
         "farm.get",
         "farm.profile.update",
@@ -1105,9 +961,6 @@ mod tests {
         "store.backup.create",
         "sync.pull",
         "sync.push",
-        "runtime.start",
-        "runtime.stop",
-        "runtime.restart",
         "farm.create",
         "farm.profile.update",
         "farm.location.update",
@@ -1136,7 +989,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 62);
+        assert_eq!(OPERATION_REGISTRY.len(), 53);
     }
 
     #[test]
@@ -1241,9 +1094,6 @@ mod tests {
             "sync.pull",
             "sync.push",
             "sync.watch",
-            "runtime.log.watch",
-            "job.list",
-            "job.watch",
             "listing.list",
             "market.refresh",
             "market.product.search",
@@ -1269,6 +1119,8 @@ mod tests {
         assert!(!namespaces.contains("message"));
         assert!(!namespaces.contains("approval"));
         assert!(!namespaces.contains("agent"));
+        assert!(!namespaces.contains("runtime"));
+        assert!(!namespaces.contains("job"));
     }
 
     #[test]
