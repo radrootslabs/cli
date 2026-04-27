@@ -2,14 +2,10 @@ mod support;
 
 use serde_json::Value;
 
-use support::{RadrootsCliSandbox, radroots};
+use support::{RadrootsCliSandbox, assert_no_removed_command_reference, radroots};
 
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
-
-fn json_success(sandbox: &RadrootsCliSandbox, args: &[&str]) -> Value {
-    sandbox.json_success(args)
-}
 
 #[test]
 fn root_help_exposes_only_target_namespaces() {
@@ -114,32 +110,8 @@ fn target_outputs_do_not_suggest_removed_command_families() {
         ]
         .as_slice(),
     ] {
-        let value = json_success(&sandbox, args);
+        let value = sandbox.json_success(args);
         assert_no_removed_command_reference(&value, args);
-    }
-}
-
-fn assert_no_removed_command_reference(value: &Value, args: &[&str]) {
-    let raw = serde_json::to_string(value).expect("json value");
-    for removed in [
-        "radroots setup",
-        "radroots status",
-        "radroots doctor",
-        "radroots sell",
-        "radroots find",
-        "radroots local",
-        "radroots net",
-        "radroots myc",
-        "radroots rpc",
-        "radroots product",
-        "radroots message",
-        "radroots approval",
-        "radroots agent",
-    ] {
-        assert!(
-            !raw.contains(removed),
-            "`{args:?}` output should not contain removed command reference `{removed}`: {raw}"
-        );
     }
 }
 
@@ -220,18 +192,15 @@ fn offline_allows_supported_external_dry_run() {
     let listing_file = sandbox.root().join("listing.toml");
     let listing_file = listing_file.to_string_lossy().into_owned();
 
-    let publish = json_success(
-        &sandbox,
-        &[
-            "--format",
-            "json",
-            "--offline",
-            "--dry-run",
-            "listing",
-            "publish",
-            listing_file.as_str(),
-        ],
-    );
+    let publish = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--offline",
+        "--dry-run",
+        "listing",
+        "publish",
+        listing_file.as_str(),
+    ]);
 
     assert_eq!(publish["operation_id"], "listing.publish");
     assert_eq!(publish["result"]["state"], "dry_run");
@@ -255,10 +224,13 @@ fn online_requires_relay_for_external_network_operations() {
 
 #[test]
 fn online_allows_local_diagnostics() {
-    let value = json_success(
-        &RadrootsCliSandbox::new(),
-        &["--format", "json", "--online", "workspace", "get"],
-    );
+    let value = RadrootsCliSandbox::new().json_success(&[
+        "--format",
+        "json",
+        "--online",
+        "workspace",
+        "get",
+    ]);
 
     assert_eq!(value["operation_id"], "workspace.get");
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
@@ -283,58 +255,46 @@ fn required_approval_missing_token_returns_structured_error() {
 fn buyer_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
 
-    let search = json_success(
-        &sandbox,
-        &["--format", "json", "market", "product", "search", "eggs"],
-    );
+    let search = sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
     assert_eq!(search["operation_id"], "market.product.search");
     assert_eq!(search["errors"].as_array().expect("errors").len(), 0);
 
-    let create = json_success(
-        &sandbox,
-        &["--format", "json", "basket", "create", "basket_flow"],
-    );
+    let create = sandbox.json_success(&["--format", "json", "basket", "create", "basket_flow"]);
     assert_eq!(create["operation_id"], "basket.create");
     assert_eq!(create["result"]["basket_id"], "basket_flow");
 
-    let add = json_success(
-        &sandbox,
-        &[
-            "--format",
-            "json",
-            "basket",
-            "item",
-            "add",
-            "basket_flow",
-            "--listing-addr",
-            LISTING_ADDR,
-            "--bin-id",
-            "bin-1",
-            "--quantity",
-            "2",
-        ],
-    );
+    let add = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "basket_flow",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
     assert_eq!(add["operation_id"], "basket.item.add");
     assert_eq!(add["result"]["ready_for_quote"], true);
 
-    let quote = json_success(
-        &sandbox,
-        &[
-            "--format",
-            "json",
-            "basket",
-            "quote",
-            "create",
-            "basket_flow",
-        ],
-    );
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "basket_flow",
+    ]);
     assert_eq!(quote["operation_id"], "basket.quote.create");
     assert_eq!(quote["result"]["state"], "quoted");
     let order_id = quote["result"]["quote"]["order_id"]
         .as_str()
         .expect("order id");
 
-    let orders = json_success(&sandbox, &["--format", "json", "order", "list"]);
+    let orders = sandbox.json_success(&["--format", "json", "order", "list"]);
     assert_eq!(orders["operation_id"], "order.list");
     assert_eq!(orders["result"]["state"], "ready");
     assert_eq!(orders["result"]["count"], 1);
@@ -345,10 +305,8 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         "buyer_account_id"
     );
 
-    let submit = json_success(
-        &sandbox,
-        &["--format", "json", "--dry-run", "order", "submit", order_id],
-    );
+    let submit =
+        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
     assert_eq!(submit["operation_id"], "order.submit");
     assert_eq!(submit["dry_run"], true);
     assert_eq!(submit["result"]["state"], "unconfigured");
@@ -368,106 +326,91 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     let listing_file = sandbox.root().join("listing.toml");
     let listing_file = listing_file.to_string_lossy().into_owned();
 
-    let account = json_success(&sandbox, &["--format", "json", "account", "create"]);
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
     assert_eq!(account["operation_id"], "account.create");
     assert_eq!(account["result"]["account"]["signer"], "local");
 
-    let farm = json_success(
-        &sandbox,
-        &[
-            "--format",
-            "json",
-            "farm",
-            "create",
-            "--name",
-            "Green Farm",
-            "--location",
-            "farmstand",
-            "--delivery-method",
-            "pickup",
-        ],
-    );
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--delivery-method",
+        "pickup",
+    ]);
     assert_eq!(farm["operation_id"], "farm.create");
     assert_eq!(farm["result"]["state"], "saved");
 
-    let create = json_success(
-        &sandbox,
-        &[
-            "--format",
-            "json",
-            "listing",
-            "create",
-            "--output",
-            listing_file.as_str(),
-            "--key",
-            "eggs",
-            "--title",
-            "Eggs",
-            "--category",
-            "eggs",
-            "--summary",
-            "Fresh eggs",
-            "--bin-id",
-            "bin-1",
-            "--quantity-amount",
-            "1",
-            "--quantity-unit",
-            "each",
-            "--price-amount",
-            "6",
-            "--price-currency",
-            "USD",
-            "--price-per-amount",
-            "1",
-            "--price-per-unit",
-            "each",
-            "--available",
-            "10",
-        ],
-    );
+    let create = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "create",
+        "--output",
+        listing_file.as_str(),
+        "--key",
+        "eggs",
+        "--title",
+        "Eggs",
+        "--category",
+        "eggs",
+        "--summary",
+        "Fresh eggs",
+        "--bin-id",
+        "bin-1",
+        "--quantity-amount",
+        "1",
+        "--quantity-unit",
+        "each",
+        "--price-amount",
+        "6",
+        "--price-currency",
+        "USD",
+        "--price-per-amount",
+        "1",
+        "--price-per-unit",
+        "each",
+        "--available",
+        "10",
+    ]);
     assert_eq!(create["operation_id"], "listing.create");
     assert_eq!(create["result"]["file"], listing_file);
 
-    let validate = json_success(
-        &sandbox,
-        &[
-            "--format",
-            "json",
-            "listing",
-            "validate",
-            listing_file.as_str(),
-        ],
-    );
+    let validate = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "validate",
+        listing_file.as_str(),
+    ]);
     assert_eq!(validate["operation_id"], "listing.validate");
     assert_eq!(validate["result"]["valid"], true);
     assert_eq!(validate["result"]["issues"], Value::Null);
 
-    let publish = json_success(
-        &sandbox,
-        &[
-            "--format",
-            "json",
-            "--dry-run",
-            "listing",
-            "publish",
-            listing_file.as_str(),
-        ],
-    );
+    let publish = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "publish",
+        listing_file.as_str(),
+    ]);
     assert_eq!(publish["operation_id"], "listing.publish");
     assert_eq!(publish["result"]["state"], "dry_run");
 
-    let signed = json_success(
-        &sandbox,
-        &[
-            "--format",
-            "json",
-            "--approval-token",
-            "approve",
-            "listing",
-            "publish",
-            listing_file.as_str(),
-        ],
-    );
+    let signed = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file.as_str(),
+    ]);
     assert_eq!(signed["operation_id"], "listing.publish");
     assert_eq!(signed["result"]["state"], "signed");
     assert_eq!(signed["result"]["signer_mode"], "local");

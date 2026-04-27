@@ -1,12 +1,15 @@
 mod support;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use radroots_events::kinds::KIND_LISTING;
-use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
+use radroots_identity::RadrootsIdentityPublic;
 use serde_json::{Value, json};
-use support::RadrootsCliSandbox;
+use support::{
+    RadrootsCliSandbox, assert_contains, assert_hex_len, create_listing_draft, identity_public,
+    make_listing_publishable, shell_single_quoted, toml_string, write_public_identity_profile,
+};
 
 #[test]
 fn local_signer_status_reports_unconfigured_without_account() {
@@ -666,117 +669,4 @@ fn remote_session(
         "relays": ["wss://relay.example.test"],
         "permissions": permissions
     })
-}
-
-fn identity_public(seed: u8) -> RadrootsIdentityPublic {
-    let secret = [seed; 32];
-    RadrootsIdentity::from_secret_key_bytes(&secret)
-        .expect("fixture identity")
-        .to_public()
-}
-
-fn write_public_identity_profile(
-    sandbox: &RadrootsCliSandbox,
-    name: &str,
-    identity: &RadrootsIdentityPublic,
-) -> PathBuf {
-    let path = sandbox.root().join(format!("{name}.json"));
-    fs::write(
-        &path,
-        serde_json::to_string_pretty(identity).expect("public identity json"),
-    )
-    .expect("write public identity");
-    path
-}
-
-fn shell_single_quoted(value: &str) -> String {
-    value.replace('\'', "'\"'\"'")
-}
-
-fn toml_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn assert_contains(value: &Value, needle: &str) {
-    let value = value.as_str().expect("string value");
-    assert!(
-        value.contains(needle),
-        "expected `{value}` to contain `{needle}`"
-    );
-}
-
-fn assert_hex_len(value: &Value, expected_len: usize) {
-    let value = value.as_str().expect("hex string");
-    assert_eq!(value.len(), expected_len);
-    assert!(value.chars().all(|ch| ch.is_ascii_hexdigit()));
-}
-
-fn create_listing_draft(sandbox: &RadrootsCliSandbox, key: &str) -> PathBuf {
-    let listing_file = sandbox.root().join(format!("{key}.toml"));
-    let listing_file_arg = listing_file.to_string_lossy();
-    let value = sandbox.json_success(&[
-        "--format",
-        "json",
-        "listing",
-        "create",
-        "--output",
-        listing_file_arg.as_ref(),
-        "--key",
-        key,
-        "--title",
-        "Eggs",
-        "--category",
-        "eggs",
-        "--summary",
-        "Fresh eggs",
-        "--bin-id",
-        "bin-1",
-        "--quantity-amount",
-        "1",
-        "--quantity-unit",
-        "each",
-        "--price-amount",
-        "6",
-        "--price-currency",
-        "USD",
-        "--price-per-amount",
-        "1",
-        "--price-per-unit",
-        "each",
-        "--available",
-        "10",
-    ]);
-    assert_eq!(value["operation_id"], "listing.create");
-    listing_file
-}
-
-fn make_listing_publishable(path: &Path, farm_d_tag: &str) {
-    let raw = fs::read_to_string(path).expect("listing draft");
-    let mut seller_pubkey_present = false;
-    let patched = raw
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("seller_pubkey =") {
-                seller_pubkey_present = !trimmed.ends_with("\"\"");
-                line.to_owned()
-            } else if trimmed.starts_with("farm_d_tag =") {
-                format!("{}farm_d_tag = \"{}\"", line_indent(line), farm_d_tag)
-            } else if trimmed.starts_with("method =") {
-                format!("{}method = \"pickup\"", line_indent(line))
-            } else if trimmed.starts_with("primary =") {
-                format!("{}primary = \"farmstand\"", line_indent(line))
-            } else {
-                line.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(seller_pubkey_present, "listing draft seller pubkey");
-    fs::write(path, format!("{patched}\n")).expect("write listing draft");
-}
-
-fn line_indent(line: &str) -> &str {
-    let trimmed = line.trim_start();
-    &line[..line.len() - trimmed.len()]
 }
