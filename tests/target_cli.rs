@@ -79,6 +79,18 @@ fn removed_global_flags_are_rejected_publicly() {
 }
 
 #[test]
+fn removed_order_submit_watch_flag_is_rejected_publicly() {
+    let output = radroots()
+        .args(["order", "submit", "--watch"])
+        .output()
+        .expect("run removed order submit watch flag");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("unexpected argument") || stderr.contains("unrecognized"));
+}
+
+#[test]
 fn removed_command_families_are_rejected_publicly() {
     for command in [
         "setup", "status", "doctor", "sell", "find", "local", "net", "myc", "rpc", "product",

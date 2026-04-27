@@ -934,9 +934,6 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
         TargetCommand::Order(args) => match &args.command {
             OrderCommand::Submit(args) => {
                 insert_string(&mut input, "order_id", &args.order_id);
-                if args.watch {
-                    input.insert("watch".to_owned(), Value::Bool(true));
-                }
             }
             OrderCommand::Get(args) => insert_string(&mut input, "order_id", &args.order_id),
             OrderCommand::Event(event) => match &event.command {

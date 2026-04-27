@@ -745,8 +745,6 @@ pub enum OrderCommand {
 #[derive(Debug, Clone, Args)]
 pub struct OrderSubmitArgs {
     pub order_id: Option<String>,
-    #[arg(long)]
-    pub watch: bool,
 }
 
 #[derive(Debug, Clone, Args)]
