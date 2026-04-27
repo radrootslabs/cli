@@ -1510,11 +1510,6 @@ fn binding_error_view(
             reason,
             vec!["run radroots signer status get".to_owned()],
         ),
-        ActorWriteBindingError::Unavailable(reason) => (
-            "unavailable".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
     };
 
     ListingMutationView {

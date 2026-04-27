@@ -1,28 +1,43 @@
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use radroots_runtime_manager::{ManagedRuntimeInstallState, load_registry, read_secret_file};
+#[cfg(test)]
 use radroots_runtime_paths::{
     RadrootsPathOverrides, RadrootsPathProfile, RadrootsPathResolver, RadrootsRuntimeNamespace,
 };
+#[cfg(test)]
 use radroots_sdk::RadrootsSdkConfig;
 use url::Url;
 
+#[cfg(test)]
 use crate::runtime::config::{
     CapabilityBindingInspection, CapabilityBindingInspectionState, CapabilityBindingTargetKind,
     INFERENCE_HYF_STDIO_CAPABILITY, RuntimeConfig, WORKFLOW_TRADE_CAPABILITY,
     WRITE_PLANE_TRADE_JSONRPC_CAPABILITY,
 };
+#[cfg(not(test))]
+use crate::runtime::config::{
+    CapabilityBindingTargetKind, RuntimeConfig, WRITE_PLANE_TRADE_JSONRPC_CAPABILITY,
+};
+#[cfg(test)]
 use crate::runtime::hyf;
 
+#[cfg(test)]
 const WORKFLOW_PROVIDER_RUNTIME_ID: &str = "rhi";
+#[cfg(test)]
 const WORKFLOW_TARGET: &str = "workflow-default";
+#[cfg(test)]
 const WORKFLOW_IDENTITY_FILE_NAME: &str = "identity.secret.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderProvenance {
     ExplicitBinding,
     ManagedDefault,
+    #[cfg(test)]
     DirectConfig,
+    #[cfg(test)]
     Disabled,
     Unavailable,
 }
@@ -32,13 +47,16 @@ impl ProviderProvenance {
         match self {
             Self::ExplicitBinding => "explicit_binding",
             Self::ManagedDefault => "managed_default",
+            #[cfg(test)]
             Self::DirectConfig => "direct_config",
+            #[cfg(test)]
             Self::Disabled => "disabled",
             Self::Unavailable => "unavailable",
         }
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedProviderView {
     pub capability_id: String,
@@ -70,6 +88,7 @@ pub struct ResolvedWritePlaneTarget {
     pub bridge_bearer_token: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowProviderView {
     pub provider_runtime_id: String,
@@ -84,6 +103,7 @@ pub struct WorkflowProviderView {
     pub reason: Option<String>,
 }
 
+#[cfg(test)]
 impl WorkflowProviderView {
     pub fn detail(&self) -> String {
         match self.state.as_str() {
@@ -104,6 +124,7 @@ impl WorkflowProviderView {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HyfProviderView {
     pub provider_runtime_id: String,
@@ -128,6 +149,7 @@ enum WritePlaneResolution {
     Unconfigured(WritePlaneProviderView),
 }
 
+#[cfg(test)]
 pub fn resolve_write_plane_provider(config: &RuntimeConfig) -> WritePlaneProviderView {
     match resolve_write_plane_resolution(config) {
         WritePlaneResolution::Ready { view, .. } | WritePlaneResolution::Unconfigured(view) => view,
@@ -143,6 +165,7 @@ pub fn resolve_actor_write_plane_target(
     }
 }
 
+#[cfg(test)]
 pub fn resolve_workflow_provider(config: &RuntimeConfig) -> WorkflowProviderView {
     let binding = inspect_binding(config, WORKFLOW_TRADE_CAPABILITY);
     let (state, provenance, reason) = match binding.state {
@@ -182,6 +205,7 @@ pub fn resolve_workflow_provider(config: &RuntimeConfig) -> WorkflowProviderView
     }
 }
 
+#[cfg(test)]
 pub fn resolve_hyf_provider(config: &RuntimeConfig) -> HyfProviderView {
     let binding = inspect_binding(config, INFERENCE_HYF_STDIO_CAPABILITY);
     let status = hyf::resolve_runtime_status(config);
@@ -219,6 +243,7 @@ pub fn resolve_hyf_provider(config: &RuntimeConfig) -> HyfProviderView {
     }
 }
 
+#[cfg(test)]
 pub fn resolve_capability_providers(config: &RuntimeConfig) -> Vec<ResolvedProviderView> {
     let write = resolve_write_plane_provider(config);
     let workflow = resolve_workflow_provider(config);
@@ -490,6 +515,7 @@ fn validate_write_plane_url(value: &str) -> Result<String, String> {
     Ok(trimmed.to_owned())
 }
 
+#[cfg(test)]
 fn resolve_workflow_execution_state(
     config: &RuntimeConfig,
     binding: &CapabilityBindingInspection,
@@ -587,6 +613,7 @@ fn resolve_workflow_execution_state(
     )
 }
 
+#[cfg(test)]
 fn canonical_local_relay_url() -> Result<String, String> {
     let config = RadrootsSdkConfig::local();
     let relays = config
@@ -598,12 +625,14 @@ fn canonical_local_relay_url() -> Result<String, String> {
         .ok_or_else(|| "canonical localhost relay config did not define any relay urls".to_owned())
 }
 
+#[cfg(test)]
 fn canonical_local_radrootsd_url() -> Result<String, String> {
     RadrootsSdkConfig::local()
         .resolved_radrootsd_endpoint()
         .map_err(|error| format!("resolve canonical localhost radrootsd endpoint: {error}"))
 }
 
+#[cfg(test)]
 fn workflow_identity_path(repo_local_root: &Path) -> Result<PathBuf, String> {
     let base_paths = RadrootsPathResolver::current()
         .resolve(
@@ -626,6 +655,7 @@ fn workflow_identity_path(repo_local_root: &Path) -> Result<PathBuf, String> {
         .join(WORKFLOW_IDENTITY_FILE_NAME))
 }
 
+#[cfg(test)]
 fn loopback_endpoint_matches(configured: &str, canonical: &str) -> bool {
     let Ok(configured_url) = Url::parse(configured) else {
         return false;
@@ -638,6 +668,7 @@ fn loopback_endpoint_matches(configured: &str, canonical: &str) -> bool {
         && loopback_host_matches(configured_url.host_str(), canonical_url.host_str())
 }
 
+#[cfg(test)]
 fn loopback_host_matches(left: Option<&str>, right: Option<&str>) -> bool {
     match (left, right) {
         (Some(left), Some(right)) => {
@@ -647,6 +678,7 @@ fn loopback_host_matches(left: Option<&str>, right: Option<&str>) -> bool {
     }
 }
 
+#[cfg(test)]
 fn normalize_loopback_host(host: &str) -> &str {
     if host.eq_ignore_ascii_case("localhost") {
         "127.0.0.1"
@@ -655,6 +687,7 @@ fn normalize_loopback_host(host: &str) -> &str {
     }
 }
 
+#[cfg(test)]
 fn inspect_binding(config: &RuntimeConfig, capability_id: &str) -> CapabilityBindingInspection {
     config
         .inspect_capability_bindings()
@@ -663,6 +696,7 @@ fn inspect_binding(config: &RuntimeConfig, capability_id: &str) -> CapabilityBin
         .expect("provider capability binding inspection must exist")
 }
 
+#[cfg(test)]
 fn binding_provenance(binding: &CapabilityBindingInspection) -> ProviderProvenance {
     match binding.state {
         CapabilityBindingInspectionState::Configured => match binding.target_kind.as_deref() {
@@ -674,6 +708,7 @@ fn binding_provenance(binding: &CapabilityBindingInspection) -> ProviderProvenan
     }
 }
 
+#[cfg(test)]
 fn hyf_target_kind(
     config: &RuntimeConfig,
     binding: &CapabilityBindingInspection,
@@ -687,6 +722,7 @@ fn hyf_target_kind(
     None
 }
 
+#[cfg(test)]
 fn hyf_target(config: &RuntimeConfig, binding: &CapabilityBindingInspection) -> Option<String> {
     if binding.state == CapabilityBindingInspectionState::Configured {
         return binding.target.clone();
@@ -697,6 +733,7 @@ fn hyf_target(config: &RuntimeConfig, binding: &CapabilityBindingInspection) -> 
     None
 }
 
+#[cfg(test)]
 fn hyf_executable(
     config: &RuntimeConfig,
     binding: &CapabilityBindingInspection,

@@ -2,7 +2,6 @@ pub mod accounts;
 pub mod config;
 pub mod daemon;
 pub mod farm;
-#[allow(dead_code)]
 pub mod farm_config;
 pub mod find;
 pub mod hyf;
@@ -10,7 +9,6 @@ pub mod listing;
 pub mod local;
 pub mod logging;
 pub mod management;
-pub mod myc;
 pub mod network;
 pub mod order;
 pub mod paths;
