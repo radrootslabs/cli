@@ -3,8 +3,7 @@ use std::time::Duration;
 use radroots_events_codec::wire::WireEventParts;
 use radroots_identity::RadrootsIdentity;
 use radroots_nostr::prelude::{
-    RadrootsNostrClient, RadrootsNostrError, RadrootsNostrEvent, RadrootsNostrOutput,
-    radroots_nostr_build_event,
+    RadrootsNostrClient, RadrootsNostrError, RadrootsNostrOutput, radroots_nostr_build_event,
 };
 
 const RELAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -17,7 +16,6 @@ pub struct DirectRelayFailure {
 
 #[derive(Debug, Clone)]
 pub struct DirectRelayPublishReceipt {
-    pub event: RadrootsNostrEvent,
     pub event_id: String,
     pub target_relays: Vec<String>,
     pub acknowledged_relays: Vec<String>,
@@ -111,7 +109,6 @@ async fn publish_parts_with_identity_async(
     }
 
     Ok(DirectRelayPublishReceipt {
-        event,
         event_id,
         target_relays: relay_urls.to_vec(),
         acknowledged_relays: publish_output
@@ -146,14 +143,6 @@ fn summarize_failures(failed_relays: &[DirectRelayFailure]) -> String {
         .map(|failure| format!("{}: {}", failure.relay, failure.reason))
         .collect::<Vec<_>>()
         .join("; ")
-}
-
-pub fn event_created_at_u32(event: &RadrootsNostrEvent) -> u32 {
-    u32::try_from(event.created_at.as_secs()).unwrap_or(u32::MAX)
-}
-
-pub fn event_signature(event: &RadrootsNostrEvent) -> String {
-    event.sig.to_string()
 }
 
 #[cfg(test)]

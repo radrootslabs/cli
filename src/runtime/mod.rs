@@ -29,6 +29,8 @@ pub enum RuntimeError {
     Sql(#[from] radroots_replica_db::SqlError),
     #[error("replica sync error: {0}")]
     ReplicaSync(#[from] radroots_replica_sync::RadrootsReplicaEventsError),
+    #[error("network error: {0}")]
+    Network(String),
     #[error("failed to serialize json output: {0}")]
     Json(#[from] serde_json::Error),
     #[error("failed to write output: {0}")]
@@ -43,6 +45,7 @@ impl RuntimeError {
             | Self::Accounts(_)
             | Self::Sql(_)
             | Self::ReplicaSync(_)
+            | Self::Network(_)
             | Self::Json(_)
             | Self::Io(_) => ExitCode::from(1),
         }

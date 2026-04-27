@@ -467,6 +467,10 @@ impl OperationAdapterError {
                     message,
                 }
             }
+            RuntimeError::Network(_) => Self::NetworkUnavailable {
+                operation_id: operation_id.to_owned(),
+                message,
+            },
             RuntimeError::Accounts(_) => classify_runtime_failure(
                 operation_id,
                 message,
@@ -1423,6 +1427,15 @@ mod tests {
                 "account_mismatch",
                 "account",
                 5,
+            ),
+            (
+                OperationAdapterError::runtime_failure(
+                    "farm.publish",
+                    RuntimeError::Network("direct relay connection failed".to_owned()),
+                ),
+                "network_unavailable",
+                "network",
+                8,
             ),
         ];
 

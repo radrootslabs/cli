@@ -8,15 +8,19 @@ use radroots_events::profile::{RadrootsProfile, RadrootsProfileType};
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::farm::encode::to_wire_parts_with_kind;
 use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
+use radroots_events_codec::wire::WireEventParts;
 
 use crate::domain::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
     FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishView,
-    FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
+    FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{self, AccountRecordView};
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime::direct_relay::{
+    DirectRelayFailure, DirectRelayPublishReceipt, publish_parts_with_identity,
+};
 use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
     FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
@@ -27,9 +31,7 @@ use crate::runtime_args::{
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
-const FARM_WRITE_SOURCE: &str = "direct Nostr relay publish · pending implementation";
-const DIRECT_RELAY_UNAVAILABLE_REASON: &str =
-    "direct Nostr relay publishing is not implemented for farm publish";
+const FARM_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -347,18 +349,21 @@ pub fn publish(
     let profile_idempotency_key = component_idempotency_key(args, "profile")?;
     let farm_idempotency_key = component_idempotency_key(args, "farm")?;
 
-    if let Err(error) = resolve_farm_write_authority(config, account_pubkey.as_str()) {
-        return Ok(binding_error_publish_view(
-            config,
-            args,
-            &resolved,
-            &account_pubkey,
-            previews,
-            profile_idempotency_key,
-            farm_idempotency_key,
-            error,
-        ));
-    }
+    let signing = match resolve_farm_signing_identity(config, account_pubkey.as_str()) {
+        Ok(signing) => signing,
+        Err(error) => {
+            return Ok(binding_error_publish_view(
+                config,
+                args,
+                &resolved,
+                &account_pubkey,
+                previews,
+                profile_idempotency_key,
+                farm_idempotency_key,
+                error,
+            ));
+        }
+    };
 
     if config.output.dry_run {
         return Ok(base_publish_view(
@@ -372,14 +377,14 @@ pub fn publish(
                 KIND_PROFILE,
                 profile_idempotency_key,
                 args,
-                Some(previews.profile),
+                Some(previews.profile.event),
             ),
             preview_component(
                 "relay.farm.publish",
                 KIND_FARM,
                 farm_idempotency_key,
                 args,
-                Some(previews.farm),
+                Some(previews.farm.event),
             ),
             Some("dry run requested; relay publish skipped".to_owned()),
             vec![format!(
@@ -388,21 +393,53 @@ pub fn publish(
             )],
         ));
     }
-    Ok(direct_relay_unavailable_publish_view(
+    let profile_receipt = publish_parts_with_identity(
+        &signing.identity,
+        &config.relay.urls,
+        previews.profile.parts.clone(),
+    )
+    .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let farm_receipt =
+        publish_parts_with_identity(&signing.identity, &config.relay.urls, previews.farm.parts)
+            .map_err(|error| RuntimeError::Network(error.to_string()))?;
+
+    Ok(base_publish_view(
+        "published",
         config,
         args,
         &resolved,
         &account_pubkey,
-        previews,
-        profile_idempotency_key,
-        farm_idempotency_key,
+        published_component(
+            "relay.profile.publish",
+            KIND_PROFILE,
+            profile_idempotency_key,
+            args,
+            previews.profile.event,
+            profile_receipt,
+        ),
+        published_component(
+            "relay.farm.publish",
+            KIND_FARM,
+            farm_idempotency_key,
+            args,
+            previews.farm.event,
+            farm_receipt,
+        ),
+        None,
+        Vec::new(),
     ))
 }
 
 #[derive(Debug, Clone)]
 struct FarmPublishPreviews {
-    profile: FarmPublishEventView,
-    farm: FarmPublishEventView,
+    profile: FarmPublishEventDraft,
+    farm: FarmPublishEventDraft,
+}
+
+#[derive(Debug, Clone)]
+struct FarmPublishEventDraft {
+    event: FarmPublishEventView,
+    parts: WireEventParts,
 }
 
 fn missing_publish_view(
@@ -437,15 +474,19 @@ fn missing_publish_view(
     }
 }
 
-fn resolve_farm_write_authority(
+fn resolve_farm_signing_identity(
     config: &RuntimeConfig,
     account_pubkey: &str,
-) -> Result<Option<crate::runtime::signer::ActorWriteSignerAuthority>, ActorWriteBindingError> {
+) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(
         config.signer.backend,
         crate::runtime::config::SignerBackend::Local
     ) {
-        return resolve_actor_write_authority(config, "farm", account_pubkey);
+        return resolve_actor_write_authority(config, "farm", account_pubkey).and_then(|_| {
+            Err(ActorWriteBindingError::Unconfigured(
+                "farm publish requires signer mode `local`".to_owned(),
+            ))
+        });
     }
     let signing = accounts::resolve_local_signing_identity(config)
         .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
@@ -460,7 +501,7 @@ fn resolve_farm_write_authority(
             "selected local account pubkey `{selected_pubkey}` cannot sign farm pubkey `{account_pubkey}`"
         )));
     }
-    Ok(None)
+    Ok(signing)
 }
 
 fn base_publish_view(
@@ -508,21 +549,27 @@ fn build_publish_previews(
     );
 
     Ok(FarmPublishPreviews {
-        profile: FarmPublishEventView {
-            kind: profile_parts.kind,
-            author: account_pubkey.to_owned(),
-            content: profile_parts.content,
-            tags: profile_parts.tags,
-            event_id: None,
-            event_addr: None,
+        profile: FarmPublishEventDraft {
+            event: FarmPublishEventView {
+                kind: profile_parts.kind,
+                author: account_pubkey.to_owned(),
+                content: profile_parts.content.clone(),
+                tags: profile_parts.tags.clone(),
+                event_id: None,
+                event_addr: None,
+            },
+            parts: profile_parts,
         },
-        farm: FarmPublishEventView {
-            kind: farm_parts.kind,
-            author: account_pubkey.to_owned(),
-            content: farm_parts.content,
-            tags: farm_parts.tags,
-            event_id: None,
-            event_addr: Some(farm_addr),
+        farm: FarmPublishEventDraft {
+            event: FarmPublishEventView {
+                kind: farm_parts.kind,
+                author: account_pubkey.to_owned(),
+                content: farm_parts.content.clone(),
+                tags: farm_parts.tags.clone(),
+                event_id: None,
+                event_addr: Some(farm_addr),
+            },
+            parts: farm_parts,
         },
     })
 }
@@ -555,6 +602,9 @@ fn preview_component(
         rpc_method: rpc_method.to_owned(),
         event_kind,
         deduplicated: false,
+        target_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
         job_id: None,
         job_status: None,
         signer_mode: None,
@@ -609,7 +659,7 @@ fn binding_error_publish_view(
                 KIND_PROFILE,
                 profile_idempotency_key,
                 args,
-                Some(previews.profile),
+                Some(previews.profile.event),
             )
         },
         FarmPublishComponentView {
@@ -620,7 +670,7 @@ fn binding_error_publish_view(
                 KIND_FARM,
                 farm_idempotency_key,
                 args,
-                Some(previews.farm),
+                Some(previews.farm.event),
             )
         },
         Some(reason),
@@ -628,46 +678,44 @@ fn binding_error_publish_view(
     )
 }
 
-fn direct_relay_unavailable_publish_view(
-    config: &RuntimeConfig,
+fn published_component(
+    rpc_method: &str,
+    event_kind: u32,
+    idempotency_key: Option<String>,
     args: &FarmPublishArgs,
-    resolved: &ResolvedFarmConfig,
-    account_pubkey: &str,
-    previews: FarmPublishPreviews,
-    profile_idempotency_key: Option<String>,
-    farm_idempotency_key: Option<String>,
-) -> FarmPublishView {
-    base_publish_view(
-        "unavailable",
-        config,
-        args,
-        resolved,
-        account_pubkey,
-        FarmPublishComponentView {
-            state: "unavailable".to_owned(),
-            reason: Some(DIRECT_RELAY_UNAVAILABLE_REASON.to_owned()),
-            ..preview_component(
-                "relay.profile.publish",
-                KIND_PROFILE,
-                profile_idempotency_key,
-                args,
-                Some(previews.profile),
-            )
-        },
-        FarmPublishComponentView {
-            state: "unavailable".to_owned(),
-            reason: Some(DIRECT_RELAY_UNAVAILABLE_REASON.to_owned()),
-            ..preview_component(
-                "relay.farm.publish",
-                KIND_FARM,
-                farm_idempotency_key,
-                args,
-                Some(previews.farm),
-            )
-        },
-        Some(DIRECT_RELAY_UNAVAILABLE_REASON.to_owned()),
-        Vec::new(),
-    )
+    mut event: FarmPublishEventView,
+    receipt: DirectRelayPublishReceipt,
+) -> FarmPublishComponentView {
+    event.event_id = Some(receipt.event_id.clone());
+    FarmPublishComponentView {
+        state: "published".to_owned(),
+        rpc_method: rpc_method.to_owned(),
+        event_kind,
+        deduplicated: false,
+        target_relays: receipt.target_relays,
+        acknowledged_relays: receipt.acknowledged_relays,
+        failed_relays: relay_failures(receipt.failed_relays),
+        job_id: None,
+        job_status: None,
+        signer_mode: Some("local".to_owned()),
+        signer_session_id: None,
+        event_id: Some(receipt.event_id),
+        event_addr: event.event_addr.clone(),
+        idempotency_key,
+        reason: None,
+        job: None,
+        event: args.print_event.then_some(event),
+    }
+}
+
+fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
+    failures
+        .into_iter()
+        .map(|failure| RelayFailureView {
+            relay: failure.relay,
+            reason: failure.reason,
+        })
+        .collect()
 }
 
 fn selected_account_for_draft(
