@@ -11,13 +11,12 @@ use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
 
 use crate::domain::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
-    FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishJobView,
-    FarmPublishView, FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
+    FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishView,
+    FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{self, AccountRecordView};
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::daemon::{self, BridgeEventPublishResult, DaemonRpcError};
 use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
     FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
@@ -28,6 +27,9 @@ use crate::runtime_args::{
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
+const FARM_WRITE_SOURCE: &str = "direct Nostr relay publish · pending implementation";
+const DIRECT_RELAY_UNAVAILABLE_REASON: &str =
+    "direct Nostr relay publishing is not implemented for farm publish";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -345,21 +347,18 @@ pub fn publish(
     let profile_idempotency_key = component_idempotency_key(args, "profile")?;
     let farm_idempotency_key = component_idempotency_key(args, "farm")?;
 
-    let signer_authority = match resolve_farm_write_authority(config, account_pubkey.as_str()) {
-        Ok(authority) => authority,
-        Err(error) => {
-            return Ok(binding_error_publish_view(
-                config,
-                args,
-                &resolved,
-                &account_pubkey,
-                previews,
-                profile_idempotency_key,
-                farm_idempotency_key,
-                error,
-            ));
-        }
-    };
+    if let Err(error) = resolve_farm_write_authority(config, account_pubkey.as_str()) {
+        return Ok(binding_error_publish_view(
+            config,
+            args,
+            &resolved,
+            &account_pubkey,
+            previews,
+            profile_idempotency_key,
+            farm_idempotency_key,
+            error,
+        ));
+    }
 
     if config.output.dry_run {
         return Ok(base_publish_view(
@@ -369,175 +368,41 @@ pub fn publish(
             &resolved,
             &account_pubkey,
             preview_component(
-                "bridge.profile.publish",
+                "relay.profile.publish",
                 KIND_PROFILE,
                 profile_idempotency_key,
                 args,
                 Some(previews.profile),
             ),
             preview_component(
-                "bridge.farm.publish",
+                "relay.farm.publish",
                 KIND_FARM,
                 farm_idempotency_key,
                 args,
                 Some(previews.farm),
             ),
-            Some("dry run requested; daemon farm publish skipped".to_owned()),
+            Some("dry run requested; relay publish skipped".to_owned()),
             vec![format!(
                 "radroots farm publish --scope {}",
                 resolved.scope.as_str()
             )],
         ));
     }
-    let profile_signer_session_id = match daemon::resolve_signer_session_id(
-        config,
-        "farm profile",
-        account_pubkey.as_str(),
-        KIND_PROFILE,
-        args.signer_session_id.as_deref(),
-        signer_authority.as_ref(),
-    ) {
-        Ok(session_id) => session_id,
-        Err(error) => {
-            return Ok(daemon_error_publish_view(
-                config,
-                args,
-                &resolved,
-                &account_pubkey,
-                previews,
-                profile_idempotency_key,
-                farm_idempotency_key,
-                error,
-                FarmPublishFailureStage::Profile,
-            ));
-        }
-    };
-    let farm_signer_session_id = match daemon::resolve_signer_session_id(
-        config,
-        "farm",
-        account_pubkey.as_str(),
-        KIND_FARM,
-        Some(profile_signer_session_id.as_str()),
-        signer_authority.as_ref(),
-    ) {
-        Ok(session_id) => session_id,
-        Err(error) => {
-            return Ok(daemon_error_publish_view(
-                config,
-                args,
-                &resolved,
-                &account_pubkey,
-                previews,
-                profile_idempotency_key,
-                farm_idempotency_key,
-                error,
-                FarmPublishFailureStage::Farm,
-            ));
-        }
-    };
-
-    let profile_result = match daemon::bridge_profile_publish(
-        config,
-        &resolved.document.profile,
-        Some(RadrootsProfileType::Farm),
-        profile_idempotency_key.as_deref(),
-        Some(profile_signer_session_id.as_str()),
-        signer_authority.as_ref(),
-    ) {
-        Ok(result) => result_component(
-            "bridge.profile.publish",
-            KIND_PROFILE,
-            result,
-            args,
-            Some(previews.profile.clone()),
-        ),
-        Err(error) => {
-            return Ok(daemon_error_publish_view(
-                config,
-                args,
-                &resolved,
-                &account_pubkey,
-                previews,
-                profile_idempotency_key,
-                farm_idempotency_key,
-                error,
-                FarmPublishFailureStage::Profile,
-            ));
-        }
-    };
-
-    if component_failed(&profile_result) {
-        return Ok(persist_publication_and_view(
-            config,
-            args,
-            resolved,
-            &account_pubkey,
-            profile_result,
-            preview_component(
-                "bridge.farm.publish",
-                KIND_FARM,
-                farm_idempotency_key,
-                args,
-                Some(previews.farm),
-            ),
-        )?);
-    }
-
-    let farm_result = match daemon::bridge_farm_publish(
-        config,
-        &resolved.document.farm,
-        farm_idempotency_key.as_deref(),
-        Some(farm_signer_session_id.as_str()),
-        signer_authority.as_ref(),
-    ) {
-        Ok(result) => result_component(
-            "bridge.farm.publish",
-            KIND_FARM,
-            result,
-            args,
-            Some(previews.farm),
-        ),
-        Err(error) => {
-            let profile_for_error = profile_result.clone();
-            let farm_for_error = daemon_error_component(
-                "bridge.farm.publish",
-                KIND_FARM,
-                args,
-                farm_idempotency_key,
-                error,
-                Some(previews.farm),
-            );
-            return Ok(persist_publication_and_view(
-                config,
-                args,
-                resolved,
-                &account_pubkey,
-                profile_for_error,
-                farm_for_error,
-            )?);
-        }
-    };
-
-    persist_publication_and_view(
+    Ok(direct_relay_unavailable_publish_view(
         config,
         args,
-        resolved,
+        &resolved,
         &account_pubkey,
-        profile_result,
-        farm_result,
-    )
+        previews,
+        profile_idempotency_key,
+        farm_idempotency_key,
+    ))
 }
 
 #[derive(Debug, Clone)]
 struct FarmPublishPreviews {
     profile: FarmPublishEventView,
     farm: FarmPublishEventView,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FarmPublishFailureStage {
-    Profile,
-    Farm,
 }
 
 fn missing_publish_view(
@@ -555,7 +420,7 @@ fn missing_publish_view(
 ) -> FarmPublishView {
     FarmPublishView {
         state: "unconfigured".to_owned(),
-        source: daemon::bridge_source().to_owned(),
+        source: FARM_WRITE_SOURCE.to_owned(),
         scope: scope.as_str().to_owned(),
         path,
         config_present,
@@ -564,8 +429,8 @@ fn missing_publish_view(
         selected_account_pubkey,
         farm_d_tag,
         requested_signer_session_id: args.signer_session_id.clone(),
-        profile: not_submitted_component("bridge.profile.publish", KIND_PROFILE, args, None, None),
-        farm: not_submitted_component("bridge.farm.publish", KIND_FARM, args, None, None),
+        profile: not_submitted_component("relay.profile.publish", KIND_PROFILE, args, None, None),
+        farm: not_submitted_component("relay.farm.publish", KIND_FARM, args, None, None),
         missing,
         reason: Some(reason),
         actions,
@@ -611,7 +476,7 @@ fn base_publish_view(
 ) -> FarmPublishView {
     FarmPublishView {
         state: state.to_owned(),
-        source: daemon::bridge_source().to_owned(),
+        source: FARM_WRITE_SOURCE.to_owned(),
         scope: resolved.scope.as_str().to_owned(),
         path: resolved.path.display().to_string(),
         config_present: true,
@@ -698,15 +563,7 @@ fn preview_component(
         event_addr: event.as_ref().and_then(|event| event.event_addr.clone()),
         idempotency_key: idempotency_key.clone(),
         reason: Some("not submitted".to_owned()),
-        job: args.print_job.then(|| FarmPublishJobView {
-            rpc_method: rpc_method.to_owned(),
-            state: "not_submitted".to_owned(),
-            job_id: None,
-            idempotency_key,
-            requested_signer_session_id: args.signer_session_id.clone(),
-            signer_mode: None,
-            signer_session_id: None,
-        }),
+        job: None,
         event: args.print_event.then_some(event).flatten(),
     }
 }
@@ -719,111 +576,6 @@ fn not_submitted_component(
     event: Option<FarmPublishEventView>,
 ) -> FarmPublishComponentView {
     preview_component(rpc_method, event_kind, idempotency_key, args, event)
-}
-
-fn result_component(
-    rpc_method: &str,
-    fallback_event_kind: u32,
-    result: BridgeEventPublishResult,
-    args: &FarmPublishArgs,
-    preview: Option<FarmPublishEventView>,
-) -> FarmPublishComponentView {
-    let state = if result.status == "failed" {
-        "failed".to_owned()
-    } else if result.deduplicated {
-        "deduplicated".to_owned()
-    } else {
-        result.status.clone()
-    };
-    let event_kind = result.event_kind.unwrap_or(fallback_event_kind);
-    let event_addr = result
-        .event_addr
-        .clone()
-        .or_else(|| preview.as_ref().and_then(|event| event.event_addr.clone()));
-    let event = args.print_event.then(|| FarmPublishEventView {
-        event_id: result.event_id.clone(),
-        event_addr: event_addr.clone(),
-        ..preview.unwrap_or_else(|| FarmPublishEventView {
-            kind: event_kind,
-            author: String::new(),
-            content: String::new(),
-            tags: Vec::new(),
-            event_id: None,
-            event_addr: None,
-        })
-    });
-    FarmPublishComponentView {
-        state: state.clone(),
-        rpc_method: rpc_method.to_owned(),
-        event_kind,
-        deduplicated: result.deduplicated,
-        job_id: Some(result.job_id.clone()),
-        job_status: Some(result.status.clone()),
-        signer_mode: Some(result.signer_mode.clone()),
-        signer_session_id: result.signer_session_id.clone(),
-        event_id: result.event_id.clone(),
-        event_addr,
-        idempotency_key: result.idempotency_key.clone(),
-        reason: (result.status == "failed")
-            .then(|| "daemon publish job failed before relay delivery completed".to_owned()),
-        job: args.print_job.then(|| FarmPublishJobView {
-            rpc_method: rpc_method.to_owned(),
-            state,
-            job_id: Some(result.job_id),
-            idempotency_key: result.idempotency_key,
-            requested_signer_session_id: args.signer_session_id.clone(),
-            signer_mode: Some(result.signer_mode),
-            signer_session_id: result.signer_session_id,
-        }),
-        event,
-    }
-}
-
-fn daemon_error_component(
-    rpc_method: &str,
-    event_kind: u32,
-    args: &FarmPublishArgs,
-    idempotency_key: Option<String>,
-    error: DaemonRpcError,
-    preview: Option<FarmPublishEventView>,
-) -> FarmPublishComponentView {
-    let (state, reason) = daemon_error_state_reason(error);
-    FarmPublishComponentView {
-        state: state.clone(),
-        rpc_method: rpc_method.to_owned(),
-        event_kind,
-        deduplicated: false,
-        job_id: None,
-        job_status: None,
-        signer_mode: None,
-        signer_session_id: None,
-        event_id: None,
-        event_addr: preview.as_ref().and_then(|event| event.event_addr.clone()),
-        idempotency_key: idempotency_key.clone(),
-        reason: Some(reason),
-        job: args.print_job.then(|| FarmPublishJobView {
-            rpc_method: rpc_method.to_owned(),
-            state,
-            job_id: None,
-            idempotency_key,
-            requested_signer_session_id: args.signer_session_id.clone(),
-            signer_mode: None,
-            signer_session_id: None,
-        }),
-        event: args.print_event.then_some(preview).flatten(),
-    }
-}
-
-fn daemon_error_state_reason(error: DaemonRpcError) -> (String, String) {
-    match error {
-        DaemonRpcError::Unconfigured(reason)
-        | DaemonRpcError::Unauthorized(reason)
-        | DaemonRpcError::MethodUnavailable(reason) => ("unconfigured".to_owned(), reason),
-        DaemonRpcError::External(reason) => ("unavailable".to_owned(), reason),
-        DaemonRpcError::InvalidResponse(reason)
-        | DaemonRpcError::Remote(reason)
-        | DaemonRpcError::UnknownJob(reason) => ("error".to_owned(), reason),
-    }
 }
 
 fn binding_error_publish_view(
@@ -853,7 +605,7 @@ fn binding_error_publish_view(
             state: state.clone(),
             reason: Some(reason.clone()),
             ..preview_component(
-                "bridge.profile.publish",
+                "relay.profile.publish",
                 KIND_PROFILE,
                 profile_idempotency_key,
                 args,
@@ -864,7 +616,7 @@ fn binding_error_publish_view(
             state: state.clone(),
             reason: Some(reason.clone()),
             ..preview_component(
-                "bridge.farm.publish",
+                "relay.farm.publish",
                 KIND_FARM,
                 farm_idempotency_key,
                 args,
@@ -876,7 +628,7 @@ fn binding_error_publish_view(
     )
 }
 
-fn daemon_error_publish_view(
+fn direct_relay_unavailable_publish_view(
     config: &RuntimeConfig,
     args: &FarmPublishArgs,
     resolved: &ResolvedFarmConfig,
@@ -884,168 +636,38 @@ fn daemon_error_publish_view(
     previews: FarmPublishPreviews,
     profile_idempotency_key: Option<String>,
     farm_idempotency_key: Option<String>,
-    error: DaemonRpcError,
-    stage: FarmPublishFailureStage,
 ) -> FarmPublishView {
-    let (state, reason) = daemon_error_state_reason(error);
-    let profile = match stage {
-        FarmPublishFailureStage::Profile => FarmPublishComponentView {
-            state: state.clone(),
-            reason: Some(reason.clone()),
+    base_publish_view(
+        "unavailable",
+        config,
+        args,
+        resolved,
+        account_pubkey,
+        FarmPublishComponentView {
+            state: "unavailable".to_owned(),
+            reason: Some(DIRECT_RELAY_UNAVAILABLE_REASON.to_owned()),
             ..preview_component(
-                "bridge.profile.publish",
+                "relay.profile.publish",
                 KIND_PROFILE,
                 profile_idempotency_key,
                 args,
                 Some(previews.profile),
             )
         },
-        FarmPublishFailureStage::Farm => preview_component(
-            "bridge.profile.publish",
-            KIND_PROFILE,
-            profile_idempotency_key,
-            args,
-            Some(previews.profile),
-        ),
-    };
-    let farm = match stage {
-        FarmPublishFailureStage::Profile => preview_component(
-            "bridge.farm.publish",
-            KIND_FARM,
-            farm_idempotency_key,
-            args,
-            Some(previews.farm),
-        ),
-        FarmPublishFailureStage::Farm => FarmPublishComponentView {
-            state: state.clone(),
-            reason: Some(reason.clone()),
+        FarmPublishComponentView {
+            state: "unavailable".to_owned(),
+            reason: Some(DIRECT_RELAY_UNAVAILABLE_REASON.to_owned()),
             ..preview_component(
-                "bridge.farm.publish",
+                "relay.farm.publish",
                 KIND_FARM,
                 farm_idempotency_key,
                 args,
                 Some(previews.farm),
             )
         },
-    };
-    base_publish_view(
-        state.as_str(),
-        config,
-        args,
-        resolved,
-        account_pubkey,
-        profile,
-        farm,
-        Some(reason),
-        daemon_error_actions(state.as_str()),
+        Some(DIRECT_RELAY_UNAVAILABLE_REASON.to_owned()),
+        Vec::new(),
     )
-}
-
-fn persist_publication_and_view(
-    config: &RuntimeConfig,
-    args: &FarmPublishArgs,
-    mut resolved: ResolvedFarmConfig,
-    account_pubkey: &str,
-    profile: FarmPublishComponentView,
-    farm: FarmPublishComponentView,
-) -> Result<FarmPublishView, RuntimeError> {
-    let now = unix_timestamp_now();
-    if component_published(&profile) {
-        if let Some(event_id) = &profile.event_id {
-            resolved.document.publication.profile_event_id = Some(event_id.clone());
-        }
-        resolved.document.publication.profile_published_at = Some(now);
-    }
-    if component_published(&farm) {
-        if let Some(event_id) = &farm.event_id {
-            resolved.document.publication.farm_event_id = Some(event_id.clone());
-        }
-        resolved.document.publication.farm_published_at = Some(now);
-    }
-    if component_published(&profile) || component_published(&farm) {
-        farm_config::write(&config.paths, resolved.scope, &resolved.document)?;
-    }
-
-    let state = publish_view_state(&profile, &farm);
-    let mut actions = Vec::new();
-    if let Some(job_id) = &profile.job_id {
-        actions.push(format!("radroots job get {job_id}"));
-    }
-    if let Some(job_id) = &farm.job_id {
-        actions.push(format!("radroots job get {job_id}"));
-        actions.push(format!("radroots job watch {job_id}"));
-    }
-    if actions.is_empty() {
-        actions.push("radroots runtime status get".to_owned());
-    }
-    let reason = (state == "partial" || state == "unavailable" || state == "error")
-        .then(|| "farm publish did not complete for both profile and farm record".to_owned());
-
-    Ok(base_publish_view(
-        state,
-        config,
-        args,
-        &resolved,
-        account_pubkey,
-        profile,
-        farm,
-        reason,
-        actions,
-    ))
-}
-
-fn publish_view_state(
-    profile: &FarmPublishComponentView,
-    farm: &FarmPublishComponentView,
-) -> &'static str {
-    if component_error(profile) || component_error(farm) {
-        return "error";
-    }
-    if component_unconfigured(profile) || component_unconfigured(farm) {
-        return "unconfigured";
-    }
-    if component_failed(profile) || component_failed(farm) {
-        return if component_published(profile) || component_published(farm) {
-            "partial"
-        } else {
-            "unavailable"
-        };
-    }
-    if profile.state == "deduplicated" || farm.state == "deduplicated" {
-        return "deduplicated";
-    }
-    "published"
-}
-
-fn component_published(component: &FarmPublishComponentView) -> bool {
-    matches!(component.state.as_str(), "published" | "deduplicated")
-        || component
-            .job_status
-            .as_deref()
-            .is_some_and(|status| status == "published")
-}
-
-fn component_failed(component: &FarmPublishComponentView) -> bool {
-    matches!(component.state.as_str(), "failed" | "unavailable")
-}
-
-fn component_unconfigured(component: &FarmPublishComponentView) -> bool {
-    component.state == "unconfigured"
-}
-
-fn component_error(component: &FarmPublishComponentView) -> bool {
-    component.state == "error"
-}
-
-fn daemon_error_actions(state: &str) -> Vec<String> {
-    match state {
-        "unconfigured" => vec![
-            "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell".to_owned(),
-            "start radrootsd with bridge ingress enabled".to_owned(),
-        ],
-        "unavailable" => vec!["start radrootsd and verify the rpc url".to_owned()],
-        _ => vec!["inspect the daemon rpc response contract".to_owned()],
-    }
 }
 
 fn selected_account_for_draft(
@@ -1577,13 +1199,6 @@ fn non_empty(value: &str) -> Option<String> {
     } else {
         Some(trimmed.to_owned())
     }
-}
-
-fn unix_timestamp_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
 }
 
 fn generate_d_tag() -> String {

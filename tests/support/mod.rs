@@ -166,6 +166,16 @@ pub fn assert_no_removed_command_reference(value: &Value, args: &[&str]) {
     }
 }
 
+pub fn assert_no_daemon_runtime_reference(value: &Value, args: &[&str]) {
+    let raw = serde_json::to_string(value).expect("json value");
+    for removed in ["radrootsd", "daemon", "bridge", "radroots job"] {
+        assert!(
+            !raw.contains(removed),
+            "`{args:?}` output should not contain daemon runtime reference `{removed}`: {raw}"
+        );
+    }
+}
+
 pub fn assert_contains(value: &Value, needle: &str) {
     let value = value.as_str().expect("string value");
     assert!(

@@ -2,12 +2,10 @@ mod support;
 
 use std::path::Path;
 
-use radroots_events::kinds::KIND_LISTING;
-use serde_json::json;
 use support::{
-    RadrootsCliSandbox, assert_contains, assert_hex_len, assert_no_removed_command_reference,
-    create_listing_draft, identity_public, make_listing_publishable, shell_single_quoted,
-    toml_string, write_public_identity_profile,
+    RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
+    assert_no_removed_command_reference, create_listing_draft, identity_public,
+    make_listing_publishable, shell_single_quoted, toml_string, write_public_identity_profile,
 };
 
 #[test]
@@ -447,10 +445,10 @@ fn local_listing_publish_dry_run_validates_local_account_authority() {
 }
 
 #[test]
-fn local_listing_publish_signs_with_selected_account_without_remote_fallback() {
+fn local_listing_publish_fails_until_direct_relay_publish_exists() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
-    let listing_file = create_listing_draft(&sandbox, "local-signed");
+    let listing_file = create_listing_draft(&sandbox, "local-unavailable");
     make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
 
     let (output, value) = sandbox.json_output(&[
@@ -463,41 +461,17 @@ fn local_listing_publish_signs_with_selected_account_without_remote_fallback() {
         listing_file.to_string_lossy().as_ref(),
     ]);
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["result"]["state"], "signed");
-    assert_eq!(value["result"]["signer_mode"], "local");
-    assert_eq!(
-        value["result"]["signer_session_id"],
-        serde_json::Value::Null
-    );
-    assert_eq!(value["result"]["job_id"], serde_json::Value::Null);
-    assert_eq!(value["result"]["event"]["kind"], KIND_LISTING);
-    assert_eq!(
-        value["result"]["event"]["author"],
-        value["result"]["seller_pubkey"]
-    );
-    assert_eq!(
-        value["result"]["event"]["event_id"],
-        value["result"]["event_id"]
-    );
-    assert_hex_len(&value["result"]["event_id"], 64);
-    assert_hex_len(&value["result"]["event"]["signature"], 128);
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
     assert_contains(
-        &value["result"]["reason"],
-        "relay delivery was not attempted",
-    );
-    assert!(
-        value["result"]["event"]["tags"]
-            .as_array()
-            .expect("event tags")
-            .iter()
-            .any(|tag| tag
-                .as_array()
-                .is_some_and(|items| items.first() == Some(&json!("d"))
-                    && items.get(1) == Some(&value["result"]["listing_id"])))
+        &value["errors"][0]["message"],
+        "direct Nostr relay publishing is not implemented",
     );
     assert_no_removed_command_reference(&value, &["listing", "publish"]);
+    assert_no_daemon_runtime_reference(&value, &["listing", "publish"]);
 }
 
 #[test]
@@ -522,6 +496,7 @@ fn local_listing_publish_dry_run_does_not_sign_matching_listing() {
     assert_eq!(value["result"]["dry_run"], true);
     assert_eq!(value["result"]["event_id"], serde_json::Value::Null);
     assert_no_removed_command_reference(&value, &["listing", "publish", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&value, &["listing", "publish", "--dry-run"]);
 }
 
 #[test]
@@ -617,6 +592,48 @@ fn local_farm_publish_dry_run_validates_secret_backed_account() {
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["result"]["state"], "dry_run");
     assert_eq!(value["result"]["dry_run"], true);
+    assert_no_daemon_runtime_reference(&value, &["farm", "publish", "--dry-run"]);
+}
+
+#[test]
+fn local_farm_publish_fails_until_direct_relay_publish_exists() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "farm",
+        "publish",
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "farm.publish");
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+    assert_contains(
+        &value["errors"][0]["message"],
+        "direct Nostr relay publishing is not implemented",
+    );
+    assert_no_removed_command_reference(&value, &["farm", "publish"]);
+    assert_no_daemon_runtime_reference(&value, &["farm", "publish"]);
 }
 
 #[test]

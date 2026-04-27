@@ -18,7 +18,6 @@ use radroots_events::listing::{
 use radroots_events::trade::RadrootsTradeListingValidationError;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
-use radroots_nostr::prelude::radroots_nostr_build_event;
 use radroots_replica_db::ReplicaSql;
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::listing::publish::validate_listing_for_seller;
@@ -27,14 +26,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
     FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
-    ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
-    ListingSummaryView, ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
+    ListingMutationEventView, ListingMutationView, ListingNewView, ListingSummaryView,
+    ListingValidateView, ListingValidationIssueView, SyncFreshnessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
-use crate::runtime::daemon;
-use crate::runtime::daemon::DaemonRpcError;
 use crate::runtime::farm_config;
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::freshness_from_executor;
@@ -45,8 +42,9 @@ use crate::runtime_args::{
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
-const LISTING_WRITE_SOURCE: &str = "daemon bridge · durable write plane";
-const LISTING_LOCAL_SIGNED_SOURCE: &str = "local account signer · signed event artifact";
+const LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · pending implementation";
+const DIRECT_RELAY_UNAVAILABLE_REASON: &str =
+    "direct Nostr relay publishing is not implemented for listing mutations";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -806,16 +804,8 @@ fn mutate(
             idempotency_key: args.idempotency_key.clone(),
             signer_session_id: None,
             requested_signer_session_id: args.signer_session_id.clone(),
-            reason: Some("dry run requested; daemon publish skipped".to_owned()),
-            job: args.print_job.then(|| ListingMutationJobView {
-                rpc_method: "bridge.listing.publish".to_owned(),
-                state: "not_submitted".to_owned(),
-                job_id: None,
-                idempotency_key: args.idempotency_key.clone(),
-                requested_signer_session_id: args.signer_session_id.clone(),
-                signer_mode: Some(config.signer.backend.as_str().to_owned()),
-                signer_session_id: None,
-            }),
+            reason: Some("dry run requested; relay publish skipped".to_owned()),
+            job: None,
             event: args.print_event.then_some(event_preview),
             actions: vec![format!(
                 "radroots listing {} {}",
@@ -825,22 +815,11 @@ fn mutate(
         });
     }
 
-    if matches!(operation, ListingMutationOperation::Publish)
-        && matches!(config.signer.backend, SignerBackend::Local)
-    {
-        return local_signed_view(
-            config,
-            args,
-            operation,
-            &canonical,
-            listing_addr,
-            event_preview,
-        );
-    }
-
-    let signer_authority =
+    if matches!(config.signer.backend, SignerBackend::Local) {
+        validate_local_listing_signer(config, &canonical)?;
+    } else {
         match resolve_actor_write_authority(config, "seller", canonical.seller_pubkey.as_str()) {
-            Ok(authority) => authority,
+            Ok(_) => {}
             Err(error) => {
                 return Ok(binding_error_view(
                     config,
@@ -852,109 +831,17 @@ fn mutate(
                     error,
                 ));
             }
-        };
-
-    let signer_session_id = match daemon::resolve_signer_session_id(
-        config,
-        "seller",
-        canonical.seller_pubkey.as_str(),
-        KIND_LISTING,
-        args.signer_session_id.as_deref(),
-        signer_authority.as_ref(),
-    ) {
-        Ok(session_id) => session_id,
-        Err(error) => {
-            return Ok(daemon_error_view(
-                config,
-                args,
-                operation,
-                &canonical,
-                listing_addr,
-                event_preview,
-                error,
-            ));
         }
-    };
-
-    match daemon::bridge_listing_publish(
-        config,
-        &canonical.listing,
-        KIND_LISTING,
-        args.idempotency_key.as_deref(),
-        Some(signer_session_id.as_str()),
-        signer_authority.as_ref(),
-    ) {
-        Ok(result) => {
-            let failed = result.status == "failed";
-            let mut actions = Vec::new();
-            if failed {
-                if let Some(job_id) = &Some(result.job_id.clone()) {
-                    actions.push(format!("radroots job get {job_id}"));
-                }
-                actions.push("radroots runtime status get".to_owned());
-            } else {
-                actions.push(format!("radroots job get {}", result.job_id));
-                actions.push(format!("radroots job watch {}", result.job_id));
-            }
-
-            Ok(ListingMutationView {
-                state: if failed {
-                    "unavailable".to_owned()
-                } else if result.deduplicated {
-                    "deduplicated".to_owned()
-                } else {
-                    result.status.clone()
-                },
-                operation: operation.as_str().to_owned(),
-                source: LISTING_WRITE_SOURCE.to_owned(),
-                file: args.file.display().to_string(),
-                listing_id: canonical.listing_id,
-                listing_addr: listing_addr.clone(),
-                seller_pubkey: canonical.seller_pubkey.clone(),
-                event_kind: result.event_kind.unwrap_or(KIND_LISTING),
-                dry_run: false,
-                deduplicated: result.deduplicated,
-                job_id: Some(result.job_id.clone()),
-                job_status: Some(result.status.clone()),
-                signer_mode: Some(result.signer_mode.clone()),
-                signer_session_id: result.signer_session_id.clone(),
-                event_id: result.event_id.clone(),
-                event_addr: result
-                    .event_addr
-                    .clone()
-                    .or_else(|| Some(listing_addr.clone())),
-                idempotency_key: result.idempotency_key.clone(),
-                requested_signer_session_id: args.signer_session_id.clone(),
-                reason: failed.then(|| {
-                    "daemon publish job failed before relay delivery completed".to_owned()
-                }),
-                job: args.print_job.then(|| ListingMutationJobView {
-                    rpc_method: "bridge.listing.publish".to_owned(),
-                    state: result.status,
-                    job_id: Some(result.job_id),
-                    idempotency_key: result.idempotency_key,
-                    requested_signer_session_id: args.signer_session_id.clone(),
-                    signer_mode: Some(result.signer_mode),
-                    signer_session_id: result.signer_session_id,
-                }),
-                event: args.print_event.then(|| ListingMutationEventView {
-                    event_id: result.event_id,
-                    event_addr: result.event_addr.unwrap_or(listing_addr),
-                    ..event_preview
-                }),
-                actions,
-            })
-        }
-        Err(error) => Ok(daemon_error_view(
-            config,
-            args,
-            operation,
-            &canonical,
-            listing_addr,
-            event_preview,
-            error,
-        )),
     }
+
+    Ok(direct_relay_unavailable_view(
+        config,
+        args,
+        operation,
+        &canonical,
+        listing_addr,
+        event_preview,
+    ))
 }
 
 fn scaffold_contents(draft: &ListingDraftDocument) -> Result<String, RuntimeError> {
@@ -1289,172 +1176,18 @@ fn build_listing_event_preview(
     ))
 }
 
-fn daemon_error_view(
+fn direct_relay_unavailable_view(
     config: &RuntimeConfig,
     args: &ListingMutationArgs,
     operation: ListingMutationOperation,
     canonical: &CanonicalListingDraft,
     listing_addr: String,
     event_preview: ListingMutationEventView,
-    error: DaemonRpcError,
 ) -> ListingMutationView {
-    match error {
-        DaemonRpcError::Unconfigured(reason)
-        | DaemonRpcError::Unauthorized(reason)
-        | DaemonRpcError::MethodUnavailable(reason) => ListingMutationView {
-            state: "unconfigured".to_owned(),
-            operation: operation.as_str().to_owned(),
-            source: LISTING_WRITE_SOURCE.to_owned(),
-            file: args.file.display().to_string(),
-            listing_id: canonical.listing_id.clone(),
-            listing_addr,
-            seller_pubkey: canonical.seller_pubkey.clone(),
-            event_kind: KIND_LISTING,
-            dry_run: false,
-            deduplicated: false,
-            job_id: None,
-            job_status: None,
-            signer_mode: None,
-            signer_session_id: None,
-            event_id: None,
-            event_addr: None,
-            idempotency_key: args.idempotency_key.clone(),
-            requested_signer_session_id: args.signer_session_id.clone(),
-            reason: Some(reason),
-            job: args.print_job.then(|| ListingMutationJobView {
-                rpc_method: "bridge.listing.publish".to_owned(),
-                state: "unconfigured".to_owned(),
-                job_id: None,
-                idempotency_key: args.idempotency_key.clone(),
-                requested_signer_session_id: args.signer_session_id.clone(),
-                signer_mode: Some(config.signer.backend.as_str().to_owned()),
-                signer_session_id: None,
-            }),
-            event: args.print_event.then_some(event_preview),
-            actions: vec![
-                "set RADROOTS_RPC_BEARER_TOKEN in .env or your shell".to_owned(),
-                "start radrootsd with bridge ingress enabled".to_owned(),
-            ],
-        },
-        DaemonRpcError::External(reason) => ListingMutationView {
-            state: "unavailable".to_owned(),
-            operation: operation.as_str().to_owned(),
-            source: LISTING_WRITE_SOURCE.to_owned(),
-            file: args.file.display().to_string(),
-            listing_id: canonical.listing_id.clone(),
-            listing_addr,
-            seller_pubkey: canonical.seller_pubkey.clone(),
-            event_kind: KIND_LISTING,
-            dry_run: false,
-            deduplicated: false,
-            job_id: None,
-            job_status: None,
-            signer_mode: None,
-            signer_session_id: None,
-            event_id: None,
-            event_addr: None,
-            idempotency_key: args.idempotency_key.clone(),
-            requested_signer_session_id: args.signer_session_id.clone(),
-            reason: Some(reason),
-            job: args.print_job.then(|| ListingMutationJobView {
-                rpc_method: "bridge.listing.publish".to_owned(),
-                state: "unavailable".to_owned(),
-                job_id: None,
-                idempotency_key: args.idempotency_key.clone(),
-                requested_signer_session_id: args.signer_session_id.clone(),
-                signer_mode: Some(config.signer.backend.as_str().to_owned()),
-                signer_session_id: None,
-            }),
-            event: args.print_event.then_some(event_preview),
-            actions: vec!["start radrootsd and verify the rpc url".to_owned()],
-        },
-        DaemonRpcError::InvalidResponse(reason)
-        | DaemonRpcError::Remote(reason)
-        | DaemonRpcError::UnknownJob(reason) => ListingMutationView {
-            state: "error".to_owned(),
-            operation: operation.as_str().to_owned(),
-            source: LISTING_WRITE_SOURCE.to_owned(),
-            file: args.file.display().to_string(),
-            listing_id: canonical.listing_id.clone(),
-            listing_addr,
-            seller_pubkey: canonical.seller_pubkey.clone(),
-            event_kind: KIND_LISTING,
-            dry_run: false,
-            deduplicated: false,
-            job_id: None,
-            job_status: None,
-            signer_mode: None,
-            signer_session_id: None,
-            event_id: None,
-            event_addr: None,
-            idempotency_key: args.idempotency_key.clone(),
-            requested_signer_session_id: args.signer_session_id.clone(),
-            reason: Some(reason),
-            job: args.print_job.then(|| ListingMutationJobView {
-                rpc_method: "bridge.listing.publish".to_owned(),
-                state: "error".to_owned(),
-                job_id: None,
-                idempotency_key: args.idempotency_key.clone(),
-                requested_signer_session_id: args.signer_session_id.clone(),
-                signer_mode: Some(config.signer.backend.as_str().to_owned()),
-                signer_session_id: None,
-            }),
-            event: args.print_event.then_some(event_preview),
-            actions: vec!["inspect the daemon rpc response contract".to_owned()],
-        },
-    }
-}
-
-fn local_signed_view(
-    config: &RuntimeConfig,
-    args: &ListingMutationArgs,
-    operation: ListingMutationOperation,
-    canonical: &CanonicalListingDraft,
-    listing_addr: String,
-    event_preview: ListingMutationEventView,
-) -> Result<ListingMutationView, RuntimeError> {
-    let signed_event = match sign_listing_event(config, canonical) {
-        Ok(event) => event,
-        Err(error) => {
-            return Ok(ListingMutationView {
-                state: "unconfigured".to_owned(),
-                operation: operation.as_str().to_owned(),
-                source: LISTING_LOCAL_SIGNED_SOURCE.to_owned(),
-                file: args.file.display().to_string(),
-                listing_id: canonical.listing_id.clone(),
-                listing_addr,
-                seller_pubkey: canonical.seller_pubkey.clone(),
-                event_kind: KIND_LISTING,
-                dry_run: false,
-                deduplicated: false,
-                job_id: None,
-                job_status: None,
-                signer_mode: Some(config.signer.backend.as_str().to_owned()),
-                event_id: None,
-                event_addr: None,
-                idempotency_key: args.idempotency_key.clone(),
-                signer_session_id: None,
-                requested_signer_session_id: args.signer_session_id.clone(),
-                reason: Some(error.to_string()),
-                job: args.print_job.then(|| ListingMutationJobView {
-                    rpc_method: "local.listing.sign".to_owned(),
-                    state: "unconfigured".to_owned(),
-                    job_id: None,
-                    idempotency_key: args.idempotency_key.clone(),
-                    requested_signer_session_id: args.signer_session_id.clone(),
-                    signer_mode: Some(config.signer.backend.as_str().to_owned()),
-                    signer_session_id: None,
-                }),
-                event: args.print_event.then_some(event_preview),
-                actions: vec!["radroots signer status get".to_owned()],
-            });
-        }
-    };
-    let event_view = signed_listing_event_view(&signed_event, listing_addr.as_str());
-    Ok(ListingMutationView {
-        state: "signed".to_owned(),
+    ListingMutationView {
+        state: "unavailable".to_owned(),
         operation: operation.as_str().to_owned(),
-        source: LISTING_LOCAL_SIGNED_SOURCE.to_owned(),
+        source: LISTING_WRITE_SOURCE.to_owned(),
         file: args.file.display().to_string(),
         listing_id: canonical.listing_id.clone(),
         listing_addr: listing_addr.clone(),
@@ -1465,38 +1198,16 @@ fn local_signed_view(
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        event_id: event_view.event_id.clone(),
+        event_id: None,
         event_addr: Some(listing_addr),
         idempotency_key: args.idempotency_key.clone(),
         signer_session_id: None,
         requested_signer_session_id: args.signer_session_id.clone(),
-        reason: Some("signed locally; relay delivery was not attempted".to_owned()),
-        job: args.print_job.then(|| ListingMutationJobView {
-            rpc_method: "local.listing.sign".to_owned(),
-            state: "not_submitted".to_owned(),
-            job_id: None,
-            idempotency_key: args.idempotency_key.clone(),
-            requested_signer_session_id: args.signer_session_id.clone(),
-            signer_mode: Some(config.signer.backend.as_str().to_owned()),
-            signer_session_id: None,
-        }),
-        event: Some(event_view),
+        reason: Some(DIRECT_RELAY_UNAVAILABLE_REASON.to_owned()),
+        job: None,
+        event: args.print_event.then_some(event_preview),
         actions: Vec::new(),
-    })
-}
-
-fn sign_listing_event(
-    config: &RuntimeConfig,
-    canonical: &CanonicalListingDraft,
-) -> Result<radroots_nostr::prelude::RadrootsNostrEvent, RuntimeError> {
-    let signing = resolve_listing_signing_identity(config, canonical)?;
-    let parts = to_wire_parts_with_kind(&canonical.listing, KIND_LISTING)
-        .map_err(|error| RuntimeError::Config(format!("invalid listing contract: {error}")))?;
-    let event = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
-        .map_err(|error| RuntimeError::Config(format!("build local listing event: {error}")))?
-        .sign_with_keys(signing.identity.keys())
-        .map_err(|error| RuntimeError::Config(format!("sign local listing event: {error}")))?;
-    Ok(event)
+    }
 }
 
 fn validate_local_listing_signer(
@@ -1524,26 +1235,6 @@ fn resolve_listing_signing_identity(
         )));
     }
     Ok(signing)
-}
-
-fn signed_listing_event_view(
-    event: &radroots_nostr::prelude::RadrootsNostrEvent,
-    listing_addr: &str,
-) -> ListingMutationEventView {
-    ListingMutationEventView {
-        kind: event.kind.as_u16() as u32,
-        author: event.pubkey.to_string(),
-        created_at: Some(u32::try_from(event.created_at.as_secs()).unwrap_or(u32::MAX)),
-        content: event.content.clone(),
-        tags: event
-            .tags
-            .iter()
-            .map(|tag| tag.as_slice().to_vec())
-            .collect(),
-        event_id: Some(event.id.to_string()),
-        signature: Some(event.sig.to_string()),
-        event_addr: listing_addr.to_owned(),
-    }
 }
 
 fn binding_error_view(
@@ -1583,15 +1274,7 @@ fn binding_error_view(
         idempotency_key: args.idempotency_key.clone(),
         requested_signer_session_id: args.signer_session_id.clone(),
         reason: Some(reason),
-        job: args.print_job.then(|| ListingMutationJobView {
-            rpc_method: "bridge.listing.publish".to_owned(),
-            state,
-            job_id: None,
-            idempotency_key: args.idempotency_key.clone(),
-            requested_signer_session_id: args.signer_session_id.clone(),
-            signer_mode: Some(config.signer.backend.as_str().to_owned()),
-            signer_session_id: None,
-        }),
+        job: None,
         event: args.print_event.then_some(event_preview),
         actions,
     }

@@ -6,8 +6,9 @@ use std::path::Path;
 use serde_json::Value;
 
 use support::{
-    RadrootsCliSandbox, assert_no_removed_command_reference, create_listing_draft, identity_public,
-    make_listing_publishable, ndjson_from_stdout, radroots, write_public_identity_profile,
+    RadrootsCliSandbox, assert_no_daemon_runtime_reference, assert_no_removed_command_reference,
+    create_listing_draft, identity_public, make_listing_publishable, ndjson_from_stdout, radroots,
+    write_public_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -1207,6 +1208,7 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     assert_eq!(publish["operation_id"], "listing.publish");
     assert_eq!(publish["result"]["state"], "dry_run");
     assert_no_removed_command_reference(&publish, &["listing", "publish", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&publish, &["listing", "publish", "--dry-run"]);
 
     let archive = sandbox.json_success(&[
         "--format",
@@ -1220,8 +1222,9 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     assert_eq!(archive["result"]["state"], "dry_run");
     assert_eq!(archive["result"]["operation"], "archive");
     assert_no_removed_command_reference(&archive, &["listing", "archive", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&archive, &["listing", "archive", "--dry-run"]);
 
-    let signed = sandbox.json_success(&[
+    let (publish_output, unavailable_publish) = sandbox.json_output(&[
         "--format",
         "json",
         "--approval-token",
@@ -1230,13 +1233,38 @@ fn seller_target_flow_acceptance_uses_target_operations() {
         "publish",
         listing_file,
     ]);
-    assert_eq!(signed["operation_id"], "listing.publish");
-    assert_eq!(signed["result"]["state"], "signed");
-    assert_eq!(signed["result"]["signer_mode"], "local");
+    assert!(!publish_output.status.success());
+    assert_eq!(unavailable_publish["operation_id"], "listing.publish");
     assert_eq!(
-        signed["result"]["event"]["author"],
-        signed["result"]["seller_pubkey"]
+        unavailable_publish["errors"][0]["code"],
+        "operation_unavailable"
     );
-    assert!(signed["result"]["event"]["signature"].is_string());
-    assert_no_removed_command_reference(&signed, &["listing", "publish"]);
+    assert_eq!(
+        unavailable_publish["errors"][0]["detail"]["class"],
+        "operation"
+    );
+    assert_no_removed_command_reference(&unavailable_publish, &["listing", "publish"]);
+    assert_no_daemon_runtime_reference(&unavailable_publish, &["listing", "publish"]);
+
+    let (archive_output, unavailable_archive) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "listing",
+        "archive",
+        listing_file,
+    ]);
+    assert!(!archive_output.status.success());
+    assert_eq!(unavailable_archive["operation_id"], "listing.archive");
+    assert_eq!(
+        unavailable_archive["errors"][0]["code"],
+        "operation_unavailable"
+    );
+    assert_eq!(
+        unavailable_archive["errors"][0]["detail"]["class"],
+        "operation"
+    );
+    assert_no_removed_command_reference(&unavailable_archive, &["listing", "archive"]);
+    assert_no_daemon_runtime_reference(&unavailable_archive, &["listing", "archive"]);
 }

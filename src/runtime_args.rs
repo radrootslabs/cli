@@ -128,7 +128,6 @@ pub struct FarmPublishArgs {
     pub scope: Option<FarmScopeArg>,
     pub idempotency_key: Option<String>,
     pub signer_session_id: Option<String>,
-    pub print_job: bool,
     pub print_event: bool,
 }
 
@@ -160,7 +159,6 @@ pub struct ListingMutationArgs {
     pub file: PathBuf,
     pub idempotency_key: Option<String>,
     pub signer_session_id: Option<String>,
-    pub print_job: bool,
     pub print_event: bool,
 }
 
