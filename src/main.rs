@@ -9,6 +9,7 @@ mod operation_core;
 mod operation_farm;
 mod operation_listing;
 mod operation_market;
+mod operation_order;
 mod operation_registry;
 mod operation_runtime;
 mod output_contract;
