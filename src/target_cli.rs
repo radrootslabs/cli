@@ -163,45 +163,45 @@ impl TargetCommand {
                 },
                 FarmCommand::Publish => "farm.publish",
             },
-            Self::Listing(args) => match args.command {
-                ListingCommand::Create => "listing.create",
-                ListingCommand::Get => "listing.get",
+            Self::Listing(args) => match &args.command {
+                ListingCommand::Create(_) => "listing.create",
+                ListingCommand::Get(_) => "listing.get",
                 ListingCommand::List => "listing.list",
-                ListingCommand::Update => "listing.update",
-                ListingCommand::Validate => "listing.validate",
-                ListingCommand::Publish => "listing.publish",
-                ListingCommand::Archive => "listing.archive",
+                ListingCommand::Update(_) => "listing.update",
+                ListingCommand::Validate(_) => "listing.validate",
+                ListingCommand::Publish(_) => "listing.publish",
+                ListingCommand::Archive(_) => "listing.archive",
             },
             Self::Market(args) => match &args.command {
                 MarketCommand::Refresh => "market.refresh",
-                MarketCommand::Product(product) => match product.command {
-                    MarketProductCommand::Search => "market.product.search",
+                MarketCommand::Product(product) => match &product.command {
+                    MarketProductCommand::Search(_) => "market.product.search",
                 },
-                MarketCommand::Listing(listing) => match listing.command {
-                    MarketListingCommand::Get => "market.listing.get",
+                MarketCommand::Listing(listing) => match &listing.command {
+                    MarketListingCommand::Get(_) => "market.listing.get",
                 },
             },
             Self::Basket(args) => match &args.command {
-                BasketCommand::Create => "basket.create",
-                BasketCommand::Get => "basket.get",
+                BasketCommand::Create(_) => "basket.create",
+                BasketCommand::Get(_) => "basket.get",
                 BasketCommand::List => "basket.list",
                 BasketCommand::Item(item) => match item.command {
-                    BasketItemCommand::Add => "basket.item.add",
-                    BasketItemCommand::Update => "basket.item.update",
-                    BasketItemCommand::Remove => "basket.item.remove",
+                    BasketItemCommand::Add(_) => "basket.item.add",
+                    BasketItemCommand::Update(_) => "basket.item.update",
+                    BasketItemCommand::Remove(_) => "basket.item.remove",
                 },
-                BasketCommand::Validate => "basket.validate",
+                BasketCommand::Validate(_) => "basket.validate",
                 BasketCommand::Quote(quote) => match quote.command {
-                    BasketQuoteCommand::Create => "basket.quote.create",
+                    BasketQuoteCommand::Create(_) => "basket.quote.create",
                 },
             },
             Self::Order(args) => match &args.command {
-                OrderCommand::Submit => "order.submit",
-                OrderCommand::Get => "order.get",
+                OrderCommand::Submit(_) => "order.submit",
+                OrderCommand::Get(_) => "order.get",
                 OrderCommand::List => "order.list",
-                OrderCommand::Event(event) => match event.command {
-                    OrderEventCommand::List => "order.event.list",
-                    OrderEventCommand::Watch => "order.event.watch",
+                OrderCommand::Event(event) => match &event.command {
+                    OrderEventCommand::List(_) => "order.event.list",
+                    OrderEventCommand::Watch(_) => "order.event.watch",
                 },
             },
         }
@@ -517,15 +517,57 @@ pub struct ListingArgs {
     pub command: ListingCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum ListingCommand {
-    Create,
-    Get,
+    Create(ListingCreateArgs),
+    Get(LookupArgs),
     List,
-    Update,
-    Validate,
-    Publish,
-    Archive,
+    Update(FileArgs),
+    Validate(FileArgs),
+    Publish(FileArgs),
+    Archive(FileArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListingCreateArgs {
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub key: Option<String>,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub category: Option<String>,
+    #[arg(long)]
+    pub summary: Option<String>,
+    #[arg(long = "bin-id")]
+    pub bin_id: Option<String>,
+    #[arg(long = "quantity-amount")]
+    pub quantity_amount: Option<String>,
+    #[arg(long = "quantity-unit")]
+    pub quantity_unit: Option<String>,
+    #[arg(long = "price-amount")]
+    pub price_amount: Option<String>,
+    #[arg(long = "price-currency")]
+    pub price_currency: Option<String>,
+    #[arg(long = "price-per-amount")]
+    pub price_per_amount: Option<String>,
+    #[arg(long = "price-per-unit")]
+    pub price_per_unit: Option<String>,
+    #[arg(long)]
+    pub available: Option<String>,
+    #[arg(long)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FileArgs {
+    pub file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct LookupArgs {
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -547,9 +589,9 @@ pub struct MarketProductArgs {
     pub command: MarketProductCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum MarketProductCommand {
-    Search,
+    Search(QueryArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -558,9 +600,14 @@ pub struct MarketListingArgs {
     pub command: MarketListingCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum MarketListingCommand {
-    Get,
+    Get(LookupArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct QueryArgs {
+    pub query: Vec<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -571,12 +618,30 @@ pub struct BasketArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum BasketCommand {
-    Create,
-    Get,
+    Create(BasketCreateArgs),
+    Get(BasketKeyArgs),
     List,
     Item(BasketItemArgs),
-    Validate,
+    Validate(BasketKeyArgs),
     Quote(BasketQuoteArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketCreateArgs {
+    pub basket_id: Option<String>,
+    #[arg(long)]
+    pub listing: Option<String>,
+    #[arg(long = "listing-addr")]
+    pub listing_addr: Option<String>,
+    #[arg(long = "bin-id")]
+    pub bin_id: Option<String>,
+    #[arg(long)]
+    pub quantity: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketKeyArgs {
+    pub basket_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -585,11 +650,32 @@ pub struct BasketItemArgs {
     pub command: BasketItemCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum BasketItemCommand {
-    Add,
-    Update,
-    Remove,
+    Add(BasketItemMutationArgs),
+    Update(BasketItemMutationArgs),
+    Remove(BasketItemRemoveArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketItemMutationArgs {
+    pub basket_id: Option<String>,
+    #[arg(long = "item-id")]
+    pub item_id: Option<String>,
+    #[arg(long)]
+    pub listing: Option<String>,
+    #[arg(long = "listing-addr")]
+    pub listing_addr: Option<String>,
+    #[arg(long = "bin-id")]
+    pub bin_id: Option<String>,
+    #[arg(long)]
+    pub quantity: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketItemRemoveArgs {
+    pub basket_id: Option<String>,
+    pub item_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -598,9 +684,9 @@ pub struct BasketQuoteArgs {
     pub command: BasketQuoteCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum BasketQuoteCommand {
-    Create,
+    Create(BasketKeyArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -611,10 +697,22 @@ pub struct OrderArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum OrderCommand {
-    Submit,
-    Get,
+    Submit(OrderSubmitArgs),
+    Get(OrderKeyArgs),
     List,
     Event(OrderEventArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderSubmitArgs {
+    pub order_id: Option<String>,
+    #[arg(long)]
+    pub watch: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderKeyArgs {
+    pub order_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -623,10 +721,10 @@ pub struct OrderEventArgs {
     pub command: OrderEventCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum OrderEventCommand {
-    List,
-    Watch,
+    List(OrderKeyArgs),
+    Watch(OrderKeyArgs),
 }
 
 #[derive(Debug, Clone, Args)]

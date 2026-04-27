@@ -2,9 +2,32 @@ use std::process::Command;
 
 use assert_cmd::prelude::*;
 use serde_json::Value;
+use tempfile::TempDir;
+
+const LISTING_ADDR: &str =
+    "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
 
 fn radroots() -> Command {
     Command::cargo_bin("radroots").expect("binary")
+}
+
+fn radroots_in(root: &TempDir) -> Command {
+    let mut command = radroots();
+    command.env("RADROOTS_CLI_PATHS_PROFILE", "repo_local");
+    command.env("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT", root.path());
+    command
+}
+
+fn json_success(root: &TempDir, args: &[&str]) -> Value {
+    let output = radroots_in(root).args(args).output().expect("run command");
+
+    assert!(
+        output.status.success(),
+        "`{args:?}` failed with stderr `{}` and stdout `{}`",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    serde_json::from_slice(&output.stdout).expect("json envelope")
 }
 
 #[test]
@@ -134,4 +157,140 @@ fn required_approval_missing_token_returns_structured_error() {
     assert_eq!(value["operation_id"], "order.submit");
     assert_eq!(value["errors"][0]["code"], "approval_required");
     assert_eq!(value["errors"][0]["exit_code"], 6);
+}
+
+#[test]
+fn buyer_mvp_flow_acceptance_uses_target_operations() {
+    let root = TempDir::new().expect("tempdir");
+
+    let search = json_success(
+        &root,
+        &["--format", "json", "market", "product", "search", "eggs"],
+    );
+    assert_eq!(search["operation_id"], "market.product.search");
+    assert_eq!(search["errors"].as_array().expect("errors").len(), 0);
+
+    let create = json_success(
+        &root,
+        &["--format", "json", "basket", "create", "basket_flow"],
+    );
+    assert_eq!(create["operation_id"], "basket.create");
+    assert_eq!(create["result"]["basket_id"], "basket_flow");
+
+    let add = json_success(
+        &root,
+        &[
+            "--format",
+            "json",
+            "basket",
+            "item",
+            "add",
+            "basket_flow",
+            "--listing-addr",
+            LISTING_ADDR,
+            "--bin-id",
+            "bin-1",
+            "--quantity",
+            "2",
+        ],
+    );
+    assert_eq!(add["operation_id"], "basket.item.add");
+    assert_eq!(add["result"]["ready_for_quote"], true);
+
+    let quote = json_success(
+        &root,
+        &[
+            "--format",
+            "json",
+            "basket",
+            "quote",
+            "create",
+            "basket_flow",
+        ],
+    );
+    assert_eq!(quote["operation_id"], "basket.quote.create");
+    assert_eq!(quote["result"]["state"], "quoted");
+    let order_id = quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id");
+
+    let submit = json_success(
+        &root,
+        &["--format", "json", "--dry-run", "order", "submit", order_id],
+    );
+    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["dry_run"], true);
+    assert_eq!(submit["errors"].as_array().expect("errors").len(), 0);
+}
+
+#[test]
+fn seller_mvp_flow_acceptance_uses_target_operations() {
+    let root = TempDir::new().expect("tempdir");
+    let listing_file = root.path().join("listing.toml");
+    let listing_file = listing_file.to_string_lossy().into_owned();
+
+    let create = json_success(
+        &root,
+        &[
+            "--format",
+            "json",
+            "listing",
+            "create",
+            "--output",
+            listing_file.as_str(),
+            "--key",
+            "eggs",
+            "--title",
+            "Eggs",
+            "--bin-id",
+            "bin-1",
+            "--quantity-amount",
+            "1",
+            "--quantity-unit",
+            "dozen",
+            "--price-amount",
+            "6",
+            "--price-currency",
+            "USD",
+            "--price-per-amount",
+            "1",
+            "--price-per-unit",
+            "dozen",
+            "--available",
+            "10",
+        ],
+    );
+    assert_eq!(create["operation_id"], "listing.create");
+    assert_eq!(create["result"]["file"], listing_file);
+
+    let validate = json_success(
+        &root,
+        &[
+            "--format",
+            "json",
+            "listing",
+            "validate",
+            listing_file.as_str(),
+        ],
+    );
+    assert_eq!(validate["operation_id"], "listing.validate");
+    assert!(validate["result"]["valid"].is_boolean());
+
+    let publish = json_success(
+        &root,
+        &[
+            "--format",
+            "json",
+            "--dry-run",
+            "listing",
+            "publish",
+            listing_file.as_str(),
+        ],
+    );
+    assert_eq!(publish["operation_id"], "listing.publish");
+    assert_eq!(publish["result"]["state"], "dry_run");
+
+    let orders = json_success(&root, &["--format", "json", "order", "list"]);
+    assert_eq!(orders["operation_id"], "order.list");
+    assert_eq!(orders["errors"].as_array().expect("errors").len(), 0);
 }
