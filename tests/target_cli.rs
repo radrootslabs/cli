@@ -110,6 +110,24 @@ fn removed_command_families_are_rejected_publicly() {
 }
 
 #[test]
+fn seller_order_decision_commands_are_deferred() {
+    for args in [
+        ["order", "accept", "ord_deferred"].as_slice(),
+        ["order", "decline", "ord_deferred"].as_slice(),
+        ["order", "decision", "accept", "ord_deferred"].as_slice(),
+    ] {
+        let output = radroots()
+            .args(args)
+            .output()
+            .expect("run deferred seller order decision command");
+
+        assert!(!output.status.success(), "`{args:?}` should be rejected");
+        let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+        assert!(stderr.contains("unrecognized subcommand"));
+    }
+}
+
+#[test]
 fn target_outputs_do_not_suggest_removed_command_families() {
     let sandbox = RadrootsCliSandbox::new();
 
@@ -390,18 +408,33 @@ fn unsupported_ndjson_returns_structured_invalid_input() {
 
 #[test]
 fn offline_forbids_external_network_operations() {
-    let output = radroots()
-        .args(["--format", "json", "--offline", "sync", "pull"])
-        .output()
-        .expect("run offline sync pull");
+    for (operation_id, args) in [
+        (
+            "sync.pull",
+            ["--format", "json", "--offline", "sync", "pull"].as_slice(),
+        ),
+        (
+            "market.refresh",
+            ["--format", "json", "--offline", "market", "refresh"].as_slice(),
+        ),
+        (
+            "order.submit",
+            ["--format", "json", "--offline", "order", "submit"].as_slice(),
+        ),
+    ] {
+        let output = radroots()
+            .args(args)
+            .output()
+            .expect("run offline external command");
 
-    assert!(!output.status.success());
-    let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
+        assert!(!output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
 
-    assert_eq!(value["operation_id"], "sync.pull");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "offline_forbidden");
-    assert_eq!(value["errors"][0]["exit_code"], 8);
+        assert_eq!(value["operation_id"], operation_id);
+        assert_eq!(value["result"], Value::Null);
+        assert_eq!(value["errors"][0]["code"], "offline_forbidden");
+        assert_eq!(value["errors"][0]["exit_code"], 8);
+    }
 }
 
 #[test]
@@ -775,6 +808,31 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(sync_push["result"]["state"], "unconfigured");
     assert_eq!(sync_push["result"]["replica_db"], "missing");
 
+    sandbox.json_success(&["--format", "json", "store", "init"]);
+    let relay_refresh = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--dry-run",
+        "market",
+        "refresh",
+    ]);
+    assert_eq!(relay_refresh["operation_id"], "market.refresh");
+    assert_eq!(relay_refresh["dry_run"], true);
+    assert_eq!(relay_refresh["result"]["state"], "ready");
+    assert_eq!(
+        relay_refresh["result"]["target_relays"][0],
+        "ws://127.0.0.1:9"
+    );
+    assert_eq!(relay_refresh["result"]["fetched_count"], 0);
+    assert_eq!(relay_refresh["result"]["ingested_count"], 0);
+
+    let empty_search =
+        sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
+    assert_eq!(empty_search["operation_id"], "market.product.search");
+    assert_eq!(empty_search["result"]["state"], "empty");
+
     let create_dry_run = sandbox.json_success(&[
         "--format",
         "json",
@@ -1046,6 +1104,11 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(submit["result"]["order_id"], order_id);
     assert_eq!(submit["result"]["buyer_account_id"], account_id);
     assert_eq!(submit["result"]["listing_event_id"], listing_event_id);
+    assert_eq!(submit["result"]["event_id"], Value::Null);
+    assert_eq!(submit["result"]["event_kind"], Value::Null);
+    assert_eq!(submit["result"]["target_relays"], Value::Null);
+    assert_eq!(submit["result"]["acknowledged_relays"], Value::Null);
+    assert_eq!(submit["result"]["failed_relays"], Value::Null);
     assert_eq!(submit["errors"].as_array().expect("errors").len(), 0);
     assert_no_removed_command_reference(&submit, &["order", "submit", "--dry-run"]);
     assert_no_daemon_runtime_reference(&submit, &["order", "submit", "--dry-run"]);
@@ -1172,6 +1235,28 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     assert_eq!(mismatch["errors"][0]["detail"]["class"], "account");
     assert_no_removed_command_reference(&mismatch, &["order", "submit", "--dry-run"]);
     assert_no_daemon_runtime_reference(&mismatch, &["order", "submit", "--dry-run"]);
+
+    let (network_output, network_mismatch) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--account-id",
+        second_account_id,
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--approval-token",
+        "approve",
+        "order",
+        "submit",
+        order_id,
+    ]);
+
+    assert!(!network_output.status.success());
+    assert_eq!(network_output.status.code(), Some(5));
+    assert_eq!(network_mismatch["operation_id"], "order.submit");
+    assert_eq!(network_mismatch["result"], Value::Null);
+    assert_eq!(network_mismatch["errors"][0]["code"], "account_mismatch");
+    assert_eq!(network_mismatch["errors"][0]["detail"]["class"], "account");
+    assert_no_daemon_runtime_reference(&network_mismatch, &["order", "submit"]);
 }
 
 #[test]
