@@ -4,11 +4,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_events::RadrootsNostrEventPtr;
-use radroots_events::kinds::KIND_LISTING;
-use radroots_events::trade::{RadrootsTradeOrderItem, RadrootsTradeOrderRequested};
+use radroots_events::kinds::{KIND_LISTING, KIND_TRADE_ORDER_REQUEST};
+use radroots_events::trade::{
+    RadrootsActiveTradeMessageType, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
+};
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::trade::{
-    RadrootsTradeListingAddress, active_trade_order_request_event_build,
+    RadrootsTradeListingAddress, active_trade_event_context_from_tags,
+    active_trade_order_request_event_build, active_trade_order_request_from_event,
+};
+use radroots_nostr::prelude::{
+    RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
+    radroots_nostr_kind,
 };
 use radroots_replica_db::{ReplicaSql, nostr_event_state, trade_product};
 use radroots_replica_db_schema::nostr_event_state::{
@@ -20,15 +27,16 @@ use radroots_trade::order::canonicalize_active_order_request_for_signer;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
-    OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryView, OrderIssueView,
-    OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView, OrderWatchView,
+    OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView, OrderHistoryView,
+    OrderIssueView, OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView, OrderWatchView,
     RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::direct_relay::{
-    DirectRelayFailure, DirectRelayPublishReceipt, publish_parts_with_identity,
+    DirectRelayFailure, DirectRelayFetchReceipt, DirectRelayPublishReceipt,
+    fetch_events_from_relays, publish_parts_with_identity,
 };
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime_args::{
@@ -38,8 +46,9 @@ use crate::runtime_args::{
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
 const ORDER_SUBMIT_SOURCE: &str = "direct Nostr relay publish · local key";
-const ORDER_EVENT_STATE_UNAVAILABLE_REASON: &str =
-    "relay-backed order event state is not implemented";
+const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
+const ORDER_EVENT_WATCH_UNAVAILABLE_REASON: &str =
+    "relay-backed order event watch is not implemented";
 const ORDERS_DIR: &str = "orders/drafts";
 
 static ORDER_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -568,7 +577,7 @@ pub fn watch(
         order_id: loaded.document.order.order_id.clone(),
         job_id: None,
         interval_ms: args.interval_ms,
-        reason: Some(ORDER_EVENT_STATE_UNAVAILABLE_REASON.to_owned()),
+        reason: Some(ORDER_EVENT_WATCH_UNAVAILABLE_REASON.to_owned()),
         workflow: None,
         frames: Vec::new(),
         actions: vec![format!(
@@ -578,54 +587,34 @@ pub fn watch(
     })
 }
 
-pub fn history(config: &RuntimeConfig) -> Result<OrderHistoryView, RuntimeError> {
-    let dir = drafts_dir(config);
-    if !dir.exists() {
-        return Ok(OrderHistoryView {
-            state: "empty".to_owned(),
-            source: ORDER_SOURCE.to_owned(),
-            count: 0,
-            reason: Some("no relay-backed order events recorded yet".to_owned()),
-            orders: Vec::new(),
-            actions: vec!["radroots order list".to_owned()],
-        });
+pub fn history(
+    config: &RuntimeConfig,
+    order_id: Option<&str>,
+) -> Result<OrderHistoryView, RuntimeError> {
+    if config.relay.urls.is_empty() {
+        return Ok(order_history_unconfigured(
+            None,
+            "order event list requires at least one configured relay".to_owned(),
+            Vec::new(),
+        ));
     }
 
-    let mut invalid_count = 0usize;
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
-            continue;
+    let seller = match accounts::resolve_account(config)? {
+        Some(account) => account,
+        None => {
+            return Ok(order_history_unconfigured(
+                None,
+                "order event list requires a selected seller account".to_owned(),
+                config.relay.urls.clone(),
+            ));
         }
-        if load_draft(path.as_path()).is_err() {
-            invalid_count += 1;
-        }
-    }
-
-    let state = if invalid_count > 0 {
-        "degraded"
-    } else {
-        "empty"
     };
+    let seller_pubkey = seller.record.public_identity.public_key_hex;
+    let filter = order_request_filter(seller_pubkey.as_str())?;
+    let receipt = fetch_events_from_relays(&config.relay.urls, filter)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
 
-    let reason = if invalid_count > 0 {
-        Some(format!(
-            "{invalid_count} invalid order draft file{} skipped while reading local order event state",
-            if invalid_count == 1 { "" } else { "s" }
-        ))
-    } else {
-        Some("no relay-backed order events recorded yet".to_owned())
-    };
-
-    Ok(OrderHistoryView {
-        state: state.to_owned(),
-        source: ORDER_SOURCE.to_owned(),
-        count: 0,
-        reason,
-        orders: Vec::new(),
-        actions: vec!["radroots order list".to_owned()],
-    })
+    Ok(order_history_from_receipt(seller_pubkey, order_id, receipt))
 }
 
 pub fn cancel(
@@ -665,13 +654,159 @@ pub fn cancel(
         source: ORDER_SOURCE.to_owned(),
         lookup: args.key.clone(),
         order_id: Some(loaded.document.order.order_id.clone()),
-        reason: Some(ORDER_EVENT_STATE_UNAVAILABLE_REASON.to_owned()),
+        reason: Some("seller order decisions are not implemented".to_owned()),
         job: None,
         actions: vec![format!(
             "radroots order get {}",
             loaded.document.order.order_id
         )],
     })
+}
+
+fn order_history_unconfigured(
+    seller_pubkey: Option<String>,
+    reason: String,
+    target_relays: Vec<String>,
+) -> OrderHistoryView {
+    OrderHistoryView {
+        state: "unconfigured".to_owned(),
+        source: ORDER_EVENT_LIST_SOURCE.to_owned(),
+        seller_pubkey,
+        target_relays,
+        connected_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: 0,
+        decoded_count: 0,
+        skipped_count: 0,
+        count: 0,
+        reason: Some(reason),
+        orders: Vec::new(),
+        actions: vec!["radroots account create".to_owned()],
+    }
+}
+
+fn order_history_from_receipt(
+    seller_pubkey: String,
+    order_id: Option<&str>,
+    receipt: DirectRelayFetchReceipt,
+) -> OrderHistoryView {
+    let DirectRelayFetchReceipt {
+        target_relays,
+        connected_relays,
+        failed_relays,
+        events,
+    } = receipt;
+    let fetched_count = events.len();
+    let mut skipped_count = 0usize;
+    let mut orders = Vec::new();
+
+    for event in events {
+        match order_history_entry_from_event(&event, seller_pubkey.as_str()) {
+            Ok(entry) if order_id.is_none_or(|order_id| entry.id == order_id) => {
+                orders.push(entry);
+            }
+            Ok(_) | Err(_) => skipped_count += 1,
+        }
+    }
+
+    orders.sort_by(|left, right| {
+        right
+            .updated_at_unix
+            .cmp(&left.updated_at_unix)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let decoded_count = orders.len();
+    let reason = if orders.is_empty() {
+        Some(match order_id {
+            Some(order_id) => {
+                format!("no relay-backed order request events matched `{order_id}`")
+            }
+            None => "no relay-backed order request events matched the selected seller".to_owned(),
+        })
+    } else {
+        None
+    };
+
+    OrderHistoryView {
+        state: if orders.is_empty() { "empty" } else { "ready" }.to_owned(),
+        source: ORDER_EVENT_LIST_SOURCE.to_owned(),
+        seller_pubkey: Some(seller_pubkey),
+        target_relays,
+        connected_relays,
+        failed_relays: relay_failures(failed_relays),
+        fetched_count,
+        decoded_count,
+        skipped_count,
+        count: orders.len(),
+        reason,
+        orders,
+        actions: Vec::new(),
+    }
+}
+
+fn order_history_entry_from_event(
+    event: &RadrootsNostrEvent,
+    seller_pubkey: &str,
+) -> Result<OrderHistoryEntryView, RuntimeError> {
+    let event_kind = event_kind_u32(event);
+    if event_kind != KIND_TRADE_ORDER_REQUEST {
+        return Err(RuntimeError::Config(format!(
+            "order event list received unexpected kind `{event_kind}`"
+        )));
+    }
+
+    let event = radroots_event_from_nostr(event);
+    let envelope = active_trade_order_request_from_event(&event)
+        .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
+    let context = active_trade_event_context_from_tags(
+        RadrootsActiveTradeMessageType::TradeOrderRequested,
+        &event.tags,
+    )
+    .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
+
+    if context.counterparty_pubkey != seller_pubkey
+        || envelope.payload.seller_pubkey != seller_pubkey
+    {
+        return Err(RuntimeError::Config(
+            "order request is not targeted at the selected seller".to_owned(),
+        ));
+    }
+
+    let listing_event_id = context.listing_event.as_ref().map(|event| event.id.clone());
+    let created_at_unix = u64::from(event.created_at);
+
+    Ok(OrderHistoryEntryView {
+        id: envelope.order_id.clone(),
+        state: "requested".to_owned(),
+        event_id: Some(event.id),
+        event_kind: Some(event.kind),
+        listing_lookup: None,
+        listing_addr: Some(envelope.listing_addr),
+        listing_event_id,
+        buyer_account_id: None,
+        buyer_pubkey: Some(envelope.payload.buyer_pubkey),
+        seller_pubkey: Some(envelope.payload.seller_pubkey),
+        item_count: Some(envelope.payload.items.len()),
+        created_at_unix: Some(created_at_unix),
+        submitted_at_unix: Some(created_at_unix),
+        updated_at_unix: created_at_unix,
+        job: None,
+        workflow: None,
+        issues: Vec::new(),
+    })
+}
+
+fn order_request_filter(seller_pubkey: &str) -> Result<RadrootsNostrFilter, RuntimeError> {
+    let filter = RadrootsNostrFilter::new()
+        .kind(radroots_nostr_kind(KIND_TRADE_ORDER_REQUEST as u16))
+        .limit(1_000);
+    radroots_nostr_filter_tag(filter, "p", vec![seller_pubkey.to_owned()])
+        .map_err(|error| RuntimeError::Config(format!("build order event filter: {error}")))
+}
+
+fn event_kind_u32(event: &RadrootsNostrEvent) -> u32 {
+    u32::from(event.kind.as_u16())
 }
 
 fn validate_scaffold_args(args: &OrderDraftCreateArgs) -> Result<(), RuntimeError> {
@@ -1436,9 +1571,15 @@ impl From<OrderGetView> for OrderNewView {
 
 #[cfg(test)]
 mod tests {
+    use radroots_events::RadrootsNostrEventPtr;
+    use radroots_events::trade::{RadrootsTradeOrderItem, RadrootsTradeOrderRequested};
+    use radroots_events_codec::trade::active_trade_order_request_event_build;
+    use radroots_identity::RadrootsIdentity;
+    use radroots_nostr::prelude::radroots_nostr_build_event;
+
     use super::{
         ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, collect_issues,
-        inspect_document, next_order_id,
+        inspect_document, next_order_id, order_history_entry_from_event,
     };
 
     #[test]
@@ -1502,5 +1643,52 @@ mod tests {
                 .iter()
                 .any(|issue| issue.field == "order.listing_event_id")
         );
+    }
+
+    #[test]
+    fn order_request_event_decodes_to_history_entry() {
+        let buyer = RadrootsIdentity::generate();
+        let seller = RadrootsIdentity::generate();
+        let buyer_pubkey = buyer.public_key_hex();
+        let seller_pubkey = seller.public_key_hex();
+        let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
+        let listing_event_id = "1".repeat(64);
+        let payload = RadrootsTradeOrderRequested {
+            order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+            listing_addr: listing_addr.clone(),
+            buyer_pubkey: buyer_pubkey.clone(),
+            seller_pubkey: seller_pubkey.clone(),
+            items: vec![RadrootsTradeOrderItem {
+                bin_id: "bin-1".to_owned(),
+                bin_count: 2,
+            }],
+        };
+        let parts = active_trade_order_request_event_build(
+            &RadrootsNostrEventPtr {
+                id: listing_event_id.clone(),
+                relays: None,
+            },
+            &payload,
+        )
+        .expect("order request parts");
+        let event = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+            .expect("nostr event builder")
+            .sign_with_keys(buyer.keys())
+            .expect("signed order request");
+
+        let entry =
+            order_history_entry_from_event(&event, seller_pubkey.as_str()).expect("history entry");
+
+        assert_eq!(entry.id, "ord_AAAAAAAAAAAAAAAAAAAAAg");
+        assert_eq!(entry.state, "requested");
+        assert_eq!(entry.event_kind, Some(3422));
+        assert_eq!(entry.listing_addr.as_deref(), Some(listing_addr.as_str()));
+        assert_eq!(
+            entry.listing_event_id.as_deref(),
+            Some(listing_event_id.as_str())
+        );
+        assert_eq!(entry.buyer_pubkey.as_deref(), Some(buyer_pubkey.as_str()));
+        assert_eq!(entry.seller_pubkey.as_deref(), Some(seller_pubkey.as_str()));
+        assert_eq!(entry.item_count, Some(1));
     }
 }

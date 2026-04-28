@@ -379,6 +379,7 @@ fn external_network_operation(operation_id: &str) -> bool {
             | "listing.publish"
             | "listing.archive"
             | "order.submit"
+            | "order.event.list"
             | "order.event.watch"
     )
 }

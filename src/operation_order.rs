@@ -91,10 +91,14 @@ impl OperationService<OrderEventListRequest> for OrderOperationService<'_> {
 
     fn execute(
         &self,
-        _request: OperationRequest<OrderEventListRequest>,
+        request: OperationRequest<OrderEventListRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = map_runtime(crate::runtime::order::history(self.config))?;
-        serialized_target_result::<OrderEventListResult, _>(&view)
+        let order_id = string_input(&request, "order_id");
+        let view =
+            crate::runtime::order::history(self.config, order_id.as_deref()).map_err(|error| {
+                OperationAdapterError::runtime_failure(request.operation_id(), error)
+            })?;
+        history_result::<OrderEventListResult>(request.operation_id(), &view)
     }
 }
 
@@ -138,6 +142,25 @@ where
             view.reason
                 .clone()
                 .unwrap_or_else(|| format!("order submit finished with state `{}`", view.state)),
+        )),
+    }
+}
+
+fn history_result<R>(
+    operation_id: &str,
+    view: &crate::domain::runtime::OrderHistoryView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_target_result::<R, _>(view),
+        disposition => Err(OperationAdapterError::from_command_disposition(
+            operation_id,
+            disposition,
+            view.reason.clone().unwrap_or_else(|| {
+                format!("order event list finished with state `{}`", view.state)
+            }),
         )),
     }
 }
@@ -290,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn order_event_list_wraps_history_without_legacy_action() {
+    fn order_event_list_requires_relay_configuration() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(OrderOperationService::new(&config));
@@ -301,13 +324,12 @@ mod tests {
         .expect("order event list request");
         let envelope = service
             .execute(request)
-            .expect("order event list result")
-            .to_envelope(OperationContext::default().envelope_context("req_order_events"))
-            .expect("order event list envelope");
+            .expect_err("order event list unconfigured")
+            .to_output_error();
 
-        assert_eq!(envelope.operation_id, "order.event.list");
-        assert_eq!(envelope.result["state"], "empty");
-        assert_eq!(envelope.result["actions"][0], "radroots order list");
+        assert_eq!(envelope.code, "operation_unavailable");
+        assert_eq!(envelope.exit_code, 3);
+        assert!(envelope.message.contains("configured relay"));
     }
 
     #[test]

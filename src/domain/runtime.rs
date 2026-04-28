@@ -1281,6 +1281,20 @@ pub struct OrderWorkflowView {
 pub struct OrderHistoryView {
     pub state: String,
     pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connected_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_relays: Vec<RelayFailureView>,
+    #[serde(default)]
+    pub fetched_count: usize,
+    #[serde(default)]
+    pub decoded_count: usize,
+    #[serde(default)]
+    pub skipped_count: usize,
     pub count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -1293,6 +1307,8 @@ pub struct OrderHistoryView {
 impl OrderHistoryView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
             "error" => CommandDisposition::InternalError,
             _ => CommandDisposition::Success,
         }
@@ -1304,11 +1320,25 @@ pub struct OrderHistoryEntryView {
     pub id: String,
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_kind: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_lookup: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submitted_at_unix: Option<u64>,
     pub updated_at_unix: u64,
