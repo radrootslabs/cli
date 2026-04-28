@@ -614,7 +614,7 @@ pub fn history(
         }
     };
     let seller_pubkey = seller.record.public_identity.public_key_hex;
-    let filter = order_request_filter(seller_pubkey.as_str())?;
+    let filter = order_request_filter(seller_pubkey.as_str(), order_id)?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
 
@@ -702,14 +702,18 @@ fn order_history_from_receipt(
     } = receipt;
     let fetched_count = events.len();
     let mut skipped_count = 0usize;
+    let mut decoded_count = 0usize;
     let mut orders = Vec::new();
 
     for event in events {
         match order_history_entry_from_event(&event, seller_pubkey.as_str()) {
-            Ok(entry) if order_id.is_none_or(|order_id| entry.id == order_id) => {
-                orders.push(entry);
+            Ok(entry) => {
+                decoded_count += 1;
+                if order_id.is_none_or(|order_id| entry.id == order_id) {
+                    orders.push(entry);
+                }
             }
-            Ok(_) | Err(_) => skipped_count += 1,
+            Err(_) => skipped_count += 1,
         }
     }
 
@@ -720,7 +724,6 @@ fn order_history_from_receipt(
             .then_with(|| left.id.cmp(&right.id))
     });
 
-    let decoded_count = orders.len();
     let reason = if orders.is_empty() {
         Some(match order_id {
             Some(order_id) => {
@@ -801,12 +804,20 @@ fn order_history_entry_from_event(
     })
 }
 
-fn order_request_filter(seller_pubkey: &str) -> Result<RadrootsNostrFilter, RuntimeError> {
+fn order_request_filter(
+    seller_pubkey: &str,
+    order_id: Option<&str>,
+) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
         .kind(radroots_nostr_kind(KIND_TRADE_ORDER_REQUEST as u16))
         .limit(1_000);
-    radroots_nostr_filter_tag(filter, "p", vec![seller_pubkey.to_owned()])
-        .map_err(|error| RuntimeError::Config(format!("build order event filter: {error}")))
+    let filter = radroots_nostr_filter_tag(filter, "p", vec![seller_pubkey.to_owned()])
+        .map_err(|error| RuntimeError::Config(format!("build order event filter: {error}")))?;
+    if let Some(order_id) = order_id {
+        return radroots_nostr_filter_tag(filter, "d", vec![order_id.to_owned()])
+            .map_err(|error| RuntimeError::Config(format!("build order event filter: {error}")));
+    }
+    Ok(filter)
 }
 
 fn event_kind_u32(event: &RadrootsNostrEvent) -> u32 {
@@ -1687,7 +1698,9 @@ mod tests {
     use super::{
         ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, collect_issues,
         inspect_document, next_order_id, order_history_entry_from_event,
+        order_history_from_receipt, order_request_filter,
     };
+    use crate::runtime::direct_relay::DirectRelayFetchReceipt;
 
     #[test]
     fn generated_order_id_uses_stable_prefix() {
@@ -1797,5 +1810,103 @@ mod tests {
         assert_eq!(entry.buyer_pubkey.as_deref(), Some(buyer_pubkey.as_str()));
         assert_eq!(entry.seller_pubkey.as_deref(), Some(seller_pubkey.as_str()));
         assert_eq!(entry.item_count, Some(1));
+    }
+
+    #[test]
+    fn order_request_filter_includes_order_id_d_tag_when_provided() {
+        let filter = order_request_filter("a", Some("ord_AAAAAAAAAAAAAAAAAAAAAg"))
+            .expect("order request filter");
+        let value = serde_json::to_value(filter).expect("filter json");
+
+        assert_eq!(value["kinds"][0], 3422);
+        assert_eq!(value["#p"][0], "a");
+        assert_eq!(value["#d"][0], "ord_AAAAAAAAAAAAAAAAAAAAAg");
+    }
+
+    #[test]
+    fn order_history_counts_decoded_before_order_id_narrowing() {
+        let seller = RadrootsIdentity::generate();
+        let other_seller = RadrootsIdentity::generate();
+        let buyer = RadrootsIdentity::generate();
+        let seller_pubkey = seller.public_key_hex();
+        let other_seller_pubkey = other_seller.public_key_hex();
+        let buyer_pubkey = buyer.public_key_hex();
+        let first_order_id = "ord_AAAAAAAAAAAAAAAAAAAAAg";
+        let second_order_id = "ord_AAAAAAAAAAAAAAAAAAAAAw";
+        let first_listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
+        let second_listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAw");
+        let other_listing_addr = format!("30402:{other_seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
+        let listing_event_id = "1".repeat(64);
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![
+                signed_order_request_event(
+                    &buyer,
+                    first_order_id,
+                    first_listing_addr.as_str(),
+                    buyer_pubkey.as_str(),
+                    seller_pubkey.as_str(),
+                    listing_event_id.as_str(),
+                ),
+                signed_order_request_event(
+                    &buyer,
+                    second_order_id,
+                    second_listing_addr.as_str(),
+                    buyer_pubkey.as_str(),
+                    seller_pubkey.as_str(),
+                    listing_event_id.as_str(),
+                ),
+                signed_order_request_event(
+                    &buyer,
+                    "ord_AAAAAAAAAAAAAAAAAAAABA",
+                    other_listing_addr.as_str(),
+                    buyer_pubkey.as_str(),
+                    other_seller_pubkey.as_str(),
+                    listing_event_id.as_str(),
+                ),
+            ],
+        };
+
+        let history = order_history_from_receipt(seller_pubkey, Some(first_order_id), receipt);
+
+        assert_eq!(history.fetched_count, 3);
+        assert_eq!(history.decoded_count, 2);
+        assert_eq!(history.skipped_count, 1);
+        assert_eq!(history.count, 1);
+        assert_eq!(history.orders[0].id, first_order_id);
+    }
+
+    fn signed_order_request_event(
+        buyer: &RadrootsIdentity,
+        order_id: &str,
+        listing_addr: &str,
+        buyer_pubkey: &str,
+        seller_pubkey: &str,
+        listing_event_id: &str,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
+        let payload = RadrootsTradeOrderRequested {
+            order_id: order_id.to_owned(),
+            listing_addr: listing_addr.to_owned(),
+            buyer_pubkey: buyer_pubkey.to_owned(),
+            seller_pubkey: seller_pubkey.to_owned(),
+            items: vec![RadrootsTradeOrderItem {
+                bin_id: "bin-1".to_owned(),
+                bin_count: 2,
+            }],
+        };
+        let parts = active_trade_order_request_event_build(
+            &RadrootsNostrEventPtr {
+                id: listing_event_id.to_owned(),
+                relays: None,
+            },
+            &payload,
+        )
+        .expect("order request parts");
+        radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+            .expect("nostr event builder")
+            .sign_with_keys(buyer.keys())
+            .expect("signed order request")
     }
 }
