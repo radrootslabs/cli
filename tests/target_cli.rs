@@ -499,6 +499,53 @@ fn offline_allows_supported_external_dry_run() {
 }
 
 #[test]
+fn offline_rejects_order_decision_dry_run() {
+    for (operation_id, args) in [
+        (
+            "order.accept",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "--dry-run",
+                "order",
+                "accept",
+                "ord_offline_decision",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.decline",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "--dry-run",
+                "order",
+                "decline",
+                "ord_offline_decision",
+                "--reason",
+                "unavailable",
+            ]
+            .as_slice(),
+        ),
+    ] {
+        let output = radroots()
+            .args(args)
+            .output()
+            .expect("run offline order decision dry-run");
+        let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
+
+        assert_eq!(output.status.code(), Some(8));
+        assert_eq!(value["operation_id"], operation_id);
+        assert_eq!(value["dry_run"], true);
+        assert_eq!(value["result"], Value::Null);
+        assert_eq!(value["errors"][0]["code"], "offline_forbidden");
+        assert_eq!(value["errors"][0]["exit_code"], 8);
+    }
+}
+
+#[test]
 fn listing_publish_dry_run_validates_missing_file() {
     let sandbox = RadrootsCliSandbox::new();
     let missing = sandbox.root().join("missing-listing.toml");

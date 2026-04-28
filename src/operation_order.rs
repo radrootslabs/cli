@@ -474,11 +474,12 @@ mod tests {
     use serde_json::{Map, Value};
     use tempfile::tempdir;
 
-    use super::OrderOperationService;
+    use super::{OrderOperationService, decision_result};
+    use crate::domain::runtime::OrderDecisionView;
     use crate::operation_adapter::{
         OperationAdapter, OperationContext, OperationData, OperationRequest, OrderAcceptRequest,
-        OrderDeclineRequest, OrderEventListRequest, OrderEventWatchRequest, OrderGetRequest,
-        OrderListRequest, OrderStatusGetRequest, OrderSubmitRequest,
+        OrderAcceptResult, OrderDeclineRequest, OrderEventListRequest, OrderEventWatchRequest,
+        OrderGetRequest, OrderListRequest, OrderStatusGetRequest, OrderSubmitRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -570,6 +571,25 @@ mod tests {
         let error = service.execute(accept).expect_err("approval required");
 
         assert_eq!(error.to_output_error().code, "approval_required");
+    }
+
+    #[test]
+    fn order_decision_already_decided_maps_to_validation_failure() {
+        let view = already_decided_view();
+        let error = match decision_result::<OrderAcceptResult>("order.accept", &view) {
+            Ok(_) => panic!("already decided view should fail validation"),
+            Err(error) => error,
+        };
+        let output_error = error.to_output_error();
+
+        assert_eq!(output_error.code, "validation_failed");
+        assert_eq!(output_error.exit_code, 10);
+        let detail = output_error.detail.expect("validation detail");
+        assert_eq!(detail["state"], "already_decided");
+        assert_eq!(detail["operation_id"], "order.accept");
+        assert_eq!(detail["event_id"], "d".repeat(64));
+        assert_eq!(detail["event_kind"], 3423);
+        assert_eq!(detail["actions"][0], "radroots order status get ord_test");
     }
 
     #[test]
@@ -762,5 +782,39 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), Value::String((*value).to_owned())))
             .collect::<Map<String, Value>>()
+    }
+
+    fn already_decided_view() -> OrderDecisionView {
+        OrderDecisionView {
+            state: "already_decided".to_owned(),
+            source: "test".to_owned(),
+            order_id: "ord_test".to_owned(),
+            listing_addr: Some("30402:seller:listing".to_owned()),
+            buyer_pubkey: Some("b".repeat(64)),
+            seller_pubkey: Some("s".repeat(64)),
+            decision: "accepted".to_owned(),
+            request_event_id: Some("r".repeat(64)),
+            listing_event_id: Some("l".repeat(64)),
+            root_event_id: Some("r".repeat(64)),
+            prev_event_id: Some("r".repeat(64)),
+            event_id: Some("d".repeat(64)),
+            event_kind: Some(3423),
+            dry_run: false,
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            acknowledged_relays: Vec::new(),
+            failed_relays: Vec::new(),
+            fetched_count: 2,
+            decoded_count: 2,
+            skipped_count: 0,
+            idempotency_key: None,
+            signer_mode: Some("local".to_owned()),
+            reason: Some(
+                "order accept refused because order `ord_test` already has a visible `accepted` seller decision"
+                    .to_owned(),
+            ),
+            issues: Vec::new(),
+            actions: vec!["radroots order status get ord_test".to_owned()],
+        }
     }
 }

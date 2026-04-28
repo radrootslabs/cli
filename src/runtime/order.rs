@@ -2524,6 +2524,8 @@ impl From<OrderGetView> for OrderNewView {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use radroots_events::RadrootsNostrEventPtr;
     use radroots_events::kinds::KIND_TRADE_ORDER_DECISION;
     use radroots_events::trade::{
@@ -2537,16 +2539,27 @@ mod tests {
     };
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{radroots_event_from_nostr, radroots_nostr_build_event};
+    use radroots_runtime_paths::RadrootsMigrationReport;
+    use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_trade::order::canonicalize_active_order_decision_for_signer;
+    use tempfile::tempdir;
 
     use super::{
         ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem,
-        accepted_order_decision_payload_from_request, collect_issues,
+        SellerOrderRequestResolution, accepted_order_decision_payload_from_request, collect_issues,
         declined_order_decision_payload_from_request, inspect_document, next_order_id,
+        order_decision_dry_run_view, order_decision_preflight_view_from_status,
         order_history_entry_from_event, order_history_from_receipt, order_request_filter,
         order_status_from_receipt, seller_order_request_resolution_from_receipt,
     };
+    use crate::runtime::config::{
+        AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
+        LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
+        PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
+        SignerBackend, SignerConfig, Verbosity,
+    };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
+    use crate::runtime_args::{OrderDecisionArg, OrderDecisionArgs};
 
     #[test]
     fn generated_order_id_uses_stable_prefix() {
@@ -3057,6 +3070,67 @@ mod tests {
     }
 
     #[test]
+    fn order_decision_dry_run_view_preserves_ready_preflight_without_publish_fields() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let resolution = request_resolution_for_fixture(&fixture);
+        let request = resolution.requests[0].clone();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone()],
+            },
+        );
+        let args = OrderDecisionArgs {
+            key: fixture.order_id.clone(),
+            decision: OrderDecisionArg::Accept,
+            reason: None,
+            idempotency_key: Some("idem_dry_run".to_owned()),
+        };
+
+        let view = order_decision_dry_run_view(&config, &args, &request, &status_view);
+
+        assert_eq!(view.state, "dry_run");
+        assert_eq!(view.dry_run, true);
+        assert_eq!(view.order_id, fixture.order_id);
+        assert_eq!(
+            view.request_event_id.as_deref(),
+            Some(request.request_event_id.as_str())
+        );
+        assert_eq!(
+            view.root_event_id.as_deref(),
+            Some(request.request_event_id.as_str())
+        );
+        assert_eq!(
+            view.prev_event_id.as_deref(),
+            Some(request.request_event_id.as_str())
+        );
+        assert_eq!(
+            view.listing_addr.as_deref(),
+            Some(fixture.listing_addr.as_str())
+        );
+        assert_eq!(view.event_id, None);
+        assert_eq!(view.event_kind, None);
+        assert!(view.acknowledged_relays.is_empty());
+        assert_eq!(view.target_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.connected_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.fetched_count, 1);
+        assert_eq!(view.decoded_count, 1);
+        assert_eq!(view.skipped_count, 0);
+        assert_eq!(view.idempotency_key.as_deref(), Some("idem_dry_run"));
+        assert_eq!(
+            view.actions,
+            vec![format!("radroots order status get {}", fixture.order_id)]
+        );
+    }
+
+    #[test]
     fn order_status_from_receipt_reports_accepted() {
         let fixture = order_status_fixture();
         let decision_event = signed_order_decision_event(
@@ -3094,6 +3168,73 @@ mod tests {
         );
         assert!(view.reducer_issues.is_empty());
         assert_eq!(view.decoded_count, 2);
+    }
+
+    #[test]
+    fn order_decision_preflight_rejects_existing_decision() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let resolution = request_resolution_for_fixture(&fixture);
+        let request = resolution.requests[0].clone();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let decision_event_id = decision_event.id.to_string();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event],
+            },
+        );
+        let args = OrderDecisionArgs {
+            key: fixture.order_id.clone(),
+            decision: OrderDecisionArg::Decline,
+            reason: Some("out of stock".to_owned()),
+            idempotency_key: None,
+        };
+
+        let view = order_decision_preflight_view_from_status(
+            &config,
+            &args,
+            &request,
+            &resolution,
+            &status_view,
+        )
+        .expect("existing decision preflight view");
+
+        assert_eq!(view.state, "already_decided");
+        assert_eq!(view.event_id.as_deref(), Some(decision_event_id.as_str()));
+        assert_eq!(view.event_kind, Some(KIND_TRADE_ORDER_DECISION));
+        assert_eq!(
+            view.request_event_id.as_deref(),
+            Some(request.request_event_id.as_str())
+        );
+        assert_eq!(view.target_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.connected_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.fetched_count, 2);
+        assert_eq!(view.decoded_count, 2);
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("already has a visible `accepted` seller decision")
+        );
     }
 
     #[test]
@@ -3284,6 +3425,115 @@ mod tests {
             buyer_pubkey,
             seller_pubkey,
             request_event,
+        }
+    }
+
+    fn request_resolution_for_fixture(
+        fixture: &OrderStatusFixture,
+    ) -> SellerOrderRequestResolution {
+        seller_order_request_resolution_from_receipt(
+            fixture.seller_pubkey.as_str(),
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone()],
+            },
+        )
+        .expect("seller order request resolution")
+    }
+
+    fn sample_config(root: &Path) -> RuntimeConfig {
+        let data = root.join("data");
+        let logs = root.join("logs");
+        let secrets = root.join("secrets");
+        RuntimeConfig {
+            output: OutputConfig {
+                format: OutputFormat::Human,
+                verbosity: Verbosity::Normal,
+                color: true,
+                dry_run: false,
+            },
+            interaction: InteractionConfig {
+                input_enabled: true,
+                assume_yes: false,
+                stdin_tty: false,
+                stdout_tty: false,
+                prompts_allowed: false,
+                confirmations_allowed: false,
+            },
+            paths: PathsConfig {
+                profile: "interactive_user".into(),
+                profile_source: "test".into(),
+                allowed_profiles: vec!["interactive_user".into(), "repo_local".into()],
+                root_source: "test".into(),
+                repo_local_root: None,
+                repo_local_root_source: None,
+                subordinate_path_override_source: "runtime_config".into(),
+                app_namespace: "apps/cli".into(),
+                shared_accounts_namespace: "shared/accounts".into(),
+                shared_identities_namespace: "shared/identities".into(),
+                app_config_path: root.join("config/apps/cli/config.toml"),
+                workspace_config_path: None,
+                app_data_root: data.join("apps/cli"),
+                app_logs_root: logs.join("apps/cli"),
+                shared_accounts_data_root: data.join("shared/accounts"),
+                shared_accounts_secrets_root: secrets.join("shared/accounts"),
+                default_identity_path: secrets.join("shared/identities/default.json"),
+            },
+            migration: MigrationConfig {
+                report: RadrootsMigrationReport::empty(),
+            },
+            logging: LoggingConfig {
+                filter: "info".into(),
+                directory: None,
+                stdout: false,
+            },
+            account: AccountConfig {
+                selector: None,
+                store_path: data.join("shared/accounts/store.json"),
+                secrets_dir: secrets.join("shared/accounts"),
+                secret_backend: RadrootsSecretBackend::EncryptedFile,
+                secret_fallback: None,
+            },
+            account_secret_contract: AccountSecretContractConfig {
+                default_backend: "host_vault".into(),
+                default_fallback: Some("encrypted_file".into()),
+                allowed_backends: vec!["host_vault".into(), "encrypted_file".into()],
+                host_vault_policy: Some("desktop".into()),
+                uses_protected_store: true,
+            },
+            identity: IdentityConfig {
+                path: secrets.join("shared/identities/default.json"),
+            },
+            signer: SignerConfig {
+                backend: SignerBackend::Local,
+            },
+            relay: RelayConfig {
+                urls: Vec::new(),
+                publish_policy: RelayPublishPolicy::Any,
+                source: RelayConfigSource::Defaults,
+            },
+            local: LocalConfig {
+                root: data.join("apps/cli/replica"),
+                replica_db_path: data.join("apps/cli/replica/replica.sqlite"),
+                backups_dir: data.join("apps/cli/replica/backups"),
+                exports_dir: data.join("apps/cli/replica/exports"),
+            },
+            myc: MycConfig {
+                executable: PathBuf::from("myc"),
+                status_timeout_ms: 2_000,
+            },
+            hyf: HyfConfig {
+                enabled: false,
+                executable: PathBuf::from("hyfd"),
+            },
+            rpc: RpcConfig {
+                url: "http://127.0.0.1:7070".into(),
+                bridge_bearer_token: None,
+            },
+            capability_bindings: Vec::new(),
         }
     }
 
