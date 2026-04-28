@@ -381,6 +381,15 @@ pub enum OperationAdapterError {
         operation_id: String,
         message: String,
     },
+    #[error("operation `{operation_id}` failed: {message}")]
+    DetailedFailure {
+        operation_id: String,
+        code: String,
+        class: String,
+        message: String,
+        exit_code: CliExitCode,
+        detail_json: String,
+    },
     #[error("operation runtime error: {0}")]
     Runtime(String),
 }
@@ -420,6 +429,21 @@ impl OperationAdapterError {
             message,
             RuntimeFailureAvailability::Unconfigured,
         )
+    }
+
+    pub fn operation_unavailable_with_detail(
+        operation_id: &str,
+        message: String,
+        detail: Value,
+    ) -> Self {
+        Self::DetailedFailure {
+            operation_id: operation_id.to_owned(),
+            code: "operation_unavailable".to_owned(),
+            class: "operation".to_owned(),
+            message,
+            exit_code: CliExitCode::RuntimeUnavailable,
+            detail_json: detail.to_string(),
+        }
     }
 
     pub fn unavailable(operation_id: &str, message: String) -> Self {
@@ -620,6 +644,21 @@ impl OperationAdapterError {
                 message,
                 CliExitCode::RuntimeUnavailable,
             ),
+            Self::DetailedFailure {
+                operation_id,
+                code,
+                class,
+                message,
+                exit_code,
+                detail_json,
+            } => runtime_output_error_with_detail(
+                code.as_str(),
+                operation_id,
+                class,
+                message,
+                *exit_code,
+                detail_json,
+            ),
             Self::UnknownOperation(operation_id) => OutputError::new(
                 "unknown_operation",
                 format!("unknown operation `{operation_id}`"),
@@ -786,6 +825,25 @@ fn runtime_output_error(
         "operation_id": operation_id,
         "class": class,
     }));
+    error
+}
+
+fn runtime_output_error_with_detail(
+    code: &str,
+    operation_id: &str,
+    class: &str,
+    message: &str,
+    exit_code: CliExitCode,
+    detail_json: &str,
+) -> OutputError {
+    let mut error = OutputError::new(code, message.to_owned(), exit_code);
+    let mut detail = serde_json::from_str::<Map<String, Value>>(detail_json).unwrap_or_default();
+    detail.insert(
+        "operation_id".to_owned(),
+        Value::from(operation_id.to_owned()),
+    );
+    detail.insert("class".to_owned(), Value::from(class.to_owned()));
+    error.detail = Some(Value::Object(detail));
     error
 }
 

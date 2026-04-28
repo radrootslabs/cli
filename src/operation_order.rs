@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::domain::runtime::{CommandDisposition, OrderSubmitView};
 use crate::operation_adapter::{
@@ -136,13 +136,33 @@ where
 {
     match view.disposition() {
         CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        disposition => Err(OperationAdapterError::from_command_disposition(
-            operation_id,
-            disposition,
-            view.reason
+        disposition => {
+            let message = view
+                .reason
                 .clone()
-                .unwrap_or_else(|| format!("order submit finished with state `{}`", view.state)),
-        )),
+                .unwrap_or_else(|| format!("order submit finished with state `{}`", view.state));
+            if disposition == CommandDisposition::Unconfigured && !view.issues.is_empty() {
+                Err(OperationAdapterError::operation_unavailable_with_detail(
+                    operation_id,
+                    message,
+                    json!({
+                        "state": &view.state,
+                        "order_id": &view.order_id,
+                        "file": &view.file,
+                        "listing_addr": &view.listing_addr,
+                        "listing_event_id": &view.listing_event_id,
+                        "issues": &view.issues,
+                        "actions": &view.actions,
+                    }),
+                ))
+            } else {
+                Err(OperationAdapterError::from_command_disposition(
+                    operation_id,
+                    disposition,
+                    message,
+                ))
+            }
+        }
     }
 }
 

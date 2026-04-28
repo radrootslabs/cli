@@ -11,7 +11,7 @@ use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
 use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
-use radroots_sql_core::SqliteExecutor;
+use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -103,6 +103,12 @@ impl RadrootsCliSandbox {
         fs::create_dir_all(path.parent().expect("app config parent")).expect("app config dir");
         fs::write(&path, raw).expect("write app config");
         path
+    }
+
+    pub fn replica_db_path(&self) -> PathBuf {
+        self.root
+            .path()
+            .join("data/apps/cli/replica/replica.sqlite")
     }
 
     #[cfg(unix)]
@@ -268,6 +274,37 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
         RadrootsReplicaIngestOutcome::Applied
     );
     event_id
+}
+
+pub fn remove_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) {
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica db");
+    let params = serde_json::to_string(&vec![listing_addr]).expect("delete listing params");
+    executor
+        .exec(
+            "DELETE FROM trade_product WHERE listing_addr = ?;",
+            params.as_str(),
+        )
+        .expect("delete listing row");
+}
+
+pub fn replace_latest_listing_event_id(
+    sandbox: &RadrootsCliSandbox,
+    listing_addr: &str,
+    event_id: &str,
+) {
+    let parsed = RadrootsTradeListingAddress::parse(listing_addr).expect("listing addr");
+    let key = format!(
+        "{}:{}:{}",
+        KIND_LISTING, parsed.seller_pubkey, parsed.listing_id
+    );
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica db");
+    let params = serde_json::to_string(&vec![event_id, key.as_str()]).expect("update params");
+    executor
+        .exec(
+            "UPDATE nostr_event_state SET last_event_id = ? WHERE key = ?;",
+            params.as_str(),
+        )
+        .expect("update latest listing event id");
 }
 
 pub fn create_listing_draft(sandbox: &RadrootsCliSandbox, key: &str) -> PathBuf {

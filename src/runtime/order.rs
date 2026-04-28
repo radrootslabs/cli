@@ -509,6 +509,10 @@ pub fn submit(
         });
     }
 
+    if let Some(view) = order_submit_listing_freshness_view(config, &loaded, args)? {
+        return Ok(view);
+    }
+
     if config.relay.urls.is_empty() {
         return Err(RuntimeError::Network(
             "order submit requires at least one configured relay before signing".to_owned(),
@@ -1222,6 +1226,109 @@ fn actions_for_document(
         actions.push(format!("radroots order get {}", document.order.order_id));
     }
     actions
+}
+
+fn order_submit_listing_freshness_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+) -> Result<Option<OrderSubmitView>, RuntimeError> {
+    if !config.local.replica_db_path.exists() {
+        return Ok(Some(order_submit_unconfigured_view(
+            config,
+            loaded,
+            args,
+            "order submit requires local market data to confirm the listing is still active; run `radroots store init` and `radroots market refresh` before submitting",
+            vec![issue(
+                "order.listing_addr",
+                "local replica database is missing; run `radroots store init` and `radroots market refresh` before submitting",
+            )],
+            vec![
+                "radroots store init".to_owned(),
+                "radroots market refresh".to_owned(),
+            ],
+        )));
+    }
+
+    let listing_addr = loaded.document.order.listing_addr.as_str();
+    let parsed = parse_listing_addr(listing_addr)
+        .map_err(|error| RuntimeError::Config(format!("order listing_addr is invalid: {error}")))?;
+    let active_event_id = match resolve_active_listing_event_id(config, listing_addr, &parsed)? {
+        Some(event_id) => event_id,
+        None => {
+            return Ok(Some(order_submit_unconfigured_view(
+                config,
+                loaded,
+                args,
+                "order listing is not active in the local replica; run `radroots market refresh` and create a new order from current market data",
+                vec![issue(
+                    "order.listing_addr",
+                    "listing is missing, archived, or superseded in the local replica",
+                )],
+                vec!["radroots market refresh".to_owned()],
+            )));
+        }
+    };
+
+    if !active_event_id.eq_ignore_ascii_case(loaded.document.order.listing_event_id.as_str()) {
+        return Ok(Some(order_submit_unconfigured_view(
+            config,
+            loaded,
+            args,
+            "order listing event is no longer current in the local replica; run `radroots market refresh` and create a new order from current market data",
+            vec![issue(
+                "order.listing_event_id",
+                format!(
+                    "draft listing_event_id does not match latest local listing event `{active_event_id}`"
+                ),
+            )],
+            vec!["radroots market refresh".to_owned()],
+        )));
+    }
+
+    Ok(None)
+}
+
+fn order_submit_unconfigured_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    reason: impl Into<String>,
+    issues: Vec<OrderIssueView>,
+    mut actions: Vec<String>,
+) -> OrderSubmitView {
+    actions.push(format!(
+        "radroots order get {}",
+        loaded.document.order.order_id
+    ));
+
+    OrderSubmitView {
+        state: "unconfigured".to_owned(),
+        source: ORDER_SOURCE.to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        file: loaded.file.display().to_string(),
+        listing_lookup: loaded.document.listing_lookup.clone(),
+        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        event_id: None,
+        event_kind: None,
+        dry_run: config.output.dry_run,
+        deduplicated: false,
+        target_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: None,
+        signer_session_id: None,
+        requested_signer_session_id: None,
+        reason: Some(reason.into()),
+        job: None,
+        issues,
+        actions,
+    }
 }
 
 fn publish_order_request(

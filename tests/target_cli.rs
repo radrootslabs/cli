@@ -8,7 +8,8 @@ use serde_json::Value;
 use support::{
     RadrootsCliSandbox, assert_no_daemon_runtime_reference, assert_no_removed_command_reference,
     create_listing_draft, identity_public, make_listing_publishable, ndjson_from_stdout, radroots,
-    seed_orderable_listing, write_public_identity_profile,
+    remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing,
+    write_public_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -1037,6 +1038,31 @@ fn order_submit_missing_order_returns_not_found_while_read_view_stays_successful
     assert_no_daemon_runtime_reference(&submit, &["order", "submit"]);
 }
 
+fn create_ready_order(sandbox: &RadrootsCliSandbox, basket_id: &str) -> String {
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    seed_orderable_listing(sandbox, LISTING_ADDR);
+    sandbox.json_success(&["--format", "json", "basket", "create", basket_id]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        basket_id,
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    let quote = sandbox.json_success(&["--format", "json", "basket", "quote", "create", basket_id]);
+    quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id")
+        .to_owned()
+}
+
 #[test]
 fn buyer_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
@@ -1186,6 +1212,110 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(watch["result"]["job_id"], Value::Null);
     assert_eq!(watch["result"]["workflow"], Value::Null);
     assert_no_daemon_runtime_reference(&watch, &["order", "event", "watch"]);
+}
+
+#[test]
+fn order_submit_requires_local_replica_freshness_before_signing() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "freshness_missing_db");
+    fs::remove_file(sandbox.replica_db_path()).expect("remove replica db");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--approval-token",
+        "approve",
+        "order",
+        "submit",
+        order_id.as_str(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["state"], "unconfigured");
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["field"],
+        "order.listing_addr"
+    );
+    assert!(
+        value["errors"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("run `radroots store init` and `radroots market refresh`")
+    );
+}
+
+#[test]
+fn order_submit_rejects_missing_or_archived_local_listing_before_publish() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "freshness_missing_listing");
+    remove_orderable_listing(&sandbox, LISTING_ADDR);
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--approval-token",
+        "approve",
+        "order",
+        "submit",
+        order_id.as_str(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["field"],
+        "order.listing_addr"
+    );
+    assert!(
+        value["errors"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("listing is not active")
+    );
+}
+
+#[test]
+fn order_submit_rejects_superseded_local_listing_event_before_publish() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "freshness_superseded_listing");
+    let replacement_event_id = "3".repeat(64);
+    replace_latest_listing_event_id(&sandbox, LISTING_ADDR, replacement_event_id.as_str());
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--approval-token",
+        "approve",
+        "order",
+        "submit",
+        order_id.as_str(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["field"],
+        "order.listing_event_id"
+    );
+    assert!(
+        value["errors"][0]["detail"]["issues"][0]["message"]
+            .as_str()
+            .expect("issue message")
+            .contains(replacement_event_id.as_str())
+    );
 }
 
 #[test]
