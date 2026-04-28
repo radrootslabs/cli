@@ -4,16 +4,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_events::RadrootsNostrEventPtr;
-use radroots_events::kinds::{KIND_LISTING, KIND_TRADE_ORDER_REQUEST};
+use radroots_events::kinds::{KIND_LISTING, KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST};
 use radroots_events::trade::{
     RadrootsActiveTradeMessageType, RadrootsTradeInventoryCommitment, RadrootsTradeOrderDecision,
     RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::trade::{
-    RadrootsTradeListingAddress, active_trade_event_context_from_tags,
-    active_trade_order_decision_event_build, active_trade_order_request_event_build,
-    active_trade_order_request_from_event,
+    RadrootsTradeListingAddress, active_trade_envelope_from_event,
+    active_trade_event_context_from_tags, active_trade_order_decision_event_build,
+    active_trade_order_request_event_build, active_trade_order_request_from_event,
 };
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
@@ -26,7 +26,10 @@ use radroots_replica_db_schema::nostr_event_state::{
 use radroots_replica_db_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
+    RadrootsActiveOrderDecisionRecord, RadrootsActiveOrderReducerIssue,
+    RadrootsActiveOrderRequestRecord, RadrootsActiveOrderStatus,
     canonicalize_active_order_decision_for_signer, canonicalize_active_order_request_for_signer,
+    reduce_active_order_events,
 };
 use serde::{Deserialize, Serialize};
 
@@ -782,26 +785,212 @@ pub fn status(
         });
     }
 
-    Ok(OrderStatusView {
-        state: "unavailable".to_owned(),
+    let filter = order_status_filter(args.key.as_str())?;
+    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
+        Ok(receipt) => receipt,
+        Err(DirectRelayFetchError::Connect {
+            reason,
+            target_relays,
+            failed_relays,
+        }) => {
+            return Ok(OrderStatusView {
+                state: "unavailable".to_owned(),
+                source: ORDER_STATUS_SOURCE.to_owned(),
+                order_id: args.key.clone(),
+                request_event_id: None,
+                decision_event_id: None,
+                listing_addr: None,
+                buyer_pubkey: None,
+                seller_pubkey: None,
+                last_event_id: None,
+                reducer_issues: Vec::new(),
+                target_relays,
+                connected_relays: Vec::new(),
+                failed_relays: relay_failures(failed_relays),
+                fetched_count: 0,
+                decoded_count: 0,
+                skipped_count: 0,
+                reason: Some(format!("direct relay connection failed: {reason}")),
+                actions: Vec::new(),
+            });
+        }
+        Err(error) => return Err(RuntimeError::Network(error.to_string())),
+    };
+
+    Ok(order_status_from_receipt(args.key.as_str(), receipt))
+}
+
+enum OrderStatusRecord {
+    Request(RadrootsActiveOrderRequestRecord),
+    Decision(RadrootsActiveOrderDecisionRecord),
+}
+
+fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -> OrderStatusView {
+    let DirectRelayFetchReceipt {
+        target_relays,
+        connected_relays,
+        failed_relays,
+        events,
+    } = receipt;
+    let fetched_count = events.len();
+    let mut decoded_count = 0usize;
+    let mut skipped_count = 0usize;
+    let mut requests = Vec::new();
+    let mut decisions = Vec::new();
+
+    for event in events {
+        match order_status_record_from_event(&event) {
+            Ok(OrderStatusRecord::Request(record)) => {
+                decoded_count += 1;
+                requests.push(record);
+            }
+            Ok(OrderStatusRecord::Decision(record)) => {
+                decoded_count += 1;
+                decisions.push(record);
+            }
+            Err(_) => skipped_count += 1,
+        }
+    }
+
+    let projection = reduce_active_order_events(order_id, requests, decisions);
+    let state = active_order_status_state(&projection.status).to_owned();
+    let reason = active_order_status_reason(&projection.status, order_id);
+    let reducer_issues = projection
+        .issues
+        .into_iter()
+        .map(active_order_reducer_issue_view)
+        .collect();
+
+    OrderStatusView {
+        state,
         source: ORDER_STATUS_SOURCE.to_owned(),
-        order_id: args.key.clone(),
-        request_event_id: None,
-        decision_event_id: None,
-        listing_addr: None,
-        buyer_pubkey: None,
-        seller_pubkey: None,
-        last_event_id: None,
-        reducer_issues: Vec::new(),
-        target_relays: config.relay.urls.clone(),
-        connected_relays: Vec::new(),
-        failed_relays: Vec::new(),
-        fetched_count: 0,
-        decoded_count: 0,
-        skipped_count: 0,
-        reason: Some("order status reducer fetch is not implemented".to_owned()),
+        order_id: projection.order_id,
+        request_event_id: projection.request_event_id,
+        decision_event_id: projection.decision_event_id,
+        listing_addr: projection.listing_addr,
+        buyer_pubkey: projection.buyer_pubkey,
+        seller_pubkey: projection.seller_pubkey,
+        last_event_id: projection.last_event_id,
+        reducer_issues,
+        target_relays,
+        connected_relays,
+        failed_relays: relay_failures(failed_relays),
+        fetched_count,
+        decoded_count,
+        skipped_count,
+        reason,
         actions: Vec::new(),
-    })
+    }
+}
+
+fn order_status_record_from_event(
+    event: &RadrootsNostrEvent,
+) -> Result<OrderStatusRecord, RuntimeError> {
+    match event_kind_u32(event) {
+        KIND_TRADE_ORDER_REQUEST => {
+            let event = radroots_event_from_nostr(event);
+            let envelope = active_trade_envelope_from_event::<RadrootsTradeOrderRequested>(&event)
+                .map_err(|error| {
+                    RuntimeError::Config(format!("decode active order request event: {error}"))
+                })?;
+            if envelope.message_type != RadrootsActiveTradeMessageType::TradeOrderRequested {
+                return Err(RuntimeError::Config(
+                    "active order request event used the wrong message type".to_owned(),
+                ));
+            }
+            Ok(OrderStatusRecord::Request(
+                RadrootsActiveOrderRequestRecord {
+                    event_id: event.id,
+                    author_pubkey: event.author,
+                    payload: envelope.payload,
+                },
+            ))
+        }
+        KIND_TRADE_ORDER_DECISION => {
+            let event = radroots_event_from_nostr(event);
+            let envelope =
+                active_trade_envelope_from_event::<RadrootsTradeOrderDecisionEvent>(&event)
+                    .map_err(|error| {
+                        RuntimeError::Config(format!("decode active order decision event: {error}"))
+                    })?;
+            if envelope.message_type != RadrootsActiveTradeMessageType::TradeOrderDecision {
+                return Err(RuntimeError::Config(
+                    "active order decision event used the wrong message type".to_owned(),
+                ));
+            }
+            let context = active_trade_event_context_from_tags(
+                RadrootsActiveTradeMessageType::TradeOrderDecision,
+                &event.tags,
+            )
+            .map_err(|error| {
+                RuntimeError::Config(format!("decode active order decision tags: {error}"))
+            })?;
+            Ok(OrderStatusRecord::Decision(
+                RadrootsActiveOrderDecisionRecord {
+                    event_id: event.id,
+                    author_pubkey: event.author,
+                    root_event_id: context.root_event_id.unwrap_or_default(),
+                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    payload: envelope.payload,
+                },
+            ))
+        }
+        event_kind => Err(RuntimeError::Config(format!(
+            "order status received unexpected kind `{event_kind}`"
+        ))),
+    }
+}
+
+fn active_order_status_state(status: &RadrootsActiveOrderStatus) -> &'static str {
+    match status {
+        RadrootsActiveOrderStatus::Missing => "missing",
+        RadrootsActiveOrderStatus::Requested => "requested",
+        RadrootsActiveOrderStatus::Accepted => "accepted",
+        RadrootsActiveOrderStatus::Declined => "declined",
+        RadrootsActiveOrderStatus::Invalid => "invalid",
+    }
+}
+
+fn active_order_status_reason(
+    status: &RadrootsActiveOrderStatus,
+    order_id: &str,
+) -> Option<String> {
+    match status {
+        RadrootsActiveOrderStatus::Missing => {
+            Some(format!("no active order events matched `{order_id}`"))
+        }
+        RadrootsActiveOrderStatus::Invalid => Some(format!(
+            "active order events for `{order_id}` failed reducer validation"
+        )),
+        _ => None,
+    }
+}
+
+fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue) -> OrderIssueView {
+    let field = match &issue_value {
+        RadrootsActiveOrderReducerIssue::MissingRequest => "request_event_id",
+        RadrootsActiveOrderReducerIssue::MultipleRequests { .. } => "request_event_id",
+        RadrootsActiveOrderReducerIssue::RequestPayloadInvalid { .. } => "request_payload",
+        RadrootsActiveOrderReducerIssue::RequestOrderIdMismatch { .. } => "order_id",
+        RadrootsActiveOrderReducerIssue::RequestAuthorMismatch { .. } => "buyer_pubkey",
+        RadrootsActiveOrderReducerIssue::RequestListingAddressInvalid { .. } => "listing_addr",
+        RadrootsActiveOrderReducerIssue::RequestSellerListingMismatch { .. } => "seller_pubkey",
+        RadrootsActiveOrderReducerIssue::DecisionPayloadInvalid { .. } => "decision_payload",
+        RadrootsActiveOrderReducerIssue::DecisionOrderIdMismatch { .. } => "order_id",
+        RadrootsActiveOrderReducerIssue::DecisionAuthorMismatch { .. } => "seller_pubkey",
+        RadrootsActiveOrderReducerIssue::DecisionBuyerMismatch { .. } => "buyer_pubkey",
+        RadrootsActiveOrderReducerIssue::DecisionSellerMismatch { .. } => "seller_pubkey",
+        RadrootsActiveOrderReducerIssue::DecisionListingAddressInvalid { .. } => "listing_addr",
+        RadrootsActiveOrderReducerIssue::DecisionListingMismatch { .. } => "listing_addr",
+        RadrootsActiveOrderReducerIssue::DecisionRootMismatch { .. } => "root_event_id",
+        RadrootsActiveOrderReducerIssue::DecisionPreviousMismatch { .. } => "prev_event_id",
+        RadrootsActiveOrderReducerIssue::DecisionMissingInventoryCommitments { .. } => {
+            "inventory_commitments"
+        }
+        RadrootsActiveOrderReducerIssue::DecisionMissingReason { .. } => "reason",
+        RadrootsActiveOrderReducerIssue::ConflictingDecisions { .. } => "decision_event_id",
+    };
+    issue(field, format!("{issue_value:?}"))
 }
 
 pub fn cancel(
@@ -1386,6 +1575,17 @@ fn order_request_filter(
             .map_err(|error| RuntimeError::Config(format!("build order event filter: {error}")));
     }
     Ok(filter)
+}
+
+fn order_status_filter(order_id: &str) -> Result<RadrootsNostrFilter, RuntimeError> {
+    let filter = RadrootsNostrFilter::new()
+        .kinds([
+            radroots_nostr_kind(KIND_TRADE_ORDER_REQUEST as u16),
+            radroots_nostr_kind(KIND_TRADE_ORDER_DECISION as u16),
+        ])
+        .limit(1_000);
+    radroots_nostr_filter_tag(filter, "d", vec![order_id.to_owned()])
+        .map_err(|error| RuntimeError::Config(format!("build order status filter: {error}")))
 }
 
 fn event_kind_u32(event: &RadrootsNostrEvent) -> u32 {
@@ -2287,7 +2487,8 @@ mod tests {
     use radroots_events::RadrootsNostrEventPtr;
     use radroots_events::kinds::KIND_TRADE_ORDER_DECISION;
     use radroots_events::trade::{
-        RadrootsActiveTradeMessageType, RadrootsTradeOrderDecision, RadrootsTradeOrderItem,
+        RadrootsActiveTradeMessageType, RadrootsTradeInventoryCommitment,
+        RadrootsTradeOrderDecision, RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderItem,
         RadrootsTradeOrderRequested,
     };
     use radroots_events_codec::trade::{
@@ -2303,7 +2504,7 @@ mod tests {
         accepted_order_decision_payload_from_request, collect_issues,
         declined_order_decision_payload_from_request, inspect_document, next_order_id,
         order_history_entry_from_event, order_history_from_receipt, order_request_filter,
-        seller_order_request_resolution_from_receipt,
+        order_status_from_receipt, seller_order_request_resolution_from_receipt,
     };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
 
@@ -2760,6 +2961,184 @@ mod tests {
     }
 
     #[test]
+    fn order_status_from_receipt_reports_missing() {
+        let order_id = "ord_AAAAAAAAAAAAAAAAAAAAAg";
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: Vec::new(),
+        };
+
+        let view = order_status_from_receipt(order_id, receipt);
+
+        assert_eq!(view.state, "missing");
+        assert_eq!(view.order_id, order_id);
+        assert_eq!(view.fetched_count, 0);
+        assert_eq!(view.decoded_count, 0);
+        assert_eq!(view.skipped_count, 0);
+        assert!(view.request_event_id.is_none());
+        assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_requested() {
+        let fixture = order_status_fixture();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone()],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let request_event_id = fixture.request_event.id.to_string();
+
+        assert_eq!(view.state, "requested");
+        assert_eq!(
+            view.request_event_id.as_deref(),
+            Some(request_event_id.as_str())
+        );
+        assert!(view.decision_event_id.is_none());
+        assert_eq!(
+            view.listing_addr.as_deref(),
+            Some(fixture.listing_addr.as_str())
+        );
+        assert_eq!(
+            view.buyer_pubkey.as_deref(),
+            Some(fixture.buyer_pubkey.as_str())
+        );
+        assert_eq!(
+            view.seller_pubkey.as_deref(),
+            Some(fixture.seller_pubkey.as_str())
+        );
+        assert_eq!(view.decoded_count, 1);
+        assert_eq!(view.skipped_count, 0);
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_accepted() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), decision_event.clone()],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let decision_event_id = decision_event.id.to_string();
+
+        assert_eq!(view.state, "accepted");
+        assert_eq!(
+            view.decision_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert_eq!(
+            view.last_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert!(view.reducer_issues.is_empty());
+        assert_eq!(view.decoded_count, 2);
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_declined() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Declined {
+                reason: "out of stock".to_owned(),
+            },
+        );
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), decision_event.clone()],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let decision_event_id = decision_event.id.to_string();
+
+        assert_eq!(view.state, "declined");
+        assert_eq!(
+            view.decision_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert!(view.reducer_issues.is_empty());
+        assert_eq!(view.decoded_count, 2);
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_conflicting_decisions_invalid() {
+        let fixture = order_status_fixture();
+        let accepted_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let declined_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Declined {
+                reason: "out of stock".to_owned(),
+            },
+        );
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![
+                fixture.request_event.clone(),
+                accepted_event,
+                declined_event,
+            ],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.decoded_count, 3);
+        assert!(view.decision_event_id.is_none());
+        assert!(view.reducer_issues.iter().any(|issue| {
+            issue.field == "decision_event_id" && issue.message.contains("ConflictingDecisions")
+        }));
+    }
+
+    #[test]
     fn seller_order_request_resolution_skips_wrong_seller_request() {
         let selected_seller = RadrootsIdentity::generate();
         let other_seller = RadrootsIdentity::generate();
@@ -2830,6 +3209,73 @@ mod tests {
         assert_eq!(resolution.decoded_count, 0);
         assert_eq!(resolution.skipped_count, 1);
         assert!(resolution.requests.is_empty());
+    }
+
+    struct OrderStatusFixture {
+        seller: RadrootsIdentity,
+        order_id: String,
+        listing_addr: String,
+        buyer_pubkey: String,
+        seller_pubkey: String,
+        request_event: radroots_nostr::prelude::RadrootsNostrEvent,
+    }
+
+    fn order_status_fixture() -> OrderStatusFixture {
+        let seller = RadrootsIdentity::generate();
+        let buyer = RadrootsIdentity::generate();
+        let seller_pubkey = seller.public_key_hex();
+        let buyer_pubkey = buyer.public_key_hex();
+        let order_id = "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned();
+        let listing_event_id = "1".repeat(64);
+        let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
+        let request_event = signed_order_request_event(
+            &buyer,
+            order_id.as_str(),
+            listing_addr.as_str(),
+            buyer_pubkey.as_str(),
+            seller_pubkey.as_str(),
+            listing_event_id.as_str(),
+        );
+
+        OrderStatusFixture {
+            seller,
+            order_id,
+            listing_addr,
+            buyer_pubkey,
+            seller_pubkey,
+            request_event,
+        }
+    }
+
+    fn signed_order_decision_event(
+        seller: &RadrootsIdentity,
+        request_event: &radroots_nostr::prelude::RadrootsNostrEvent,
+        order_id: &str,
+        listing_addr: &str,
+        buyer_pubkey: &str,
+        seller_pubkey: &str,
+        decision: RadrootsTradeOrderDecision,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
+        let payload = RadrootsTradeOrderDecisionEvent {
+            order_id: order_id.to_owned(),
+            listing_addr: listing_addr.to_owned(),
+            buyer_pubkey: buyer_pubkey.to_owned(),
+            seller_pubkey: seller_pubkey.to_owned(),
+            decision,
+        };
+        let payload = canonicalize_active_order_decision_for_signer(payload, seller_pubkey)
+            .expect("canonical order decision");
+        let request_event_id = request_event.id.to_string();
+        let parts = active_trade_order_decision_event_build(
+            request_event_id.as_str(),
+            request_event_id.as_str(),
+            &payload,
+        )
+        .expect("order decision parts");
+        radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+            .expect("nostr event builder")
+            .sign_with_keys(seller.keys())
+            .expect("signed order decision")
     }
 
     fn signed_order_request_event(
