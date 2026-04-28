@@ -1159,10 +1159,20 @@ pub struct OrderSubmitView {
     pub buyer_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_kind: Option<u32>,
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default)]
     pub deduplicated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acknowledged_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_relays: Vec<RelayFailureView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

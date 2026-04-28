@@ -48,7 +48,9 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
         if request.context.dry_run {
             config.output.dry_run = true;
         }
-        let view = map_runtime(crate::runtime::order::submit(&config, &args))?;
+        let view = crate::runtime::order::submit(&config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
         if request.context.dry_run && view.state == "unconfigured" && !view.issues.is_empty() {
             serialized_target_result::<OrderSubmitResult, _>(&view)
         } else {

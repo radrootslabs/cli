@@ -5,8 +5,12 @@ use std::path::Path;
 use support::{
     RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
     assert_no_removed_command_reference, create_listing_draft, identity_public,
-    make_listing_publishable, shell_single_quoted, toml_string, write_public_identity_profile,
+    make_listing_publishable, seed_orderable_listing, shell_single_quoted, toml_string,
+    write_public_identity_profile,
 };
+
+const LISTING_ADDR: &str =
+    "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
 
 #[test]
 fn local_signer_status_reports_unconfigured_without_account() {
@@ -715,6 +719,47 @@ fn local_seller_publish_commands_attempt_configured_direct_relay() {
         "listing.archive",
         &["listing", "archive"],
     );
+
+    seed_orderable_listing(&sandbox, LISTING_ADDR);
+    sandbox.json_success(&["--format", "json", "basket", "create", "direct_order"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "direct_order",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "1",
+    ]);
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "direct_order",
+    ]);
+    let order_id = quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id");
+    let (order_output, order_value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        relay,
+        "--approval-token",
+        "approve",
+        "order",
+        "submit",
+        order_id,
+    ]);
+    assert!(!order_output.status.success());
+    assert_direct_relay_connection_failure(&order_value, "order.submit", &["order", "submit"]);
 }
 
 #[test]

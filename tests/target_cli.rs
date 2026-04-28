@@ -1060,21 +1060,22 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         order_id,
     ]);
     assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(8));
     assert_eq!(unavailable_submit["operation_id"], "order.submit");
     assert_eq!(unavailable_submit["result"], Value::Null);
     assert_eq!(
         unavailable_submit["errors"][0]["code"],
-        "operation_unavailable"
+        "network_unavailable"
     );
     assert_eq!(
         unavailable_submit["errors"][0]["detail"]["class"],
-        "operation"
+        "network"
     );
     assert!(
         unavailable_submit["errors"][0]["message"]
             .as_str()
             .expect("message")
-            .contains("direct Nostr relay order publication is not implemented")
+            .contains("order submit requires at least one configured relay before signing")
     );
     assert_no_removed_command_reference(&unavailable_submit, &["order", "submit"]);
     assert_no_daemon_runtime_reference(&unavailable_submit, &["order", "submit"]);

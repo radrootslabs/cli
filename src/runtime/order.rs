@@ -3,24 +3,33 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::kinds::KIND_LISTING;
+use radroots_events::trade::{RadrootsTradeOrderItem, RadrootsTradeOrderRequested};
 use radroots_events_codec::d_tag::is_d_tag_base64url;
-use radroots_events_codec::trade::RadrootsTradeListingAddress;
+use radroots_events_codec::trade::{
+    RadrootsTradeListingAddress, active_trade_order_request_event_build,
+};
 use radroots_replica_db::{ReplicaSql, nostr_event_state, trade_product};
 use radroots_replica_db_schema::nostr_event_state::{
     INostrEventStateFindOne, INostrEventStateFindOneArgs, NostrEventStateQueryBindValues,
 };
 use radroots_replica_db_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
 use radroots_sql_core::SqliteExecutor;
+use radroots_trade::order::canonicalize_active_order_request_for_signer;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
     OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryView, OrderIssueView,
     OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView, OrderWatchView,
+    RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
+use crate::runtime::direct_relay::{
+    DirectRelayFailure, DirectRelayPublishReceipt, publish_parts_with_identity,
+};
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime_args::{
     OrderDraftCreateArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
@@ -28,8 +37,7 @@ use crate::runtime_args::{
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
-const ORDER_SUBMIT_UNAVAILABLE_REASON: &str =
-    "direct Nostr relay order publication is not implemented";
+const ORDER_SUBMIT_SOURCE: &str = "direct Nostr relay publish · local key";
 const ORDER_EVENT_STATE_UNAVAILABLE_REASON: &str =
     "relay-backed order event state is not implemented";
 const ORDERS_DIR: &str = "orders/drafts";
@@ -363,8 +371,13 @@ pub fn submit(
             buyer_account_id: None,
             buyer_pubkey: None,
             seller_pubkey: None,
+            event_id: None,
+            event_kind: None,
             dry_run: config.output.dry_run,
             deduplicated: false,
+            target_relays: Vec::new(),
+            acknowledged_relays: Vec::new(),
+            failed_relays: Vec::new(),
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             signer_session_id: None,
@@ -393,8 +406,13 @@ pub fn submit(
                 buyer_account_id: None,
                 buyer_pubkey: None,
                 seller_pubkey: None,
+                event_id: None,
+                event_kind: None,
                 dry_run: config.output.dry_run,
                 deduplicated: false,
+                target_relays: Vec::new(),
+                acknowledged_relays: Vec::new(),
+                failed_relays: Vec::new(),
                 idempotency_key: args.idempotency_key.clone(),
                 signer_mode: None,
                 signer_session_id: None,
@@ -425,8 +443,13 @@ pub fn submit(
             buyer_account_id: loaded.document.buyer_account_id.clone(),
             buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
             seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+            event_id: None,
+            event_kind: None,
             dry_run: config.output.dry_run,
             deduplicated: false,
+            target_relays: Vec::new(),
+            acknowledged_relays: Vec::new(),
+            failed_relays: Vec::new(),
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             signer_session_id: None,
@@ -439,7 +462,7 @@ pub fn submit(
     }
 
     if config.output.dry_run {
-        if let Err(error) = validate_local_order_write_authority(
+        if let Err(error) = resolve_local_order_signing_identity(
             config,
             loaded.document.order.buyer_pubkey.as_str(),
         ) {
@@ -456,8 +479,13 @@ pub fn submit(
             buyer_account_id: loaded.document.buyer_account_id.clone(),
             buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
             seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+            event_id: None,
+            event_kind: None,
             dry_run: true,
             deduplicated: false,
+            target_relays: Vec::new(),
+            acknowledged_relays: Vec::new(),
+            failed_relays: Vec::new(),
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             signer_session_id: None,
@@ -472,15 +500,24 @@ pub fn submit(
         });
     }
 
-    if let Err(error) =
-        validate_local_order_write_authority(config, loaded.document.order.buyer_pubkey.as_str())
-    {
-        return Ok(order_binding_error_view(config, &loaded, args, error));
+    if config.relay.urls.is_empty() {
+        return Err(RuntimeError::Network(
+            "order submit requires at least one configured relay before signing".to_owned(),
+        ));
     }
 
-    Ok(direct_relay_unavailable_order_submit_view(
-        config, &loaded, args,
-    ))
+    let signing = match resolve_local_order_signing_identity(
+        config,
+        loaded.document.order.buyer_pubkey.as_str(),
+    ) {
+        Ok(signing) => signing,
+        Err(error) => return Ok(order_binding_error_view(config, &loaded, args, error)),
+    };
+
+    match publish_order_request(config, &loaded, args, signing) {
+        Ok(view) => Ok(view),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn watch(
@@ -1052,14 +1089,70 @@ fn actions_for_document(
     actions
 }
 
-fn direct_relay_unavailable_order_submit_view(
+fn publish_order_request(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
     args: &OrderSubmitArgs,
+    signing: accounts::AccountSigningIdentity,
+) -> Result<OrderSubmitView, RuntimeError> {
+    let signer_pubkey = signing
+        .account
+        .record
+        .public_identity
+        .public_key_hex
+        .as_str();
+    let payload = RadrootsTradeOrderRequested {
+        order_id: loaded.document.order.order_id.clone(),
+        listing_addr: loaded.document.order.listing_addr.clone(),
+        buyer_pubkey: loaded.document.order.buyer_pubkey.clone(),
+        seller_pubkey: loaded.document.order.seller_pubkey.clone(),
+        items: loaded
+            .document
+            .order
+            .items
+            .iter()
+            .map(|item| RadrootsTradeOrderItem {
+                bin_id: item.bin_id.clone(),
+                bin_count: item.bin_count,
+            })
+            .collect(),
+    };
+    let payload = canonicalize_active_order_request_for_signer(payload, signer_pubkey)
+        .map_err(|error| RuntimeError::Config(format!("canonicalize order request: {error}")))?;
+    let listing_event = RadrootsNostrEventPtr {
+        id: loaded.document.order.listing_event_id.clone(),
+        relays: None,
+    };
+    let parts = active_trade_order_request_event_build(&listing_event, &payload)
+        .map_err(|error| RuntimeError::Config(format!("encode order request event: {error}")))?;
+    let event_kind = parts.kind;
+    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+
+    Ok(published_order_submit_view(
+        config, loaded, args, event_kind, receipt,
+    ))
+}
+
+fn published_order_submit_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    event_kind: u32,
+    receipt: DirectRelayPublishReceipt,
 ) -> OrderSubmitView {
+    let DirectRelayPublishReceipt {
+        event_id,
+        created_at: _,
+        signature: _,
+        target_relays,
+        acknowledged_relays,
+        failed_relays,
+    } = receipt;
+
     OrderSubmitView {
-        state: "unavailable".to_owned(),
-        source: ORDER_SOURCE.to_owned(),
+        state: "submitted".to_owned(),
+        source: ORDER_SUBMIT_SOURCE.to_owned(),
         order_id: loaded.document.order.order_id.clone(),
         file: loaded.file.display().to_string(),
         listing_lookup: loaded.document.listing_lookup.clone(),
@@ -1068,13 +1161,18 @@ fn direct_relay_unavailable_order_submit_view(
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        event_id: Some(event_id),
+        event_kind: Some(event_kind),
         dry_run: false,
         deduplicated: false,
+        target_relays,
+        acknowledged_relays,
+        failed_relays: relay_failures(failed_relays),
         idempotency_key: args.idempotency_key.clone(),
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
         signer_session_id: None,
         requested_signer_session_id: None,
-        reason: Some(ORDER_SUBMIT_UNAVAILABLE_REASON.to_owned()),
+        reason: None,
         job: None,
         issues: Vec::new(),
         actions: Vec::new(),
@@ -1112,8 +1210,13 @@ fn order_binding_error_view(
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        event_id: None,
+        event_kind: None,
         dry_run: config.output.dry_run,
         deduplicated: false,
+        target_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
         idempotency_key: args.idempotency_key.clone(),
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
         signer_session_id: None,
@@ -1125,12 +1228,14 @@ fn order_binding_error_view(
     }
 }
 
-fn validate_local_order_write_authority(
+fn resolve_local_order_signing_identity(
     config: &RuntimeConfig,
     buyer_pubkey: &str,
-) -> Result<(), ActorWriteBindingError> {
+) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
-        return Ok(());
+        return Err(ActorWriteBindingError::Unconfigured(
+            "order submit requires signer mode `local`".to_owned(),
+        ));
     }
     let signing = accounts::resolve_local_signing_identity(config)
         .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
@@ -1145,7 +1250,17 @@ fn validate_local_order_write_authority(
             "selected local account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
         )));
     }
-    Ok(())
+    Ok(signing)
+}
+
+fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
+    failures
+        .into_iter()
+        .map(|failure| RelayFailureView {
+            relay: failure.relay,
+            reason: failure.reason,
+        })
+        .collect()
 }
 
 fn load_draft(path: &Path) -> Result<LoadedOrderDraft, String> {
