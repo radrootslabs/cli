@@ -132,6 +132,7 @@ struct SellerOrderRequestResolution {
     decoded_count: usize,
     skipped_count: usize,
     requests: Vec<ResolvedSellerOrderRequest>,
+    candidate_issues: Vec<OrderIssueView>,
 }
 
 pub fn scaffold(
@@ -719,6 +720,14 @@ pub fn decide(
         args.key.as_str(),
         receipt,
     )?;
+    if !resolution.candidate_issues.is_empty() {
+        return Ok(order_decision_view_from_resolution(
+            config,
+            args,
+            seller_pubkey,
+            resolution,
+        ));
+    }
     if resolution.requests.len() == 1 {
         let request = resolution.requests[0].clone();
         let signing = match resolve_local_order_decision_signing_identity(
@@ -1168,6 +1177,7 @@ fn order_decision_view_from_resolution(
         decoded_count,
         skipped_count,
         requests,
+        candidate_issues,
     } = resolution;
     let mut view = order_decision_base_view(config, args, "missing", config.output.dry_run);
     view.seller_pubkey = Some(seller_pubkey);
@@ -1177,7 +1187,17 @@ fn order_decision_view_from_resolution(
     view.fetched_count = fetched_count;
     view.decoded_count = decoded_count;
     view.skipped_count = skipped_count;
+    view.issues = candidate_issues;
 
+    if !view.issues.is_empty() {
+        view.state = "invalid".to_owned();
+        view.reason = Some(format!(
+            "seller order request preflight found invalid request candidates for `{}`",
+            args.key
+        ));
+        view.actions = vec![format!("radroots order status get {}", args.key)];
+        return view;
+    }
     match requests.as_slice() {
         [] => {
             view.reason = Some(format!(
@@ -1187,18 +1207,24 @@ fn order_decision_view_from_resolution(
             view
         }
         _ => {
-            view.state = "unavailable".to_owned();
+            let event_ids = requests
+                .iter()
+                .map(|request| request.request_event_id.clone())
+                .collect::<Vec<_>>();
+            view.state = "invalid".to_owned();
             view.reason = Some(format!(
                 "multiple seller-targeted order request events matched `{}`; refusing to choose an order root",
                 args.key
             ));
             view.issues = vec![issue(
-                "order_id",
+                "request_event_id",
                 format!(
-                    "matched {} request events for the same order id",
-                    requests.len()
+                    "matched {} request events for the same order id: {}",
+                    requests.len(),
+                    event_ids.join(", ")
                 ),
             )];
+            view.actions = vec![format!("radroots order status get {}", args.key)];
             view
         }
     }
@@ -1327,18 +1353,37 @@ fn seller_order_request_resolution_from_receipt(
     let mut skipped_count = 0usize;
     let mut decoded_count = 0usize;
     let mut requests = Vec::new();
+    let mut candidate_issues = Vec::new();
 
     for event in events {
+        if event_kind_u32(&event) != KIND_TRADE_ORDER_REQUEST {
+            skipped_count += 1;
+            continue;
+        }
+        if !event_matches_tag_value(&event, "d", order_id)
+            || !event_matches_tag_value(&event, "p", seller_pubkey)
+        {
+            skipped_count += 1;
+            continue;
+        }
+        let event_id = event.id.to_string();
         match seller_order_request_from_event(&event, seller_pubkey, order_id) {
             Ok(request) => {
                 decoded_count += 1;
                 requests.push(request);
             }
-            Err(_) => skipped_count += 1,
+            Err(error) => {
+                skipped_count += 1;
+                candidate_issues.push(issue(
+                    "request_event_id",
+                    format!("request event `{event_id}` failed seller decision preflight: {error}"),
+                ));
+            }
         }
     }
 
     requests.sort_by(|left, right| left.request_event_id.cmp(&right.request_event_id));
+    candidate_issues.sort_by(|left, right| left.message.cmp(&right.message));
 
     Ok(SellerOrderRequestResolution {
         target_relays,
@@ -1348,6 +1393,15 @@ fn seller_order_request_resolution_from_receipt(
         decoded_count,
         skipped_count,
         requests,
+        candidate_issues,
+    })
+}
+
+fn event_matches_tag_value(event: &RadrootsNostrEvent, key: &str, value: &str) -> bool {
+    event.tags.iter().any(|tag| {
+        let values = tag.as_slice();
+        values.first().map(String::as_str) == Some(key)
+            && values.get(1).map(String::as_str) == Some(value)
     })
 }
 
