@@ -1463,32 +1463,6 @@ pub struct OrderHistoryEntryView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OrderCancelView {
-    pub state: String,
-    pub source: String,
-    pub lookup: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub order_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub job: Option<OrderJobView>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub actions: Vec<String>,
-}
-
-impl OrderCancelView {
-    pub fn disposition(&self) -> CommandDisposition {
-        match self.state.as_str() {
-            "unconfigured" => CommandDisposition::Unconfigured,
-            "unavailable" => CommandDisposition::ExternalUnavailable,
-            "error" => CommandDisposition::InternalError,
-            _ => CommandDisposition::Success,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct OrderSummaryView {
     pub id: String,
     pub state: String,

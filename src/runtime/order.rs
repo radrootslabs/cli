@@ -34,9 +34,9 @@ use radroots_trade::order::{
 use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
-    OrderCancelView, OrderDecisionView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView,
-    OrderHistoryView, OrderIssueView, OrderListView, OrderNewView, OrderStatusView,
-    OrderSubmitView, OrderSummaryView, OrderWatchView, RelayFailureView,
+    OrderDecisionView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView, OrderHistoryView,
+    OrderIssueView, OrderListView, OrderNewView, OrderStatusView, OrderSubmitView,
+    OrderSummaryView, OrderWatchView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -752,7 +752,6 @@ pub fn decide(
     Ok(order_decision_view_from_resolution(
         config,
         args,
-        decision_reason,
         seller_pubkey,
         resolution,
     ))
@@ -993,52 +992,6 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
     issue(field, format!("{issue_value:?}"))
 }
 
-pub fn cancel(
-    config: &RuntimeConfig,
-    args: &RecordLookupArgs,
-) -> Result<OrderCancelView, RuntimeError> {
-    let file = draft_lookup_path(config, args.key.as_str());
-    if !file.exists() {
-        return Ok(OrderCancelView {
-            state: "missing".to_owned(),
-            source: ORDER_SOURCE.to_owned(),
-            lookup: args.key.clone(),
-            order_id: None,
-            reason: Some(format!("order draft `{}` was not found", args.key)),
-            job: None,
-            actions: vec!["radroots order list".to_owned()],
-        });
-    }
-
-    let loaded = match load_draft(file.as_path()) {
-        Ok(loaded) => loaded,
-        Err(reason) => {
-            return Ok(OrderCancelView {
-                state: "error".to_owned(),
-                source: ORDER_SOURCE.to_owned(),
-                lookup: args.key.clone(),
-                order_id: None,
-                reason: Some(reason),
-                job: None,
-                actions: Vec::new(),
-            });
-        }
-    };
-
-    Ok(OrderCancelView {
-        state: "unavailable".to_owned(),
-        source: ORDER_SOURCE.to_owned(),
-        lookup: args.key.clone(),
-        order_id: Some(loaded.document.order.order_id.clone()),
-        reason: Some("seller order decisions are not implemented".to_owned()),
-        job: None,
-        actions: vec![format!(
-            "radroots order get {}",
-            loaded.document.order.order_id
-        )],
-    })
-}
-
 fn order_history_unconfigured(
     seller_pubkey: Option<String>,
     reason: String,
@@ -1186,7 +1139,6 @@ fn order_decision_base_view(
 fn order_decision_view_from_resolution(
     config: &RuntimeConfig,
     args: &OrderDecisionArgs,
-    decision_reason: Option<&str>,
     seller_pubkey: String,
     resolution: SellerOrderRequestResolution,
 ) -> OrderDecisionView {
@@ -1214,20 +1166,6 @@ fn order_decision_view_from_resolution(
                 "no seller-targeted order request event matched `{}`",
                 args.key
             ));
-            view
-        }
-        [request] => {
-            view.state = "unavailable".to_owned();
-            apply_order_decision_request(&mut view, request);
-            view.reason = Some(match decision_reason {
-                Some(reason) => {
-                    format!(
-                        "seller order decision publication is not implemented for reason `{reason}`"
-                    )
-                }
-                None => "seller order decision publication is not implemented".to_owned(),
-            });
-            view.actions = vec![format!("radroots order status get {}", request.order_id)];
             view
         }
         _ => {
