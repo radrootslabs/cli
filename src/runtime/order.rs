@@ -105,6 +105,27 @@ struct ResolvedOrderListing {
     seller_pubkey: String,
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedSellerOrderRequest {
+    request_event_id: String,
+    listing_event_id: Option<String>,
+    order_id: String,
+    listing_addr: String,
+    buyer_pubkey: String,
+    seller_pubkey: String,
+}
+
+#[derive(Debug, Clone)]
+struct SellerOrderRequestResolution {
+    target_relays: Vec<String>,
+    connected_relays: Vec<String>,
+    failed_relays: Vec<DirectRelayFailure>,
+    fetched_count: usize,
+    decoded_count: usize,
+    skipped_count: usize,
+    requests: Vec<ResolvedSellerOrderRequest>,
+}
+
 pub fn scaffold(
     config: &RuntimeConfig,
     args: &OrderDraftCreateArgs,
@@ -648,64 +669,69 @@ pub fn decide(
         .map(str::trim)
         .filter(|reason| !reason.is_empty());
     if config.output.dry_run {
-        return Ok(OrderDecisionView {
-            state: "dry_run".to_owned(),
-            source: ORDER_DECISION_SOURCE.to_owned(),
-            order_id: args.key.clone(),
-            listing_addr: None,
-            buyer_pubkey: None,
-            seller_pubkey: None,
-            decision: args.decision.as_str().to_owned(),
-            root_event_id: None,
-            prev_event_id: None,
-            event_id: None,
-            event_kind: None,
-            dry_run: true,
-            target_relays: config.relay.urls.clone(),
-            acknowledged_relays: Vec::new(),
-            failed_relays: Vec::new(),
-            idempotency_key: args.idempotency_key.clone(),
-            signer_mode: Some(config.signer.backend.as_str().to_owned()),
-            reason: Some(match decision_reason {
-                Some(reason) => format!(
-                    "dry run requested; seller order decision publication skipped with reason `{reason}`"
-                ),
-                None => "dry run requested; seller order decision publication skipped".to_owned(),
-            }),
-            issues: Vec::new(),
-            actions: vec![format!("radroots order status get {}", args.key)],
+        let mut view = order_decision_base_view(config, args, "dry_run", true);
+        view.reason = Some(match decision_reason {
+            Some(reason) => format!(
+                "dry run requested; seller order decision publication skipped with reason `{reason}`"
+            ),
+            None => "dry run requested; seller order decision publication skipped".to_owned(),
         });
+        view.actions = vec![format!("radroots order status get {}", args.key)];
+        return Ok(view);
     }
 
-    Ok(OrderDecisionView {
-        state: "unavailable".to_owned(),
-        source: ORDER_DECISION_SOURCE.to_owned(),
-        order_id: args.key.clone(),
-        listing_addr: None,
-        buyer_pubkey: None,
-        seller_pubkey: None,
-        decision: args.decision.as_str().to_owned(),
-        root_event_id: None,
-        prev_event_id: None,
-        event_id: None,
-        event_kind: None,
-        dry_run: false,
-        target_relays: config.relay.urls.clone(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
-        idempotency_key: args.idempotency_key.clone(),
-        signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        reason: Some(match decision_reason {
-            Some(reason) => {
-                format!(
-                    "seller order decision publication is not implemented for reason `{reason}`"
-                )
-            }
-            None => "seller order decision publication is not implemented".to_owned(),
-        }),
-        issues: Vec::new(),
-        actions: Vec::new(),
-    })
+    if config.relay.urls.is_empty() {
+        let mut view = order_decision_base_view(config, args, "unconfigured", false);
+        view.reason = Some(format!(
+            "order {} requires at least one configured relay",
+            args.decision.command()
+        ));
+        return Ok(view);
+    }
+
+    let seller = match accounts::resolve_account(config)? {
+        Some(account) => account,
+        None => {
+            let mut view = order_decision_base_view(config, args, "unconfigured", false);
+            view.reason = Some(format!(
+                "order {} requires a selected seller account",
+                args.decision.command()
+            ));
+            view.actions = vec!["radroots account create".to_owned()];
+            return Ok(view);
+        }
+    };
+    let seller_pubkey = seller.record.public_identity.public_key_hex;
+    let filter = order_request_filter(seller_pubkey.as_str(), Some(args.key.as_str()))?;
+    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
+        Ok(receipt) => receipt,
+        Err(DirectRelayFetchError::Connect {
+            reason,
+            target_relays,
+            failed_relays,
+        }) => {
+            let mut view = order_decision_base_view(config, args, "unavailable", false);
+            view.seller_pubkey = Some(seller_pubkey);
+            view.target_relays = target_relays;
+            view.failed_relays = relay_failures(failed_relays);
+            view.reason = Some(format!("direct relay connection failed: {reason}"));
+            return Ok(view);
+        }
+        Err(error) => return Err(RuntimeError::Network(error.to_string())),
+    };
+
+    let resolution = seller_order_request_resolution_from_receipt(
+        seller_pubkey.as_str(),
+        args.key.as_str(),
+        receipt,
+    )?;
+    Ok(order_decision_view_from_resolution(
+        config,
+        args,
+        decision_reason,
+        seller_pubkey,
+        resolution,
+    ))
 }
 
 pub fn status(
@@ -909,6 +935,207 @@ fn order_history_from_receipt(
         orders,
         actions: Vec::new(),
     }
+}
+
+fn order_decision_base_view(
+    config: &RuntimeConfig,
+    args: &OrderDecisionArgs,
+    state: &str,
+    dry_run: bool,
+) -> OrderDecisionView {
+    OrderDecisionView {
+        state: state.to_owned(),
+        source: ORDER_DECISION_SOURCE.to_owned(),
+        order_id: args.key.clone(),
+        listing_addr: None,
+        buyer_pubkey: None,
+        seller_pubkey: None,
+        decision: args.decision.as_str().to_owned(),
+        request_event_id: None,
+        listing_event_id: None,
+        root_event_id: None,
+        prev_event_id: None,
+        event_id: None,
+        event_kind: None,
+        dry_run,
+        target_relays: config.relay.urls.clone(),
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: 0,
+        decoded_count: 0,
+        skipped_count: 0,
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        reason: None,
+        issues: Vec::new(),
+        actions: Vec::new(),
+    }
+}
+
+fn order_decision_view_from_resolution(
+    config: &RuntimeConfig,
+    args: &OrderDecisionArgs,
+    decision_reason: Option<&str>,
+    seller_pubkey: String,
+    resolution: SellerOrderRequestResolution,
+) -> OrderDecisionView {
+    let SellerOrderRequestResolution {
+        target_relays,
+        connected_relays,
+        failed_relays,
+        fetched_count,
+        decoded_count,
+        skipped_count,
+        requests,
+    } = resolution;
+    let mut view = order_decision_base_view(config, args, "missing", false);
+    view.seller_pubkey = Some(seller_pubkey);
+    view.target_relays = target_relays;
+    view.connected_relays = connected_relays;
+    view.failed_relays = relay_failures(failed_relays);
+    view.fetched_count = fetched_count;
+    view.decoded_count = decoded_count;
+    view.skipped_count = skipped_count;
+
+    match requests.as_slice() {
+        [] => {
+            view.reason = Some(format!(
+                "no seller-targeted order request event matched `{}`",
+                args.key
+            ));
+            view
+        }
+        [request] => {
+            view.state = "unavailable".to_owned();
+            view.order_id = request.order_id.clone();
+            view.listing_addr = Some(request.listing_addr.clone());
+            view.buyer_pubkey = Some(request.buyer_pubkey.clone());
+            view.seller_pubkey = Some(request.seller_pubkey.clone());
+            view.request_event_id = Some(request.request_event_id.clone());
+            view.listing_event_id = request.listing_event_id.clone();
+            view.root_event_id = Some(request.request_event_id.clone());
+            view.prev_event_id = Some(request.request_event_id.clone());
+            view.reason = Some(match decision_reason {
+                Some(reason) => {
+                    format!(
+                        "seller order decision publication is not implemented for reason `{reason}`"
+                    )
+                }
+                None => "seller order decision publication is not implemented".to_owned(),
+            });
+            view.actions = vec![format!("radroots order status get {}", request.order_id)];
+            view
+        }
+        _ => {
+            view.state = "unavailable".to_owned();
+            view.reason = Some(format!(
+                "multiple seller-targeted order request events matched `{}`; refusing to choose an order root",
+                args.key
+            ));
+            view.issues = vec![issue(
+                "order_id",
+                format!(
+                    "matched {} request events for the same order id",
+                    requests.len()
+                ),
+            )];
+            view
+        }
+    }
+}
+
+fn seller_order_request_resolution_from_receipt(
+    seller_pubkey: &str,
+    order_id: &str,
+    receipt: DirectRelayFetchReceipt,
+) -> Result<SellerOrderRequestResolution, RuntimeError> {
+    let DirectRelayFetchReceipt {
+        target_relays,
+        connected_relays,
+        failed_relays,
+        events,
+    } = receipt;
+    let fetched_count = events.len();
+    let mut skipped_count = 0usize;
+    let mut decoded_count = 0usize;
+    let mut requests = Vec::new();
+
+    for event in events {
+        match seller_order_request_from_event(&event, seller_pubkey, order_id) {
+            Ok(request) => {
+                decoded_count += 1;
+                requests.push(request);
+            }
+            Err(_) => skipped_count += 1,
+        }
+    }
+
+    requests.sort_by(|left, right| left.request_event_id.cmp(&right.request_event_id));
+
+    Ok(SellerOrderRequestResolution {
+        target_relays,
+        connected_relays,
+        failed_relays,
+        fetched_count,
+        decoded_count,
+        skipped_count,
+        requests,
+    })
+}
+
+fn seller_order_request_from_event(
+    event: &RadrootsNostrEvent,
+    seller_pubkey: &str,
+    order_id: &str,
+) -> Result<ResolvedSellerOrderRequest, RuntimeError> {
+    let event_kind = event_kind_u32(event);
+    if event_kind != KIND_TRADE_ORDER_REQUEST {
+        return Err(RuntimeError::Config(format!(
+            "order decision received unexpected kind `{event_kind}`"
+        )));
+    }
+
+    let event = radroots_event_from_nostr(event);
+    let envelope = active_trade_order_request_from_event(&event)
+        .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
+    let context = active_trade_event_context_from_tags(
+        RadrootsActiveTradeMessageType::TradeOrderRequested,
+        &event.tags,
+    )
+    .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
+
+    if envelope.order_id != order_id || envelope.payload.order_id != order_id {
+        return Err(RuntimeError::Config(
+            "order request does not match requested order id".to_owned(),
+        ));
+    }
+    if context.counterparty_pubkey != seller_pubkey
+        || envelope.payload.seller_pubkey != seller_pubkey
+    {
+        return Err(RuntimeError::Config(
+            "order request is not targeted at the selected seller".to_owned(),
+        ));
+    }
+    let listing_addr =
+        parse_listing_addr(envelope.payload.listing_addr.as_str()).map_err(|error| {
+            RuntimeError::Config(format!("order request listing_addr is invalid: {error}"))
+        })?;
+    if listing_addr.seller_pubkey != seller_pubkey {
+        return Err(RuntimeError::Config(
+            "order request listing address is outside selected seller authority".to_owned(),
+        ));
+    }
+    let listing_event_id = context.listing_event.as_ref().map(|event| event.id.clone());
+
+    Ok(ResolvedSellerOrderRequest {
+        request_event_id: event.id,
+        listing_event_id,
+        order_id: envelope.order_id,
+        listing_addr: envelope.payload.listing_addr,
+        buyer_pubkey: envelope.payload.buyer_pubkey,
+        seller_pubkey: envelope.payload.seller_pubkey,
+    })
 }
 
 fn order_history_entry_from_event(
@@ -1858,6 +2085,7 @@ mod tests {
         ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, collect_issues,
         inspect_document, next_order_id, order_history_entry_from_event,
         order_history_from_receipt, order_request_filter,
+        seller_order_request_resolution_from_receipt,
     };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
 
@@ -2035,6 +2263,123 @@ mod tests {
         assert_eq!(history.skipped_count, 1);
         assert_eq!(history.count, 1);
         assert_eq!(history.orders[0].id, first_order_id);
+    }
+
+    #[test]
+    fn seller_order_request_resolution_matches_selected_seller_order() {
+        let seller = RadrootsIdentity::generate();
+        let buyer = RadrootsIdentity::generate();
+        let seller_pubkey = seller.public_key_hex();
+        let buyer_pubkey = buyer.public_key_hex();
+        let order_id = "ord_AAAAAAAAAAAAAAAAAAAAAg";
+        let listing_event_id = "1".repeat(64);
+        let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
+        let event = signed_order_request_event(
+            &buyer,
+            order_id,
+            listing_addr.as_str(),
+            buyer_pubkey.as_str(),
+            seller_pubkey.as_str(),
+            listing_event_id.as_str(),
+        );
+        let event_id = event.id.to_string();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![event],
+        };
+
+        let resolution =
+            seller_order_request_resolution_from_receipt(seller_pubkey.as_str(), order_id, receipt)
+                .expect("seller order request resolution");
+
+        assert_eq!(resolution.fetched_count, 1);
+        assert_eq!(resolution.decoded_count, 1);
+        assert_eq!(resolution.skipped_count, 0);
+        assert_eq!(resolution.requests.len(), 1);
+        assert_eq!(resolution.requests[0].request_event_id, event_id);
+        assert_eq!(resolution.requests[0].order_id, order_id);
+        assert_eq!(
+            resolution.requests[0].listing_event_id.as_deref(),
+            Some(listing_event_id.as_str())
+        );
+        assert_eq!(resolution.requests[0].listing_addr, listing_addr);
+        assert_eq!(resolution.requests[0].buyer_pubkey, buyer_pubkey);
+        assert_eq!(resolution.requests[0].seller_pubkey, seller_pubkey);
+    }
+
+    #[test]
+    fn seller_order_request_resolution_skips_wrong_seller_request() {
+        let selected_seller = RadrootsIdentity::generate();
+        let other_seller = RadrootsIdentity::generate();
+        let buyer = RadrootsIdentity::generate();
+        let selected_seller_pubkey = selected_seller.public_key_hex();
+        let other_seller_pubkey = other_seller.public_key_hex();
+        let buyer_pubkey = buyer.public_key_hex();
+        let order_id = "ord_AAAAAAAAAAAAAAAAAAAAAg";
+        let listing_event_id = "1".repeat(64);
+        let listing_addr = format!("30402:{other_seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![signed_order_request_event(
+                &buyer,
+                order_id,
+                listing_addr.as_str(),
+                buyer_pubkey.as_str(),
+                other_seller_pubkey.as_str(),
+                listing_event_id.as_str(),
+            )],
+        };
+
+        let resolution = seller_order_request_resolution_from_receipt(
+            selected_seller_pubkey.as_str(),
+            order_id,
+            receipt,
+        )
+        .expect("seller order request resolution");
+
+        assert_eq!(resolution.fetched_count, 1);
+        assert_eq!(resolution.decoded_count, 0);
+        assert_eq!(resolution.skipped_count, 1);
+        assert!(resolution.requests.is_empty());
+    }
+
+    #[test]
+    fn seller_order_request_resolution_skips_listing_outside_seller_authority() {
+        let seller = RadrootsIdentity::generate();
+        let listing_seller = RadrootsIdentity::generate();
+        let buyer = RadrootsIdentity::generate();
+        let seller_pubkey = seller.public_key_hex();
+        let listing_seller_pubkey = listing_seller.public_key_hex();
+        let buyer_pubkey = buyer.public_key_hex();
+        let order_id = "ord_AAAAAAAAAAAAAAAAAAAAAg";
+        let listing_event_id = "1".repeat(64);
+        let listing_addr = format!("30402:{listing_seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![signed_order_request_event(
+                &buyer,
+                order_id,
+                listing_addr.as_str(),
+                buyer_pubkey.as_str(),
+                seller_pubkey.as_str(),
+                listing_event_id.as_str(),
+            )],
+        };
+
+        let resolution =
+            seller_order_request_resolution_from_receipt(seller_pubkey.as_str(), order_id, receipt)
+                .expect("seller order request resolution");
+
+        assert_eq!(resolution.fetched_count, 1);
+        assert_eq!(resolution.decoded_count, 0);
+        assert_eq!(resolution.skipped_count, 1);
+        assert!(resolution.requests.is_empty());
     }
 
     fn signed_order_request_event(

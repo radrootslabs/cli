@@ -1216,6 +1216,10 @@ pub struct OrderDecisionView {
     pub seller_pubkey: Option<String>,
     pub decision: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub root_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prev_event_id: Option<String>,
@@ -1228,9 +1232,17 @@ pub struct OrderDecisionView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_relays: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connected_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acknowledged_relays: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed_relays: Vec<RelayFailureView>,
+    #[serde(default)]
+    pub fetched_count: usize,
+    #[serde(default)]
+    pub decoded_count: usize,
+    #[serde(default)]
+    pub skipped_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

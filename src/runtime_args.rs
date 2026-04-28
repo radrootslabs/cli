@@ -189,6 +189,13 @@ impl OrderDecisionArg {
             Self::Decline => "declined",
         }
     }
+
+    pub fn command(self) -> &'static str {
+        match self {
+            Self::Accept => "accept",
+            Self::Decline => "decline",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

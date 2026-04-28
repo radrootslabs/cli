@@ -231,13 +231,50 @@ where
                 .reason
                 .clone()
                 .unwrap_or_else(|| format!("order decision finished with state `{}`", view.state));
-            Err(OperationAdapterError::from_command_disposition(
-                operation_id,
-                disposition,
-                message,
-            ))
+            if disposition == CommandDisposition::ExternalUnavailable {
+                let detail = order_decision_error_detail(view);
+                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                    Err(OperationAdapterError::network_unavailable_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                } else {
+                    Err(OperationAdapterError::operation_unavailable_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                }
+            } else {
+                Err(OperationAdapterError::from_command_disposition(
+                    operation_id,
+                    disposition,
+                    message,
+                ))
+            }
         }
     }
+}
+
+fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
+    json!({
+        "state": &view.state,
+        "order_id": &view.order_id,
+        "listing_addr": &view.listing_addr,
+        "request_event_id": &view.request_event_id,
+        "root_event_id": &view.root_event_id,
+        "prev_event_id": &view.prev_event_id,
+        "buyer_pubkey": &view.buyer_pubkey,
+        "seller_pubkey": &view.seller_pubkey,
+        "target_relays": &view.target_relays,
+        "connected_relays": &view.connected_relays,
+        "failed_relays": &view.failed_relays,
+        "fetched_count": view.fetched_count,
+        "decoded_count": view.decoded_count,
+        "skipped_count": view.skipped_count,
+        "issues": &view.issues,
+    })
 }
 
 fn status_result<R>(
