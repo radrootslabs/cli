@@ -2752,8 +2752,9 @@ mod tests {
         SellerOrderRequestResolution, accepted_order_decision_payload_from_request, collect_issues,
         declined_order_decision_payload_from_request, inspect_document, next_order_id,
         order_decision_dry_run_view, order_decision_preflight_view_from_status,
-        order_history_entry_from_event, order_history_from_receipt, order_request_filter,
-        order_status_from_receipt, seller_order_request_resolution_from_receipt,
+        order_decision_view_from_resolution, order_history_entry_from_event,
+        order_history_from_receipt, order_request_filter, order_status_from_receipt,
+        seller_order_request_resolution_from_receipt,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -3334,6 +3335,72 @@ mod tests {
     }
 
     #[test]
+    fn order_decline_dry_run_view_preserves_ready_preflight_without_publish_fields() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let resolution = request_resolution_for_fixture(&fixture);
+        let request = resolution.requests[0].clone();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone()],
+            },
+        );
+        let args = OrderDecisionArgs {
+            key: fixture.order_id.clone(),
+            decision: OrderDecisionArg::Decline,
+            reason: Some(" out of stock ".to_owned()),
+            idempotency_key: Some("idem_decline_dry_run".to_owned()),
+        };
+
+        let view = order_decision_dry_run_view(&config, &args, &request, &status_view);
+
+        assert_eq!(view.state, "dry_run");
+        assert_eq!(view.decision, "declined");
+        assert_eq!(view.dry_run, true);
+        assert_eq!(
+            view.reason.as_deref(),
+            Some(
+                "dry run requested; seller order decision publication skipped with reason `out of stock`"
+            )
+        );
+        assert_eq!(
+            view.request_event_id.as_deref(),
+            Some(request.request_event_id.as_str())
+        );
+        assert_eq!(
+            view.root_event_id.as_deref(),
+            Some(request.request_event_id.as_str())
+        );
+        assert_eq!(
+            view.prev_event_id.as_deref(),
+            Some(request.request_event_id.as_str())
+        );
+        assert_eq!(
+            view.listing_addr.as_deref(),
+            Some(fixture.listing_addr.as_str())
+        );
+        assert_eq!(view.event_id, None);
+        assert_eq!(view.event_kind, None);
+        assert!(view.acknowledged_relays.is_empty());
+        assert_eq!(view.target_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.connected_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.fetched_count, 1);
+        assert_eq!(view.decoded_count, 1);
+        assert_eq!(view.skipped_count, 0);
+        assert_eq!(
+            view.idempotency_key.as_deref(),
+            Some("idem_decline_dry_run")
+        );
+    }
+
+    #[test]
     fn order_status_from_receipt_reports_accepted() {
         let fixture = order_status_fixture();
         let decision_event = signed_order_decision_event(
@@ -3501,6 +3568,9 @@ mod tests {
                 reason: "out of stock".to_owned(),
             },
         );
+        let mut expected_event_ids =
+            vec![accepted_event.id.to_string(), declined_event.id.to_string()];
+        expected_event_ids.sort();
         let receipt = DirectRelayFetchReceipt {
             target_relays: vec!["ws://relay.test".to_owned()],
             connected_relays: vec!["ws://relay.test".to_owned()],
@@ -3517,9 +3587,17 @@ mod tests {
         assert_eq!(view.state, "invalid");
         assert_eq!(view.decoded_count, 3);
         assert!(view.decision_event_id.is_none());
-        assert!(view.reducer_issues.iter().any(|issue| {
-            issue.field == "decision_event_id" && issue.message.contains("ConflictingDecisions")
-        }));
+        let issue = view
+            .reducer_issues
+            .iter()
+            .find(|issue| issue.code == "conflicting_decisions")
+            .expect("conflicting decision issue");
+        assert_eq!(issue.field, "decision_event_id");
+        assert_eq!(
+            issue.message,
+            "active order reducer reported conflicting decisions"
+        );
+        assert_eq!(issue.event_ids, expected_event_ids);
     }
 
     #[test]
@@ -3595,7 +3673,131 @@ mod tests {
         assert!(resolution.requests.is_empty());
     }
 
+    #[test]
+    fn seller_order_request_resolution_reports_invalid_same_order_candidate() {
+        let fixture = order_status_fixture();
+        let invalid_event = signed_malformed_order_request_event(
+            &fixture.buyer,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            "2".repeat(64).as_str(),
+        );
+        let invalid_event_id = invalid_event.id.to_string();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), invalid_event],
+        };
+
+        let resolution = seller_order_request_resolution_from_receipt(
+            fixture.seller_pubkey.as_str(),
+            fixture.order_id.as_str(),
+            receipt,
+        )
+        .expect("seller order request resolution");
+
+        assert_eq!(resolution.fetched_count, 2);
+        assert_eq!(resolution.decoded_count, 1);
+        assert_eq!(resolution.skipped_count, 1);
+        assert_eq!(resolution.requests.len(), 1);
+        assert_eq!(resolution.candidate_issues.len(), 1);
+        assert_eq!(
+            resolution.candidate_issues[0].code,
+            "invalid_request_candidate"
+        );
+        assert_eq!(
+            resolution.candidate_issues[0].event_ids,
+            vec![invalid_event_id.clone()]
+        );
+
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let args = OrderDecisionArgs {
+            key: fixture.order_id.clone(),
+            decision: OrderDecisionArg::Accept,
+            reason: None,
+            idempotency_key: None,
+        };
+        let view = order_decision_view_from_resolution(
+            &config,
+            &args,
+            fixture.seller_pubkey.clone(),
+            resolution,
+        );
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.issues[0].code, "invalid_request_candidate");
+        assert_eq!(view.issues[0].event_ids, vec![invalid_event_id]);
+        assert!(view.event_id.is_none());
+    }
+
+    #[test]
+    fn seller_order_request_resolution_reports_multiple_same_order_candidates_invalid() {
+        let fixture = order_status_fixture();
+        let second_request_event = signed_order_request_event(
+            &fixture.buyer,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            "2".repeat(64).as_str(),
+        );
+        let mut expected_event_ids = vec![
+            fixture.request_event.id.to_string(),
+            second_request_event.id.to_string(),
+        ];
+        expected_event_ids.sort();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), second_request_event],
+        };
+
+        let resolution = seller_order_request_resolution_from_receipt(
+            fixture.seller_pubkey.as_str(),
+            fixture.order_id.as_str(),
+            receipt,
+        )
+        .expect("seller order request resolution");
+
+        assert_eq!(resolution.fetched_count, 2);
+        assert_eq!(resolution.decoded_count, 2);
+        assert_eq!(resolution.skipped_count, 0);
+        assert_eq!(resolution.requests.len(), 2);
+
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let args = OrderDecisionArgs {
+            key: fixture.order_id.clone(),
+            decision: OrderDecisionArg::Accept,
+            reason: None,
+            idempotency_key: None,
+        };
+        let view = order_decision_view_from_resolution(
+            &config,
+            &args,
+            fixture.seller_pubkey.clone(),
+            resolution,
+        );
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.issues.len(), 1);
+        assert_eq!(view.issues[0].code, "multiple_request_candidates");
+        assert_eq!(view.issues[0].field, "request_event_id");
+        assert_eq!(view.issues[0].event_ids, expected_event_ids);
+        assert!(view.event_id.is_none());
+    }
+
     struct OrderStatusFixture {
+        buyer: RadrootsIdentity,
         seller: RadrootsIdentity,
         order_id: String,
         listing_addr: String,
@@ -3622,6 +3824,7 @@ mod tests {
         );
 
         OrderStatusFixture {
+            buyer,
             seller,
             order_id,
             listing_addr,
@@ -3769,6 +3972,38 @@ mod tests {
             .expect("nostr event builder")
             .sign_with_keys(seller.keys())
             .expect("signed order decision")
+    }
+
+    fn signed_malformed_order_request_event(
+        buyer: &RadrootsIdentity,
+        order_id: &str,
+        listing_addr: &str,
+        buyer_pubkey: &str,
+        seller_pubkey: &str,
+        listing_event_id: &str,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
+        let payload = RadrootsTradeOrderRequested {
+            order_id: order_id.to_owned(),
+            listing_addr: listing_addr.to_owned(),
+            buyer_pubkey: buyer_pubkey.to_owned(),
+            seller_pubkey: seller_pubkey.to_owned(),
+            items: vec![RadrootsTradeOrderItem {
+                bin_id: "bin-1".to_owned(),
+                bin_count: 2,
+            }],
+        };
+        let parts = active_trade_order_request_event_build(
+            &RadrootsNostrEventPtr {
+                id: listing_event_id.to_owned(),
+                relays: None,
+            },
+            &payload,
+        )
+        .expect("order request parts");
+        radroots_nostr_build_event(parts.kind, "not-json".to_owned(), parts.tags)
+            .expect("nostr event builder")
+            .sign_with_keys(buyer.keys())
+            .expect("signed malformed order request")
     }
 
     fn signed_order_request_event(
