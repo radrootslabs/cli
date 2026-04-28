@@ -172,6 +172,11 @@ impl TargetCommand {
                 OrderCommand::Submit(_) => "order.submit",
                 OrderCommand::Get(_) => "order.get",
                 OrderCommand::List => "order.list",
+                OrderCommand::Accept(_) => "order.accept",
+                OrderCommand::Decline(_) => "order.decline",
+                OrderCommand::Status(status) => match &status.command {
+                    OrderStatusCommand::Get(_) => "order.status.get",
+                },
                 OrderCommand::Event(event) => match &event.command {
                     OrderEventCommand::List(_) => "order.event.list",
                     OrderEventCommand::Watch(_) => "order.event.watch",
@@ -678,6 +683,9 @@ pub enum OrderCommand {
     Submit(OrderSubmitArgs),
     Get(OrderKeyArgs),
     List,
+    Accept(OrderKeyArgs),
+    Decline(OrderDeclineArgs),
+    Status(OrderStatusArgs),
     Event(OrderEventArgs),
 }
 
@@ -689,6 +697,24 @@ pub struct OrderSubmitArgs {
 #[derive(Debug, Clone, Args)]
 pub struct OrderKeyArgs {
     pub order_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderDeclineArgs {
+    pub order_id: Option<String>,
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderStatusArgs {
+    #[command(subcommand)]
+    pub command: OrderStatusCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrderStatusCommand {
+    Get(OrderKeyArgs),
 }
 
 #[derive(Debug, Clone, Args)]

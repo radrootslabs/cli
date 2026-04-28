@@ -1,16 +1,23 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::domain::runtime::{CommandDisposition, OrderSubmitView};
+use crate::domain::runtime::{
+    CommandDisposition, OrderDecisionView, OrderStatusView, OrderSubmitView,
+};
 use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
-    OperationResult, OperationResultData, OperationService, OrderEventListRequest,
-    OrderEventListResult, OrderEventWatchRequest, OrderEventWatchResult, OrderGetRequest,
-    OrderGetResult, OrderListRequest, OrderListResult, OrderSubmitRequest, OrderSubmitResult,
+    OperationResult, OperationResultData, OperationService, OrderAcceptRequest, OrderAcceptResult,
+    OrderDeclineRequest, OrderDeclineResult, OrderEventListRequest, OrderEventListResult,
+    OrderEventWatchRequest, OrderEventWatchResult, OrderGetRequest, OrderGetResult,
+    OrderListRequest, OrderListResult, OrderStatusGetRequest, OrderStatusGetResult,
+    OrderSubmitRequest, OrderSubmitResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime_args::{OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs};
+use crate::runtime_args::{
+    OrderDecisionArg, OrderDecisionArgs, OrderStatusArgs, OrderSubmitArgs, OrderWatchArgs,
+    RecordLookupArgs,
+};
 
 pub struct OrderOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -86,6 +93,97 @@ impl OperationService<OrderListRequest> for OrderOperationService<'_> {
     }
 }
 
+impl OperationService<OrderAcceptRequest> for OrderOperationService<'_> {
+    type Result = OrderAcceptResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<OrderAcceptRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
+
+        let args = OrderDecisionArgs {
+            key: required_order_key(&request)?,
+            decision: OrderDecisionArg::Accept,
+            reason: None,
+            idempotency_key: request
+                .context
+                .idempotency_key
+                .clone()
+                .or_else(|| string_input(&request, "idempotency_key")),
+        };
+        let mut config = self.config.clone();
+        if request.context.dry_run {
+            config.output.dry_run = true;
+        }
+        let view = crate::runtime::order::decide(&config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
+        decision_result::<OrderAcceptResult>(request.operation_id(), &view)
+    }
+}
+
+impl OperationService<OrderDeclineRequest> for OrderOperationService<'_> {
+    type Result = OrderDeclineResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<OrderDeclineRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let reason = string_input(&request, "reason").ok_or_else(|| {
+            invalid_input(
+                request.operation_id(),
+                "missing required `reason` input".to_owned(),
+            )
+        })?;
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
+
+        let args = OrderDecisionArgs {
+            key: required_order_key(&request)?,
+            decision: OrderDecisionArg::Decline,
+            reason: Some(reason),
+            idempotency_key: request
+                .context
+                .idempotency_key
+                .clone()
+                .or_else(|| string_input(&request, "idempotency_key")),
+        };
+        let mut config = self.config.clone();
+        if request.context.dry_run {
+            config.output.dry_run = true;
+        }
+        let view = crate::runtime::order::decide(&config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
+        decision_result::<OrderDeclineResult>(request.operation_id(), &view)
+    }
+}
+
+impl OperationService<OrderStatusGetRequest> for OrderOperationService<'_> {
+    type Result = OrderStatusGetResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<OrderStatusGetRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = OrderStatusArgs {
+            key: required_order_key(&request)?,
+        };
+        let view = crate::runtime::order::status(self.config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
+        status_result::<OrderStatusGetResult>(request.operation_id(), &view)
+    }
+}
+
 impl OperationService<OrderEventListRequest> for OrderOperationService<'_> {
     type Result = OrderEventListResult;
 
@@ -116,6 +214,52 @@ impl OperationService<OrderEventWatchRequest> for OrderOperationService<'_> {
         };
         let view = map_runtime(crate::runtime::order::watch(self.config, &args))?;
         serialized_target_result::<OrderEventWatchResult, _>(&view)
+    }
+}
+
+fn decision_result<R>(
+    operation_id: &str,
+    view: &OrderDecisionView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_target_result::<R, _>(view),
+        disposition => {
+            let message = view
+                .reason
+                .clone()
+                .unwrap_or_else(|| format!("order decision finished with state `{}`", view.state));
+            Err(OperationAdapterError::from_command_disposition(
+                operation_id,
+                disposition,
+                message,
+            ))
+        }
+    }
+}
+
+fn status_result<R>(
+    operation_id: &str,
+    view: &OrderStatusView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_target_result::<R, _>(view),
+        disposition => {
+            let message = view
+                .reason
+                .clone()
+                .unwrap_or_else(|| format!("order status finished with state `{}`", view.state));
+            Err(OperationAdapterError::from_command_disposition(
+                operation_id,
+                disposition,
+                message,
+            ))
+        }
     }
 }
 
@@ -272,8 +416,9 @@ mod tests {
 
     use super::OrderOperationService;
     use crate::operation_adapter::{
-        OperationAdapter, OperationContext, OperationData, OperationRequest, OrderEventListRequest,
-        OrderEventWatchRequest, OrderGetRequest, OrderListRequest, OrderSubmitRequest,
+        OperationAdapter, OperationContext, OperationData, OperationRequest, OrderAcceptRequest,
+        OrderDeclineRequest, OrderEventListRequest, OrderEventWatchRequest, OrderGetRequest,
+        OrderListRequest, OrderStatusGetRequest, OrderSubmitRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -350,6 +495,55 @@ mod tests {
         assert_eq!(output_error.code, "not_found");
         assert_eq!(output_error.exit_code, 4);
         assert!(output_error.message.contains("ord_missing"));
+    }
+
+    #[test]
+    fn order_accept_requires_approval_token() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let accept = OperationRequest::new(
+            OperationContext::default(),
+            OrderAcceptRequest::from_data(data(&[("order_id", "ord_pending")])),
+        )
+        .expect("order accept request");
+        let error = service.execute(accept).expect_err("approval required");
+
+        assert_eq!(error.to_output_error().code, "approval_required");
+    }
+
+    #[test]
+    fn order_decline_requires_reason_before_approval() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let decline = OperationRequest::new(
+            OperationContext::default(),
+            OrderDeclineRequest::from_data(data(&[("order_id", "ord_pending")])),
+        )
+        .expect("order decline request");
+        let error = service.execute(decline).expect_err("reason required");
+        let output_error = error.to_output_error();
+
+        assert_eq!(output_error.code, "invalid_input");
+        assert!(output_error.message.contains("reason"));
+    }
+
+    #[test]
+    fn order_status_get_requires_relay_configuration() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let status = OperationRequest::new(
+            OperationContext::default(),
+            OrderStatusGetRequest::from_data(data(&[("order_id", "ord_pending")])),
+        )
+        .expect("order status request");
+        let error = service.execute(status).expect_err("status unconfigured");
+        let output_error = error.to_output_error();
+
+        assert_eq!(output_error.code, "operation_unavailable");
+        assert!(output_error.message.contains("configured relay"));
     }
 
     #[test]

@@ -842,6 +842,51 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false
     ),
     operation!(
+        "order.accept",
+        "radroots order accept",
+        "order",
+        "order_accept",
+        "OrderAcceptRequest",
+        "OrderAcceptResult",
+        "Accept a buyer order request.",
+        Seller,
+        true,
+        Required,
+        Critical,
+        false,
+        true
+    ),
+    operation!(
+        "order.decline",
+        "radroots order decline",
+        "order",
+        "order_decline",
+        "OrderDeclineRequest",
+        "OrderDeclineResult",
+        "Decline a buyer order request.",
+        Seller,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
+        "order.status.get",
+        "radroots order status get",
+        "order",
+        "order_status_get",
+        "OrderStatusGetRequest",
+        "OrderStatusGetResult",
+        "Get reducer-derived order status.",
+        Any,
+        false,
+        None,
+        Low,
+        false,
+        false
+    ),
+    operation!(
         "order.event.list",
         "radroots order event list",
         "order",
@@ -946,6 +991,9 @@ mod tests {
         "order.submit",
         "order.get",
         "order.list",
+        "order.accept",
+        "order.decline",
+        "order.status.get",
         "order.event.list",
         "order.event.watch",
     ];
@@ -977,6 +1025,8 @@ mod tests {
         "basket.item.remove",
         "basket.quote.create",
         "order.submit",
+        "order.accept",
+        "order.decline",
     ];
 
     const INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[];
@@ -989,7 +1039,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 53);
+        assert_eq!(OPERATION_REGISTRY.len(), 56);
     }
 
     #[test]
@@ -1036,6 +1086,8 @@ mod tests {
             "listing.publish",
             "listing.archive",
             "order.submit",
+            "order.accept",
+            "order.decline",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

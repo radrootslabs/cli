@@ -111,21 +111,60 @@ fn removed_command_families_are_rejected_publicly() {
 }
 
 #[test]
-fn seller_order_decision_commands_are_deferred() {
-    for args in [
-        ["order", "accept", "ord_deferred"].as_slice(),
-        ["order", "decline", "ord_deferred"].as_slice(),
-        ["order", "decision", "accept", "ord_deferred"].as_slice(),
+fn seller_order_decision_and_status_commands_are_public() {
+    for (operation_id, args) in [
+        (
+            "order.accept",
+            [
+                "--format",
+                "json",
+                "--dry-run",
+                "order",
+                "accept",
+                "ord_public",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.decline",
+            [
+                "--format",
+                "json",
+                "--dry-run",
+                "order",
+                "decline",
+                "ord_public",
+                "--reason",
+                "out_of_stock",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.status.get",
+            ["--format", "json", "order", "status", "get", "ord_public"].as_slice(),
+        ),
     ] {
         let output = radroots()
             .args(args)
             .output()
-            .expect("run deferred seller order decision command");
+            .expect("run seller order command");
+        let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
 
-        assert!(!output.status.success(), "`{args:?}` should be rejected");
-        let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
-        assert!(stderr.contains("unrecognized subcommand"));
+        assert_eq!(value["operation_id"], operation_id);
+        assert_ne!(
+            String::from_utf8(output.stderr).expect("utf8 stderr"),
+            "unrecognized subcommand"
+        );
     }
+
+    let output = radroots()
+        .args(["order", "decision", "accept", "ord_deferred"])
+        .output()
+        .expect("run removed nested decision command");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("unrecognized subcommand"));
 }
 
 #[test]
@@ -515,6 +554,19 @@ fn online_requires_relay_for_external_network_operations() {
         (
             "order.event.list",
             ["--format", "json", "--online", "order", "event", "list"].as_slice(),
+        ),
+        (
+            "order.status.get",
+            [
+                "--format",
+                "json",
+                "--online",
+                "order",
+                "status",
+                "get",
+                "ord_missing",
+            ]
+            .as_slice(),
         ),
         (
             "order.event.watch",
@@ -979,6 +1031,12 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
         &["listing", "archive", "missing-listing.toml"],
     );
     assert_required_approval_token_rejected(&sandbox, "order.submit", &["order", "submit"]);
+    assert_required_approval_token_rejected(&sandbox, "order.accept", &["order", "accept"]);
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "order.decline",
+        &["order", "decline", "--reason", "out_of_stock"],
+    );
 }
 
 fn assert_required_approval_token_rejected(

@@ -1204,6 +1204,106 @@ impl OrderSubmitView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OrderDecisionView {
+    pub state: String,
+    pub source: String,
+    pub order_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    pub decision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_kind: Option<u32>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acknowledged_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_relays: Vec<RelayFailureView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderDecisionView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "missing" => CommandDisposition::NotFound,
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderStatusView {
+    pub state: String,
+    pub source: String,
+    pub order_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reducer_issues: Vec<OrderIssueView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connected_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_relays: Vec<RelayFailureView>,
+    #[serde(default)]
+    pub fetched_count: usize,
+    #[serde(default)]
+    pub decoded_count: usize,
+    #[serde(default)]
+    pub skipped_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderStatusView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct OrderSubmitWatchView {
     pub submit: OrderSubmitView,
     pub watch: OrderWatchView,

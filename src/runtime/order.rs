@@ -27,9 +27,9 @@ use radroots_trade::order::canonicalize_active_order_request_for_signer;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
-    OrderCancelView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView, OrderHistoryView,
-    OrderIssueView, OrderListView, OrderNewView, OrderSubmitView, OrderSummaryView, OrderWatchView,
-    RelayFailureView,
+    OrderCancelView, OrderDecisionView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView,
+    OrderHistoryView, OrderIssueView, OrderListView, OrderNewView, OrderStatusView,
+    OrderSubmitView, OrderSummaryView, OrderWatchView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -40,13 +40,16 @@ use crate::runtime::direct_relay::{
 };
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime_args::{
-    OrderDraftCreateArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
+    OrderDecisionArgs, OrderDraftCreateArgs, OrderStatusArgs, OrderSubmitArgs, OrderWatchArgs,
+    RecordLookupArgs,
 };
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
 const ORDER_SUBMIT_SOURCE: &str = "direct Nostr relay publish · local key";
+const ORDER_DECISION_SOURCE: &str = "direct Nostr relay decision publish · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
+const ORDER_STATUS_SOURCE: &str = "direct Nostr relay status fetch · active order reducer";
 const ORDER_EVENT_WATCH_UNAVAILABLE_REASON: &str =
     "relay-backed order event watch is not implemented";
 const ORDERS_DIR: &str = "orders/drafts";
@@ -633,6 +636,125 @@ pub fn history(
     };
 
     Ok(order_history_from_receipt(seller_pubkey, order_id, receipt))
+}
+
+pub fn decide(
+    config: &RuntimeConfig,
+    args: &OrderDecisionArgs,
+) -> Result<OrderDecisionView, RuntimeError> {
+    let decision_reason = args
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty());
+    if config.output.dry_run {
+        return Ok(OrderDecisionView {
+            state: "dry_run".to_owned(),
+            source: ORDER_DECISION_SOURCE.to_owned(),
+            order_id: args.key.clone(),
+            listing_addr: None,
+            buyer_pubkey: None,
+            seller_pubkey: None,
+            decision: args.decision.as_str().to_owned(),
+            root_event_id: None,
+            prev_event_id: None,
+            event_id: None,
+            event_kind: None,
+            dry_run: true,
+            target_relays: config.relay.urls.clone(),
+            acknowledged_relays: Vec::new(),
+            failed_relays: Vec::new(),
+            idempotency_key: args.idempotency_key.clone(),
+            signer_mode: Some(config.signer.backend.as_str().to_owned()),
+            reason: Some(match decision_reason {
+                Some(reason) => format!(
+                    "dry run requested; seller order decision publication skipped with reason `{reason}`"
+                ),
+                None => "dry run requested; seller order decision publication skipped".to_owned(),
+            }),
+            issues: Vec::new(),
+            actions: vec![format!("radroots order status get {}", args.key)],
+        });
+    }
+
+    Ok(OrderDecisionView {
+        state: "unavailable".to_owned(),
+        source: ORDER_DECISION_SOURCE.to_owned(),
+        order_id: args.key.clone(),
+        listing_addr: None,
+        buyer_pubkey: None,
+        seller_pubkey: None,
+        decision: args.decision.as_str().to_owned(),
+        root_event_id: None,
+        prev_event_id: None,
+        event_id: None,
+        event_kind: None,
+        dry_run: false,
+        target_relays: config.relay.urls.clone(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        reason: Some(match decision_reason {
+            Some(reason) => {
+                format!(
+                    "seller order decision publication is not implemented for reason `{reason}`"
+                )
+            }
+            None => "seller order decision publication is not implemented".to_owned(),
+        }),
+        issues: Vec::new(),
+        actions: Vec::new(),
+    })
+}
+
+pub fn status(
+    config: &RuntimeConfig,
+    args: &OrderStatusArgs,
+) -> Result<OrderStatusView, RuntimeError> {
+    if config.relay.urls.is_empty() {
+        return Ok(OrderStatusView {
+            state: "unconfigured".to_owned(),
+            source: ORDER_STATUS_SOURCE.to_owned(),
+            order_id: args.key.clone(),
+            request_event_id: None,
+            decision_event_id: None,
+            listing_addr: None,
+            buyer_pubkey: None,
+            seller_pubkey: None,
+            last_event_id: None,
+            reducer_issues: Vec::new(),
+            target_relays: Vec::new(),
+            connected_relays: Vec::new(),
+            failed_relays: Vec::new(),
+            fetched_count: 0,
+            decoded_count: 0,
+            skipped_count: 0,
+            reason: Some("order status get requires at least one configured relay".to_owned()),
+            actions: Vec::new(),
+        });
+    }
+
+    Ok(OrderStatusView {
+        state: "unavailable".to_owned(),
+        source: ORDER_STATUS_SOURCE.to_owned(),
+        order_id: args.key.clone(),
+        request_event_id: None,
+        decision_event_id: None,
+        listing_addr: None,
+        buyer_pubkey: None,
+        seller_pubkey: None,
+        last_event_id: None,
+        reducer_issues: Vec::new(),
+        target_relays: config.relay.urls.clone(),
+        connected_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: 0,
+        decoded_count: 0,
+        skipped_count: 0,
+        reason: Some("order status reducer fetch is not implemented".to_owned()),
+        actions: Vec::new(),
+    })
 }
 
 pub fn cancel(

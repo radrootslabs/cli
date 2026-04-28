@@ -260,6 +260,15 @@ fn execute_request(
         TargetOperationRequest::OrderList(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
+        TargetOperationRequest::OrderAccept(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
+        TargetOperationRequest::OrderDecline(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
+        TargetOperationRequest::OrderStatusGet(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
         TargetOperationRequest::OrderEventList(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
@@ -379,6 +388,9 @@ fn external_network_operation(operation_id: &str) -> bool {
             | "listing.publish"
             | "listing.archive"
             | "order.submit"
+            | "order.accept"
+            | "order.decline"
+            | "order.status.get"
             | "order.event.list"
             | "order.event.watch"
     )

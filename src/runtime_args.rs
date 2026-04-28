@@ -176,6 +176,34 @@ pub struct OrderSubmitArgs {
     pub idempotency_key: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderDecisionArg {
+    Accept,
+    Decline,
+}
+
+impl OrderDecisionArg {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accept => "accepted",
+            Self::Decline => "declined",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderDecisionArgs {
+    pub key: String,
+    pub decision: OrderDecisionArg,
+    pub reason: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderStatusArgs {
+    pub key: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct OrderWatchArgs {
     pub key: String,

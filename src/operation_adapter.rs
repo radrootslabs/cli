@@ -1035,7 +1035,7 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
         AccountCommand, AccountSelectionCommand, BasketCommand, BasketItemCommand,
         BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand, FarmLocationCommand,
         FarmProfileCommand, ListingCommand, MarketCommand, MarketListingCommand,
-        MarketProductCommand, OrderCommand, OrderEventCommand, TargetCommand,
+        MarketProductCommand, OrderCommand, OrderEventCommand, OrderStatusCommand, TargetCommand,
     };
 
     let mut input = OperationData::new();
@@ -1163,6 +1163,16 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 insert_string(&mut input, "order_id", &args.order_id);
             }
             OrderCommand::Get(args) => insert_string(&mut input, "order_id", &args.order_id),
+            OrderCommand::Accept(args) => insert_string(&mut input, "order_id", &args.order_id),
+            OrderCommand::Decline(args) => {
+                insert_string(&mut input, "order_id", &args.order_id);
+                insert_string(&mut input, "reason", &args.reason);
+            }
+            OrderCommand::Status(status) => match &status.command {
+                OrderStatusCommand::Get(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id)
+                }
+            },
             OrderCommand::Event(event) => match &event.command {
                 OrderEventCommand::List(args) | OrderEventCommand::Watch(args) => {
                     insert_string(&mut input, "order_id", &args.order_id)
@@ -1259,6 +1269,9 @@ target_operation_contracts! {
     OrderSubmit => (OrderSubmitRequest, OrderSubmitResult, "order.submit"),
     OrderGet => (OrderGetRequest, OrderGetResult, "order.get"),
     OrderList => (OrderListRequest, OrderListResult, "order.list"),
+    OrderAccept => (OrderAcceptRequest, OrderAcceptResult, "order.accept"),
+    OrderDecline => (OrderDeclineRequest, OrderDeclineResult, "order.decline"),
+    OrderStatusGet => (OrderStatusGetRequest, OrderStatusGetResult, "order.status.get"),
     OrderEventList => (OrderEventListRequest, OrderEventListResult, "order.event.list"),
     OrderEventWatch => (OrderEventWatchRequest, OrderEventWatchResult, "order.event.watch"),
 }

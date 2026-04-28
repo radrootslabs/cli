@@ -4,7 +4,9 @@ use crate::domain::runtime::{
 };
 use crate::runtime::accounts::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolution_view};
 use crate::runtime::config::{RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend};
-use radroots_events::kinds::{KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_ORDER_REQUEST};
+use radroots_events::kinds::{
+    KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST,
+};
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
 use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
@@ -272,7 +274,7 @@ fn deferred_myc_binding_status() -> SignerBindingStatusView {
     }
 }
 
-fn cli_write_kinds() -> [CliWriteKind; 4] {
+fn cli_write_kinds() -> [CliWriteKind; 6] {
     [
         CliWriteKind {
             command: "farm profile publish",
@@ -289,6 +291,14 @@ fn cli_write_kinds() -> [CliWriteKind; 4] {
         CliWriteKind {
             command: "order submit",
             event_kind: KIND_TRADE_ORDER_REQUEST,
+        },
+        CliWriteKind {
+            command: "order accept",
+            event_kind: KIND_TRADE_ORDER_DECISION,
+        },
+        CliWriteKind {
+            command: "order decline",
+            event_kind: KIND_TRADE_ORDER_DECISION,
         },
     ]
 }
@@ -333,7 +343,7 @@ fn local_availability(value: RadrootsNostrLocalSignerAvailability) -> &'static s
 mod tests {
     use radroots_events::kinds::KIND_TRADE_DISCOUNT_DECLINE;
 
-    use super::{KIND_TRADE_ORDER_REQUEST, cli_write_kinds};
+    use super::{KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST, cli_write_kinds};
 
     #[test]
     fn order_submit_readiness_uses_active_order_request_kind() {
@@ -344,5 +354,18 @@ mod tests {
 
         assert_eq!(write_kind.event_kind, KIND_TRADE_ORDER_REQUEST);
         assert_ne!(write_kind.event_kind, KIND_TRADE_DISCOUNT_DECLINE);
+    }
+
+    #[test]
+    fn order_decision_readiness_uses_active_order_decision_kind() {
+        for command in ["order accept", "order decline"] {
+            let write_kind = cli_write_kinds()
+                .into_iter()
+                .find(|kind| kind.command == command)
+                .expect("order decision readiness");
+
+            assert_eq!(write_kind.event_kind, KIND_TRADE_ORDER_DECISION);
+            assert_ne!(write_kind.event_kind, KIND_TRADE_DISCOUNT_DECLINE);
+        }
     }
 }
