@@ -671,25 +671,9 @@ pub fn decide(
     config: &RuntimeConfig,
     args: &OrderDecisionArgs,
 ) -> Result<OrderDecisionView, RuntimeError> {
-    let decision_reason = args
-        .reason
-        .as_deref()
-        .map(str::trim)
-        .filter(|reason| !reason.is_empty());
-    if config.output.dry_run {
-        let mut view = order_decision_base_view(config, args, "dry_run", true);
-        view.reason = Some(match decision_reason {
-            Some(reason) => format!(
-                "dry run requested; seller order decision publication skipped with reason `{reason}`"
-            ),
-            None => "dry run requested; seller order decision publication skipped".to_owned(),
-        });
-        view.actions = vec![format!("radroots order status get {}", args.key)];
-        return Ok(view);
-    }
-
     if config.relay.urls.is_empty() {
-        let mut view = order_decision_base_view(config, args, "unconfigured", false);
+        let mut view =
+            order_decision_base_view(config, args, "unconfigured", config.output.dry_run);
         view.reason = Some(format!(
             "order {} requires at least one configured relay",
             args.decision.command()
@@ -700,7 +684,8 @@ pub fn decide(
     let seller = match accounts::resolve_account(config)? {
         Some(account) => account,
         None => {
-            let mut view = order_decision_base_view(config, args, "unconfigured", false);
+            let mut view =
+                order_decision_base_view(config, args, "unconfigured", config.output.dry_run);
             view.reason = Some(format!(
                 "order {} requires a selected seller account",
                 args.decision.command()
@@ -718,7 +703,8 @@ pub fn decide(
             target_relays,
             failed_relays,
         }) => {
-            let mut view = order_decision_base_view(config, args, "unavailable", false);
+            let mut view =
+                order_decision_base_view(config, args, "unavailable", config.output.dry_run);
             view.seller_pubkey = Some(seller_pubkey);
             view.target_relays = target_relays;
             view.failed_relays = relay_failures(failed_relays);
@@ -747,7 +733,39 @@ pub fn decide(
                 ));
             }
         };
-        return publish_order_decision(config, args, request, resolution, signing);
+        let payload = {
+            let signer_pubkey = signing
+                .account
+                .record
+                .public_identity
+                .public_key_hex
+                .as_str();
+            canonical_order_decision_payload(args, &request, signer_pubkey)?
+        };
+        let status_view = status(
+            config,
+            &OrderStatusArgs {
+                key: args.key.clone(),
+            },
+        )?;
+        if let Some(view) = order_decision_preflight_view_from_status(
+            config,
+            args,
+            &request,
+            &resolution,
+            &status_view,
+        ) {
+            return Ok(view);
+        }
+        if config.output.dry_run {
+            return Ok(order_decision_dry_run_view(
+                config,
+                args,
+                &request,
+                &status_view,
+            ));
+        }
+        return publish_order_decision(config, args, request, resolution, signing, payload);
     }
     Ok(order_decision_view_from_resolution(
         config,
@@ -1151,7 +1169,7 @@ fn order_decision_view_from_resolution(
         skipped_count,
         requests,
     } = resolution;
-    let mut view = order_decision_base_view(config, args, "missing", false);
+    let mut view = order_decision_base_view(config, args, "missing", config.output.dry_run);
     view.seller_pubkey = Some(seller_pubkey);
     view.target_relays = target_relays;
     view.connected_relays = connected_relays;
@@ -1210,6 +1228,88 @@ fn apply_order_decision_request(
     view.listing_event_id = request.listing_event_id.clone();
     view.root_event_id = Some(request.request_event_id.clone());
     view.prev_event_id = Some(request.request_event_id.clone());
+}
+
+fn apply_order_decision_status(view: &mut OrderDecisionView, status: &OrderStatusView) {
+    view.target_relays = status.target_relays.clone();
+    view.connected_relays = status.connected_relays.clone();
+    view.failed_relays = status.failed_relays.clone();
+    view.fetched_count = status.fetched_count;
+    view.decoded_count = status.decoded_count;
+    view.skipped_count = status.skipped_count;
+    view.issues = status.reducer_issues.clone();
+}
+
+fn order_decision_preflight_view_from_status(
+    config: &RuntimeConfig,
+    args: &OrderDecisionArgs,
+    request: &ResolvedSellerOrderRequest,
+    resolution: &SellerOrderRequestResolution,
+    status: &OrderStatusView,
+) -> Option<OrderDecisionView> {
+    let state = match status.state.as_str() {
+        "accepted" | "declined" => "already_decided",
+        "invalid" => "invalid",
+        "unavailable" => "unavailable",
+        "unconfigured" => "unconfigured",
+        _ => return None,
+    };
+    let mut view = order_decision_base_view(config, args, state, config.output.dry_run);
+    apply_order_decision_resolution(&mut view, resolution);
+    apply_order_decision_request(&mut view, request);
+    apply_order_decision_status(&mut view, status);
+    if let Some(decision_event_id) = &status.decision_event_id {
+        view.event_id = Some(decision_event_id.clone());
+        view.event_kind = Some(KIND_TRADE_ORDER_DECISION);
+    }
+    view.reason = Some(match status.state.as_str() {
+        "accepted" | "declined" => format!(
+            "order {} refused because order `{}` already has a visible `{}` seller decision",
+            args.decision.command(),
+            request.order_id,
+            status.state
+        ),
+        "invalid" => status.reason.clone().unwrap_or_else(|| {
+            format!(
+                "order {} refused because active order events for `{}` are invalid",
+                args.decision.command(),
+                request.order_id
+            )
+        }),
+        _ => status.reason.clone().unwrap_or_else(|| {
+            format!(
+                "order {} status preflight failed with state `{}`",
+                args.decision.command(),
+                status.state
+            )
+        }),
+    });
+    view.actions = vec![format!("radroots order status get {}", request.order_id)];
+    Some(view)
+}
+
+fn order_decision_dry_run_view(
+    config: &RuntimeConfig,
+    args: &OrderDecisionArgs,
+    request: &ResolvedSellerOrderRequest,
+    status: &OrderStatusView,
+) -> OrderDecisionView {
+    let decision_reason = args
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty());
+    let mut view = order_decision_base_view(config, args, "dry_run", true);
+    apply_order_decision_request(&mut view, request);
+    apply_order_decision_status(&mut view, status);
+    view.reason = Some(match decision_reason {
+        Some(reason) => format!(
+            "dry run requested; seller order decision publication skipped with reason `{reason}`"
+        ),
+        None => "dry run requested; seller order decision publication skipped".to_owned(),
+    });
+    view.actions = vec![format!("radroots order status get {}", request.order_id)];
+    view
 }
 
 fn seller_order_request_resolution_from_receipt(
@@ -1312,16 +1412,8 @@ fn publish_order_decision(
     request: ResolvedSellerOrderRequest,
     resolution: SellerOrderRequestResolution,
     signing: accounts::AccountSigningIdentity,
+    payload: RadrootsTradeOrderDecisionEvent,
 ) -> Result<OrderDecisionView, RuntimeError> {
-    let signer_pubkey = signing
-        .account
-        .record
-        .public_identity
-        .public_key_hex
-        .as_str();
-    let payload = order_decision_payload_from_request(args, &request)?;
-    let payload = canonicalize_active_order_decision_for_signer(payload, signer_pubkey)
-        .map_err(|error| RuntimeError::Config(format!("canonicalize order decision: {error}")))?;
     let parts = active_trade_order_decision_event_build(
         request.request_event_id.as_str(),
         request.request_event_id.as_str(),
@@ -1335,6 +1427,16 @@ fn publish_order_decision(
     Ok(published_order_decision_view(
         config, args, request, resolution, event_kind, receipt,
     ))
+}
+
+fn canonical_order_decision_payload(
+    args: &OrderDecisionArgs,
+    request: &ResolvedSellerOrderRequest,
+    signer_pubkey: &str,
+) -> Result<RadrootsTradeOrderDecisionEvent, RuntimeError> {
+    let payload = order_decision_payload_from_request(args, request)?;
+    canonicalize_active_order_decision_for_signer(payload, signer_pubkey)
+        .map_err(|error| RuntimeError::Config(format!("canonicalize order decision: {error}")))
 }
 
 fn order_decision_payload_from_request(
@@ -1439,7 +1541,7 @@ fn order_decision_binding_error_view(
             vec!["run radroots signer status get".to_owned()],
         ),
     };
-    let mut view = order_decision_base_view(config, args, state.as_str(), false);
+    let mut view = order_decision_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_decision_resolution(&mut view, &resolution);
     apply_order_decision_request(&mut view, &request);
     view.reason = Some(reason);

@@ -227,6 +227,20 @@ fn decision_result<R>(
 where
     R: OperationResultData,
 {
+    if matches!(view.state.as_str(), "already_decided" | "invalid") {
+        let message = view.reason.clone().unwrap_or_else(|| {
+            format!(
+                "order decision failed validation with state `{}`",
+                view.state
+            )
+        });
+        return Err(OperationAdapterError::validation_failed_with_detail(
+            operation_id,
+            message,
+            order_decision_error_detail(view),
+        ));
+    }
+
     match view.disposition() {
         CommandDisposition::Success => serialized_target_result::<R, _>(view),
         disposition => {
@@ -268,15 +282,21 @@ fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
         "request_event_id": &view.request_event_id,
         "root_event_id": &view.root_event_id,
         "prev_event_id": &view.prev_event_id,
+        "event_id": &view.event_id,
+        "event_kind": view.event_kind,
         "buyer_pubkey": &view.buyer_pubkey,
         "seller_pubkey": &view.seller_pubkey,
+        "decision": &view.decision,
+        "dry_run": view.dry_run,
         "target_relays": &view.target_relays,
         "connected_relays": &view.connected_relays,
+        "acknowledged_relays": &view.acknowledged_relays,
         "failed_relays": &view.failed_relays,
         "fetched_count": view.fetched_count,
         "decoded_count": view.decoded_count,
         "skipped_count": view.skipped_count,
         "issues": &view.issues,
+        "actions": &view.actions,
     })
 }
 

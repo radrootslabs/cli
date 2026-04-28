@@ -461,6 +461,21 @@ impl OperationAdapterError {
         }
     }
 
+    pub fn validation_failed_with_detail(
+        operation_id: &str,
+        message: String,
+        detail: Value,
+    ) -> Self {
+        Self::DetailedFailure {
+            operation_id: operation_id.to_owned(),
+            code: "validation_failed".to_owned(),
+            class: "validation".to_owned(),
+            message,
+            exit_code: CliExitCode::ValidationFailed,
+            detail_json: detail.to_string(),
+        }
+    }
+
     pub fn unavailable(operation_id: &str, message: String) -> Self {
         classify_runtime_failure(
             operation_id,
