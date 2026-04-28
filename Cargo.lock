@@ -1782,6 +1782,8 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "nostr",
  "nostr-sdk",
+ "radroots_events",
+ "radroots_events_codec",
  "radroots_identity",
  "serde",
  "serde_json",
@@ -1872,6 +1874,7 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "base64 0.22.1",
  "hex",
+ "radroots_core",
  "radroots_events",
  "radroots_events_codec",
  "radroots_replica_db",

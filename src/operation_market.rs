@@ -31,7 +31,9 @@ impl OperationService<MarketRefreshRequest> for MarketOperationService<'_> {
         &self,
         _request: OperationRequest<MarketRefreshRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = market_refresh_view(map_runtime(crate::runtime::sync::pull(self.config))?);
+        let view = market_refresh_view(map_runtime(crate::runtime::sync::market_refresh(
+            self.config,
+        ))?);
         serialized_operation_result::<MarketRefreshResult, _>(&view)
     }
 }
@@ -313,6 +315,43 @@ mod tests {
         assert_eq!(envelope.result["state"], "unconfigured");
         assert_eq!(envelope.result["replica_db"], "missing");
         assert_eq!(envelope.result["direction"], "pull");
+    }
+
+    #[test]
+    fn market_refresh_dry_run_skips_relay_fetch_when_store_is_ready() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["wss://relay.example.com".to_owned()];
+        crate::runtime::local::init(&config).expect("store init");
+
+        let service = OperationAdapter::new(MarketOperationService::new(&config));
+        let mut context = OperationContext::default();
+        context.dry_run = true;
+        let request = OperationRequest::new(context.clone(), MarketRefreshRequest::default())
+            .expect("market refresh request");
+        let envelope = service
+            .execute(request)
+            .expect("market refresh dry run")
+            .to_envelope(context.envelope_context("req_market_refresh"))
+            .expect("market refresh envelope");
+
+        assert_eq!(envelope.operation_id, "market.refresh");
+        assert_eq!(envelope.result["state"], "ready");
+        assert_eq!(
+            envelope.result["target_relays"][0],
+            "wss://relay.example.com"
+        );
+        assert_eq!(envelope.result["fetched_count"], 0);
+        assert_eq!(envelope.result["ingested_count"], 0);
+        assert_eq!(envelope.result["skipped_count"], 0);
+        assert_eq!(envelope.result["unsupported_count"], 0);
+        assert!(
+            envelope.result["reason"]
+                .as_str()
+                .expect("reason")
+                .contains("dry run")
+        );
     }
 
     #[test]

@@ -1,16 +1,25 @@
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use radroots_events::kinds::{KIND_FARM, KIND_LISTING, KIND_PROFILE};
+use radroots_nostr::prelude::{
+    RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_kind,
+};
 use radroots_replica_db::ReplicaSql;
-use radroots_replica_sync::radroots_replica_sync_status;
+use radroots_replica_sync::{
+    RadrootsReplicaIngestOutcome, radroots_replica_ingest_event, radroots_replica_sync_status,
+};
 use radroots_sql_core::SqliteExecutor;
 
 use crate::domain::runtime::{
-    SyncActionView, SyncFreshnessView, SyncQueueView, SyncStatusView, SyncWatchFrameView,
-    SyncWatchView,
+    RelayFailureView, SyncActionView, SyncFreshnessView, SyncQueueView, SyncStatusView,
+    SyncWatchFrameView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime::direct_relay::{
+    DirectRelayFailure, DirectRelayFetchReceipt, fetch_events_from_relays,
+};
 use crate::runtime_args::SyncWatchArgs;
 
 const SYNC_SOURCE: &str = "local replica · local first";
@@ -52,6 +61,65 @@ pub fn pull(config: &RuntimeConfig) -> Result<SyncActionView, RuntimeError> {
         "pull",
         "relay ingest is not wired into `radroots sync pull` yet",
     )
+}
+
+pub fn market_refresh(config: &RuntimeConfig) -> Result<SyncActionView, RuntimeError> {
+    let snapshot = inspect_sync(config)?;
+    if snapshot.state == "unconfigured" {
+        return Ok(empty_action_from_snapshot(snapshot, "pull"));
+    }
+
+    if config.output.dry_run {
+        let mut view = empty_action_from_snapshot(snapshot, "pull");
+        view.state = "ready".to_owned();
+        view.reason = Some("dry run requested; relay fetch skipped".to_owned());
+        view.target_relays = config.relay.urls.clone();
+        view.fetched_count = Some(0);
+        view.ingested_count = Some(0);
+        view.skipped_count = Some(0);
+        view.unsupported_count = Some(0);
+        return Ok(view);
+    }
+
+    let receipt = match fetch_events_from_relays(&config.relay.urls, market_refresh_filter()) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let mut view = empty_action_from_snapshot(snapshot, "pull");
+            view.state = "unavailable".to_owned();
+            view.reason = Some(error.to_string());
+            view.target_relays = config.relay.urls.clone();
+            return Ok(view);
+        }
+    };
+
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let ingest = ingest_market_events(&executor, &receipt)?;
+    let freshness = freshness_from_executor(&executor)?;
+    let queue = radroots_replica_sync_status(&executor)?;
+
+    Ok(SyncActionView {
+        direction: "pull".to_owned(),
+        state: "ready".to_owned(),
+        source: "direct Nostr relay fetch · local replica ingest".to_owned(),
+        local_root: config.local.root.display().to_string(),
+        replica_db: "ready".to_owned(),
+        relay_count: config.relay.urls.len(),
+        publish_policy: config.relay.publish_policy.as_str().to_owned(),
+        freshness,
+        queue: SyncQueueView {
+            expected_count: queue.expected_count,
+            pending_count: queue.pending_count,
+        },
+        target_relays: receipt.target_relays,
+        connected_relays: receipt.connected_relays,
+        failed_relays: relay_failures(receipt.failed_relays),
+        fetched_count: Some(ingest.fetched_count),
+        ingested_count: Some(ingest.ingested_count),
+        skipped_count: Some(ingest.skipped_count),
+        unsupported_count: Some(ingest.unsupported_count),
+        reason: None,
+        actions: vec!["radroots market product search eggs".to_owned()],
+    })
 }
 
 pub fn push(config: &RuntimeConfig) -> Result<SyncActionView, RuntimeError> {
@@ -107,19 +175,7 @@ fn narrowed_action(
 ) -> Result<SyncActionView, RuntimeError> {
     let snapshot = inspect_sync(config)?;
     if snapshot.state == "unconfigured" {
-        return Ok(SyncActionView {
-            direction: direction.to_owned(),
-            state: snapshot.state,
-            source: snapshot.source,
-            local_root: snapshot.local_root,
-            replica_db: snapshot.replica_db,
-            relay_count: snapshot.relay_count,
-            publish_policy: snapshot.publish_policy,
-            freshness: snapshot.freshness,
-            queue: snapshot.queue,
-            reason: snapshot.reason,
-            actions: snapshot.actions,
-        });
+        return Ok(empty_action_from_snapshot(snapshot, direction));
     }
 
     let mut actions = vec!["radroots sync status get".to_owned()];
@@ -135,9 +191,39 @@ fn narrowed_action(
         publish_policy: snapshot.publish_policy,
         freshness: snapshot.freshness,
         queue: snapshot.queue,
+        target_relays: Vec::new(),
+        connected_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: None,
+        ingested_count: None,
+        skipped_count: None,
+        unsupported_count: None,
         reason: Some(unavailable_reason.to_owned()),
         actions,
     })
+}
+
+fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncActionView {
+    SyncActionView {
+        direction: direction.to_owned(),
+        state: snapshot.state,
+        source: snapshot.source,
+        local_root: snapshot.local_root,
+        replica_db: snapshot.replica_db,
+        relay_count: snapshot.relay_count,
+        publish_policy: snapshot.publish_policy,
+        freshness: snapshot.freshness,
+        queue: snapshot.queue,
+        target_relays: Vec::new(),
+        connected_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: None,
+        ingested_count: None,
+        skipped_count: None,
+        unsupported_count: None,
+        reason: snapshot.reason,
+        actions: snapshot.actions,
+    }
 }
 
 fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
@@ -235,6 +321,55 @@ pub(crate) fn freshness_from_executor(
             last_event_at: None,
         },
     })
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct MarketIngestCounts {
+    fetched_count: usize,
+    ingested_count: usize,
+    skipped_count: usize,
+    unsupported_count: usize,
+}
+
+fn market_refresh_filter() -> RadrootsNostrFilter {
+    RadrootsNostrFilter::new()
+        .kinds([
+            radroots_nostr_kind(KIND_PROFILE as u16),
+            radroots_nostr_kind(KIND_FARM as u16),
+            radroots_nostr_kind(KIND_LISTING as u16),
+        ])
+        .limit(1_000)
+}
+
+fn ingest_market_events(
+    executor: &SqliteExecutor,
+    receipt: &DirectRelayFetchReceipt,
+) -> Result<MarketIngestCounts, RuntimeError> {
+    let mut counts = MarketIngestCounts {
+        fetched_count: receipt.events.len(),
+        ..MarketIngestCounts::default()
+    };
+
+    for event in &receipt.events {
+        let event = radroots_event_from_nostr(event);
+        match radroots_replica_ingest_event(executor, &event) {
+            Ok(RadrootsReplicaIngestOutcome::Applied) => counts.ingested_count += 1,
+            Ok(RadrootsReplicaIngestOutcome::Skipped) => counts.skipped_count += 1,
+            Err(_) => counts.unsupported_count += 1,
+        }
+    }
+
+    Ok(counts)
+}
+
+fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
+    failures
+        .into_iter()
+        .map(|failure| RelayFailureView {
+            relay: failure.relay,
+            reason: failure.reason,
+        })
+        .collect()
 }
 
 fn unix_now() -> u64 {

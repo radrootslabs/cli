@@ -2045,6 +2045,20 @@ pub struct SyncActionView {
     pub publish_policy: String,
     pub freshness: SyncFreshnessView,
     pub queue: SyncQueueView,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connected_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_relays: Vec<RelayFailureView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingested_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsupported_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
