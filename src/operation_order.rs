@@ -134,12 +134,15 @@ impl OperationService<OrderDeclineRequest> for OrderOperationService<'_> {
         &self,
         request: OperationRequest<OrderDeclineRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let reason = string_input(&request, "reason").ok_or_else(|| {
-            invalid_input(
-                request.operation_id(),
-                "missing required `reason` input".to_owned(),
-            )
-        })?;
+        let reason = string_input(&request, "reason")
+            .map(|reason| reason.trim().to_owned())
+            .filter(|reason| !reason.is_empty())
+            .ok_or_else(|| {
+                invalid_input(
+                    request.operation_id(),
+                    "missing required `reason` input".to_owned(),
+                )
+            })?;
         if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
                 request.operation_id(),
@@ -557,6 +560,23 @@ mod tests {
         let decline = OperationRequest::new(
             OperationContext::default(),
             OrderDeclineRequest::from_data(data(&[("order_id", "ord_pending")])),
+        )
+        .expect("order decline request");
+        let error = service.execute(decline).expect_err("reason required");
+        let output_error = error.to_output_error();
+
+        assert_eq!(output_error.code, "invalid_input");
+        assert!(output_error.message.contains("reason"));
+    }
+
+    #[test]
+    fn order_decline_rejects_blank_reason_before_approval() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let decline = OperationRequest::new(
+            OperationContext::default(),
+            OrderDeclineRequest::from_data(data(&[("order_id", "ord_pending"), ("reason", " ")])),
         )
         .expect("order decline request");
         let error = service.execute(decline).expect_err("reason required");

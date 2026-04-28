@@ -730,7 +730,7 @@ pub fn decide(
         args.key.as_str(),
         receipt,
     )?;
-    if args.decision == OrderDecisionArg::Accept && resolution.requests.len() == 1 {
+    if resolution.requests.len() == 1 {
         let request = resolution.requests[0].clone();
         let signing = match resolve_local_order_decision_signing_identity(
             config,
@@ -744,7 +744,7 @@ pub fn decide(
                 ));
             }
         };
-        return publish_order_accept_decision(config, args, request, resolution, signing);
+        return publish_order_decision(config, args, request, resolution, signing);
     }
     Ok(order_decision_view_from_resolution(
         config,
@@ -1179,7 +1179,7 @@ fn seller_order_request_from_event(
     })
 }
 
-fn publish_order_accept_decision(
+fn publish_order_decision(
     config: &RuntimeConfig,
     args: &OrderDecisionArgs,
     request: ResolvedSellerOrderRequest,
@@ -1192,7 +1192,7 @@ fn publish_order_accept_decision(
         .public_identity
         .public_key_hex
         .as_str();
-    let payload = accepted_order_decision_payload_from_request(&request);
+    let payload = order_decision_payload_from_request(args, &request)?;
     let payload = canonicalize_active_order_decision_for_signer(payload, signer_pubkey)
         .map_err(|error| RuntimeError::Config(format!("canonicalize order decision: {error}")))?;
     let parts = active_trade_order_decision_event_build(
@@ -1208,6 +1208,28 @@ fn publish_order_accept_decision(
     Ok(published_order_decision_view(
         config, args, request, resolution, event_kind, receipt,
     ))
+}
+
+fn order_decision_payload_from_request(
+    args: &OrderDecisionArgs,
+    request: &ResolvedSellerOrderRequest,
+) -> Result<RadrootsTradeOrderDecisionEvent, RuntimeError> {
+    match args.decision {
+        OrderDecisionArg::Accept => Ok(accepted_order_decision_payload_from_request(request)),
+        OrderDecisionArg::Decline => {
+            let reason = args
+                .reason
+                .as_deref()
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .ok_or_else(|| {
+                    RuntimeError::Config("order decline requires a non-empty reason".to_owned())
+                })?;
+            Ok(declined_order_decision_payload_from_request(
+                request, reason,
+            ))
+        }
+    }
 }
 
 fn accepted_order_decision_payload_from_request(
@@ -1227,6 +1249,21 @@ fn accepted_order_decision_payload_from_request(
                     bin_count: item.bin_count,
                 })
                 .collect(),
+        },
+    }
+}
+
+fn declined_order_decision_payload_from_request(
+    request: &ResolvedSellerOrderRequest,
+    reason: &str,
+) -> RadrootsTradeOrderDecisionEvent {
+    RadrootsTradeOrderDecisionEvent {
+        order_id: request.order_id.clone(),
+        listing_addr: request.listing_addr.clone(),
+        buyer_pubkey: request.buyer_pubkey.clone(),
+        seller_pubkey: request.seller_pubkey.clone(),
+        decision: RadrootsTradeOrderDecision::Declined {
+            reason: reason.to_owned(),
         },
     }
 }
@@ -2263,9 +2300,10 @@ mod tests {
 
     use super::{
         ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem,
-        accepted_order_decision_payload_from_request, collect_issues, inspect_document,
-        next_order_id, order_history_entry_from_event, order_history_from_receipt,
-        order_request_filter, seller_order_request_resolution_from_receipt,
+        accepted_order_decision_payload_from_request, collect_issues,
+        declined_order_decision_payload_from_request, inspect_document, next_order_id,
+        order_history_entry_from_event, order_history_from_receipt, order_request_filter,
+        seller_order_request_resolution_from_receipt,
     };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
 
@@ -2596,6 +2634,121 @@ mod tests {
         assert_eq!(envelope.order_id, order_id);
         assert_eq!(envelope.payload.seller_pubkey, seller_pubkey);
         assert_eq!(envelope.payload.buyer_pubkey, buyer_pubkey);
+        assert_eq!(
+            context.root_event_id.as_deref(),
+            Some(request.request_event_id.as_str())
+        );
+        assert_eq!(
+            context.prev_event_id.as_deref(),
+            Some(request.request_event_id.as_str())
+        );
+    }
+
+    #[test]
+    fn declined_order_decision_payload_uses_decline_reason() {
+        let seller = RadrootsIdentity::generate();
+        let buyer = RadrootsIdentity::generate();
+        let seller_pubkey = seller.public_key_hex();
+        let buyer_pubkey = buyer.public_key_hex();
+        let order_id = "ord_AAAAAAAAAAAAAAAAAAAAAg";
+        let listing_event_id = "1".repeat(64);
+        let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![signed_order_request_event(
+                &buyer,
+                order_id,
+                listing_addr.as_str(),
+                buyer_pubkey.as_str(),
+                seller_pubkey.as_str(),
+                listing_event_id.as_str(),
+            )],
+        };
+        let resolution =
+            seller_order_request_resolution_from_receipt(seller_pubkey.as_str(), order_id, receipt)
+                .expect("seller order request resolution");
+        let request = resolution
+            .requests
+            .first()
+            .expect("resolved request")
+            .clone();
+
+        let payload = declined_order_decision_payload_from_request(&request, "out of stock");
+
+        assert_eq!(payload.order_id, order_id);
+        assert_eq!(payload.listing_addr, listing_addr);
+        assert_eq!(payload.buyer_pubkey, buyer_pubkey);
+        assert_eq!(payload.seller_pubkey, seller_pubkey);
+        let RadrootsTradeOrderDecision::Declined { reason } = payload.decision else {
+            panic!("expected declined decision");
+        };
+        assert_eq!(reason, "out of stock");
+    }
+
+    #[test]
+    fn declined_order_decision_event_uses_request_chain_tags() {
+        let seller = RadrootsIdentity::generate();
+        let buyer = RadrootsIdentity::generate();
+        let seller_pubkey = seller.public_key_hex();
+        let buyer_pubkey = buyer.public_key_hex();
+        let order_id = "ord_AAAAAAAAAAAAAAAAAAAAAg";
+        let listing_event_id = "1".repeat(64);
+        let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![signed_order_request_event(
+                &buyer,
+                order_id,
+                listing_addr.as_str(),
+                buyer_pubkey.as_str(),
+                seller_pubkey.as_str(),
+                listing_event_id.as_str(),
+            )],
+        };
+        let resolution =
+            seller_order_request_resolution_from_receipt(seller_pubkey.as_str(), order_id, receipt)
+                .expect("seller order request resolution");
+        let request = resolution
+            .requests
+            .first()
+            .expect("resolved request")
+            .clone();
+        let payload = declined_order_decision_payload_from_request(&request, " out of stock ");
+        let payload =
+            canonicalize_active_order_decision_for_signer(payload, seller_pubkey.as_str())
+                .expect("canonical decision payload");
+        let parts = active_trade_order_decision_event_build(
+            request.request_event_id.as_str(),
+            request.request_event_id.as_str(),
+            &payload,
+        )
+        .expect("decision event parts");
+
+        assert_eq!(parts.kind, KIND_TRADE_ORDER_DECISION);
+        let event = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+            .expect("nostr event builder")
+            .sign_with_keys(seller.keys())
+            .expect("signed order decision");
+        let event = radroots_event_from_nostr(&event);
+        let envelope =
+            active_trade_order_decision_from_event(&event).expect("decoded decision event");
+        let context = active_trade_event_context_from_tags(
+            RadrootsActiveTradeMessageType::TradeOrderDecision,
+            &event.tags,
+        )
+        .expect("decision event context");
+
+        assert_eq!(envelope.order_id, order_id);
+        assert_eq!(envelope.payload.seller_pubkey, seller_pubkey);
+        assert_eq!(envelope.payload.buyer_pubkey, buyer_pubkey);
+        let RadrootsTradeOrderDecision::Declined { reason } = envelope.payload.decision else {
+            panic!("expected declined decision");
+        };
+        assert_eq!(reason, "out of stock");
         assert_eq!(
             context.root_event_id.as_deref(),
             Some(request.request_event_id.as_str())
