@@ -506,18 +506,48 @@ fn listing_publish_invalid_draft_returns_validation_failure() {
 
 #[test]
 fn online_requires_relay_for_external_network_operations() {
-    let output = radroots()
-        .args(["--format", "json", "--online", "market", "refresh"])
-        .output()
-        .expect("run online market refresh");
+    for (operation_id, args) in [
+        (
+            "market.refresh",
+            ["--format", "json", "--online", "market", "refresh"].as_slice(),
+        ),
+        (
+            "order.event.list",
+            ["--format", "json", "--online", "order", "event", "list"].as_slice(),
+        ),
+        (
+            "order.event.watch",
+            [
+                "--format",
+                "json",
+                "--online",
+                "order",
+                "event",
+                "watch",
+                "ord_missing",
+            ]
+            .as_slice(),
+        ),
+    ] {
+        let output = radroots()
+            .args(args)
+            .output()
+            .expect("run online external command");
 
-    assert!(!output.status.success());
-    let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
+        assert!(!output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
 
-    assert_eq!(value["operation_id"], "market.refresh");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "network_unavailable");
-    assert_eq!(value["errors"][0]["exit_code"], 8);
+        assert_eq!(value["operation_id"], operation_id);
+        assert_eq!(value["result"], Value::Null);
+        assert_eq!(value["errors"][0]["code"], "network_unavailable");
+        assert_eq!(value["errors"][0]["exit_code"], 8);
+        assert!(
+            value["errors"][0]["message"]
+                .as_str()
+                .expect("message")
+                .contains("requires at least one configured relay")
+        );
+    }
 }
 
 #[test]

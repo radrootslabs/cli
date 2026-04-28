@@ -763,6 +763,20 @@ fn local_seller_publish_commands_attempt_configured_direct_relay() {
 }
 
 #[test]
+fn local_order_event_list_attempts_configured_direct_relay() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let relay = "ws://127.0.0.1:9";
+
+    let (output, value) = sandbox.json_output(&[
+        "--format", "json", "--relay", relay, "order", "event", "list",
+    ]);
+
+    assert!(!output.status.success());
+    assert_direct_relay_connection_failure(&value, "order.event.list", &["order", "event", "list"]);
+}
+
+#[test]
 fn watch_only_farm_publish_dry_run_fails_as_account_watch_only() {
     let sandbox = RadrootsCliSandbox::new();
     let public_identity = identity_public(13);
