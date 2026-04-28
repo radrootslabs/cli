@@ -175,13 +175,33 @@ where
 {
     match view.disposition() {
         CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        disposition => Err(OperationAdapterError::from_command_disposition(
-            operation_id,
-            disposition,
-            view.reason.clone().unwrap_or_else(|| {
+        disposition => {
+            let message = view.reason.clone().unwrap_or_else(|| {
                 format!("order event list finished with state `{}`", view.state)
-            }),
-        )),
+            });
+            if disposition == CommandDisposition::ExternalUnavailable {
+                Err(OperationAdapterError::network_unavailable_with_detail(
+                    operation_id,
+                    message,
+                    json!({
+                        "state": &view.state,
+                        "seller_pubkey": &view.seller_pubkey,
+                        "target_relays": &view.target_relays,
+                        "connected_relays": &view.connected_relays,
+                        "failed_relays": &view.failed_relays,
+                        "fetched_count": view.fetched_count,
+                        "decoded_count": view.decoded_count,
+                        "skipped_count": view.skipped_count,
+                    }),
+                ))
+            } else {
+                Err(OperationAdapterError::from_command_disposition(
+                    operation_id,
+                    disposition,
+                    message,
+                ))
+            }
+        }
     }
 }
 

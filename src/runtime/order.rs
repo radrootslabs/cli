@@ -35,7 +35,7 @@ use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::direct_relay::{
-    DirectRelayFailure, DirectRelayFetchReceipt, DirectRelayPublishReceipt,
+    DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, DirectRelayPublishReceipt,
     fetch_events_from_relays, publish_parts_with_identity,
 };
 use crate::runtime::signer::ActorWriteBindingError;
@@ -615,8 +615,22 @@ pub fn history(
     };
     let seller_pubkey = seller.record.public_identity.public_key_hex;
     let filter = order_request_filter(seller_pubkey.as_str(), order_id)?;
-    let receipt = fetch_events_from_relays(&config.relay.urls, filter)
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
+        Ok(receipt) => receipt,
+        Err(DirectRelayFetchError::Connect {
+            reason,
+            target_relays,
+            failed_relays,
+        }) => {
+            return Ok(order_history_unavailable(
+                seller_pubkey,
+                reason,
+                target_relays,
+                failed_relays,
+            ));
+        }
+        Err(error) => return Err(RuntimeError::Network(error.to_string())),
+    };
 
     Ok(order_history_from_receipt(seller_pubkey, order_id, receipt))
 }
@@ -686,6 +700,29 @@ fn order_history_unconfigured(
         reason: Some(reason),
         orders: Vec::new(),
         actions: vec!["radroots account create".to_owned()],
+    }
+}
+
+fn order_history_unavailable(
+    seller_pubkey: String,
+    reason: String,
+    target_relays: Vec<String>,
+    failed_relays: Vec<DirectRelayFailure>,
+) -> OrderHistoryView {
+    OrderHistoryView {
+        state: "unavailable".to_owned(),
+        source: ORDER_EVENT_LIST_SOURCE.to_owned(),
+        seller_pubkey: Some(seller_pubkey),
+        target_relays,
+        connected_relays: Vec::new(),
+        failed_relays: relay_failures(failed_relays),
+        fetched_count: 0,
+        decoded_count: 0,
+        skipped_count: 0,
+        count: 0,
+        reason: Some(format!("direct relay connection failed: {reason}")),
+        orders: Vec::new(),
+        actions: Vec::new(),
     }
 }
 

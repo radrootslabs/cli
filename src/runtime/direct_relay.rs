@@ -68,8 +68,12 @@ pub enum DirectRelayFetchError {
         #[source]
         source: RadrootsNostrError,
     },
-    #[error("direct relay connection failed: {0}")]
-    Connect(String),
+    #[error("direct relay connection failed: {reason}")]
+    Connect {
+        reason: String,
+        target_relays: Vec<String>,
+        failed_relays: Vec<DirectRelayFailure>,
+    },
     #[error("direct relay fetch failed: {0}")]
     Fetch(#[source] RadrootsNostrError),
 }
@@ -142,9 +146,11 @@ async fn fetch_events_from_relays_async(
     let connection_output = client.try_connect(connect_timeout).await;
     let failed_relays = relay_failures_from_output(&connection_output);
     if connection_output.success.is_empty() {
-        return Err(DirectRelayFetchError::Connect(summarize_failures(
-            &failed_relays,
-        )));
+        return Err(DirectRelayFetchError::Connect {
+            reason: summarize_failures(&failed_relays),
+            target_relays: relay_urls.to_vec(),
+            failed_relays,
+        });
     }
 
     let events = client
@@ -319,6 +325,16 @@ mod tests {
         .await
         .expect_err("connection failure");
 
-        assert!(matches!(err, DirectRelayFetchError::Connect(_)));
+        match err {
+            DirectRelayFetchError::Connect {
+                target_relays,
+                failed_relays,
+                ..
+            } => {
+                assert_eq!(target_relays, vec!["ws://127.0.0.1:9"]);
+                assert_eq!(failed_relays.len(), 1);
+            }
+            _ => panic!("expected connection failure"),
+        }
     }
 }

@@ -774,6 +774,29 @@ fn local_order_event_list_attempts_configured_direct_relay() {
 
     assert!(!output.status.success());
     assert_direct_relay_connection_failure(&value, "order.event.list", &["order", "event", "list"]);
+    assert_eq!(value["errors"][0]["detail"]["state"], "unavailable");
+    assert_eq!(value["errors"][0]["detail"]["target_relays"][0], relay);
+    assert_eq!(
+        value["errors"][0]["detail"]["connected_relays"]
+            .as_array()
+            .expect("connected relays")
+            .len(),
+        0
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["failed_relays"]
+            .as_array()
+            .expect("failed relays")
+            .len(),
+        1
+    );
+    assert_contains(
+        &value["errors"][0]["detail"]["failed_relays"][0]["relay"],
+        "127.0.0.1:9",
+    );
+    assert_eq!(value["errors"][0]["detail"]["fetched_count"], 0);
+    assert_eq!(value["errors"][0]["detail"]["decoded_count"], 0);
+    assert_eq!(value["errors"][0]["detail"]["skipped_count"], 0);
 }
 
 #[test]

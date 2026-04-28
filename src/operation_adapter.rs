@@ -446,6 +446,21 @@ impl OperationAdapterError {
         }
     }
 
+    pub fn network_unavailable_with_detail(
+        operation_id: &str,
+        message: String,
+        detail: Value,
+    ) -> Self {
+        Self::DetailedFailure {
+            operation_id: operation_id.to_owned(),
+            code: "network_unavailable".to_owned(),
+            class: "network".to_owned(),
+            message,
+            exit_code: CliExitCode::SyncOrNetworkFailure,
+            detail_json: detail.to_string(),
+        }
+    }
+
     pub fn unavailable(operation_id: &str, message: String) -> Self {
         classify_runtime_failure(
             operation_id,
