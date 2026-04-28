@@ -993,30 +993,131 @@ fn active_order_status_reason(
 }
 
 fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue) -> OrderIssueView {
-    let field = match &issue_value {
-        RadrootsActiveOrderReducerIssue::MissingRequest => "request_event_id",
-        RadrootsActiveOrderReducerIssue::MultipleRequests { .. } => "request_event_id",
-        RadrootsActiveOrderReducerIssue::RequestPayloadInvalid { .. } => "request_payload",
-        RadrootsActiveOrderReducerIssue::RequestOrderIdMismatch { .. } => "order_id",
-        RadrootsActiveOrderReducerIssue::RequestAuthorMismatch { .. } => "buyer_pubkey",
-        RadrootsActiveOrderReducerIssue::RequestListingAddressInvalid { .. } => "listing_addr",
-        RadrootsActiveOrderReducerIssue::RequestSellerListingMismatch { .. } => "seller_pubkey",
-        RadrootsActiveOrderReducerIssue::DecisionPayloadInvalid { .. } => "decision_payload",
-        RadrootsActiveOrderReducerIssue::DecisionOrderIdMismatch { .. } => "order_id",
-        RadrootsActiveOrderReducerIssue::DecisionAuthorMismatch { .. } => "seller_pubkey",
-        RadrootsActiveOrderReducerIssue::DecisionBuyerMismatch { .. } => "buyer_pubkey",
-        RadrootsActiveOrderReducerIssue::DecisionSellerMismatch { .. } => "seller_pubkey",
-        RadrootsActiveOrderReducerIssue::DecisionListingAddressInvalid { .. } => "listing_addr",
-        RadrootsActiveOrderReducerIssue::DecisionListingMismatch { .. } => "listing_addr",
-        RadrootsActiveOrderReducerIssue::DecisionRootMismatch { .. } => "root_event_id",
-        RadrootsActiveOrderReducerIssue::DecisionPreviousMismatch { .. } => "prev_event_id",
-        RadrootsActiveOrderReducerIssue::DecisionMissingInventoryCommitments { .. } => {
-            "inventory_commitments"
+    match issue_value {
+        RadrootsActiveOrderReducerIssue::MissingRequest => issue_with_code(
+            "missing_request",
+            "request_event_id",
+            "active order reducer reported missing request",
+        ),
+        RadrootsActiveOrderReducerIssue::MultipleRequests { event_ids } => issue_with_events(
+            "multiple_requests",
+            "request_event_id",
+            "active order reducer reported multiple request events",
+            event_ids,
+        ),
+        RadrootsActiveOrderReducerIssue::RequestPayloadInvalid { event_id } => issue_with_events(
+            "invalid_request_payload",
+            "request_payload",
+            "active order reducer reported invalid request payload",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::RequestOrderIdMismatch { event_id } => issue_with_events(
+            "request_order_id_mismatch",
+            "order_id",
+            "active order reducer reported request order id mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::RequestAuthorMismatch { event_id } => issue_with_events(
+            "request_author_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported request author mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::RequestListingAddressInvalid { event_id } => {
+            issue_with_events(
+                "invalid_request_listing_address",
+                "listing_addr",
+                "active order reducer reported invalid request listing address",
+                vec![event_id],
+            )
         }
-        RadrootsActiveOrderReducerIssue::DecisionMissingReason { .. } => "reason",
-        RadrootsActiveOrderReducerIssue::ConflictingDecisions { .. } => "decision_event_id",
-    };
-    issue(field, format!("{issue_value:?}"))
+        RadrootsActiveOrderReducerIssue::RequestSellerListingMismatch { event_id } => {
+            issue_with_events(
+                "request_seller_listing_mismatch",
+                "seller_pubkey",
+                "active order reducer reported request seller/listing mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::DecisionPayloadInvalid { event_id } => issue_with_events(
+            "invalid_decision_payload",
+            "decision_payload",
+            "active order reducer reported invalid decision payload",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::DecisionOrderIdMismatch { event_id } => issue_with_events(
+            "decision_order_id_mismatch",
+            "order_id",
+            "active order reducer reported decision order id mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::DecisionAuthorMismatch { event_id } => issue_with_events(
+            "decision_author_mismatch",
+            "seller_pubkey",
+            "active order reducer reported decision author mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::DecisionBuyerMismatch { event_id } => issue_with_events(
+            "decision_buyer_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported decision buyer mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::DecisionSellerMismatch { event_id } => issue_with_events(
+            "decision_seller_mismatch",
+            "seller_pubkey",
+            "active order reducer reported decision seller mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::DecisionListingAddressInvalid { event_id } => {
+            issue_with_events(
+                "invalid_decision_listing_address",
+                "listing_addr",
+                "active order reducer reported invalid decision listing address",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::DecisionListingMismatch { event_id } => issue_with_events(
+            "decision_listing_mismatch",
+            "listing_addr",
+            "active order reducer reported decision listing mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::DecisionRootMismatch { event_id } => issue_with_events(
+            "decision_root_mismatch",
+            "root_event_id",
+            "active order reducer reported decision root mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::DecisionPreviousMismatch { event_id } => {
+            issue_with_events(
+                "decision_previous_mismatch",
+                "prev_event_id",
+                "active order reducer reported decision previous mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::DecisionMissingInventoryCommitments { event_id } => {
+            issue_with_events(
+                "missing_decision_inventory_commitments",
+                "inventory_commitments",
+                "active order reducer reported missing decision inventory commitments",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::DecisionMissingReason { event_id } => issue_with_events(
+            "missing_decision_decline_reason",
+            "reason",
+            "active order reducer reported missing decision decline reason",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::ConflictingDecisions { event_ids } => issue_with_events(
+            "conflicting_decisions",
+            "decision_event_id",
+            "active order reducer reported conflicting decisions",
+            event_ids,
+        ),
+    }
 }
 
 fn order_history_unconfigured(
@@ -1216,13 +1317,15 @@ fn order_decision_view_from_resolution(
                 "multiple seller-targeted order request events matched `{}`; refusing to choose an order root",
                 args.key
             ));
-            view.issues = vec![issue(
+            view.issues = vec![issue_with_events(
+                "multiple_request_candidates",
                 "request_event_id",
                 format!(
                     "matched {} request events for the same order id: {}",
                     requests.len(),
                     event_ids.join(", ")
                 ),
+                event_ids,
             )];
             view.actions = vec![format!("radroots order status get {}", args.key)];
             view
@@ -1374,9 +1477,11 @@ fn seller_order_request_resolution_from_receipt(
             }
             Err(error) => {
                 skipped_count += 1;
-                candidate_issues.push(issue(
+                candidate_issues.push(issue_with_events(
+                    "invalid_request_candidate",
                     "request_event_id",
                     format!("request event `{event_id}` failed seller decision preflight: {error}"),
+                    vec![event_id],
                 ));
             }
         }
@@ -1946,10 +2051,7 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
         item_count: 0,
         updated_at_unix: modified_unix(path).unwrap_or_default(),
         job: None,
-        issues: vec![OrderIssueView {
-            field: "draft".to_owned(),
-            message: reason,
-        }],
+        issues: vec![issue_with_code("invalid_order_draft", "draft", reason)],
     }
 }
 
@@ -2455,9 +2557,56 @@ fn parse_listing_addr(raw: &str) -> Result<RadrootsTradeListingAddress, String> 
 }
 
 fn issue(field: impl Into<String>, message: impl Into<String>) -> OrderIssueView {
+    let field = field.into();
+    issue_with_code(validation_issue_code(&field), field, message)
+}
+
+fn issue_with_code(
+    code: impl Into<String>,
+    field: impl Into<String>,
+    message: impl Into<String>,
+) -> OrderIssueView {
     OrderIssueView {
+        code: code.into(),
         field: field.into(),
         message: message.into(),
+        event_ids: Vec::new(),
+    }
+}
+
+fn issue_with_events(
+    code: impl Into<String>,
+    field: impl Into<String>,
+    message: impl Into<String>,
+    mut event_ids: Vec<String>,
+) -> OrderIssueView {
+    event_ids.sort();
+    event_ids.dedup();
+    OrderIssueView {
+        code: code.into(),
+        field: field.into(),
+        message: message.into(),
+        event_ids,
+    }
+}
+
+fn validation_issue_code(field: &str) -> String {
+    let mut code = String::new();
+    let mut previous_separator = false;
+    for character in field.chars() {
+        if character.is_ascii_alphanumeric() {
+            code.push(character.to_ascii_lowercase());
+            previous_separator = false;
+        } else if !previous_separator {
+            code.push('_');
+            previous_separator = true;
+        }
+    }
+    let code = code.trim_matches('_');
+    if code.is_empty() {
+        "validation_failed".to_owned()
+    } else {
+        format!("{code}_invalid")
     }
 }
 

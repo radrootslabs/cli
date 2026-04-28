@@ -1492,8 +1492,11 @@ pub struct OrderDraftItemView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderIssueView {
+    pub code: String,
     pub field: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub event_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
