@@ -1049,6 +1049,8 @@ pub struct OrderNewView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_pubkey: Option<String>,
@@ -1085,6 +1087,8 @@ pub struct OrderGetView {
     pub listing_lookup: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1147,6 +1151,8 @@ pub struct OrderSubmitView {
     pub listing_lookup: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1340,6 +1346,8 @@ pub struct OrderSummaryView {
     pub listing_lookup: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     pub item_count: usize,

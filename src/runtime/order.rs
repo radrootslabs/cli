@@ -6,7 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use radroots_events::kinds::KIND_LISTING;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
-use radroots_replica_db::ReplicaSql;
+use radroots_replica_db::{ReplicaSql, nostr_event_state, trade_product};
+use radroots_replica_db_schema::nostr_event_state::{
+    INostrEventStateFindOne, INostrEventStateFindOneArgs, NostrEventStateQueryBindValues,
+};
+use radroots_replica_db_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
 use radroots_sql_core::SqliteExecutor;
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +55,8 @@ struct OrderDraft {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     listing_addr: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    listing_event_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     buyer_pubkey: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     seller_pubkey: String,
@@ -75,6 +81,7 @@ struct LoadedOrderDraft {
 #[derive(Debug, Clone)]
 struct ResolvedOrderListing {
     listing_addr: String,
+    listing_event_id: String,
     seller_pubkey: String,
 }
 
@@ -109,6 +116,10 @@ pub fn scaffold(
         .as_ref()
         .map(|listing| listing.seller_pubkey.clone())
         .unwrap_or_default();
+    let listing_event_id = resolved_listing
+        .as_ref()
+        .map(|listing| listing.listing_event_id.clone())
+        .unwrap_or_default();
 
     let items = match normalize_optional(args.bin_id.as_deref()) {
         Some(bin_id) => vec![OrderDraftItem {
@@ -129,6 +140,7 @@ pub fn scaffold(
         order: OrderDraft {
             order_id: order_id.clone(),
             listing_addr,
+            listing_event_id,
             buyer_pubkey,
             seller_pubkey,
             items,
@@ -181,6 +193,10 @@ pub fn scaffold_preflight(
         .as_ref()
         .map(|listing| listing.seller_pubkey.clone())
         .unwrap_or_default();
+    let listing_event_id = resolved_listing
+        .as_ref()
+        .map(|listing| listing.listing_event_id.clone())
+        .unwrap_or_default();
 
     let items = match normalize_optional(args.bin_id.as_deref()) {
         Some(bin_id) => vec![OrderDraftItem {
@@ -198,6 +214,7 @@ pub fn scaffold_preflight(
         order: OrderDraft {
             order_id: order_id.clone(),
             listing_addr,
+            listing_event_id,
             buyer_pubkey,
             seller_pubkey,
             items,
@@ -231,6 +248,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             file: Some(file.display().to_string()),
             listing_lookup: None,
             listing_addr: None,
+            listing_event_id: None,
             buyer_account_id: None,
             buyer_pubkey: None,
             seller_pubkey: None,
@@ -258,6 +276,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             file: Some(file.display().to_string()),
             listing_lookup: None,
             listing_addr: None,
+            listing_event_id: None,
             buyer_account_id: None,
             buyer_pubkey: None,
             seller_pubkey: None,
@@ -340,6 +359,7 @@ pub fn submit(
             file: file.display().to_string(),
             listing_lookup: None,
             listing_addr: None,
+            listing_event_id: None,
             buyer_account_id: None,
             buyer_pubkey: None,
             seller_pubkey: None,
@@ -369,6 +389,7 @@ pub fn submit(
                 file: file.display().to_string(),
                 listing_lookup: None,
                 listing_addr: None,
+                listing_event_id: None,
                 buyer_account_id: None,
                 buyer_pubkey: None,
                 seller_pubkey: None,
@@ -400,6 +421,7 @@ pub fn submit(
             file: loaded.file.display().to_string(),
             listing_lookup: loaded.document.listing_lookup.clone(),
             listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+            listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
             buyer_account_id: loaded.document.buyer_account_id.clone(),
             buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
             seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
@@ -430,6 +452,7 @@ pub fn submit(
             file: loaded.file.display().to_string(),
             listing_lookup: loaded.document.listing_lookup.clone(),
             listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+            listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
             buyer_account_id: loaded.document.buyer_account_id.clone(),
             buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
             seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
@@ -632,12 +655,20 @@ fn resolve_order_listing(
     explicit_listing_addr: Option<&str>,
 ) -> Result<Option<ResolvedOrderListing>, RuntimeError> {
     if let Some(listing_addr) = explicit_listing_addr {
-        let seller_pubkey = parse_listing_addr(listing_addr)
-            .map(|listing| listing.seller_pubkey)
-            .unwrap_or_default();
+        let parsed = parse_listing_addr(listing_addr).map_err(|error| {
+            RuntimeError::Config(format!("explicit listing_addr is invalid: {error}"))
+        })?;
+        if parsed.kind != KIND_LISTING {
+            return Err(RuntimeError::Config(
+                "explicit listing_addr must reference a public NIP-99 listing".to_owned(),
+            ));
+        }
+        let listing_event_id =
+            resolve_active_listing_event_id(config, listing_addr, &parsed)?.unwrap_or_default();
         return Ok(Some(ResolvedOrderListing {
             listing_addr: listing_addr.to_owned(),
-            seller_pubkey,
+            listing_event_id,
+            seller_pubkey: parsed.seller_pubkey,
         }));
     }
 
@@ -675,8 +706,20 @@ fn resolve_order_listing(
                 )));
             }
 
+            let listing_event_id = resolve_active_listing_event_id(
+                config,
+                listing_addr.as_str(),
+                &parsed,
+            )?
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "listing `{listing_lookup}` is missing the latest listing event pointer; run `radroots market refresh` before creating an order from this listing"
+                ))
+            })?;
+
             Ok(Some(ResolvedOrderListing {
                 listing_addr,
+                listing_event_id,
                 seller_pubkey: parsed.seller_pubkey,
             }))
         }
@@ -686,11 +729,92 @@ fn resolve_order_listing(
     }
 }
 
+fn resolve_active_listing_event_id(
+    config: &RuntimeConfig,
+    listing_addr: &str,
+    parsed: &RadrootsTradeListingAddress,
+) -> Result<Option<String>, RuntimeError> {
+    if !config.local.replica_db_path.exists() {
+        return Ok(None);
+    }
+
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let product_rows = trade_product::find_many(
+        &executor,
+        &ITradeProductFindMany {
+            filter: Some(trade_product_listing_addr_filter(listing_addr)),
+        },
+    )
+    .map_err(|error| RuntimeError::Config(format!("resolve listing product state: {error:?}")))?
+    .results;
+
+    match product_rows.len() {
+        0 => return Ok(None),
+        1 => {}
+        count => {
+            return Err(RuntimeError::Config(format!(
+                "listing address `{listing_addr}` matched {count} active local listing rows"
+            )));
+        }
+    }
+
+    let key = format!(
+        "{}:{}:{}",
+        parsed.kind, parsed.seller_pubkey, parsed.listing_id
+    );
+    let state = nostr_event_state::find_one(
+        &executor,
+        &INostrEventStateFindOne::On(INostrEventStateFindOneArgs {
+            on: NostrEventStateQueryBindValues::Key { key },
+        }),
+    )
+    .map_err(|error| RuntimeError::Config(format!("resolve listing event state: {error:?}")))?
+    .result;
+
+    let Some(state) = state else {
+        return Ok(None);
+    };
+    if !is_valid_event_id(state.last_event_id.as_str()) {
+        return Err(RuntimeError::Config(format!(
+            "listing address `{listing_addr}` has invalid latest listing event id in local replica"
+        )));
+    }
+
+    Ok(Some(state.last_event_id))
+}
+
+fn trade_product_listing_addr_filter(listing_addr: &str) -> ITradeProductFieldsFilter {
+    ITradeProductFieldsFilter {
+        id: None,
+        created_at: None,
+        updated_at: None,
+        key: None,
+        category: None,
+        title: None,
+        summary: None,
+        process: None,
+        lot: None,
+        profile: None,
+        year: None,
+        qty_amt: None,
+        qty_unit: None,
+        qty_label: None,
+        qty_avail: None,
+        price_amt: None,
+        price_currency: None,
+        price_qty_amt: None,
+        price_qty_unit: None,
+        listing_addr: Some(listing_addr.to_owned()),
+        notes: None,
+    }
+}
+
 fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
     let OrderInspection {
         state,
         ready_for_submit,
         listing_addr,
+        listing_event_id,
         seller_pubkey,
         issues,
     } = inspect_document(&loaded.document);
@@ -705,6 +829,7 @@ fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
         file: Some(loaded.file.display().to_string()),
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr,
+        listing_event_id,
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         seller_pubkey,
@@ -733,6 +858,7 @@ fn summary_from_loaded(loaded: &LoadedOrderDraft) -> OrderSummaryView {
         state,
         ready_for_submit,
         listing_addr,
+        listing_event_id,
         seller_pubkey: _,
         issues,
     } = inspect_document(&loaded.document);
@@ -744,6 +870,7 @@ fn summary_from_loaded(loaded: &LoadedOrderDraft) -> OrderSummaryView {
         file: loaded.file.display().to_string(),
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr,
+        listing_event_id,
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         item_count: loaded.document.order.items.len(),
         updated_at_unix: loaded.updated_at_unix,
@@ -765,6 +892,7 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
         file: path.display().to_string(),
         listing_lookup: None,
         listing_addr: None,
+        listing_event_id: None,
         buyer_account_id: None,
         item_count: 0,
         updated_at_unix: modified_unix(path).unwrap_or_default(),
@@ -778,6 +906,7 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
 
 fn inspect_document(document: &OrderDraftDocument) -> OrderInspection {
     let listing_addr = non_empty_string(document.order.listing_addr.clone());
+    let listing_event_id = non_empty_string(document.order.listing_event_id.clone());
     let parsed_listing_addr = listing_addr
         .as_deref()
         .and_then(|value| parse_listing_addr(value).ok());
@@ -798,6 +927,7 @@ fn inspect_document(document: &OrderDraftDocument) -> OrderInspection {
         state,
         ready_for_submit,
         listing_addr,
+        listing_event_id,
         seller_pubkey,
         issues,
     }
@@ -845,6 +975,21 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
         None => issues.push(issue(
             "order.listing_addr",
             "listing_addr is required before order submit",
+        )),
+    }
+
+    match normalize_optional(Some(document.order.listing_event_id.as_str())) {
+        Some(listing_event_id) => {
+            if !is_valid_event_id(listing_event_id.as_str()) {
+                issues.push(issue(
+                    "order.listing_event_id",
+                    "listing_event_id must be a 64-character hex Nostr event id",
+                ));
+            }
+        }
+        None => issues.push(issue(
+            "order.listing_event_id",
+            "latest active listing event id is required before order submit; run `radroots market refresh` and create the order from local market data",
         )),
     }
 
@@ -919,6 +1064,7 @@ fn direct_relay_unavailable_order_submit_view(
         file: loaded.file.display().to_string(),
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
@@ -962,6 +1108,7 @@ fn order_binding_error_view(
         file: loaded.file.display().to_string(),
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
@@ -1109,6 +1256,10 @@ fn is_valid_order_id(value: &str) -> bool {
     encoded.len() == 22 && is_d_tag_base64url(encoded)
 }
 
+fn is_valid_event_id(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
 fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut output = String::with_capacity(22);
@@ -1142,6 +1293,7 @@ struct OrderInspection {
     state: String,
     ready_for_submit: bool,
     listing_addr: Option<String>,
+    listing_event_id: Option<String>,
     seller_pubkey: Option<String>,
     issues: Vec<OrderIssueView>,
 }
@@ -1155,6 +1307,7 @@ impl From<OrderGetView> for OrderNewView {
             file: view.file.unwrap_or_default(),
             listing_lookup: view.listing_lookup,
             listing_addr: view.listing_addr,
+            listing_event_id: view.listing_event_id,
             buyer_account_id: view.buyer_account_id,
             buyer_pubkey: view.buyer_pubkey,
             seller_pubkey: view.seller_pubkey,
@@ -1168,7 +1321,10 @@ impl From<OrderGetView> for OrderNewView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, next_order_id};
+    use super::{
+        ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem, collect_issues,
+        inspect_document, next_order_id,
+    };
 
     #[test]
     fn generated_order_id_uses_stable_prefix() {
@@ -1185,6 +1341,7 @@ mod tests {
             order: OrderDraft {
                 order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
                 listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                listing_event_id: "1".repeat(64),
                 buyer_pubkey: "a".repeat(64),
                 seller_pubkey: "b".repeat(64),
                 items: vec![OrderDraftItem {
@@ -1199,5 +1356,36 @@ mod tests {
         let rendered = toml::to_string_pretty(&document).expect("render draft");
         assert!(rendered.contains("kind = \"order_draft_v1\""));
         assert!(rendered.contains("order_id = \"ord_AAAAAAAAAAAAAAAAAAAAAg\""));
+        assert!(rendered.contains("listing_event_id"));
+    }
+
+    #[test]
+    fn order_draft_requires_listing_event_id_for_submit_readiness() {
+        let document = OrderDraftDocument {
+            version: 1,
+            kind: ORDER_DRAFT_KIND.to_owned(),
+            order: OrderDraft {
+                order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                listing_event_id: String::new(),
+                buyer_pubkey: "a".repeat(64),
+                seller_pubkey: "deadbeef".to_owned(),
+                items: vec![OrderDraftItem {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+            listing_lookup: Some("fresh-eggs".to_owned()),
+            buyer_account_id: Some("acct_demo".to_owned()),
+        };
+
+        let inspection = inspect_document(&document);
+        assert_eq!(inspection.state, "draft");
+        assert!(!inspection.ready_for_submit);
+        assert!(
+            collect_issues(&document)
+                .iter()
+                .any(|issue| issue.field == "order.listing_event_id")
+        );
     }
 }

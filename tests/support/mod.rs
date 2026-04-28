@@ -6,7 +6,12 @@ use std::process::{Command, Output};
 use std::sync::Mutex;
 
 use assert_cmd::prelude::*;
+use radroots_events::RadrootsNostrEvent;
+use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
+use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
+use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
+use radroots_sql_core::SqliteExecutor;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -197,6 +202,72 @@ pub fn assert_hex_len(value: &Value, expected_len: usize) {
     let value = value.as_str().expect("hex string");
     assert_eq!(value.len(), expected_len);
     assert!(value.chars().all(|ch| ch.is_ascii_hexdigit()));
+}
+
+pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) -> String {
+    let store = sandbox.json_success(&["--format", "json", "store", "init"]);
+    let db_path = store["result"]["path"]
+        .as_str()
+        .expect("replica db path from store init");
+    let parsed = RadrootsTradeListingAddress::parse(listing_addr).expect("listing addr");
+    let seller_pubkey = parsed.seller_pubkey.clone();
+    let listing_id = parsed.listing_id.clone();
+    let event_id = "2".repeat(64);
+    let event = RadrootsNostrEvent {
+        id: event_id.clone(),
+        author: seller_pubkey.clone(),
+        created_at: 1,
+        kind: KIND_LISTING,
+        tags: vec![
+            vec!["d".to_owned(), listing_id],
+            vec![
+                "a".to_owned(),
+                format!(
+                    "{}:{}:{}",
+                    KIND_FARM, seller_pubkey, "AAAAAAAAAAAAAAAAAAAAAA"
+                ),
+            ],
+            vec!["p".to_owned(), seller_pubkey],
+            vec!["key".to_owned(), "pasture-eggs".to_owned()],
+            vec!["title".to_owned(), "Market Eggs".to_owned()],
+            vec!["category".to_owned(), "eggs".to_owned()],
+            vec!["summary".to_owned(), "Pasture-raised eggs".to_owned()],
+            vec!["process".to_owned(), "washed".to_owned()],
+            vec!["lot".to_owned(), "lot-a".to_owned()],
+            vec!["profile".to_owned(), "dozen".to_owned()],
+            vec!["year".to_owned(), "2026".to_owned()],
+            vec!["radroots:primary_bin".to_owned(), "bin-1".to_owned()],
+            vec![
+                "radroots:bin".to_owned(),
+                "bin-1".to_owned(),
+                "12".to_owned(),
+                "each".to_owned(),
+                "12".to_owned(),
+                "each".to_owned(),
+                "dozen".to_owned(),
+            ],
+            vec![
+                "radroots:price".to_owned(),
+                "bin-1".to_owned(),
+                "6".to_owned(),
+                "USD".to_owned(),
+                "1".to_owned(),
+                "each".to_owned(),
+                "6".to_owned(),
+                "each".to_owned(),
+            ],
+            vec!["inventory".to_owned(), "5".to_owned()],
+            vec!["status".to_owned(), "active".to_owned()],
+        ],
+        content: "# Market Eggs".to_owned(),
+        sig: "f".repeat(128),
+    };
+    let executor = SqliteExecutor::open(Path::new(db_path)).expect("open replica db");
+    assert_eq!(
+        radroots_replica_ingest_event(&executor, &event).expect("ingest listing"),
+        RadrootsReplicaIngestOutcome::Applied
+    );
+    event_id
 }
 
 pub fn create_listing_draft(sandbox: &RadrootsCliSandbox, key: &str) -> PathBuf {

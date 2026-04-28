@@ -1702,6 +1702,7 @@ dependencies = [
  "radroots_nostr_signer",
  "radroots_protected_store",
  "radroots_replica_db",
+ "radroots_replica_db_schema",
  "radroots_replica_sync",
  "radroots_runtime_paths",
  "radroots_secret_vault",

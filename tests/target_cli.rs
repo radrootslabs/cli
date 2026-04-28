@@ -8,7 +8,7 @@ use serde_json::Value;
 use support::{
     RadrootsCliSandbox, assert_no_daemon_runtime_reference, assert_no_removed_command_reference,
     create_listing_draft, identity_public, make_listing_publishable, ndjson_from_stdout, radroots,
-    write_public_identity_profile,
+    seed_orderable_listing, write_public_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -968,6 +968,8 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(signer["result"]["signer_account_id"], account_id);
     assert_no_removed_command_reference(&signer, &["signer", "status", "get"]);
 
+    let listing_event_id = seed_orderable_listing(&sandbox, LISTING_ADDR);
+
     let search = sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
     assert_eq!(search["operation_id"], "market.product.search");
     assert_eq!(search["errors"].as_array().expect("errors").len(), 0);
@@ -1012,6 +1014,10 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         .expect("order id");
     assert_eq!(quote["result"]["quote"]["ready_for_submit"], true);
     assert_eq!(quote["result"]["order"]["buyer_account_id"], account_id);
+    assert_eq!(
+        quote["result"]["order"]["listing_event_id"],
+        listing_event_id
+    );
 
     let orders = sandbox.json_success(&["--format", "json", "order", "list"]);
     assert_eq!(orders["operation_id"], "order.list");
@@ -1019,6 +1025,10 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(orders["result"]["count"], 1);
     assert_eq!(orders["result"]["orders"][0]["id"], order_id);
     assert_eq!(orders["result"]["orders"][0]["ready_for_submit"], true);
+    assert_eq!(
+        orders["result"]["orders"][0]["listing_event_id"],
+        listing_event_id
+    );
     assert_eq!(
         orders["result"]["orders"][0]["buyer_account_id"],
         account_id
@@ -1035,6 +1045,7 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(submit["result"]["dry_run"], true);
     assert_eq!(submit["result"]["order_id"], order_id);
     assert_eq!(submit["result"]["buyer_account_id"], account_id);
+    assert_eq!(submit["result"]["listing_event_id"], listing_event_id);
     assert_eq!(submit["errors"].as_array().expect("errors").len(), 0);
     assert_no_removed_command_reference(&submit, &["order", "submit", "--dry-run"]);
     assert_no_daemon_runtime_reference(&submit, &["order", "submit", "--dry-run"]);
@@ -1090,6 +1101,7 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     let first_account_id = first["result"]["account"]["id"]
         .as_str()
         .expect("first account id");
+    let listing_event_id = seed_orderable_listing(&sandbox, LISTING_ADDR);
     sandbox.json_success(&["--format", "json", "basket", "create", "ready_order"]);
     sandbox.json_success(&[
         "--format",
@@ -1121,6 +1133,10 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
         quote["result"]["order"]["buyer_account_id"],
         first_account_id
     );
+    assert_eq!(
+        quote["result"]["order"]["listing_event_id"],
+        listing_event_id
+    );
 
     let dry_run =
         sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
@@ -1130,6 +1146,7 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     assert_eq!(dry_run["result"]["state"], "dry_run");
     assert_eq!(dry_run["result"]["dry_run"], true);
     assert_eq!(dry_run["result"]["buyer_account_id"], first_account_id);
+    assert_eq!(dry_run["result"]["listing_event_id"], listing_event_id);
     assert_no_daemon_runtime_reference(&dry_run, &["order", "submit", "--dry-run"]);
 
     let second = sandbox.json_success(&["--format", "json", "account", "create"]);
