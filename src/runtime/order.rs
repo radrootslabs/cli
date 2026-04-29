@@ -1212,7 +1212,8 @@ fn listing_inventory_issue_involves_order(
             order_id: issue_order_id,
             event_ids,
         } => issue_order_id == order_id || event_ids.iter().any(|id| id == decision_event_id),
-        RadrootsListingInventoryAccountingIssue::UnknownInventoryBin { event_ids, .. }
+        RadrootsListingInventoryAccountingIssue::ArithmeticOverflow { event_ids, .. }
+        | RadrootsListingInventoryAccountingIssue::UnknownInventoryBin { event_ids, .. }
         | RadrootsListingInventoryAccountingIssue::OverReserved { event_ids, .. } => {
             event_ids.iter().any(|id| id == decision_event_id)
         }
@@ -1370,6 +1371,7 @@ fn order_status_inventory_view(
                 "missing_decision_inventory_commitments"
                     | "decision_inventory_commitment_mismatch"
                     | "decision_counterparty_mismatch"
+                    | "listing_inventory_arithmetic_overflow"
                     | "unknown_inventory_bin"
                     | "listing_inventory_over_reserved"
                     | "invalid_inventory_order"
@@ -2342,6 +2344,14 @@ fn listing_inventory_accounting_issue_view(
             format!("inventory accounting reported invalid active order `{order_id}`"),
             event_ids,
         ),
+        RadrootsListingInventoryAccountingIssue::ArithmeticOverflow { bin_id, event_ids } => {
+            issue_with_events(
+                "listing_inventory_arithmetic_overflow",
+                "inventory.count",
+                format!("inventory accounting overflowed for bin `{bin_id}`"),
+                event_ids,
+            )
+        }
         RadrootsListingInventoryAccountingIssue::UnknownInventoryBin { bin_id, event_ids } => {
             issue_with_events(
                 "unknown_inventory_bin",
