@@ -5,11 +5,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::kinds::{KIND_LISTING, KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST};
+use radroots_events::listing::{
+    RadrootsListing, RadrootsListingAvailability, RadrootsListingStatus,
+};
 use radroots_events::trade::{
     RadrootsActiveTradeMessageType, RadrootsTradeInventoryCommitment, RadrootsTradeOrderDecision,
     RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
+use radroots_events_codec::listing::decode::listing_from_event;
 use radroots_events_codec::trade::{
     RadrootsTradeListingAddress, active_trade_envelope_from_event,
     active_trade_event_context_from_tags, active_trade_order_decision_event_build,
@@ -28,8 +32,9 @@ use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
     RadrootsActiveOrderDecisionRecord, RadrootsActiveOrderReducerIssue,
     RadrootsActiveOrderRequestRecord, RadrootsActiveOrderStatus,
+    RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryBinAvailability,
     canonicalize_active_order_decision_for_signer, canonicalize_active_order_request_for_signer,
-    reduce_active_order_events,
+    reduce_active_order_events, reduce_listing_inventory_accounting,
 };
 use serde::{Deserialize, Serialize};
 
@@ -128,6 +133,19 @@ struct ResolvedOrderSubmitRequest {
     request_event_id: String,
     listing_event_id: Option<String>,
     payload: RadrootsTradeOrderRequested,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedAccountingRequest {
+    listing_event_id: Option<String>,
+    record: RadrootsActiveOrderRequestRecord,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedInventoryListing {
+    event_id: String,
+    listing: RadrootsListing,
+    bins: Vec<RadrootsListingInventoryBinAvailability>,
 }
 
 #[derive(Debug, Clone)]
@@ -755,6 +773,30 @@ pub fn decide(
     }
     if resolution.requests.len() == 1 {
         let request = resolution.requests[0].clone();
+        let status_view = status(
+            config,
+            &OrderStatusArgs {
+                key: args.key.clone(),
+            },
+        )?;
+        if let Some(view) = order_decision_preflight_view_from_status(
+            config,
+            args,
+            &request,
+            &resolution,
+            &status_view,
+        ) {
+            return Ok(view);
+        }
+        if let Some(view) = order_accept_inventory_preflight_view(
+            config,
+            args,
+            &request,
+            &resolution,
+            &status_view,
+        )? {
+            return Ok(view);
+        }
         let signing = match resolve_local_order_decision_signing_identity(
             config,
             request.seller_pubkey.as_str(),
@@ -776,21 +818,6 @@ pub fn decide(
                 .as_str();
             canonical_order_decision_payload(args, &request, signer_pubkey)?
         };
-        let status_view = status(
-            config,
-            &OrderStatusArgs {
-                key: args.key.clone(),
-            },
-        )?;
-        if let Some(view) = order_decision_preflight_view_from_status(
-            config,
-            args,
-            &request,
-            &resolution,
-            &status_view,
-        ) {
-            return Ok(view);
-        }
         if config.output.dry_run {
             return Ok(order_decision_dry_run_view(
                 config,
@@ -1529,6 +1556,387 @@ fn order_decision_preflight_view_from_status(
     Some(view)
 }
 
+fn order_accept_inventory_preflight_view(
+    config: &RuntimeConfig,
+    args: &OrderDecisionArgs,
+    request: &ResolvedSellerOrderRequest,
+    resolution: &SellerOrderRequestResolution,
+    status: &OrderStatusView,
+) -> Result<Option<OrderDecisionView>, RuntimeError> {
+    if args.decision != OrderDecisionArg::Accept {
+        return Ok(None);
+    }
+
+    let listing = match fetch_current_inventory_listing(config, args, request, resolution, status)?
+    {
+        Ok(listing) => listing,
+        Err(view) => return Ok(Some(view)),
+    };
+    if listing.event_id != request.listing_event_id.clone().unwrap_or_default() {
+        return Ok(Some(order_decision_inventory_invalid_view(
+            config,
+            args,
+            request,
+            resolution,
+            status,
+            "order accept refused because the request listing event is not current",
+            vec![issue_with_events(
+                "stale_request_listing_event",
+                "listing_event_id",
+                format!(
+                    "request listing_event_id does not match current listing event `{}`",
+                    listing.event_id
+                ),
+                request.listing_event_id.clone().into_iter().collect(),
+            )],
+        )));
+    }
+    if !listing_is_active(&listing.listing) {
+        return Ok(Some(order_decision_inventory_invalid_view(
+            config,
+            args,
+            request,
+            resolution,
+            status,
+            "order accept refused because the listing is not active",
+            vec![issue_with_code(
+                "listing_not_active",
+                "listing_addr",
+                "current listing event is not active",
+            )],
+        )));
+    }
+
+    let accounting_requests = fetch_listing_accounting_requests(config, request, &listing)?;
+    let mut requests = accounting_requests
+        .into_iter()
+        .filter(|record| record.listing_event_id.as_deref() == Some(listing.event_id.as_str()))
+        .map(|record| record.record)
+        .collect::<Vec<_>>();
+    requests.push(active_request_record_from_resolved(request));
+    let mut request_order_ids = requests
+        .iter()
+        .map(|record| record.payload.order_id.clone())
+        .collect::<Vec<_>>();
+    request_order_ids.sort();
+    request_order_ids.dedup();
+
+    let mut decisions = fetch_listing_accounting_decisions(config, request)?
+        .into_iter()
+        .filter(|record| request_order_ids.contains(&record.payload.order_id))
+        .collect::<Vec<_>>();
+    decisions.push(proposed_accept_decision_record(request)?);
+
+    let projection = reduce_listing_inventory_accounting(
+        request.listing_addr.as_str(),
+        listing.event_id.as_str(),
+        listing.bins,
+        requests,
+        decisions,
+    );
+    if projection.issues.is_empty() {
+        return Ok(None);
+    }
+
+    let issues = projection
+        .issues
+        .into_iter()
+        .map(listing_inventory_accounting_issue_view)
+        .collect::<Vec<_>>();
+    Ok(Some(order_decision_inventory_invalid_view(
+        config,
+        args,
+        request,
+        resolution,
+        status,
+        "order accept refused because visible inventory accounting is invalid",
+        issues,
+    )))
+}
+
+fn fetch_current_inventory_listing(
+    config: &RuntimeConfig,
+    args: &OrderDecisionArgs,
+    request: &ResolvedSellerOrderRequest,
+    resolution: &SellerOrderRequestResolution,
+    status: &OrderStatusView,
+) -> Result<Result<ResolvedInventoryListing, OrderDecisionView>, RuntimeError> {
+    let parsed = parse_listing_addr(request.listing_addr.as_str()).map_err(|error| {
+        RuntimeError::Config(format!("order request listing_addr is invalid: {error}"))
+    })?;
+    let filter = listing_event_filter(&parsed)?;
+    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
+        Ok(receipt) => receipt,
+        Err(DirectRelayFetchError::Connect {
+            reason,
+            target_relays,
+            failed_relays,
+        }) => {
+            let mut view =
+                order_decision_base_view(config, args, "unavailable", config.output.dry_run);
+            apply_order_decision_resolution(&mut view, resolution);
+            apply_order_decision_request(&mut view, request);
+            apply_order_decision_status(&mut view, status);
+            view.target_relays = target_relays;
+            view.failed_relays = relay_failures(failed_relays);
+            view.reason = Some(format!("direct relay connection failed: {reason}"));
+            return Ok(Err(view));
+        }
+        Err(error) => return Err(RuntimeError::Network(error.to_string())),
+    };
+
+    let listing = current_inventory_listing_from_receipt(request, receipt)?;
+    Ok(match listing {
+        Some(listing) => Ok(listing),
+        None => Err(order_decision_inventory_invalid_view(
+            config,
+            args,
+            request,
+            resolution,
+            status,
+            "order accept refused because the current listing event was not visible",
+            vec![issue_with_code(
+                "current_listing_missing",
+                "listing_event_id",
+                "current listing event was not visible on the configured relays",
+            )],
+        )),
+    })
+}
+
+fn current_inventory_listing_from_receipt(
+    request: &ResolvedSellerOrderRequest,
+    receipt: DirectRelayFetchReceipt,
+) -> Result<Option<ResolvedInventoryListing>, RuntimeError> {
+    let parsed = parse_listing_addr(request.listing_addr.as_str()).map_err(|error| {
+        RuntimeError::Config(format!("order request listing_addr is invalid: {error}"))
+    })?;
+    let mut candidates = Vec::new();
+    for event in receipt.events {
+        if event_kind_u32(&event) != KIND_LISTING {
+            continue;
+        }
+        let event = radroots_event_from_nostr(&event);
+        if event.author != parsed.seller_pubkey {
+            continue;
+        }
+        let listing = listing_from_event(event.kind, &event.tags, &event.content)
+            .map_err(|error| RuntimeError::Config(format!("decode listing event: {error}")))?;
+        if listing.d_tag != parsed.listing_id {
+            continue;
+        }
+        let bins = listing_inventory_bins(&listing)?;
+        candidates.push((event.created_at, event.id, listing, bins));
+    }
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+    Ok(candidates
+        .into_iter()
+        .next()
+        .map(|(_, event_id, listing, bins)| ResolvedInventoryListing {
+            event_id,
+            listing,
+            bins,
+        }))
+}
+
+fn listing_inventory_bins(
+    listing: &RadrootsListing,
+) -> Result<Vec<RadrootsListingInventoryBinAvailability>, RuntimeError> {
+    if !listing
+        .bins
+        .iter()
+        .any(|bin| bin.bin_id == listing.primary_bin_id)
+    {
+        return Err(RuntimeError::Config(
+            "current listing primary bin is missing from listing bins".to_owned(),
+        ));
+    }
+    let available_count = listing
+        .inventory_available
+        .as_ref()
+        .ok_or_else(|| {
+            RuntimeError::Config("current listing inventory availability is missing".to_owned())
+        })?
+        .to_u64_exact()
+        .ok_or_else(|| {
+            RuntimeError::Config(
+                "current listing inventory availability must be a whole number".to_owned(),
+            )
+        })?;
+    Ok(vec![RadrootsListingInventoryBinAvailability {
+        bin_id: listing.primary_bin_id.clone(),
+        available_count,
+    }])
+}
+
+fn listing_is_active(listing: &RadrootsListing) -> bool {
+    match listing.availability.as_ref() {
+        Some(RadrootsListingAvailability::Status { status }) => {
+            matches!(status, RadrootsListingStatus::Active)
+        }
+        Some(RadrootsListingAvailability::Window { .. }) | None => true,
+    }
+}
+
+fn fetch_listing_accounting_requests(
+    config: &RuntimeConfig,
+    request: &ResolvedSellerOrderRequest,
+    listing: &ResolvedInventoryListing,
+) -> Result<Vec<ResolvedAccountingRequest>, RuntimeError> {
+    let filter = order_listing_request_filter(
+        request.seller_pubkey.as_str(),
+        request.listing_addr.as_str(),
+    )?;
+    let receipt = fetch_events_from_relays(&config.relay.urls, filter)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let mut records = Vec::new();
+    for event in receipt.events {
+        if event_kind_u32(&event) != KIND_TRADE_ORDER_REQUEST
+            || !event_matches_tag_value(&event, "a", request.listing_addr.as_str())
+        {
+            continue;
+        }
+        let record = listing_accounting_request_from_event(&event)?;
+        if record.listing_event_id.as_deref() == Some(listing.event_id.as_str()) {
+            records.push(record);
+        }
+    }
+    Ok(records)
+}
+
+fn fetch_listing_accounting_decisions(
+    config: &RuntimeConfig,
+    request: &ResolvedSellerOrderRequest,
+) -> Result<Vec<RadrootsActiveOrderDecisionRecord>, RuntimeError> {
+    let filter = order_listing_decision_filter(request.listing_addr.as_str())?;
+    let receipt = fetch_events_from_relays(&config.relay.urls, filter)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let mut records = Vec::new();
+    for event in receipt.events {
+        if event_kind_u32(&event) != KIND_TRADE_ORDER_DECISION
+            || !event_matches_tag_value(&event, "a", request.listing_addr.as_str())
+        {
+            continue;
+        }
+        match order_status_record_from_event(&event)? {
+            OrderStatusRecord::Decision(record) => records.push(record),
+            OrderStatusRecord::Request(_) => {}
+        }
+    }
+    Ok(records)
+}
+
+fn listing_accounting_request_from_event(
+    event: &RadrootsNostrEvent,
+) -> Result<ResolvedAccountingRequest, RuntimeError> {
+    let event = radroots_event_from_nostr(event);
+    let envelope = active_trade_order_request_from_event(&event)
+        .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
+    let context = active_trade_event_context_from_tags(
+        RadrootsActiveTradeMessageType::TradeOrderRequested,
+        &event.tags,
+    )
+    .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
+    Ok(ResolvedAccountingRequest {
+        listing_event_id: context.listing_event.as_ref().map(|event| event.id.clone()),
+        record: RadrootsActiveOrderRequestRecord {
+            event_id: event.id,
+            author_pubkey: event.author,
+            payload: envelope.payload,
+        },
+    })
+}
+
+fn active_request_record_from_resolved(
+    request: &ResolvedSellerOrderRequest,
+) -> RadrootsActiveOrderRequestRecord {
+    RadrootsActiveOrderRequestRecord {
+        event_id: request.request_event_id.clone(),
+        author_pubkey: request.buyer_pubkey.clone(),
+        payload: RadrootsTradeOrderRequested {
+            order_id: request.order_id.clone(),
+            listing_addr: request.listing_addr.clone(),
+            buyer_pubkey: request.buyer_pubkey.clone(),
+            seller_pubkey: request.seller_pubkey.clone(),
+            items: request.items.clone(),
+        },
+    }
+}
+
+fn proposed_accept_decision_record(
+    request: &ResolvedSellerOrderRequest,
+) -> Result<RadrootsActiveOrderDecisionRecord, RuntimeError> {
+    let payload = accepted_order_decision_payload_from_request(request);
+    let payload =
+        canonicalize_active_order_decision_for_signer(payload, request.seller_pubkey.as_str())
+            .map_err(|error| {
+                RuntimeError::Config(format!("canonicalize order decision: {error}"))
+            })?;
+    Ok(RadrootsActiveOrderDecisionRecord {
+        event_id: format!("pending_accept:{}", request.order_id),
+        author_pubkey: request.seller_pubkey.clone(),
+        root_event_id: request.request_event_id.clone(),
+        prev_event_id: request.request_event_id.clone(),
+        payload,
+    })
+}
+
+fn order_decision_inventory_invalid_view(
+    config: &RuntimeConfig,
+    args: &OrderDecisionArgs,
+    request: &ResolvedSellerOrderRequest,
+    resolution: &SellerOrderRequestResolution,
+    status: &OrderStatusView,
+    reason: impl Into<String>,
+    issues: Vec<OrderIssueView>,
+) -> OrderDecisionView {
+    let mut view = order_decision_base_view(config, args, "invalid", config.output.dry_run);
+    apply_order_decision_resolution(&mut view, resolution);
+    apply_order_decision_request(&mut view, request);
+    apply_order_decision_status(&mut view, status);
+    view.reason = Some(reason.into());
+    view.issues.extend(issues);
+    view.actions = vec![format!("radroots order status get {}", request.order_id)];
+    view
+}
+
+fn listing_inventory_accounting_issue_view(
+    issue_value: RadrootsListingInventoryAccountingIssue,
+) -> OrderIssueView {
+    match issue_value {
+        RadrootsListingInventoryAccountingIssue::InvalidActiveOrder {
+            order_id,
+            event_ids,
+        } => issue_with_events(
+            "invalid_inventory_order",
+            "order_id",
+            format!("inventory accounting reported invalid active order `{order_id}`"),
+            event_ids,
+        ),
+        RadrootsListingInventoryAccountingIssue::UnknownInventoryBin { bin_id, event_ids } => {
+            issue_with_events(
+                "unknown_inventory_bin",
+                "inventory.bin_id",
+                format!("inventory accounting reported unknown bin `{bin_id}`"),
+                event_ids,
+            )
+        }
+        RadrootsListingInventoryAccountingIssue::OverReserved {
+            bin_id,
+            available_count,
+            reserved_count,
+            event_ids,
+        } => issue_with_events(
+            "listing_inventory_over_reserved",
+            "inventory.available",
+            format!(
+                "inventory accounting reported bin `{bin_id}` over-reserved: reserved {reserved_count}, available {available_count}"
+            ),
+            event_ids,
+        ),
+    }
+}
+
 fn order_decision_dry_run_view(
     config: &RuntimeConfig,
     args: &OrderDecisionArgs,
@@ -1884,6 +2292,37 @@ fn order_request_filter(
             .map_err(|error| RuntimeError::Config(format!("build order event filter: {error}")));
     }
     Ok(filter)
+}
+
+fn listing_event_filter(
+    listing_addr: &RadrootsTradeListingAddress,
+) -> Result<RadrootsNostrFilter, RuntimeError> {
+    let filter = RadrootsNostrFilter::new()
+        .kind(radroots_nostr_kind(KIND_LISTING as u16))
+        .limit(100);
+    radroots_nostr_filter_tag(filter, "d", vec![listing_addr.listing_id.clone()])
+        .map_err(|error| RuntimeError::Config(format!("build listing event filter: {error}")))
+}
+
+fn order_listing_request_filter(
+    seller_pubkey: &str,
+    listing_addr: &str,
+) -> Result<RadrootsNostrFilter, RuntimeError> {
+    let filter = RadrootsNostrFilter::new()
+        .kind(radroots_nostr_kind(KIND_TRADE_ORDER_REQUEST as u16))
+        .limit(1_000);
+    let filter = radroots_nostr_filter_tag(filter, "p", vec![seller_pubkey.to_owned()])
+        .map_err(|error| RuntimeError::Config(format!("build order request filter: {error}")))?;
+    radroots_nostr_filter_tag(filter, "a", vec![listing_addr.to_owned()])
+        .map_err(|error| RuntimeError::Config(format!("build order request filter: {error}")))
+}
+
+fn order_listing_decision_filter(listing_addr: &str) -> Result<RadrootsNostrFilter, RuntimeError> {
+    let filter = RadrootsNostrFilter::new()
+        .kind(radroots_nostr_kind(KIND_TRADE_ORDER_DECISION as u16))
+        .limit(1_000);
+    radroots_nostr_filter_tag(filter, "a", vec![listing_addr.to_owned()])
+        .map_err(|error| RuntimeError::Config(format!("build order decision filter: {error}")))
 }
 
 fn order_status_filter(order_id: &str) -> Result<RadrootsNostrFilter, RuntimeError> {
