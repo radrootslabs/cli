@@ -347,20 +347,34 @@ where
                 .reason
                 .clone()
                 .unwrap_or_else(|| format!("order submit finished with state `{}`", view.state));
-            if disposition == CommandDisposition::Unconfigured && !view.issues.is_empty() {
-                Err(OperationAdapterError::operation_unavailable_with_detail(
-                    operation_id,
-                    message,
-                    json!({
-                        "state": &view.state,
-                        "order_id": &view.order_id,
-                        "file": &view.file,
-                        "listing_addr": &view.listing_addr,
-                        "listing_event_id": &view.listing_event_id,
-                        "issues": &view.issues,
-                        "actions": &view.actions,
-                    }),
-                ))
+            if !view.issues.is_empty()
+                && matches!(
+                    disposition,
+                    CommandDisposition::Unconfigured | CommandDisposition::ValidationFailed
+                )
+            {
+                let detail = json!({
+                    "state": &view.state,
+                    "order_id": &view.order_id,
+                    "file": &view.file,
+                    "listing_addr": &view.listing_addr,
+                    "listing_event_id": &view.listing_event_id,
+                    "issues": &view.issues,
+                    "actions": &view.actions,
+                });
+                if disposition == CommandDisposition::ValidationFailed {
+                    Err(OperationAdapterError::validation_failed_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                } else {
+                    Err(OperationAdapterError::operation_unavailable_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                }
             } else {
                 Err(OperationAdapterError::from_command_disposition(
                     operation_id,

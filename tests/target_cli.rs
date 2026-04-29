@@ -1424,6 +1424,68 @@ fn order_submit_rejects_superseded_local_listing_event_before_publish() {
 }
 
 #[test]
+fn order_submit_rejects_over_available_quantity_before_publish() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    seed_orderable_listing(&sandbox, LISTING_ADDR);
+    sandbox.json_success(&["--format", "json", "basket", "create", "over_quantity"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "over_quantity",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "6",
+    ]);
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "over_quantity",
+    ]);
+    let order_id = quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--approval-token",
+        "approve",
+        "order",
+        "submit",
+        order_id,
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(10));
+    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["errors"][0]["code"], "validation_failed");
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["code"],
+        "order_quantity_exceeds_available"
+    );
+    assert!(
+        value["errors"][0]["detail"]["issues"][0]["message"]
+            .as_str()
+            .expect("issue message")
+            .contains("available quantity 5")
+    );
+    assert_no_removed_command_reference(&value, &["order", "submit"]);
+    assert_no_daemon_runtime_reference(&value, &["order", "submit"]);
+}
+
+#[test]
 fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     let sandbox = RadrootsCliSandbox::new();
     let first = sandbox.json_success(&["--format", "json", "account", "create"]);

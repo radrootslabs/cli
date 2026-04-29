@@ -552,6 +552,9 @@ pub fn submit(
     if let Some(view) = order_submit_listing_freshness_view(config, &loaded, args)? {
         return Ok(view);
     }
+    if let Some(view) = order_submit_quantity_preflight_view(config, &loaded, args)? {
+        return Ok(view);
+    }
 
     if config.relay.urls.is_empty() {
         return Err(RuntimeError::Network(
@@ -2371,6 +2374,131 @@ fn order_submit_listing_freshness_view(
     Ok(None)
 }
 
+fn order_submit_quantity_preflight_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+) -> Result<Option<OrderSubmitView>, RuntimeError> {
+    if !config.local.replica_db_path.exists() {
+        return Ok(Some(order_submit_unconfigured_view(
+            config,
+            loaded,
+            args,
+            "order submit requires local market data to confirm current listing availability; run `radroots store init` and `radroots market refresh` before submitting",
+            vec![issue(
+                "order.listing_addr",
+                "local replica database is missing; run `radroots store init` and `radroots market refresh` before submitting",
+            )],
+            vec![
+                "radroots store init".to_owned(),
+                "radroots market refresh".to_owned(),
+            ],
+        )));
+    }
+
+    let requested_count =
+        loaded
+            .document
+            .order
+            .items
+            .iter()
+            .enumerate()
+            .try_fold(0u64, |total, (index, item)| {
+                if item.bin_count == 0 {
+                    return Err(RuntimeError::Config(format!(
+                        "order item {index} quantity must be greater than zero"
+                    )));
+                }
+                total.checked_add(u64::from(item.bin_count)).ok_or_else(|| {
+                    RuntimeError::Config("order quantity exceeds supported range".to_owned())
+                })
+            })?;
+
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let product_rows = trade_product::find_many(
+        &executor,
+        &ITradeProductFindMany {
+            filter: Some(trade_product_listing_addr_filter(
+                loaded.document.order.listing_addr.as_str(),
+            )),
+        },
+    )
+    .map_err(|error| RuntimeError::Config(format!("resolve listing product state: {error:?}")))?
+    .results;
+
+    let product = match product_rows.as_slice() {
+        [product] => product,
+        [] => {
+            return Ok(Some(order_submit_unconfigured_view(
+                config,
+                loaded,
+                args,
+                "order listing is not active in the local replica; run `radroots market refresh` and create a new order from current market data",
+                vec![issue(
+                    "order.listing_addr",
+                    "listing is missing, archived, or superseded in the local replica",
+                )],
+                vec!["radroots market refresh".to_owned()],
+            )));
+        }
+        _ => {
+            return Err(RuntimeError::Config(format!(
+                "listing address `{}` matched {} active local listing rows",
+                loaded.document.order.listing_addr,
+                product_rows.len()
+            )));
+        }
+    };
+
+    let available_count = match product.qty_avail {
+        Some(value) if value >= 0 => value as u64,
+        Some(value) => {
+            return Ok(Some(order_submit_invalid_quantity_view(
+                config,
+                loaded,
+                args,
+                "order listing availability is invalid in the local replica",
+                vec![issue_with_code(
+                    "listing_inventory_availability_invalid",
+                    "inventory.available",
+                    format!("current local replica availability is negative: {value}"),
+                )],
+            )));
+        }
+        None => {
+            return Ok(Some(order_submit_invalid_quantity_view(
+                config,
+                loaded,
+                args,
+                "order listing availability is missing in the local replica",
+                vec![issue_with_code(
+                    "listing_inventory_availability_missing",
+                    "inventory.available",
+                    "current local replica listing availability is required before submit",
+                )],
+            )));
+        }
+    };
+
+    if requested_count > available_count {
+        return Ok(Some(order_submit_invalid_quantity_view(
+            config,
+            loaded,
+            args,
+            "order requested quantity exceeds current local listing availability",
+            vec![issue_with_code(
+                "order_quantity_exceeds_available",
+                "order.items",
+                format!(
+                    "requested quantity {requested_count} exceeds current local replica available quantity {available_count}"
+                ),
+            )],
+        )));
+    }
+
+    Ok(None)
+}
+
 fn order_submit_unconfigured_view(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
@@ -2410,6 +2538,45 @@ fn order_submit_unconfigured_view(
         job: None,
         issues,
         actions,
+    }
+}
+
+fn order_submit_invalid_quantity_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    reason: impl Into<String>,
+    issues: Vec<OrderIssueView>,
+) -> OrderSubmitView {
+    OrderSubmitView {
+        state: "invalid".to_owned(),
+        source: ORDER_SOURCE.to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        file: loaded.file.display().to_string(),
+        listing_lookup: loaded.document.listing_lookup.clone(),
+        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        event_id: None,
+        event_kind: None,
+        dry_run: config.output.dry_run,
+        deduplicated: false,
+        target_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: None,
+        signer_session_id: None,
+        requested_signer_session_id: None,
+        reason: Some(reason.into()),
+        job: None,
+        issues,
+        actions: vec![
+            "radroots market refresh".to_owned(),
+            format!("radroots order get {}", loaded.document.order.order_id),
+        ],
     }
 }
 
