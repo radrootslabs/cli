@@ -535,56 +535,11 @@ pub fn submit(
         });
     }
 
-    if config.output.dry_run {
-        if let Err(error) = resolve_local_order_signing_identity(
-            config,
-            loaded.document.order.buyer_pubkey.as_str(),
-        ) {
-            return Ok(order_binding_error_view(config, &loaded, args, error));
-        }
-        return Ok(OrderSubmitView {
-            state: "dry_run".to_owned(),
-            source: ORDER_SOURCE.to_owned(),
-            order_id: loaded.document.order.order_id.clone(),
-            file: loaded.file.display().to_string(),
-            listing_lookup: loaded.document.listing_lookup.clone(),
-            listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
-            listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
-            buyer_account_id: loaded.document.buyer_account_id.clone(),
-            buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
-            seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
-            event_id: None,
-            event_kind: None,
-            dry_run: true,
-            deduplicated: false,
-            target_relays: Vec::new(),
-            acknowledged_relays: Vec::new(),
-            failed_relays: Vec::new(),
-            idempotency_key: args.idempotency_key.clone(),
-            signer_mode: None,
-            signer_session_id: None,
-            requested_signer_session_id: None,
-            reason: Some("dry run requested; relay order publication skipped".to_owned()),
-            job: None,
-            issues: Vec::new(),
-            actions: vec![format!(
-                "radroots order submit {}",
-                loaded.document.order.order_id
-            )],
-        });
-    }
-
     if let Some(view) = order_submit_listing_freshness_view(config, &loaded, args)? {
         return Ok(view);
     }
     if let Some(view) = order_submit_quantity_preflight_view(config, &loaded, args)? {
         return Ok(view);
-    }
-
-    if config.relay.urls.is_empty() {
-        return Err(RuntimeError::Network(
-            "order submit requires at least one configured relay before signing".to_owned(),
-        ));
     }
 
     let signing = match resolve_local_order_signing_identity(
@@ -604,10 +559,21 @@ pub fn submit(
             .as_str(),
     )?;
 
+    if config.relay.urls.is_empty() {
+        return Err(RuntimeError::Network(
+            "order submit requires at least one configured relay before publish preflight"
+                .to_owned(),
+        ));
+    }
+
     if let Some(view) =
         order_submit_existing_request_preflight_view(config, &loaded, args, &payload)?
     {
         return Ok(view);
+    }
+
+    if config.output.dry_run {
+        return Ok(order_submit_dry_run_view(config, &loaded, args));
     }
 
     match publish_order_request(config, &loaded, args, signing, payload) {
@@ -3703,7 +3669,7 @@ fn order_submit_deduplicated_view(
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: Some(request.request_event_id.clone()),
         event_kind: Some(KIND_TRADE_ORDER_REQUEST),
-        dry_run: false,
+        dry_run: config.output.dry_run,
         deduplicated: true,
         target_relays,
         acknowledged_relays: connected_relays,
@@ -3719,6 +3685,45 @@ fn order_submit_deduplicated_view(
         job: None,
         issues: Vec::new(),
         actions: Vec::new(),
+    }
+}
+
+fn order_submit_dry_run_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+) -> OrderSubmitView {
+    OrderSubmitView {
+        state: "dry_run".to_owned(),
+        source: ORDER_SUBMIT_SOURCE.to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        file: loaded.file.display().to_string(),
+        listing_lookup: loaded.document.listing_lookup.clone(),
+        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        event_id: None,
+        event_kind: None,
+        dry_run: true,
+        deduplicated: false,
+        target_relays: config.relay.urls.clone(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        signer_session_id: None,
+        requested_signer_session_id: None,
+        reason: Some(
+            "dry run requested; relay order publication skipped after submit preflight".to_owned(),
+        ),
+        job: None,
+        issues: Vec::new(),
+        actions: vec![format!(
+            "radroots order submit {}",
+            loaded.document.order.order_id
+        )],
     }
 }
 
@@ -4209,15 +4214,16 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        LoadedOrderDraft, ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem,
-        OrderStatusContext, ResolvedSellerOrderRequest, SellerOrderRequestResolution,
-        accepted_order_decision_payload_from_request, active_request_record_from_resolved,
-        canonical_order_request_payload_from_loaded, collect_issues,
-        declined_order_decision_payload_from_request, inspect_document, next_order_id,
-        order_accept_inventory_preflight_view_from_projection, order_decision_dry_run_view,
-        order_decision_preflight_view_from_status, order_decision_view_from_resolution,
-        order_history_entry_from_event, order_history_from_receipt, order_request_filter,
-        order_status_from_receipt, order_status_from_receipt_with_context,
+        LoadedOrderDraft, ORDER_DRAFT_KIND, ORDER_SUBMIT_SOURCE, OrderDraft, OrderDraftDocument,
+        OrderDraftItem, OrderStatusContext, ResolvedSellerOrderRequest,
+        SellerOrderRequestResolution, accepted_order_decision_payload_from_request,
+        active_request_record_from_resolved, canonical_order_request_payload_from_loaded,
+        collect_issues, declined_order_decision_payload_from_request, inspect_document,
+        next_order_id, order_accept_inventory_preflight_view_from_projection,
+        order_decision_dry_run_view, order_decision_preflight_view_from_status,
+        order_decision_view_from_resolution, order_history_entry_from_event,
+        order_history_from_receipt, order_request_filter, order_status_from_receipt,
+        order_status_from_receipt_with_context, order_submit_dry_run_view,
         order_submit_existing_request_view_from_receipt, proposed_accept_decision_record,
         seller_order_request_resolution_from_receipt,
     };
@@ -4386,6 +4392,72 @@ mod tests {
         assert_eq!(view.target_relays, vec!["ws://relay.test"]);
         assert_eq!(view.acknowledged_relays, vec!["ws://relay.test"]);
         assert_eq!(view.idempotency_key.as_deref(), Some("idem-submit"));
+    }
+
+    #[test]
+    fn order_submit_dry_run_view_preserves_preflighted_no_publish_fields() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let loaded = loaded_order_draft_for_fixture(&fixture);
+        let args = OrderSubmitArgs {
+            key: fixture.order_id.clone(),
+            idempotency_key: Some("idem-dry-submit".to_owned()),
+        };
+
+        let view = order_submit_dry_run_view(&config, &loaded, &args);
+
+        assert_eq!(view.state, "dry_run");
+        assert_eq!(view.source, ORDER_SUBMIT_SOURCE);
+        assert_eq!(view.dry_run, true);
+        assert_eq!(view.deduplicated, false);
+        assert_eq!(view.event_id, None);
+        assert_eq!(view.event_kind, None);
+        assert_eq!(view.target_relays, vec!["ws://relay.test"]);
+        assert!(view.acknowledged_relays.is_empty());
+        assert!(view.failed_relays.is_empty());
+        assert_eq!(view.signer_mode.as_deref(), Some("local"));
+        assert_eq!(view.idempotency_key.as_deref(), Some("idem-dry-submit"));
+    }
+
+    #[test]
+    fn order_submit_dry_run_deduplicates_identical_visible_request() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let loaded = loaded_order_draft_for_fixture(&fixture);
+        let payload =
+            canonical_order_request_payload_from_loaded(&loaded, fixture.buyer_pubkey.as_str())
+                .expect("canonical order request payload");
+        let event_id = fixture.request_event.id.to_string();
+        let args = OrderSubmitArgs {
+            key: fixture.order_id.clone(),
+            idempotency_key: Some("idem-dry-dedupe".to_owned()),
+        };
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone()],
+        };
+
+        let view = order_submit_existing_request_view_from_receipt(
+            &config, &loaded, &args, &payload, receipt,
+        )
+        .expect("submit existing request preflight")
+        .expect("deduplicated view");
+
+        assert_eq!(view.state, "submitted");
+        assert_eq!(view.dry_run, true);
+        assert_eq!(view.deduplicated, true);
+        assert_eq!(view.event_id.as_deref(), Some(event_id.as_str()));
+        assert_eq!(view.event_kind, Some(3422));
+        assert_eq!(view.acknowledged_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.idempotency_key.as_deref(), Some("idem-dry-dedupe"));
     }
 
     #[test]

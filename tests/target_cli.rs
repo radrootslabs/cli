@@ -1256,21 +1256,23 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_no_removed_command_reference(&orders, &["order", "list"]);
     assert_no_daemon_runtime_reference(&orders, &["order", "list"]);
 
-    let submit =
-        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+    let (dry_output, submit) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+    assert!(!dry_output.status.success());
+    assert_eq!(dry_output.status.code(), Some(8));
     assert_eq!(submit["operation_id"], "order.submit");
     assert_eq!(submit["dry_run"], true);
-    assert_eq!(submit["result"]["state"], "dry_run");
-    assert_eq!(submit["result"]["dry_run"], true);
-    assert_eq!(submit["result"]["order_id"], order_id);
-    assert_eq!(submit["result"]["buyer_account_id"], account_id);
-    assert_eq!(submit["result"]["listing_event_id"], listing_event_id);
-    assert_eq!(submit["result"]["event_id"], Value::Null);
-    assert_eq!(submit["result"]["event_kind"], Value::Null);
-    assert_eq!(submit["result"]["target_relays"], Value::Null);
-    assert_eq!(submit["result"]["acknowledged_relays"], Value::Null);
-    assert_eq!(submit["result"]["failed_relays"], Value::Null);
-    assert_eq!(submit["errors"].as_array().expect("errors").len(), 0);
+    assert_eq!(submit["result"], Value::Null);
+    assert_eq!(submit["errors"][0]["code"], "network_unavailable");
+    assert_eq!(submit["errors"][0]["detail"]["class"], "network");
+    assert!(
+        submit["errors"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains(
+                "order submit requires at least one configured relay before publish preflight"
+            )
+    );
     assert_no_removed_command_reference(&submit, &["order", "submit", "--dry-run"]);
     assert_no_daemon_runtime_reference(&submit, &["order", "submit", "--dry-run"]);
 
@@ -1299,7 +1301,9 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         unavailable_submit["errors"][0]["message"]
             .as_str()
             .expect("message")
-            .contains("order submit requires at least one configured relay before signing")
+            .contains(
+                "order submit requires at least one configured relay before publish preflight"
+            )
     );
     assert_no_removed_command_reference(&unavailable_submit, &["order", "submit"]);
     assert_no_daemon_runtime_reference(&unavailable_submit, &["order", "submit"]);
@@ -1351,6 +1355,33 @@ fn order_submit_requires_local_replica_freshness_before_signing() {
             .as_str()
             .expect("message")
             .contains("run `radroots store init` and `radroots market refresh`")
+    );
+}
+
+#[test]
+fn order_submit_dry_run_requires_local_replica_freshness() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "dry_freshness_missing_db");
+    fs::remove_file(sandbox.replica_db_path()).expect("remove replica db");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "order",
+        "submit",
+        order_id.as_str(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["state"], "unconfigured");
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["field"],
+        "order.listing_addr"
     );
 }
 
@@ -1486,6 +1517,52 @@ fn order_submit_rejects_over_available_quantity_before_publish() {
 }
 
 #[test]
+fn order_submit_dry_run_rejects_over_available_quantity_before_relay_preflight() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    seed_orderable_listing(&sandbox, LISTING_ADDR);
+    sandbox.json_success(&["--format", "json", "basket", "create", "dry_over_quantity"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "dry_over_quantity",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "6",
+    ]);
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "dry_over_quantity",
+    ]);
+    let order_id = quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id");
+
+    let (output, value) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(10));
+    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["errors"][0]["code"], "validation_failed");
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["code"],
+        "order_quantity_exceeds_available"
+    );
+}
+
+#[test]
 fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     let sandbox = RadrootsCliSandbox::new();
     let first = sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -1529,15 +1606,23 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
         listing_event_id
     );
 
-    let dry_run =
-        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+    let (dry_output, dry_run) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
 
+    assert!(!dry_output.status.success());
+    assert_eq!(dry_output.status.code(), Some(8));
     assert_eq!(dry_run["operation_id"], "order.submit");
     assert_eq!(dry_run["dry_run"], true);
-    assert_eq!(dry_run["result"]["state"], "dry_run");
-    assert_eq!(dry_run["result"]["dry_run"], true);
-    assert_eq!(dry_run["result"]["buyer_account_id"], first_account_id);
-    assert_eq!(dry_run["result"]["listing_event_id"], listing_event_id);
+    assert_eq!(dry_run["result"], Value::Null);
+    assert_eq!(dry_run["errors"][0]["code"], "network_unavailable");
+    assert!(
+        dry_run["errors"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains(
+                "order submit requires at least one configured relay before publish preflight"
+            )
+    );
     assert_no_daemon_runtime_reference(&dry_run, &["order", "submit", "--dry-run"]);
 
     let second = sandbox.json_success(&["--format", "json", "account", "create"]);

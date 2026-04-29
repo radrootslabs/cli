@@ -58,11 +58,7 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
         let view = crate::runtime::order::submit(&config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
-        if request.context.dry_run && view.state == "unconfigured" && !view.issues.is_empty() {
-            serialized_target_result::<OrderSubmitResult, _>(&view)
-        } else {
-            submit_result::<OrderSubmitResult>(request.operation_id(), &view)
-        }
+        submit_result::<OrderSubmitResult>(request.operation_id(), &view)
     }
 }
 
