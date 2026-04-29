@@ -1168,6 +1168,20 @@ fn create_ready_order(sandbox: &RadrootsCliSandbox, basket_id: &str) -> String {
         .to_owned()
 }
 
+fn rewrite_order_bin(sandbox: &RadrootsCliSandbox, order_id: &str, bin_id: &str) {
+    let path = sandbox
+        .root()
+        .join("data/apps/cli/orders/drafts")
+        .join(format!("{order_id}.toml"));
+    let contents = fs::read_to_string(&path).expect("read order draft");
+    let updated = contents.replace(
+        "bin_id = \"bin-1\"",
+        format!("bin_id = \"{bin_id}\"").as_str(),
+    );
+    assert_ne!(updated, contents);
+    fs::write(path, updated).expect("rewrite order draft bin");
+}
+
 #[test]
 fn buyer_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
@@ -1511,6 +1525,46 @@ fn order_submit_rejects_over_available_quantity_before_publish() {
             .as_str()
             .expect("issue message")
             .contains("available quantity 5")
+    );
+    assert_no_removed_command_reference(&value, &["order", "submit"]);
+    assert_no_daemon_runtime_reference(&value, &["order", "submit"]);
+}
+
+#[test]
+fn order_submit_rejects_unknown_local_listing_bin_before_publish() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "unknown_bin");
+    rewrite_order_bin(&sandbox, order_id.as_str(), "unknown-bin");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--approval-token",
+        "approve",
+        "order",
+        "submit",
+        order_id.as_str(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(10));
+    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["errors"][0]["code"], "validation_failed");
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["code"],
+        "order_bin_unknown"
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["field"],
+        "order.items[0].bin_id"
+    );
+    assert!(
+        value["errors"][0]["detail"]["issues"][0]["message"]
+            .as_str()
+            .expect("issue message")
+            .contains("expected primary bin `bin-1`")
     );
     assert_no_removed_command_reference(&value, &["order", "submit"]);
     assert_no_daemon_runtime_reference(&value, &["order", "submit"]);

@@ -2942,6 +2942,7 @@ fn trade_product_listing_addr_filter(listing_addr: &str) -> ITradeProductFieldsF
         price_qty_amt: None,
         price_qty_unit: None,
         listing_addr: Some(listing_addr.to_owned()),
+        primary_bin_id: None,
         notes: None,
     }
 }
@@ -3322,6 +3323,43 @@ fn order_submit_quantity_preflight_view(
             )));
         }
     };
+
+    let Some(primary_bin_id) = product.primary_bin_id.as_deref().and_then(non_empty_ref) else {
+        return Ok(Some(order_submit_invalid_quantity_view(
+            config,
+            loaded,
+            args,
+            "order listing bin identity is missing in the local replica",
+            vec![issue_with_code(
+                "listing_primary_bin_missing",
+                "inventory.primary_bin_id",
+                "current local replica listing primary bin is required before submit",
+            )],
+        )));
+    };
+
+    let mut bin_issues = Vec::new();
+    for (index, item) in loaded.document.order.items.iter().enumerate() {
+        if item.bin_id != primary_bin_id {
+            bin_issues.push(issue_with_code(
+                "order_bin_unknown",
+                format!("order.items[{index}].bin_id"),
+                format!(
+                    "draft bin `{}` is not in the current local listing bin set; expected primary bin `{primary_bin_id}`",
+                    item.bin_id
+                ),
+            ));
+        }
+    }
+    if !bin_issues.is_empty() {
+        return Ok(Some(order_submit_invalid_quantity_view(
+            config,
+            loaded,
+            args,
+            "order draft references a bin outside the current local listing",
+            bin_issues,
+        )));
+    }
 
     let available_count = match product.qty_avail {
         Some(value) if value >= 0 => value as u64,
@@ -4084,6 +4122,14 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
 }
 
 fn non_empty_string(value: String) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn non_empty_ref(value: &str) -> Option<&str> {
     if value.trim().is_empty() {
         None
     } else {
