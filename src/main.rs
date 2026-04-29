@@ -266,6 +266,9 @@ fn execute_request(
         TargetOperationRequest::OrderDecline(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
+        TargetOperationRequest::OrderFulfillmentUpdate(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
         TargetOperationRequest::OrderStatusGet(request) => {
             execute_with(OrderOperationService::new(config), request)
         }

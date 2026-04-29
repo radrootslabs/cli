@@ -174,6 +174,9 @@ impl TargetCommand {
                 OrderCommand::List => "order.list",
                 OrderCommand::Accept(_) => "order.accept",
                 OrderCommand::Decline(_) => "order.decline",
+                OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
+                    OrderFulfillmentCommand::Update(_) => "order.fulfillment.update",
+                },
                 OrderCommand::Status(status) => match &status.command {
                     OrderStatusCommand::Get(_) => "order.status.get",
                 },
@@ -685,6 +688,7 @@ pub enum OrderCommand {
     List,
     Accept(OrderKeyArgs),
     Decline(OrderDeclineArgs),
+    Fulfillment(OrderFulfillmentArgs),
     Status(OrderStatusArgs),
     Event(OrderEventArgs),
 }
@@ -704,6 +708,46 @@ pub struct OrderDeclineArgs {
     pub order_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderFulfillmentArgs {
+    #[command(subcommand)]
+    pub command: OrderFulfillmentCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrderFulfillmentCommand {
+    Update(OrderFulfillmentUpdateArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderFulfillmentUpdateArgs {
+    pub order_id: Option<String>,
+    #[arg(long, value_enum)]
+    pub state: Option<OrderFulfillmentStateArg>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub enum OrderFulfillmentStateArg {
+    Preparing,
+    ReadyForPickup,
+    OutForDelivery,
+    Delivered,
+    SellerCancelled,
+}
+
+impl OrderFulfillmentStateArg {
+    pub const fn as_protocol_state(self) -> &'static str {
+        match self {
+            Self::Preparing => "preparing",
+            Self::ReadyForPickup => "ready_for_pickup",
+            Self::OutForDelivery => "out_for_delivery",
+            Self::Delivered => "delivered",
+            Self::SellerCancelled => "seller_cancelled",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Args)]
@@ -741,7 +785,10 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{TargetCliArgs, TargetOutputFormat};
+    use super::{
+        OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg, TargetCliArgs,
+        TargetOutputFormat,
+    };
     use crate::operation_registry::OPERATION_REGISTRY;
 
     #[test]
@@ -826,6 +873,31 @@ mod tests {
         assert!(parsed.quiet);
         assert!(parsed.no_color);
         assert_eq!(parsed.command.operation_id(), "workspace.get");
+    }
+
+    #[test]
+    fn target_parser_accepts_order_fulfillment_update_state() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "fulfillment",
+            "update",
+            "ord_test",
+            "--state",
+            "ready_for_pickup",
+        ])
+        .expect("target args parse");
+
+        assert_eq!(parsed.command.operation_id(), "order.fulfillment.update");
+        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Fulfillment(fulfillment) = order.command else {
+            panic!("expected order fulfillment command")
+        };
+        let OrderFulfillmentCommand::Update(args) = fulfillment.command;
+        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.state, Some(OrderFulfillmentStateArg::ReadyForPickup));
     }
 
     #[test]

@@ -143,6 +143,21 @@ fn seller_order_decision_and_status_commands_are_public() {
             "order.status.get",
             ["--format", "json", "order", "status", "get", "ord_public"].as_slice(),
         ),
+        (
+            "order.fulfillment.update",
+            [
+                "--format",
+                "json",
+                "--dry-run",
+                "order",
+                "fulfillment",
+                "update",
+                "ord_public",
+                "--state",
+                "ready_for_pickup",
+            ]
+            .as_slice(),
+        ),
     ] {
         let output = radroots()
             .args(args)

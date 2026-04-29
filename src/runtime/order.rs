@@ -986,7 +986,7 @@ fn order_status_from_receipt_with_context(
     });
 
     let order_id = context.order_id;
-    let projection = reduce_active_order_events(order_id, requests, decisions.clone());
+    let projection = reduce_active_order_events(order_id, requests, decisions.clone(), []);
     let listing_event_id = projection
         .request_event_id
         .as_ref()
@@ -1103,6 +1103,7 @@ fn enrich_order_status_inventory(
         listing.bins,
         requests,
         decisions,
+        [],
     );
     let relevant_issues = projection
         .issues
@@ -1587,6 +1588,114 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
             "active order reducer reported conflicting decisions",
             event_ids,
         ),
+        RadrootsActiveOrderReducerIssue::FulfillmentWithoutAcceptedDecision { event_id } => {
+            issue_with_events(
+                "fulfillment_without_accepted_decision",
+                "fulfillment_event_id",
+                "active order reducer reported fulfillment without accepted decision",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentPayloadInvalid { event_id } => {
+            issue_with_events(
+                "invalid_fulfillment_payload",
+                "fulfillment_payload",
+                "active order reducer reported invalid fulfillment payload",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentOrderIdMismatch { event_id } => {
+            issue_with_events(
+                "fulfillment_order_id_mismatch",
+                "order_id",
+                "active order reducer reported fulfillment order id mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentAuthorMismatch { event_id } => {
+            issue_with_events(
+                "fulfillment_author_mismatch",
+                "seller_pubkey",
+                "active order reducer reported fulfillment author mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentCounterpartyMismatch { event_id } => {
+            issue_with_events(
+                "fulfillment_counterparty_mismatch",
+                "buyer_pubkey",
+                "active order reducer reported fulfillment counterparty mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentBuyerMismatch { event_id } => {
+            issue_with_events(
+                "fulfillment_buyer_mismatch",
+                "buyer_pubkey",
+                "active order reducer reported fulfillment buyer mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentSellerMismatch { event_id } => {
+            issue_with_events(
+                "fulfillment_seller_mismatch",
+                "seller_pubkey",
+                "active order reducer reported fulfillment seller mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentListingAddressInvalid { event_id } => {
+            issue_with_events(
+                "invalid_fulfillment_listing_address",
+                "listing_addr",
+                "active order reducer reported invalid fulfillment listing address",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentListingMismatch { event_id } => {
+            issue_with_events(
+                "fulfillment_listing_mismatch",
+                "listing_addr",
+                "active order reducer reported fulfillment listing mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentRootMismatch { event_id } => issue_with_events(
+            "fulfillment_root_mismatch",
+            "root_event_id",
+            "active order reducer reported fulfillment root mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::FulfillmentPreviousMismatch { event_id } => {
+            issue_with_events(
+                "fulfillment_previous_mismatch",
+                "prev_event_id",
+                "active order reducer reported fulfillment previous mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentStatusNotPublishable { event_id } => {
+            issue_with_events(
+                "fulfillment_status_not_publishable",
+                "fulfillment_state",
+                "active order reducer reported non-publishable fulfillment status",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::FulfillmentUnsupportedTransition { event_id } => {
+            issue_with_events(
+                "fulfillment_unsupported_transition",
+                "fulfillment_state",
+                "active order reducer reported unsupported fulfillment transition",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::ForkedFulfillments { event_ids } => issue_with_events(
+            "forked_fulfillments",
+            "fulfillment_event_id",
+            "active order reducer reported forked fulfillment updates",
+            event_ids,
+        ),
     }
 }
 
@@ -1980,6 +2089,7 @@ fn order_accept_inventory_preflight_view(
         listing.bins,
         requests,
         decisions,
+        [],
     );
     Ok(order_accept_inventory_preflight_view_from_projection(
         config, args, request, resolution, status, projection,
@@ -5386,6 +5496,7 @@ mod tests {
                 },
                 proposed_accept_decision_record(&request).expect("proposed accept decision"),
             ],
+            [],
         );
         let args = OrderDecisionArgs {
             key: fixture.order_id.clone(),

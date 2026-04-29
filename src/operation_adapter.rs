@@ -1054,7 +1054,8 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
         AccountCommand, AccountSelectionCommand, BasketCommand, BasketItemCommand,
         BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand, FarmLocationCommand,
         FarmProfileCommand, ListingCommand, MarketCommand, MarketListingCommand,
-        MarketProductCommand, OrderCommand, OrderEventCommand, OrderStatusCommand, TargetCommand,
+        MarketProductCommand, OrderCommand, OrderEventCommand, OrderFulfillmentCommand,
+        OrderStatusCommand, TargetCommand,
     };
 
     let mut input = OperationData::new();
@@ -1187,6 +1188,17 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 insert_string(&mut input, "order_id", &args.order_id);
                 insert_string(&mut input, "reason", &args.reason);
             }
+            OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
+                OrderFulfillmentCommand::Update(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id);
+                    if let Some(state) = args.state {
+                        input.insert(
+                            "state".to_owned(),
+                            Value::String(state.as_protocol_state().to_owned()),
+                        );
+                    }
+                }
+            },
             OrderCommand::Status(status) => match &status.command {
                 OrderStatusCommand::Get(args) => {
                     insert_string(&mut input, "order_id", &args.order_id)
@@ -1290,6 +1302,7 @@ target_operation_contracts! {
     OrderList => (OrderListRequest, OrderListResult, "order.list"),
     OrderAccept => (OrderAcceptRequest, OrderAcceptResult, "order.accept"),
     OrderDecline => (OrderDeclineRequest, OrderDeclineResult, "order.decline"),
+    OrderFulfillmentUpdate => (OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, "order.fulfillment.update"),
     OrderStatusGet => (OrderStatusGetRequest, OrderStatusGetResult, "order.status.get"),
     OrderEventList => (OrderEventListRequest, OrderEventListResult, "order.event.list"),
     OrderEventWatch => (OrderEventWatchRequest, OrderEventWatchResult, "order.event.watch"),
@@ -1309,7 +1322,7 @@ mod tests {
     use std::io;
 
     use clap::Parser;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{
         OperationAdapter, OperationAdapterError, OperationContext, OperationInputMode,
@@ -1393,6 +1406,40 @@ mod tests {
         let actor = envelope_context.actor.expect("account actor");
         assert_eq!(actor.account_id, "acct_test");
         assert_eq!(actor.role, "account");
+    }
+
+    #[test]
+    fn adapter_maps_order_fulfillment_update_input() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "fulfillment",
+            "update",
+            "ord_test",
+            "--state",
+            "seller_cancelled",
+        ])
+        .expect("target args parse");
+
+        let request = TargetOperationRequest::from_target_args(&parsed)
+            .expect("operation request from target args");
+        let TargetOperationRequest::OrderFulfillmentUpdate(request) = request else {
+            panic!("expected order fulfillment update request")
+        };
+
+        assert_eq!(request.operation_id(), "order.fulfillment.update");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("order_id")
+                .and_then(Value::as_str),
+            Some("ord_test")
+        );
+        assert_eq!(
+            request.payload.input.get("state").and_then(Value::as_str),
+            Some("seller_cancelled")
+        );
     }
 
     #[test]

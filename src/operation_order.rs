@@ -8,9 +8,10 @@ use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, OrderAcceptRequest, OrderAcceptResult,
     OrderDeclineRequest, OrderDeclineResult, OrderEventListRequest, OrderEventListResult,
-    OrderEventWatchRequest, OrderEventWatchResult, OrderGetRequest, OrderGetResult,
-    OrderListRequest, OrderListResult, OrderStatusGetRequest, OrderStatusGetResult,
-    OrderSubmitRequest, OrderSubmitResult,
+    OrderEventWatchRequest, OrderEventWatchResult, OrderFulfillmentUpdateRequest,
+    OrderFulfillmentUpdateResult, OrderGetRequest, OrderGetResult, OrderListRequest,
+    OrderListResult, OrderStatusGetRequest, OrderStatusGetResult, OrderSubmitRequest,
+    OrderSubmitResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -163,6 +164,36 @@ impl OperationService<OrderDeclineRequest> for OrderOperationService<'_> {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
         decision_result::<OrderDeclineResult>(request.operation_id(), &view)
+    }
+}
+
+impl OperationService<OrderFulfillmentUpdateRequest> for OrderOperationService<'_> {
+    type Result = OrderFulfillmentUpdateResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<OrderFulfillmentUpdateRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        required_order_key(&request)?;
+        string_input(&request, "state")
+            .map(|state| state.trim().to_owned())
+            .filter(|state| !state.is_empty())
+            .ok_or_else(|| {
+                invalid_input(
+                    request.operation_id(),
+                    "missing required `state` input".to_owned(),
+                )
+            })?;
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
+        Err(OperationAdapterError::from_command_disposition(
+            request.operation_id(),
+            CommandDisposition::Unsupported,
+            "order fulfillment update runtime is not wired yet".to_owned(),
+        ))
     }
 }
 
