@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::domain::runtime::{
-    CommandDisposition, OrderDecisionView, OrderStatusView, OrderSubmitView,
+    CommandDisposition, OrderDecisionView, OrderFulfillmentView, OrderStatusView, OrderSubmitView,
 };
 use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
@@ -16,8 +16,8 @@ use crate::operation_adapter::{
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime_args::{
-    OrderDecisionArg, OrderDecisionArgs, OrderStatusArgs, OrderSubmitArgs, OrderWatchArgs,
-    RecordLookupArgs,
+    OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderStatusArgs, OrderSubmitArgs,
+    OrderWatchArgs, RecordLookupArgs,
 };
 
 pub struct OrderOperationService<'a> {
@@ -174,8 +174,8 @@ impl OperationService<OrderFulfillmentUpdateRequest> for OrderOperationService<'
         &self,
         request: OperationRequest<OrderFulfillmentUpdateRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        required_order_key(&request)?;
-        string_input(&request, "state")
+        let key = required_order_key(&request)?;
+        let state = string_input(&request, "state")
             .map(|state| state.trim().to_owned())
             .filter(|state| !state.is_empty())
             .ok_or_else(|| {
@@ -189,11 +189,24 @@ impl OperationService<OrderFulfillmentUpdateRequest> for OrderOperationService<'
                 request.operation_id(),
             ));
         }
-        Err(OperationAdapterError::from_command_disposition(
-            request.operation_id(),
-            CommandDisposition::Unsupported,
-            "order fulfillment update runtime is not wired yet".to_owned(),
-        ))
+
+        let args = OrderFulfillmentArgs {
+            key,
+            state,
+            idempotency_key: request
+                .context
+                .idempotency_key
+                .clone()
+                .or_else(|| string_input(&request, "idempotency_key")),
+        };
+        let mut config = self.config.clone();
+        if request.context.dry_run {
+            config.output.dry_run = true;
+        }
+        let view = crate::runtime::order::fulfillment_update(&config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
+        fulfillment_result::<OrderFulfillmentUpdateResult>(request.operation_id(), &view)
     }
 }
 
@@ -315,6 +328,96 @@ fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
         "buyer_pubkey": &view.buyer_pubkey,
         "seller_pubkey": &view.seller_pubkey,
         "decision": &view.decision,
+        "dry_run": view.dry_run,
+        "target_relays": &view.target_relays,
+        "connected_relays": &view.connected_relays,
+        "acknowledged_relays": &view.acknowledged_relays,
+        "failed_relays": &view.failed_relays,
+        "fetched_count": view.fetched_count,
+        "decoded_count": view.decoded_count,
+        "skipped_count": view.skipped_count,
+        "idempotency_key": &view.idempotency_key,
+        "signer_mode": &view.signer_mode,
+        "issues": &view.issues,
+        "actions": &view.actions,
+    })
+}
+
+fn fulfillment_result<R>(
+    operation_id: &str,
+    view: &OrderFulfillmentView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_target_result::<R, _>(view),
+        CommandDisposition::ValidationFailed => {
+            let message = view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "order fulfillment update failed validation with state `{}`",
+                    view.state
+                )
+            });
+            Err(OperationAdapterError::validation_failed_with_detail(
+                operation_id,
+                message,
+                order_fulfillment_error_detail(view),
+            ))
+        }
+        disposition => {
+            let message = view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "order fulfillment update finished with state `{}`",
+                    view.state
+                )
+            });
+            if disposition == CommandDisposition::ExternalUnavailable {
+                let detail = order_fulfillment_error_detail(view);
+                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                    Err(OperationAdapterError::network_unavailable_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                } else {
+                    Err(OperationAdapterError::operation_unavailable_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                }
+            } else if disposition == CommandDisposition::Unconfigured {
+                Err(OperationAdapterError::operation_unavailable_with_detail(
+                    operation_id,
+                    message,
+                    order_fulfillment_error_detail(view),
+                ))
+            } else {
+                Err(OperationAdapterError::from_command_disposition(
+                    operation_id,
+                    disposition,
+                    message,
+                ))
+            }
+        }
+    }
+}
+
+fn order_fulfillment_error_detail(view: &OrderFulfillmentView) -> Value {
+    json!({
+        "state": &view.state,
+        "order_id": &view.order_id,
+        "fulfillment_state": &view.fulfillment_state,
+        "listing_addr": &view.listing_addr,
+        "request_event_id": &view.request_event_id,
+        "decision_event_id": &view.decision_event_id,
+        "root_event_id": &view.root_event_id,
+        "prev_event_id": &view.prev_event_id,
+        "event_id": &view.event_id,
+        "event_kind": view.event_kind,
+        "buyer_pubkey": &view.buyer_pubkey,
+        "seller_pubkey": &view.seller_pubkey,
         "dry_run": view.dry_run,
         "target_relays": &view.target_relays,
         "connected_relays": &view.connected_relays,

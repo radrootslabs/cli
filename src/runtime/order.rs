@@ -4,21 +4,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_events::RadrootsNostrEventPtr;
-use radroots_events::kinds::{KIND_LISTING, KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST};
+use radroots_events::kinds::{
+    KIND_LISTING, KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION,
+    KIND_TRADE_ORDER_REQUEST,
+};
 use radroots_events::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingStatus,
 };
 use radroots_events::trade::{
-    RadrootsActiveTradeMessageType, RadrootsTradeInventoryCommitment, RadrootsTradeOrderDecision,
+    RadrootsActiveTradeFulfillmentState, RadrootsActiveTradeMessageType,
+    RadrootsTradeFulfillmentUpdated, RadrootsTradeInventoryCommitment, RadrootsTradeOrderDecision,
     RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::decode::listing_from_event;
 use radroots_events_codec::trade::{
     RadrootsTradeListingAddress, active_trade_envelope_from_event,
-    active_trade_event_context_from_tags, active_trade_order_decision_event_build,
+    active_trade_event_context_from_tags, active_trade_fulfillment_update_event_build,
+    active_trade_fulfillment_update_from_event, active_trade_order_decision_event_build,
     active_trade_order_request_event_build, active_trade_order_request_from_event,
 };
+use radroots_events_codec::wire::WireEventParts;
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
     radroots_nostr_kind,
@@ -30,8 +36,8 @@ use radroots_replica_db_schema::nostr_event_state::{
 use radroots_replica_db_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
-    RadrootsActiveOrderDecisionRecord, RadrootsActiveOrderReducerIssue,
-    RadrootsActiveOrderRequestRecord, RadrootsActiveOrderStatus,
+    RadrootsActiveOrderDecisionRecord, RadrootsActiveOrderFulfillmentRecord,
+    RadrootsActiveOrderReducerIssue, RadrootsActiveOrderRequestRecord, RadrootsActiveOrderStatus,
     RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryAccountingProjection,
     RadrootsListingInventoryBinAvailability, canonicalize_active_order_decision_for_signer,
     canonicalize_active_order_request_for_signer, reduce_active_order_events,
@@ -40,9 +46,10 @@ use radroots_trade::order::{
 use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
-    OrderDecisionView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView, OrderHistoryView,
-    OrderInventoryBinView, OrderInventoryView, OrderIssueView, OrderListView, OrderNewView,
-    OrderStatusView, OrderSubmitView, OrderSummaryView, OrderWatchView, RelayFailureView,
+    OrderDecisionView, OrderDraftItemView, OrderFulfillmentView, OrderGetView,
+    OrderHistoryEntryView, OrderHistoryView, OrderInventoryBinView, OrderInventoryView,
+    OrderIssueView, OrderListView, OrderNewView, OrderStatusView, OrderSubmitView,
+    OrderSummaryView, OrderWatchView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -53,14 +60,15 @@ use crate::runtime::direct_relay::{
 };
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime_args::{
-    OrderDecisionArg, OrderDecisionArgs, OrderDraftCreateArgs, OrderStatusArgs, OrderSubmitArgs,
-    OrderWatchArgs, RecordLookupArgs,
+    OrderDecisionArg, OrderDecisionArgs, OrderDraftCreateArgs, OrderFulfillmentArgs,
+    OrderStatusArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
 };
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
 const ORDER_SUBMIT_SOURCE: &str = "direct Nostr relay publish · local key";
 const ORDER_DECISION_SOURCE: &str = "direct Nostr relay decision publish · local key";
+const ORDER_FULFILLMENT_SOURCE: &str = "direct Nostr relay fulfillment publish · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
 const ORDER_STATUS_SOURCE: &str = "direct Nostr relay status fetch · active order reducer";
 const ORDER_EVENT_WATCH_UNAVAILABLE_REASON: &str =
@@ -819,6 +827,126 @@ pub fn decide(
     ))
 }
 
+pub fn fulfillment_update(
+    config: &RuntimeConfig,
+    args: &OrderFulfillmentArgs,
+) -> Result<OrderFulfillmentView, RuntimeError> {
+    if config.relay.urls.is_empty() {
+        let mut view =
+            order_fulfillment_base_view(config, args, "unconfigured", config.output.dry_run);
+        view.reason =
+            Some("order fulfillment update requires at least one configured relay".to_owned());
+        return Ok(view);
+    }
+
+    let fulfillment_state = match parse_fulfillment_state(args.state.as_str()) {
+        Ok(state) if state.is_publishable_update() => state,
+        Ok(_) => {
+            let mut view =
+                order_fulfillment_base_view(config, args, "invalid", config.output.dry_run);
+            view.fulfillment_state =
+                fulfillment_state_name(RadrootsActiveTradeFulfillmentState::AcceptedNotFulfilled)
+                    .to_owned();
+            view.reason = Some(
+                "`accepted_not_fulfilled` is derived from an accepted order and cannot be published"
+                    .to_owned(),
+            );
+            view.issues = vec![issue_with_code(
+                "fulfillment_state_not_publishable",
+                "fulfillment_state",
+                "accepted_not_fulfilled cannot be published as a fulfillment update",
+            )];
+            return Ok(view);
+        }
+        Err(reason) => {
+            let mut view =
+                order_fulfillment_base_view(config, args, "invalid", config.output.dry_run);
+            view.reason = Some(reason);
+            view.issues = vec![issue_with_code(
+                "unsupported_fulfillment_state",
+                "fulfillment_state",
+                "fulfillment state is not part of the active protocol set",
+            )];
+            return Ok(view);
+        }
+    };
+
+    let selected_account = match accounts::resolve_account(config)? {
+        Some(account) => account,
+        None => {
+            let mut view =
+                order_fulfillment_base_view(config, args, "unconfigured", config.output.dry_run);
+            view.reason =
+                Some("order fulfillment update requires a selected seller account".to_owned());
+            view.actions = vec!["radroots account create".to_owned()];
+            return Ok(view);
+        }
+    };
+    let selected_pubkey = selected_account.record.public_identity.public_key_hex;
+    let filter = order_status_filter(args.key.as_str())?;
+    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
+        Ok(receipt) => receipt,
+        Err(DirectRelayFetchError::Connect {
+            reason,
+            target_relays,
+            failed_relays,
+        }) => {
+            let mut view =
+                order_fulfillment_base_view(config, args, "unavailable", config.output.dry_run);
+            view.seller_pubkey = Some(selected_pubkey);
+            view.target_relays = target_relays;
+            view.failed_relays = relay_failures(failed_relays);
+            view.reason = Some(format!("direct relay connection failed: {reason}"));
+            return Ok(view);
+        }
+        Err(error) => return Err(RuntimeError::Network(error.to_string())),
+    };
+
+    let reduction = order_status_reduction_from_receipt_with_context(
+        OrderStatusContext {
+            order_id: args.key.as_str(),
+            selected_account_pubkey: None,
+        },
+        receipt,
+    );
+    let status_view = reduction.view;
+    if let Some(view) = order_fulfillment_preflight_view_from_status(
+        config,
+        args,
+        &status_view,
+        reduction.fulfillment_status,
+        reduction.fulfillment_event_id.as_deref(),
+    ) {
+        return Ok(view);
+    }
+
+    let seller_pubkey = status_view.seller_pubkey.as_deref().ok_or_else(|| {
+        RuntimeError::Config("accepted order is missing seller_pubkey".to_owned())
+    })?;
+    let signing = match resolve_local_order_fulfillment_signing_identity(config, seller_pubkey) {
+        Ok(signing) => signing,
+        Err(error) => {
+            return Ok(order_fulfillment_binding_error_view(
+                config,
+                args,
+                &status_view,
+                error,
+            ));
+        }
+    };
+    let payload = order_fulfillment_payload_from_status(&status_view, fulfillment_state)?;
+    let _ = order_fulfillment_event_parts(&status_view, &payload)?;
+    if config.output.dry_run {
+        return Ok(order_fulfillment_dry_run_view(
+            config,
+            args,
+            &status_view,
+            fulfillment_state,
+        ));
+    }
+    publish_order_fulfillment(config, args, status_view, signing, payload)
+}
+
 pub fn status(
     config: &RuntimeConfig,
     args: &OrderStatusArgs,
@@ -903,6 +1031,14 @@ enum OrderStatusRecord {
         record: RadrootsActiveOrderRequestRecord,
     },
     Decision(RadrootsActiveOrderDecisionRecord),
+    Fulfillment(RadrootsActiveOrderFulfillmentRecord),
+}
+
+#[derive(Debug, Clone)]
+struct OrderStatusReduction {
+    view: OrderStatusView,
+    fulfillment_event_id: Option<String>,
+    fulfillment_status: Option<RadrootsActiveTradeFulfillmentState>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -931,6 +1067,13 @@ fn order_status_from_receipt_with_context(
     context: OrderStatusContext<'_>,
     receipt: DirectRelayFetchReceipt,
 ) -> OrderStatusView {
+    order_status_reduction_from_receipt_with_context(context, receipt).view
+}
+
+fn order_status_reduction_from_receipt_with_context(
+    context: OrderStatusContext<'_>,
+    receipt: DirectRelayFetchReceipt,
+) -> OrderStatusReduction {
     let DirectRelayFetchReceipt {
         target_relays,
         connected_relays,
@@ -942,6 +1085,7 @@ fn order_status_from_receipt_with_context(
     let mut skipped_count = 0usize;
     let mut requests = Vec::new();
     let mut decisions = Vec::new();
+    let mut fulfillments = Vec::new();
     let mut request_listing_events = Vec::new();
     let mut candidate_issues = Vec::new();
 
@@ -962,6 +1106,10 @@ fn order_status_from_receipt_with_context(
             Ok(OrderStatusRecord::Decision(record)) => {
                 decoded_count += 1;
                 decisions.push(record);
+            }
+            Ok(OrderStatusRecord::Fulfillment(record)) => {
+                decoded_count += 1;
+                fulfillments.push(record);
             }
             Err(error) => {
                 skipped_count += 1;
@@ -986,7 +1134,10 @@ fn order_status_from_receipt_with_context(
     });
 
     let order_id = context.order_id;
-    let projection = reduce_active_order_events(order_id, requests, decisions.clone(), []);
+    let projection =
+        reduce_active_order_events(order_id, requests, decisions.clone(), fulfillments);
+    let fulfillment_event_id = projection.fulfillment_event_id.clone();
+    let fulfillment_status = projection.fulfillment_status;
     let listing_event_id = projection
         .request_event_id
         .as_ref()
@@ -1018,7 +1169,7 @@ fn order_status_from_receipt_with_context(
         reducer_issues.as_slice(),
     );
 
-    OrderStatusView {
+    let view = OrderStatusView {
         state,
         source: ORDER_STATUS_SOURCE.to_owned(),
         order_id: projection.order_id,
@@ -1039,6 +1190,11 @@ fn order_status_from_receipt_with_context(
         skipped_count,
         reason,
         actions: Vec::new(),
+    };
+    OrderStatusReduction {
+        view,
+        fulfillment_event_id,
+        fulfillment_status,
     }
 }
 
@@ -1317,6 +1473,29 @@ fn order_status_record_from_event(
             })?;
             Ok(OrderStatusRecord::Decision(
                 RadrootsActiveOrderDecisionRecord {
+                    event_id: event.id,
+                    author_pubkey: event.author,
+                    counterparty_pubkey: context.counterparty_pubkey,
+                    root_event_id: context.root_event_id.unwrap_or_default(),
+                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    payload: envelope.payload,
+                },
+            ))
+        }
+        KIND_TRADE_FULFILLMENT_UPDATE => {
+            let event = radroots_event_from_nostr(event);
+            let envelope = active_trade_fulfillment_update_from_event(&event).map_err(|error| {
+                RuntimeError::Config(format!("decode active fulfillment update event: {error}"))
+            })?;
+            let context = active_trade_event_context_from_tags(
+                RadrootsActiveTradeMessageType::TradeFulfillmentUpdated,
+                &event.tags,
+            )
+            .map_err(|error| {
+                RuntimeError::Config(format!("decode active fulfillment update tags: {error}"))
+            })?;
+            Ok(OrderStatusRecord::Fulfillment(
+                RadrootsActiveOrderFulfillmentRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
                     counterparty_pubkey: context.counterparty_pubkey,
@@ -1842,6 +2021,144 @@ fn order_decision_base_view(
         issues: Vec::new(),
         actions: Vec::new(),
     }
+}
+
+fn order_fulfillment_base_view(
+    config: &RuntimeConfig,
+    args: &OrderFulfillmentArgs,
+    state: &str,
+    dry_run: bool,
+) -> OrderFulfillmentView {
+    OrderFulfillmentView {
+        state: state.to_owned(),
+        source: ORDER_FULFILLMENT_SOURCE.to_owned(),
+        order_id: args.key.clone(),
+        fulfillment_state: args.state.trim().to_owned(),
+        listing_addr: None,
+        buyer_pubkey: None,
+        seller_pubkey: None,
+        request_event_id: None,
+        decision_event_id: None,
+        root_event_id: None,
+        prev_event_id: None,
+        event_id: None,
+        event_kind: None,
+        dry_run,
+        target_relays: config.relay.urls.clone(),
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: 0,
+        decoded_count: 0,
+        skipped_count: 0,
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        reason: None,
+        issues: Vec::new(),
+        actions: Vec::new(),
+    }
+}
+
+fn apply_order_fulfillment_status(view: &mut OrderFulfillmentView, status: &OrderStatusView) {
+    view.order_id = status.order_id.clone();
+    view.listing_addr = status.listing_addr.clone();
+    view.buyer_pubkey = status.buyer_pubkey.clone();
+    view.seller_pubkey = status.seller_pubkey.clone();
+    view.request_event_id = status.request_event_id.clone();
+    view.decision_event_id = status.decision_event_id.clone();
+    view.root_event_id = status.request_event_id.clone();
+    view.prev_event_id = status.last_event_id.clone();
+    view.target_relays = status.target_relays.clone();
+    view.connected_relays = status.connected_relays.clone();
+    view.failed_relays = status.failed_relays.clone();
+    view.fetched_count = status.fetched_count;
+    view.decoded_count = status.decoded_count;
+    view.skipped_count = status.skipped_count;
+    view.issues = status.reducer_issues.clone();
+}
+
+fn order_fulfillment_preflight_view_from_status(
+    config: &RuntimeConfig,
+    args: &OrderFulfillmentArgs,
+    status: &OrderStatusView,
+    current_fulfillment_status: Option<RadrootsActiveTradeFulfillmentState>,
+    current_fulfillment_event_id: Option<&str>,
+) -> Option<OrderFulfillmentView> {
+    let state = match status.state.as_str() {
+        "accepted" => {
+            if matches!(
+                current_fulfillment_status,
+                Some(
+                    RadrootsActiveTradeFulfillmentState::Delivered
+                        | RadrootsActiveTradeFulfillmentState::SellerCancelled
+                )
+            ) {
+                "invalid"
+            } else {
+                return None;
+            }
+        }
+        "missing" | "requested" | "declined" | "invalid" | "unavailable" | "unconfigured" => {
+            status.state.as_str()
+        }
+        _ => return None,
+    };
+    let mut view = order_fulfillment_base_view(config, args, state, config.output.dry_run);
+    apply_order_fulfillment_status(&mut view, status);
+    view.reason = Some(match state {
+        "missing" => format!("no active order events matched `{}`", args.key),
+        "requested" => format!(
+            "order fulfillment update refused because order `{}` has no accepted seller decision",
+            args.key
+        ),
+        "declined" => format!(
+            "order fulfillment update refused because order `{}` was declined",
+            args.key
+        ),
+        "invalid"
+            if matches!(
+                current_fulfillment_status,
+                Some(
+                    RadrootsActiveTradeFulfillmentState::Delivered
+                        | RadrootsActiveTradeFulfillmentState::SellerCancelled
+                )
+            ) =>
+        {
+            let current = current_fulfillment_status
+                .map(fulfillment_state_name)
+                .unwrap_or("unknown");
+            view.issues.push(issue_with_events(
+                "fulfillment_unsupported_transition",
+                "fulfillment_state",
+                format!(
+                    "order `{}` already has terminal fulfillment state `{current}`",
+                    args.key
+                ),
+                current_fulfillment_event_id
+                    .map(str::to_owned)
+                    .into_iter()
+                    .collect(),
+            ));
+            format!(
+                "order fulfillment update refused because order `{}` already has terminal fulfillment state `{current}`",
+                args.key
+            )
+        }
+        "invalid" => status.reason.clone().unwrap_or_else(|| {
+            format!(
+                "order fulfillment update refused because active order events for `{}` are invalid",
+                args.key
+            )
+        }),
+        _ => status.reason.clone().unwrap_or_else(|| {
+            format!(
+                "order fulfillment update status preflight failed with state `{}`",
+                status.state
+            )
+        }),
+    });
+    view.actions = vec![format!("radroots order status get {}", args.key)];
+    Some(view)
 }
 
 fn order_decision_view_from_resolution(
@@ -2512,6 +2829,127 @@ fn order_decision_dry_run_view(
     view
 }
 
+fn order_fulfillment_dry_run_view(
+    config: &RuntimeConfig,
+    args: &OrderFulfillmentArgs,
+    status: &OrderStatusView,
+    fulfillment_state: RadrootsActiveTradeFulfillmentState,
+) -> OrderFulfillmentView {
+    let mut view = order_fulfillment_base_view(config, args, "dry_run", true);
+    apply_order_fulfillment_status(&mut view, status);
+    view.fulfillment_state = fulfillment_state_name(fulfillment_state).to_owned();
+    view.reason =
+        Some("dry run requested; seller fulfillment update publication skipped".to_owned());
+    view.actions = vec![format!("radroots order status get {}", status.order_id)];
+    view
+}
+
+fn order_fulfillment_payload_from_status(
+    status: &OrderStatusView,
+    fulfillment_state: RadrootsActiveTradeFulfillmentState,
+) -> Result<RadrootsTradeFulfillmentUpdated, RuntimeError> {
+    Ok(RadrootsTradeFulfillmentUpdated {
+        order_id: status.order_id.clone(),
+        listing_addr: status.listing_addr.clone().ok_or_else(|| {
+            RuntimeError::Config("accepted order is missing listing_addr".to_owned())
+        })?,
+        buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
+            RuntimeError::Config("accepted order is missing buyer_pubkey".to_owned())
+        })?,
+        seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
+            RuntimeError::Config("accepted order is missing seller_pubkey".to_owned())
+        })?,
+        status: fulfillment_state,
+    })
+}
+
+fn order_fulfillment_event_parts(
+    status: &OrderStatusView,
+    payload: &RadrootsTradeFulfillmentUpdated,
+) -> Result<WireEventParts, RuntimeError> {
+    let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
+        RuntimeError::Config("accepted order is missing request_event_id".to_owned())
+    })?;
+    let prev_event_id = status
+        .last_event_id
+        .as_deref()
+        .or(status.decision_event_id.as_deref())
+        .ok_or_else(|| {
+            RuntimeError::Config("accepted order is missing previous event id".to_owned())
+        })?;
+    active_trade_fulfillment_update_event_build(root_event_id, prev_event_id, payload)
+        .map_err(|error| RuntimeError::Config(format!("encode fulfillment update event: {error}")))
+}
+
+fn publish_order_fulfillment(
+    config: &RuntimeConfig,
+    args: &OrderFulfillmentArgs,
+    status: OrderStatusView,
+    signing: accounts::AccountSigningIdentity,
+    payload: RadrootsTradeFulfillmentUpdated,
+) -> Result<OrderFulfillmentView, RuntimeError> {
+    let parts = order_fulfillment_event_parts(&status, &payload)?;
+    let event_kind = parts.kind;
+    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    Ok(published_order_fulfillment_view(
+        config,
+        args,
+        &status,
+        payload.status,
+        event_kind,
+        receipt,
+    ))
+}
+
+fn published_order_fulfillment_view(
+    config: &RuntimeConfig,
+    args: &OrderFulfillmentArgs,
+    status: &OrderStatusView,
+    fulfillment_state: RadrootsActiveTradeFulfillmentState,
+    event_kind: u32,
+    receipt: DirectRelayPublishReceipt,
+) -> OrderFulfillmentView {
+    let DirectRelayPublishReceipt {
+        event_id,
+        created_at: _,
+        signature: _,
+        target_relays,
+        acknowledged_relays,
+        failed_relays,
+    } = receipt;
+    let state = fulfillment_state_name(fulfillment_state);
+    let mut view = order_fulfillment_base_view(config, args, state, false);
+    apply_order_fulfillment_status(&mut view, status);
+    view.fulfillment_state = state.to_owned();
+    view.event_id = Some(event_id);
+    view.event_kind = Some(event_kind);
+    view.target_relays = target_relays;
+    view.acknowledged_relays = acknowledged_relays;
+    view.failed_relays = relay_failures(failed_relays);
+    view
+}
+
+fn order_fulfillment_binding_error_view(
+    config: &RuntimeConfig,
+    args: &OrderFulfillmentArgs,
+    status: &OrderStatusView,
+    error: ActorWriteBindingError,
+) -> OrderFulfillmentView {
+    let (state, reason, actions) = match error {
+        ActorWriteBindingError::Unconfigured(reason) => (
+            "unconfigured".to_owned(),
+            reason,
+            vec!["run radroots signer status get".to_owned()],
+        ),
+    };
+    let mut view = order_fulfillment_base_view(config, args, state.as_str(), config.output.dry_run);
+    apply_order_fulfillment_status(&mut view, status);
+    view.reason = Some(reason);
+    view.actions = actions;
+    view
+}
+
 fn seller_order_request_resolution_from_receipt(
     seller_pubkey: &str,
     order_id: &str,
@@ -2884,6 +3322,7 @@ fn order_status_filter(order_id: &str) -> Result<RadrootsNostrFilter, RuntimeErr
         .kinds([
             radroots_nostr_kind(KIND_TRADE_ORDER_REQUEST as u16),
             radroots_nostr_kind(KIND_TRADE_ORDER_DECISION as u16),
+            radroots_nostr_kind(KIND_TRADE_FULFILLMENT_UPDATE as u16),
         ])
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "d", vec![order_id.to_owned()])
@@ -4118,6 +4557,56 @@ fn resolve_local_order_decision_signing_identity(
     Ok(signing)
 }
 
+fn resolve_local_order_fulfillment_signing_identity(
+    config: &RuntimeConfig,
+    seller_pubkey: &str,
+) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+    if !matches!(config.signer.backend, SignerBackend::Local) {
+        return Err(ActorWriteBindingError::Unconfigured(
+            "order fulfillment update requires signer mode `local`".to_owned(),
+        ));
+    }
+    let signing = accounts::resolve_local_signing_identity(config)
+        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+    let selected_pubkey = signing
+        .account
+        .record
+        .public_identity
+        .public_key_hex
+        .as_str();
+    if !selected_pubkey.eq_ignore_ascii_case(seller_pubkey) {
+        return Err(ActorWriteBindingError::Unconfigured(format!(
+            "selected local account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
+        )));
+    }
+    Ok(signing)
+}
+
+fn parse_fulfillment_state(state: &str) -> Result<RadrootsActiveTradeFulfillmentState, String> {
+    match state.trim() {
+        "accepted_not_fulfilled" => Ok(RadrootsActiveTradeFulfillmentState::AcceptedNotFulfilled),
+        "preparing" => Ok(RadrootsActiveTradeFulfillmentState::Preparing),
+        "ready_for_pickup" => Ok(RadrootsActiveTradeFulfillmentState::ReadyForPickup),
+        "out_for_delivery" => Ok(RadrootsActiveTradeFulfillmentState::OutForDelivery),
+        "delivered" => Ok(RadrootsActiveTradeFulfillmentState::Delivered),
+        "seller_cancelled" => Ok(RadrootsActiveTradeFulfillmentState::SellerCancelled),
+        other => Err(format!(
+            "unsupported fulfillment state `{other}`; expected preparing, ready_for_pickup, out_for_delivery, delivered, or seller_cancelled"
+        )),
+    }
+}
+
+fn fulfillment_state_name(state: RadrootsActiveTradeFulfillmentState) -> &'static str {
+    match state {
+        RadrootsActiveTradeFulfillmentState::AcceptedNotFulfilled => "accepted_not_fulfilled",
+        RadrootsActiveTradeFulfillmentState::Preparing => "preparing",
+        RadrootsActiveTradeFulfillmentState::ReadyForPickup => "ready_for_pickup",
+        RadrootsActiveTradeFulfillmentState::OutForDelivery => "out_for_delivery",
+        RadrootsActiveTradeFulfillmentState::Delivered => "delivered",
+        RadrootsActiveTradeFulfillmentState::SellerCancelled => "seller_cancelled",
+    }
+}
+
 fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
     failures
         .into_iter()
@@ -4359,15 +4848,17 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use radroots_events::RadrootsNostrEventPtr;
-    use radroots_events::kinds::KIND_TRADE_ORDER_DECISION;
+    use radroots_events::kinds::{KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION};
     use radroots_events::trade::{
-        RadrootsActiveTradeMessageType, RadrootsTradeInventoryCommitment,
+        RadrootsActiveTradeFulfillmentState, RadrootsActiveTradeMessageType,
+        RadrootsTradeFulfillmentUpdated, RadrootsTradeInventoryCommitment,
         RadrootsTradeOrderDecision, RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderItem,
         RadrootsTradeOrderRequested,
     };
     use radroots_events_codec::trade::{
-        active_trade_event_context_from_tags, active_trade_order_decision_event_build,
-        active_trade_order_decision_from_event, active_trade_order_request_event_build,
+        active_trade_event_context_from_tags, active_trade_fulfillment_update_event_build,
+        active_trade_order_decision_event_build, active_trade_order_decision_from_event,
+        active_trade_order_request_event_build,
     };
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{radroots_event_from_nostr, radroots_nostr_build_event};
@@ -4387,11 +4878,12 @@ mod tests {
         collect_issues, declined_order_decision_payload_from_request, inspect_document,
         next_order_id, order_accept_inventory_preflight_view_from_projection,
         order_decision_dry_run_view, order_decision_preflight_view_from_status,
-        order_decision_view_from_resolution, order_history_entry_from_event,
+        order_decision_view_from_resolution, order_fulfillment_dry_run_view,
+        order_fulfillment_preflight_view_from_status, order_history_entry_from_event,
         order_history_from_receipt, order_request_filter, order_status_from_receipt,
-        order_status_from_receipt_with_context, order_submit_dry_run_view,
-        order_submit_existing_request_view_from_receipt, proposed_accept_decision_record,
-        seller_order_request_resolution_from_receipt,
+        order_status_from_receipt_with_context, order_status_reduction_from_receipt_with_context,
+        order_submit_dry_run_view, order_submit_existing_request_view_from_receipt,
+        proposed_accept_decision_record, seller_order_request_resolution_from_receipt,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -4400,7 +4892,9 @@ mod tests {
         SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
-    use crate::runtime_args::{OrderDecisionArg, OrderDecisionArgs, OrderSubmitArgs};
+    use crate::runtime_args::{
+        OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderSubmitArgs,
+    };
 
     #[test]
     fn generated_order_id_uses_stable_prefix() {
@@ -5321,6 +5815,206 @@ mod tests {
     }
 
     #[test]
+    fn order_status_from_receipt_reports_latest_fulfillment_as_last_event() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+        );
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![
+                fixture.request_event.clone(),
+                decision_event,
+                fulfillment_event.clone(),
+            ],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let fulfillment_event_id = fulfillment_event.id.to_string();
+
+        assert_eq!(
+            u32::from(fulfillment_event.kind.as_u16()),
+            KIND_TRADE_FULFILLMENT_UPDATE
+        );
+        assert_eq!(view.state, "accepted");
+        assert_eq!(
+            view.last_event_id.as_deref(),
+            Some(fulfillment_event_id.as_str())
+        );
+        assert_eq!(view.decoded_count, 3);
+        assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
+    fn order_fulfillment_dry_run_view_chains_from_latest_visible_event() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::Preparing,
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event,
+                    fulfillment_event.clone(),
+                ],
+            },
+        );
+        let args = OrderFulfillmentArgs {
+            key: fixture.order_id.clone(),
+            state: "ready_for_pickup".to_owned(),
+            idempotency_key: Some("idem_fulfillment".to_owned()),
+        };
+
+        let view = order_fulfillment_dry_run_view(
+            &config,
+            &args,
+            &status_view,
+            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+        );
+        let request_event_id = fixture.request_event.id.to_string();
+        let fulfillment_event_id = fulfillment_event.id.to_string();
+
+        assert_eq!(view.state, "dry_run");
+        assert_eq!(view.fulfillment_state, "ready_for_pickup");
+        assert_eq!(
+            view.root_event_id.as_deref(),
+            Some(request_event_id.as_str())
+        );
+        assert_eq!(
+            view.prev_event_id.as_deref(),
+            Some(fulfillment_event_id.as_str())
+        );
+        assert_eq!(view.event_id, None);
+        assert_eq!(view.event_kind, None);
+        assert_eq!(view.target_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.connected_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.fetched_count, 3);
+        assert_eq!(view.decoded_count, 3);
+        assert_eq!(view.idempotency_key.as_deref(), Some("idem_fulfillment"));
+    }
+
+    #[test]
+    fn order_fulfillment_preflight_rejects_terminal_fulfillment_state() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::Delivered,
+        );
+        let fulfillment_event_id = fulfillment_event.id.to_string();
+        let reduction = order_status_reduction_from_receipt_with_context(
+            OrderStatusContext {
+                order_id: fixture.order_id.as_str(),
+                selected_account_pubkey: None,
+            },
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event,
+                    fulfillment_event,
+                ],
+            },
+        );
+        let args = OrderFulfillmentArgs {
+            key: fixture.order_id.clone(),
+            state: "ready_for_pickup".to_owned(),
+            idempotency_key: None,
+        };
+
+        let view = order_fulfillment_preflight_view_from_status(
+            &config,
+            &args,
+            &reduction.view,
+            reduction.fulfillment_status,
+            reduction.fulfillment_event_id.as_deref(),
+        )
+        .expect("terminal fulfillment preflight");
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.issues[0].code, "fulfillment_unsupported_transition");
+        assert_eq!(view.issues[0].event_ids, vec![fulfillment_event_id]);
+        assert!(view.event_id.is_none());
+    }
+
+    #[test]
     fn order_status_from_receipt_rejects_wrong_decision_counterparty() {
         let fixture = order_status_fixture();
         let wrong_buyer = RadrootsIdentity::generate();
@@ -6164,6 +6858,37 @@ mod tests {
             .expect("nostr event builder")
             .sign_with_keys(seller.keys())
             .expect("signed order decision")
+    }
+
+    fn signed_fulfillment_update_event(
+        seller: &RadrootsIdentity,
+        request_event: &radroots_nostr::prelude::RadrootsNostrEvent,
+        prev_event: &radroots_nostr::prelude::RadrootsNostrEvent,
+        order_id: &str,
+        listing_addr: &str,
+        buyer_pubkey: &str,
+        seller_pubkey: &str,
+        status: RadrootsActiveTradeFulfillmentState,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
+        let payload = RadrootsTradeFulfillmentUpdated {
+            order_id: order_id.to_owned(),
+            listing_addr: listing_addr.to_owned(),
+            buyer_pubkey: buyer_pubkey.to_owned(),
+            seller_pubkey: seller_pubkey.to_owned(),
+            status,
+        };
+        let request_event_id = request_event.id.to_string();
+        let prev_event_id = prev_event.id.to_string();
+        let parts = active_trade_fulfillment_update_event_build(
+            request_event_id.as_str(),
+            prev_event_id.as_str(),
+            &payload,
+        )
+        .expect("fulfillment update parts");
+        radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+            .expect("nostr event builder")
+            .sign_with_keys(seller.keys())
+            .expect("signed fulfillment update")
     }
 
     fn signed_malformed_order_request_event(

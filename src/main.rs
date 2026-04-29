@@ -383,7 +383,10 @@ fn validate_network_contract(
 }
 
 fn dry_run_requires_network(operation_id: &str) -> bool {
-    matches!(operation_id, "order.accept" | "order.decline")
+    matches!(
+        operation_id,
+        "order.accept" | "order.decline" | "order.fulfillment.update"
+    )
 }
 
 fn external_network_operation(operation_id: &str) -> bool {
@@ -399,6 +402,7 @@ fn external_network_operation(operation_id: &str) -> bool {
             | "order.submit"
             | "order.accept"
             | "order.decline"
+            | "order.fulfillment.update"
             | "order.status.get"
             | "order.event.list"
             | "order.event.watch"
