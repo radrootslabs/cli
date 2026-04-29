@@ -1197,6 +1197,7 @@ impl OrderSubmitView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "missing" => CommandDisposition::NotFound,
+            "invalid" => CommandDisposition::ValidationFailed,
             "unconfigured" => CommandDisposition::Unconfigured,
             "unavailable" => CommandDisposition::ExternalUnavailable,
             "error" => CommandDisposition::InternalError,

@@ -124,6 +124,13 @@ struct ResolvedSellerOrderRequest {
 }
 
 #[derive(Debug, Clone)]
+struct ResolvedOrderSubmitRequest {
+    request_event_id: String,
+    listing_event_id: Option<String>,
+    payload: RadrootsTradeOrderRequested,
+}
+
+#[derive(Debug, Clone)]
 struct SellerOrderRequestResolution {
     target_relays: Vec<String>,
     connected_relays: Vec<String>,
@@ -559,8 +566,23 @@ pub fn submit(
         Ok(signing) => signing,
         Err(error) => return Ok(order_binding_error_view(config, &loaded, args, error)),
     };
+    let payload = canonical_order_request_payload_from_loaded(
+        &loaded,
+        signing
+            .account
+            .record
+            .public_identity
+            .public_key_hex
+            .as_str(),
+    )?;
 
-    match publish_order_request(config, &loaded, args, signing) {
+    if let Some(view) =
+        order_submit_existing_request_preflight_view(config, &loaded, args, &payload)?
+    {
+        return Ok(view);
+    }
+
+    match publish_order_request(config, &loaded, args, signing, payload) {
         Ok(view) => Ok(view),
         Err(error) => Err(error),
     }
@@ -851,6 +873,12 @@ enum OrderStatusRecord {
     Decision(RadrootsActiveOrderDecisionRecord),
 }
 
+#[derive(Debug, Clone, Copy)]
+struct OrderRequestCandidateContext<'a> {
+    order_id: &'a str,
+    seller_pubkey: Option<&'a str>,
+}
+
 fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -> OrderStatusView {
     let DirectRelayFetchReceipt {
         target_relays,
@@ -936,8 +964,27 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
 }
 
 fn order_status_request_candidate(event: &RadrootsNostrEvent, order_id: &str) -> bool {
-    event_kind_u32(event) == KIND_TRADE_ORDER_REQUEST
-        && event_matches_tag_value(event, "d", order_id)
+    order_request_candidate_matches(
+        event,
+        OrderRequestCandidateContext {
+            order_id,
+            seller_pubkey: None,
+        },
+    )
+}
+
+fn order_request_candidate_matches(
+    event: &RadrootsNostrEvent,
+    context: OrderRequestCandidateContext<'_>,
+) -> bool {
+    if event_kind_u32(event) != KIND_TRADE_ORDER_REQUEST
+        || !event_matches_tag_value(event, "d", context.order_id)
+    {
+        return false;
+    }
+    context
+        .seller_pubkey
+        .is_none_or(|seller_pubkey| event_matches_tag_value(event, "p", seller_pubkey))
 }
 
 fn order_status_record_from_event(
@@ -955,13 +1002,29 @@ fn order_status_record_from_event(
                     "active order request event used the wrong message type".to_owned(),
                 ));
             }
-            active_trade_event_context_from_tags(
+            let context = active_trade_event_context_from_tags(
                 RadrootsActiveTradeMessageType::TradeOrderRequested,
                 &event.tags,
             )
             .map_err(|error| {
                 RuntimeError::Config(format!("decode active order request tags: {error}"))
             })?;
+            if context.counterparty_pubkey != envelope.payload.seller_pubkey {
+                return Err(RuntimeError::Config(
+                    "active order request p tag does not match seller_pubkey".to_owned(),
+                ));
+            }
+            let listing_addr =
+                parse_listing_addr(envelope.payload.listing_addr.as_str()).map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "active order request listing_addr is invalid: {error}"
+                    ))
+                })?;
+            if listing_addr.seller_pubkey != envelope.payload.seller_pubkey {
+                return Err(RuntimeError::Config(
+                    "active order request listing_addr is outside seller authority".to_owned(),
+                ));
+            }
             Ok(OrderStatusRecord::Request(
                 RadrootsActiveOrderRequestRecord {
                     event_id: event.id,
@@ -1140,6 +1203,14 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
                 "missing_decision_inventory_commitments",
                 "inventory_commitments",
                 "active order reducer reported missing decision inventory commitments",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::DecisionInventoryCommitmentMismatch { event_id } => {
+            issue_with_events(
+                "decision_inventory_commitment_mismatch",
+                "inventory_commitments",
+                "active order reducer reported decision inventory commitment mismatch",
                 vec![event_id],
             )
         }
@@ -1495,15 +1566,13 @@ fn seller_order_request_resolution_from_receipt(
     let mut decoded_count = 0usize;
     let mut requests = Vec::new();
     let mut candidate_issues = Vec::new();
+    let candidate_context = OrderRequestCandidateContext {
+        order_id,
+        seller_pubkey: Some(seller_pubkey),
+    };
 
     for event in events {
-        if event_kind_u32(&event) != KIND_TRADE_ORDER_REQUEST {
-            skipped_count += 1;
-            continue;
-        }
-        if !event_matches_tag_value(&event, "d", order_id)
-            || !event_matches_tag_value(&event, "p", seller_pubkey)
-        {
+        if !order_request_candidate_matches(&event, candidate_context) {
             skipped_count += 1;
             continue;
         }
@@ -2344,18 +2413,286 @@ fn order_submit_unconfigured_view(
     }
 }
 
-fn publish_order_request(
+fn order_submit_existing_request_preflight_view(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
     args: &OrderSubmitArgs,
-    signing: accounts::AccountSigningIdentity,
-) -> Result<OrderSubmitView, RuntimeError> {
-    let signer_pubkey = signing
-        .account
-        .record
-        .public_identity
-        .public_key_hex
-        .as_str();
+    payload: &RadrootsTradeOrderRequested,
+) -> Result<Option<OrderSubmitView>, RuntimeError> {
+    let filter = order_request_filter(
+        loaded.document.order.seller_pubkey.as_str(),
+        Some(loaded.document.order.order_id.as_str()),
+    )?;
+    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
+        Ok(receipt) => receipt,
+        Err(DirectRelayFetchError::Connect {
+            reason,
+            target_relays: _,
+            failed_relays: _,
+        }) => {
+            return Err(RuntimeError::Network(format!(
+                "direct relay connection failed during submit preflight: {reason}"
+            )));
+        }
+        Err(error) => return Err(RuntimeError::Network(error.to_string())),
+    };
+
+    order_submit_existing_request_view_from_receipt(config, loaded, args, payload, receipt)
+}
+
+fn order_submit_existing_request_view_from_receipt(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    payload: &RadrootsTradeOrderRequested,
+    receipt: DirectRelayFetchReceipt,
+) -> Result<Option<OrderSubmitView>, RuntimeError> {
+    let DirectRelayFetchReceipt {
+        target_relays,
+        connected_relays,
+        failed_relays,
+        events,
+    } = receipt;
+    let mut requests = Vec::new();
+    let mut candidate_issues = Vec::new();
+    let candidate_context = OrderRequestCandidateContext {
+        order_id: loaded.document.order.order_id.as_str(),
+        seller_pubkey: Some(loaded.document.order.seller_pubkey.as_str()),
+    };
+
+    for event in events {
+        if !order_request_candidate_matches(&event, candidate_context) {
+            continue;
+        }
+        let event_id = event.id.to_string();
+        match order_submit_request_from_event(&event, loaded) {
+            Ok(request) => requests.push(request),
+            Err(error) => candidate_issues.push(issue_with_events(
+                "invalid_request_candidate",
+                "request_event_id",
+                format!("request event `{event_id}` failed order submit preflight: {error}"),
+                vec![event_id],
+            )),
+        }
+    }
+
+    requests.sort_by(|left, right| left.request_event_id.cmp(&right.request_event_id));
+    candidate_issues.sort_by(|left, right| {
+        left.event_ids
+            .cmp(&right.event_ids)
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    if !candidate_issues.is_empty() {
+        return Ok(Some(order_submit_invalid_existing_request_view(
+            config,
+            loaded,
+            args,
+            "visible order request candidates failed submit preflight validation",
+            candidate_issues,
+            target_relays,
+            failed_relays,
+        )));
+    }
+
+    let request_event_ids = requests
+        .iter()
+        .map(|request| request.request_event_id.clone())
+        .collect::<Vec<_>>();
+
+    match requests.as_slice() {
+        [] => Ok(None),
+        [request] if order_submit_request_matches_draft(request, loaded, payload) => {
+            Ok(Some(order_submit_deduplicated_view(
+                config,
+                loaded,
+                args,
+                request,
+                target_relays,
+                connected_relays,
+                failed_relays,
+            )))
+        }
+        [request] => Ok(Some(order_submit_invalid_existing_request_view(
+            config,
+            loaded,
+            args,
+            "visible order request event conflicts with the local order draft; refusing to publish a second request for the same order id",
+            vec![issue_with_events(
+                "existing_request_conflict",
+                "request_event_id",
+                format!(
+                    "request event `{}` does not match the local order draft",
+                    request.request_event_id
+                ),
+                vec![request.request_event_id.clone()],
+            )],
+            target_relays,
+            failed_relays,
+        ))),
+        _ => Ok(Some(order_submit_invalid_existing_request_view(
+            config,
+            loaded,
+            args,
+            "multiple visible order request events matched the local order id; refusing to publish another request",
+            vec![issue_with_events(
+                "multiple_request_candidates",
+                "request_event_id",
+                format!(
+                    "matched {} request events for the same order id",
+                    requests.len()
+                ),
+                request_event_ids,
+            )],
+            target_relays,
+            failed_relays,
+        ))),
+    }
+}
+
+fn order_submit_request_from_event(
+    event: &RadrootsNostrEvent,
+    loaded: &LoadedOrderDraft,
+) -> Result<ResolvedOrderSubmitRequest, RuntimeError> {
+    let event = radroots_event_from_nostr(event);
+    let envelope = active_trade_order_request_from_event(&event)
+        .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
+    let context = active_trade_event_context_from_tags(
+        RadrootsActiveTradeMessageType::TradeOrderRequested,
+        &event.tags,
+    )
+    .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
+
+    if envelope.order_id != loaded.document.order.order_id
+        || envelope.payload.order_id != loaded.document.order.order_id
+    {
+        return Err(RuntimeError::Config(
+            "order request does not match local order id".to_owned(),
+        ));
+    }
+    if context.counterparty_pubkey != envelope.payload.seller_pubkey {
+        return Err(RuntimeError::Config(
+            "order request p tag does not match seller_pubkey".to_owned(),
+        ));
+    }
+    let listing_addr =
+        parse_listing_addr(envelope.payload.listing_addr.as_str()).map_err(|error| {
+            RuntimeError::Config(format!("order request listing_addr is invalid: {error}"))
+        })?;
+    if listing_addr.seller_pubkey != envelope.payload.seller_pubkey {
+        return Err(RuntimeError::Config(
+            "order request listing address is outside seller authority".to_owned(),
+        ));
+    }
+    let payload =
+        canonicalize_active_order_request_for_signer(envelope.payload, event.author.as_str())
+            .map_err(|error| {
+                RuntimeError::Config(format!("canonicalize order request: {error}"))
+            })?;
+    let listing_event_id = context.listing_event.as_ref().map(|event| event.id.clone());
+
+    Ok(ResolvedOrderSubmitRequest {
+        request_event_id: event.id,
+        listing_event_id,
+        payload,
+    })
+}
+
+fn order_submit_request_matches_draft(
+    request: &ResolvedOrderSubmitRequest,
+    loaded: &LoadedOrderDraft,
+    payload: &RadrootsTradeOrderRequested,
+) -> bool {
+    request.payload == *payload
+        && request.listing_event_id.as_deref()
+            == Some(loaded.document.order.listing_event_id.as_str())
+}
+
+fn order_submit_deduplicated_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    request: &ResolvedOrderSubmitRequest,
+    target_relays: Vec<String>,
+    connected_relays: Vec<String>,
+    failed_relays: Vec<DirectRelayFailure>,
+) -> OrderSubmitView {
+    OrderSubmitView {
+        state: "submitted".to_owned(),
+        source: ORDER_SUBMIT_SOURCE.to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        file: loaded.file.display().to_string(),
+        listing_lookup: loaded.document.listing_lookup.clone(),
+        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        event_id: Some(request.request_event_id.clone()),
+        event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+        dry_run: false,
+        deduplicated: true,
+        target_relays,
+        acknowledged_relays: connected_relays,
+        failed_relays: relay_failures(failed_relays),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        signer_session_id: None,
+        requested_signer_session_id: None,
+        reason: Some(
+            "an identical order request is already visible on the configured relays; publish skipped"
+                .to_owned(),
+        ),
+        job: None,
+        issues: Vec::new(),
+        actions: Vec::new(),
+    }
+}
+
+fn order_submit_invalid_existing_request_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    reason: impl Into<String>,
+    issues: Vec<OrderIssueView>,
+    target_relays: Vec<String>,
+    failed_relays: Vec<DirectRelayFailure>,
+) -> OrderSubmitView {
+    OrderSubmitView {
+        state: "invalid".to_owned(),
+        source: ORDER_SUBMIT_SOURCE.to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        file: loaded.file.display().to_string(),
+        listing_lookup: loaded.document.listing_lookup.clone(),
+        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        event_id: None,
+        event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+        dry_run: config.output.dry_run,
+        deduplicated: false,
+        target_relays,
+        acknowledged_relays: Vec::new(),
+        failed_relays: relay_failures(failed_relays),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        signer_session_id: None,
+        requested_signer_session_id: None,
+        reason: Some(reason.into()),
+        job: None,
+        issues,
+        actions: vec![format!(
+            "radroots order status get {}",
+            loaded.document.order.order_id
+        )],
+    }
+}
+
+fn canonical_order_request_payload_from_loaded(
+    loaded: &LoadedOrderDraft,
+    signer_pubkey: &str,
+) -> Result<RadrootsTradeOrderRequested, RuntimeError> {
     let payload = RadrootsTradeOrderRequested {
         order_id: loaded.document.order.order_id.clone(),
         listing_addr: loaded.document.order.listing_addr.clone(),
@@ -2372,8 +2709,17 @@ fn publish_order_request(
             })
             .collect(),
     };
-    let payload = canonicalize_active_order_request_for_signer(payload, signer_pubkey)
-        .map_err(|error| RuntimeError::Config(format!("canonicalize order request: {error}")))?;
+    canonicalize_active_order_request_for_signer(payload, signer_pubkey)
+        .map_err(|error| RuntimeError::Config(format!("canonicalize order request: {error}")))
+}
+
+fn publish_order_request(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    signing: accounts::AccountSigningIdentity,
+    payload: RadrootsTradeOrderRequested,
+) -> Result<OrderSubmitView, RuntimeError> {
     let listing_event = RadrootsNostrEventPtr {
         id: loaded.document.order.listing_event_id.clone(),
         relays: None,
@@ -2786,12 +3132,14 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem,
-        SellerOrderRequestResolution, accepted_order_decision_payload_from_request, collect_issues,
+        LoadedOrderDraft, ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem,
+        SellerOrderRequestResolution, accepted_order_decision_payload_from_request,
+        canonical_order_request_payload_from_loaded, collect_issues,
         declined_order_decision_payload_from_request, inspect_document, next_order_id,
         order_decision_dry_run_view, order_decision_preflight_view_from_status,
         order_decision_view_from_resolution, order_history_entry_from_event,
         order_history_from_receipt, order_request_filter, order_status_from_receipt,
+        order_submit_existing_request_view_from_receipt,
         seller_order_request_resolution_from_receipt,
     };
     use crate::runtime::config::{
@@ -2801,7 +3149,7 @@ mod tests {
         SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
-    use crate::runtime_args::{OrderDecisionArg, OrderDecisionArgs};
+    use crate::runtime_args::{OrderDecisionArg, OrderDecisionArgs, OrderSubmitArgs};
 
     #[test]
     fn generated_order_id_uses_stable_prefix() {
@@ -2922,6 +3270,90 @@ mod tests {
         assert_eq!(value["kinds"][0], 3422);
         assert_eq!(value["#p"][0], "a");
         assert_eq!(value["#d"][0], "ord_AAAAAAAAAAAAAAAAAAAAAg");
+    }
+
+    #[test]
+    fn order_submit_existing_request_preflight_deduplicates_identical_request() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let loaded = loaded_order_draft_for_fixture(&fixture);
+        let payload =
+            canonical_order_request_payload_from_loaded(&loaded, fixture.buyer_pubkey.as_str())
+                .expect("canonical order request payload");
+        let event_id = fixture.request_event.id.to_string();
+        let args = OrderSubmitArgs {
+            key: fixture.order_id.clone(),
+            idempotency_key: Some("idem-submit".to_owned()),
+        };
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone()],
+        };
+
+        let view = order_submit_existing_request_view_from_receipt(
+            &config, &loaded, &args, &payload, receipt,
+        )
+        .expect("submit existing request preflight")
+        .expect("deduplicated view");
+
+        assert_eq!(view.state, "submitted");
+        assert_eq!(view.deduplicated, true);
+        assert_eq!(view.event_id.as_deref(), Some(event_id.as_str()));
+        assert_eq!(view.event_kind, Some(3422));
+        assert_eq!(view.target_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.acknowledged_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.idempotency_key.as_deref(), Some("idem-submit"));
+    }
+
+    #[test]
+    fn order_submit_existing_request_preflight_rejects_changed_request() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let loaded = loaded_order_draft_for_fixture(&fixture);
+        let payload =
+            canonical_order_request_payload_from_loaded(&loaded, fixture.buyer_pubkey.as_str())
+                .expect("canonical order request payload");
+        let changed_event = signed_order_request_event(
+            &fixture.buyer,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            "2".repeat(64).as_str(),
+        );
+        let changed_event_id = changed_event.id.to_string();
+        let args = OrderSubmitArgs {
+            key: fixture.order_id.clone(),
+            idempotency_key: None,
+        };
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![changed_event],
+        };
+
+        let view = order_submit_existing_request_view_from_receipt(
+            &config, &loaded, &args, &payload, receipt,
+        )
+        .expect("submit existing request preflight")
+        .expect("invalid view");
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.deduplicated, false);
+        assert_eq!(view.issues.len(), 1);
+        assert_eq!(view.issues[0].code, "existing_request_conflict");
+        assert_eq!(view.issues[0].event_ids, vec![changed_event_id]);
+        assert_eq!(
+            view.actions,
+            vec![format!("radroots order status get {}", fixture.order_id)]
+        );
     }
 
     #[test]
@@ -3945,6 +4377,30 @@ mod tests {
             buyer_pubkey,
             seller_pubkey,
             request_event,
+        }
+    }
+
+    fn loaded_order_draft_for_fixture(fixture: &OrderStatusFixture) -> LoadedOrderDraft {
+        LoadedOrderDraft {
+            file: PathBuf::from(format!("{}.toml", fixture.order_id)),
+            updated_at_unix: 0,
+            document: OrderDraftDocument {
+                version: 1,
+                kind: ORDER_DRAFT_KIND.to_owned(),
+                order: OrderDraft {
+                    order_id: fixture.order_id.clone(),
+                    listing_addr: fixture.listing_addr.clone(),
+                    listing_event_id: "1".repeat(64),
+                    buyer_pubkey: fixture.buyer_pubkey.clone(),
+                    seller_pubkey: fixture.seller_pubkey.clone(),
+                    items: vec![OrderDraftItem {
+                        bin_id: "bin-1".to_owned(),
+                        bin_count: 2,
+                    }],
+                },
+                listing_lookup: Some("test-listing".to_owned()),
+                buyer_account_id: Some("acct_test".to_owned()),
+            },
         }
     }
 
