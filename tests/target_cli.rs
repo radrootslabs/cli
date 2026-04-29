@@ -476,6 +476,21 @@ fn offline_forbids_external_network_operations() {
             "order.submit",
             ["--format", "json", "--offline", "order", "submit"].as_slice(),
         ),
+        (
+            "order.fulfillment.update",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "order",
+                "fulfillment",
+                "update",
+                "ord_offline_fulfillment",
+                "--state",
+                "ready_for_pickup",
+            ]
+            .as_slice(),
+        ),
     ] {
         let output = radroots()
             .args(args)
@@ -541,6 +556,22 @@ fn offline_rejects_order_decision_dry_run() {
                 "ord_offline_decision",
                 "--reason",
                 "unavailable",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.fulfillment.update",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "--dry-run",
+                "order",
+                "fulfillment",
+                "update",
+                "ord_offline_decision",
+                "--state",
+                "ready_for_pickup",
             ]
             .as_slice(),
         ),
@@ -640,6 +671,21 @@ fn online_requires_relay_for_external_network_operations() {
                 "event",
                 "watch",
                 "ord_missing",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.fulfillment.update",
+            [
+                "--format",
+                "json",
+                "--online",
+                "order",
+                "fulfillment",
+                "update",
+                "ord_missing",
+                "--state",
+                "ready_for_pickup",
             ]
             .as_slice(),
         ),
@@ -1099,6 +1145,18 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
         "order.decline",
         &["order", "decline", "--reason", "out_of_stock"],
     );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "order.fulfillment.update",
+        &[
+            "order",
+            "fulfillment",
+            "update",
+            "ord_pending_fulfillment",
+            "--state",
+            "ready_for_pickup",
+        ],
+    );
 }
 
 fn assert_required_approval_token_rejected(
@@ -1122,6 +1180,34 @@ fn assert_required_approval_token_rejected(
         assert_eq!(value["errors"][0]["exit_code"], 6);
         assert_no_removed_command_reference(&value, &args);
     }
+}
+
+#[test]
+fn order_fulfillment_update_requires_state_before_approval() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "fulfillment",
+        "update",
+        "ord_missing_state",
+    ]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(value["operation_id"], "order.fulfillment.update");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "invalid_input");
+    assert_eq!(value["errors"][0]["exit_code"], 2);
+    assert!(
+        value["errors"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("state")
+    );
+    assert_no_removed_command_reference(&value, &["order", "fulfillment", "update"]);
+    assert_no_daemon_runtime_reference(&value, &["order", "fulfillment", "update"]);
 }
 
 #[test]

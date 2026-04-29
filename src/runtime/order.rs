@@ -5031,8 +5031,10 @@ mod tests {
         order_history_from_receipt, order_request_filter, order_status_from_receipt,
         order_status_from_receipt_with_context, order_status_reduction_from_receipt_with_context,
         order_submit_dry_run_view, order_submit_existing_request_view_from_receipt,
-        proposed_accept_decision_record, seller_order_request_resolution_from_receipt,
+        proposed_accept_decision_record, resolve_local_order_fulfillment_signing_identity,
+        seller_order_request_resolution_from_receipt,
     };
+    use crate::runtime::accounts;
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
@@ -5040,6 +5042,7 @@ mod tests {
         SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
+    use crate::runtime::signer::ActorWriteBindingError;
     use crate::runtime_args::{
         OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderSubmitArgs,
     };
@@ -6324,6 +6327,203 @@ mod tests {
     }
 
     #[test]
+    fn order_fulfillment_preflight_rejects_missing_order() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: Vec::new(),
+            },
+        );
+        let args = fulfillment_args_for_fixture(&fixture, "ready_for_pickup");
+
+        let view =
+            order_fulfillment_preflight_view_from_status(&config, &args, &status_view, None, None)
+                .expect("missing fulfillment preflight");
+
+        assert_eq!(view.state, "missing");
+        assert_eq!(view.event_id, None);
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("no active order events")
+        );
+        assert_eq!(
+            view.actions,
+            vec![format!("radroots order status get {}", fixture.order_id)]
+        );
+    }
+
+    #[test]
+    fn order_fulfillment_preflight_rejects_requested_order() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone()],
+            },
+        );
+        let args = fulfillment_args_for_fixture(&fixture, "ready_for_pickup");
+
+        let view =
+            order_fulfillment_preflight_view_from_status(&config, &args, &status_view, None, None)
+                .expect("requested fulfillment preflight");
+
+        assert_eq!(view.state, "requested");
+        let request_event_id = fixture.request_event.id.to_string();
+        assert_eq!(
+            view.request_event_id.as_deref(),
+            Some(request_event_id.as_str())
+        );
+        assert!(view.event_id.is_none());
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("has no accepted seller decision")
+        );
+    }
+
+    #[test]
+    fn order_fulfillment_preflight_rejects_declined_order() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Declined {
+                reason: "out of stock".to_owned(),
+            },
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event.clone()],
+            },
+        );
+        let args = fulfillment_args_for_fixture(&fixture, "ready_for_pickup");
+
+        let view =
+            order_fulfillment_preflight_view_from_status(&config, &args, &status_view, None, None)
+                .expect("declined fulfillment preflight");
+
+        assert_eq!(view.state, "declined");
+        let decision_event_id = decision_event.id.to_string();
+        assert_eq!(
+            view.decision_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert!(view.event_id.is_none());
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("was declined")
+        );
+    }
+
+    #[test]
+    fn order_fulfillment_preflight_rejects_invalid_order_state() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let accepted_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let declined_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Declined {
+                reason: "out of stock".to_owned(),
+            },
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    accepted_event,
+                    declined_event,
+                ],
+            },
+        );
+        let args = fulfillment_args_for_fixture(&fixture, "ready_for_pickup");
+
+        let view =
+            order_fulfillment_preflight_view_from_status(&config, &args, &status_view, None, None)
+                .expect("invalid fulfillment preflight");
+
+        assert_eq!(view.state, "invalid");
+        assert!(view.event_id.is_none());
+        assert_eq!(view.issues.len(), 1);
+        assert_eq!(view.issues[0].code, "conflicting_decisions");
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("failed reducer validation")
+        );
+    }
+
+    #[test]
+    fn order_fulfillment_signing_rejects_selected_non_seller_account() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        accounts::create_or_migrate_default_account(&config).expect("create selected account");
+        let fixture = order_status_fixture();
+
+        let error = resolve_local_order_fulfillment_signing_identity(
+            &config,
+            fixture.seller_pubkey.as_str(),
+        )
+        .expect_err("non seller account rejected");
+
+        let ActorWriteBindingError::Unconfigured(reason) = error;
+        assert!(reason.contains("cannot sign order seller_pubkey"));
+    }
+
+    #[test]
     fn order_status_from_receipt_rejects_wrong_decision_counterparty() {
         let fixture = order_status_fixture();
         let wrong_buyer = RadrootsIdentity::generate();
@@ -7016,6 +7216,17 @@ mod tests {
             },
         )
         .expect("seller order request resolution")
+    }
+
+    fn fulfillment_args_for_fixture(
+        fixture: &OrderStatusFixture,
+        state: &str,
+    ) -> OrderFulfillmentArgs {
+        OrderFulfillmentArgs {
+            key: fixture.order_id.clone(),
+            state: state.to_owned(),
+            idempotency_key: None,
+        }
     }
 
     fn sample_config(root: &Path) -> RuntimeConfig {
