@@ -480,8 +480,9 @@ mod tests {
     use crate::domain::runtime::OrderDecisionView;
     use crate::operation_adapter::{
         OperationAdapter, OperationContext, OperationData, OperationRequest, OrderAcceptRequest,
-        OrderAcceptResult, OrderDeclineRequest, OrderEventListRequest, OrderEventWatchRequest,
-        OrderGetRequest, OrderListRequest, OrderStatusGetRequest, OrderSubmitRequest,
+        OrderAcceptResult, OrderDeclineRequest, OrderDeclineResult, OrderEventListRequest,
+        OrderEventWatchRequest, OrderGetRequest, OrderListRequest, OrderStatusGetRequest,
+        OrderSubmitRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -595,6 +596,31 @@ mod tests {
         assert_eq!(detail["idempotency_key"], "idem_test");
         assert_eq!(detail["signer_mode"], "local");
         assert_eq!(detail["actions"][0], "radroots order status get ord_test");
+    }
+
+    #[test]
+    fn order_decision_invalid_maps_to_validation_failure() {
+        let view = invalid_decision_view();
+        let error = match decision_result::<OrderDeclineResult>("order.decline", &view) {
+            Ok(_) => panic!("invalid view should fail validation"),
+            Err(error) => error,
+        };
+        let output_error = error.to_output_error();
+
+        assert_eq!(output_error.code, "validation_failed");
+        assert_eq!(output_error.exit_code, 10);
+        assert_eq!(
+            output_error.message,
+            "active order events for `ord_test` failed reducer validation"
+        );
+        let detail = output_error.detail.expect("validation detail");
+        assert_eq!(detail["state"], "invalid");
+        assert_eq!(detail["operation_id"], "order.decline");
+        assert_eq!(detail["listing_event_id"], "l".repeat(64));
+        assert_eq!(detail["event_id"], Value::Null);
+        assert_eq!(detail["event_kind"], Value::Null);
+        assert_eq!(detail["idempotency_key"], "idem_test");
+        assert_eq!(detail["signer_mode"], "local");
     }
 
     #[test]
@@ -821,5 +847,16 @@ mod tests {
             issues: Vec::new(),
             actions: vec!["radroots order status get ord_test".to_owned()],
         }
+    }
+
+    fn invalid_decision_view() -> OrderDecisionView {
+        let mut view = already_decided_view();
+        view.state = "invalid".to_owned();
+        view.decision = "declined".to_owned();
+        view.event_id = None;
+        view.event_kind = None;
+        view.reason =
+            Some("active order events for `ord_test` failed reducer validation".to_owned());
+        view
     }
 }
