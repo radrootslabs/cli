@@ -1351,6 +1351,7 @@ fn order_status_record_from_event(
                 RadrootsActiveOrderDecisionRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
+                    counterparty_pubkey: context.counterparty_pubkey,
                     root_event_id: context.root_event_id.unwrap_or_default(),
                     prev_event_id: context.prev_event_id.unwrap_or_default(),
                     payload: envelope.payload,
@@ -1402,6 +1403,7 @@ fn order_status_inventory_view(
                 issue.code.as_str(),
                 "missing_decision_inventory_commitments"
                     | "decision_inventory_commitment_mismatch"
+                    | "decision_counterparty_mismatch"
                     | "unknown_inventory_bin"
                     | "listing_inventory_over_reserved"
                     | "invalid_inventory_order"
@@ -1541,6 +1543,14 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
             "active order reducer reported decision author mismatch",
             vec![event_id],
         ),
+        RadrootsActiveOrderReducerIssue::DecisionCounterpartyMismatch { event_id } => {
+            issue_with_events(
+                "decision_counterparty_mismatch",
+                "buyer_pubkey",
+                "active order reducer reported decision counterparty mismatch",
+                vec![event_id],
+            )
+        }
         RadrootsActiveOrderReducerIssue::DecisionBuyerMismatch { event_id } => issue_with_events(
             "decision_buyer_mismatch",
             "buyer_pubkey",
@@ -2327,6 +2337,7 @@ fn proposed_accept_decision_record(
     Ok(RadrootsActiveOrderDecisionRecord {
         event_id: format!("pending_accept:{}", request.order_id),
         author_pubkey: request.seller_pubkey.clone(),
+        counterparty_pubkey: request.buyer_pubkey.clone(),
         root_event_id: request.request_event_id.clone(),
         prev_event_id: request.request_event_id.clone(),
         payload,
@@ -5072,6 +5083,48 @@ mod tests {
     }
 
     #[test]
+    fn order_status_from_receipt_rejects_wrong_decision_counterparty() {
+        let fixture = order_status_fixture();
+        let wrong_buyer = RadrootsIdentity::generate();
+        let decision_event = signed_order_decision_event_with_counterparty(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            wrong_buyer.public_key_hex().as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let decision_event_id = decision_event.id.to_string();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), decision_event],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+
+        assert_eq!(view.state, "invalid");
+        let issue = view
+            .reducer_issues
+            .iter()
+            .find(|issue| issue.code == "decision_counterparty_mismatch")
+            .expect("decision counterparty mismatch issue");
+        assert_eq!(issue.field, "buyer_pubkey");
+        assert_eq!(issue.event_ids, vec![decision_event_id]);
+        let inventory = view.inventory.as_ref().expect("inventory view");
+        assert_eq!(inventory.state, "invalid");
+        assert_eq!(inventory.issues[0].code, "decision_counterparty_mismatch");
+    }
+
+    #[test]
     fn order_decision_preflight_rejects_existing_decision() {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
@@ -5198,6 +5251,7 @@ mod tests {
                 RadrootsActiveOrderDecisionRecord {
                     event_id: "existing_decision".to_owned(),
                     author_pubkey: fixture.seller_pubkey.clone(),
+                    counterparty_pubkey: fixture.buyer_pubkey.clone(),
                     root_event_id: existing_request.request_event_id.clone(),
                     prev_event_id: existing_request.request_event_id.clone(),
                     payload: existing_decision_payload,
@@ -5823,6 +5877,28 @@ mod tests {
         seller_pubkey: &str,
         decision: RadrootsTradeOrderDecision,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
+        signed_order_decision_event_with_counterparty(
+            seller,
+            request_event,
+            order_id,
+            listing_addr,
+            buyer_pubkey,
+            seller_pubkey,
+            buyer_pubkey,
+            decision,
+        )
+    }
+
+    fn signed_order_decision_event_with_counterparty(
+        seller: &RadrootsIdentity,
+        request_event: &radroots_nostr::prelude::RadrootsNostrEvent,
+        order_id: &str,
+        listing_addr: &str,
+        buyer_pubkey: &str,
+        seller_pubkey: &str,
+        counterparty_pubkey: &str,
+        decision: RadrootsTradeOrderDecision,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let payload = RadrootsTradeOrderDecisionEvent {
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
@@ -5839,7 +5915,13 @@ mod tests {
             &payload,
         )
         .expect("order decision parts");
-        radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+        let mut tags = parts.tags;
+        for tag in tags.iter_mut() {
+            if tag.first().map(String::as_str) == Some("p") && tag.len() > 1 {
+                tag[1] = counterparty_pubkey.to_owned();
+            }
+        }
+        radroots_nostr_build_event(parts.kind, parts.content, tags)
             .expect("nostr event builder")
             .sign_with_keys(seller.keys())
             .expect("signed order decision")
