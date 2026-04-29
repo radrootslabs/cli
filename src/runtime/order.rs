@@ -48,8 +48,8 @@ use serde::{Deserialize, Serialize};
 use crate::domain::runtime::{
     OrderDecisionView, OrderDraftItemView, OrderFulfillmentView, OrderGetView,
     OrderHistoryEntryView, OrderHistoryView, OrderInventoryBinView, OrderInventoryView,
-    OrderIssueView, OrderListView, OrderNewView, OrderStatusView, OrderSubmitView,
-    OrderSummaryView, OrderWatchView, RelayFailureView,
+    OrderIssueView, OrderListView, OrderNewView, OrderStatusFulfillmentView, OrderStatusView,
+    OrderSubmitView, OrderSummaryView, OrderWatchView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -964,6 +964,7 @@ pub fn status(
             seller_pubkey: None,
             last_event_id: None,
             inventory: None,
+            fulfillment: None,
             reducer_issues: Vec::new(),
             target_relays: Vec::new(),
             connected_relays: Vec::new(),
@@ -996,6 +997,7 @@ pub fn status(
                 seller_pubkey: None,
                 last_event_id: None,
                 inventory: None,
+                fulfillment: None,
                 reducer_issues: Vec::new(),
                 target_relays,
                 connected_relays: Vec::new(),
@@ -1134,10 +1136,23 @@ fn order_status_reduction_from_receipt_with_context(
     });
 
     let order_id = context.order_id;
+    let fulfillment_records = fulfillments.clone();
     let projection =
         reduce_active_order_events(order_id, requests, decisions.clone(), fulfillments);
     let fulfillment_event_id = projection.fulfillment_event_id.clone();
     let fulfillment_status = projection.fulfillment_status;
+    let fulfillment_root_event_id = fulfillment_event_id.as_ref().and_then(|event_id| {
+        fulfillment_records
+            .iter()
+            .find(|record| &record.event_id == event_id)
+            .map(|record| record.root_event_id.clone())
+    });
+    let fulfillment_prev_event_id = fulfillment_event_id.as_ref().and_then(|event_id| {
+        fulfillment_records
+            .iter()
+            .find(|record| &record.event_id == event_id)
+            .map(|record| record.prev_event_id.clone())
+    });
     let listing_event_id = projection
         .request_event_id
         .as_ref()
@@ -1168,6 +1183,16 @@ fn order_status_reduction_from_receipt_with_context(
         &decisions,
         reducer_issues.as_slice(),
     );
+    let fulfillment = order_status_fulfillment_view(
+        &projection.status,
+        projection.request_event_id.clone(),
+        projection.decision_event_id.clone(),
+        fulfillment_event_id.clone(),
+        fulfillment_root_event_id.clone(),
+        fulfillment_prev_event_id.clone(),
+        fulfillment_status,
+        reducer_issues.as_slice(),
+    );
 
     let view = OrderStatusView {
         state,
@@ -1181,6 +1206,7 @@ fn order_status_reduction_from_receipt_with_context(
         seller_pubkey: projection.seller_pubkey,
         last_event_id: projection.last_event_id,
         inventory,
+        fulfillment,
         reducer_issues,
         target_relays,
         connected_relays,
@@ -1253,13 +1279,18 @@ fn enrich_order_status_inventory(
         .into_iter()
         .filter(|record| request_order_ids.contains(&record.payload.order_id))
         .collect::<Vec<_>>();
+    let fulfillments =
+        fetch_listing_accounting_fulfillments_for_status(config, listing_addr.as_str())?
+            .into_iter()
+            .filter(|record| request_order_ids.contains(&record.payload.order_id))
+            .collect::<Vec<_>>();
     let projection = reduce_listing_inventory_accounting(
         listing_addr.as_str(),
         listing.event_id.as_str(),
         listing.bins,
         requests,
         decisions,
-        [],
+        fulfillments,
     );
     let relevant_issues = projection
         .issues
@@ -1275,9 +1306,18 @@ fn enrich_order_status_inventory(
         .collect::<Vec<_>>();
     if relevant_issues.is_empty() {
         if view.state == "accepted" {
+            let inventory_state = if view
+                .fulfillment
+                .as_ref()
+                .is_some_and(|fulfillment| fulfillment.inventory_released)
+            {
+                "released"
+            } else {
+                "reserved"
+            };
             view.inventory = Some(order_inventory_view_from_listing_projection(
                 &projection,
-                "reserved",
+                inventory_state,
                 true,
             ));
         }
@@ -1353,6 +1393,27 @@ fn fetch_listing_accounting_decisions_for_status(
             continue;
         }
         if let Ok(OrderStatusRecord::Decision(record)) = order_status_record_from_event(&event) {
+            records.push(record);
+        }
+    }
+    Ok(records)
+}
+
+fn fetch_listing_accounting_fulfillments_for_status(
+    config: &RuntimeConfig,
+    listing_addr: &str,
+) -> Result<Vec<RadrootsActiveOrderFulfillmentRecord>, RuntimeError> {
+    let filter = order_listing_fulfillment_filter(listing_addr)?;
+    let receipt = fetch_events_from_relays(&config.relay.urls, filter)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let mut records = Vec::new();
+    for event in receipt.events {
+        if event_kind_u32(&event) != KIND_TRADE_FULFILLMENT_UPDATE
+            || !event_matches_tag_value(&event, "a", listing_addr)
+        {
+            continue;
+        }
+        if let Ok(OrderStatusRecord::Fulfillment(record)) = order_status_record_from_event(&event) {
             records.push(record);
         }
     }
@@ -1600,6 +1661,83 @@ fn order_status_inventory_view(
         }
         _ => None,
     }
+}
+
+fn order_status_fulfillment_view(
+    status: &RadrootsActiveOrderStatus,
+    request_event_id: Option<String>,
+    decision_event_id: Option<String>,
+    fulfillment_event_id: Option<String>,
+    fulfillment_root_event_id: Option<String>,
+    fulfillment_prev_event_id: Option<String>,
+    fulfillment_status: Option<RadrootsActiveTradeFulfillmentState>,
+    reducer_issues: &[OrderIssueView],
+) -> Option<OrderStatusFulfillmentView> {
+    let issues = reducer_issues
+        .iter()
+        .filter(|issue| fulfillment_issue_code(issue.code.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !issues.is_empty() {
+        return Some(OrderStatusFulfillmentView {
+            state: "invalid".to_owned(),
+            event_id: fulfillment_event_id,
+            root_event_id: fulfillment_root_event_id.or(request_event_id),
+            prev_event_id: fulfillment_prev_event_id,
+            terminal: false,
+            inventory_released: false,
+            issues,
+        });
+    }
+    if !matches!(status, RadrootsActiveOrderStatus::Accepted) {
+        return None;
+    }
+    let fulfillment_status = fulfillment_status?;
+    let terminal = matches!(
+        fulfillment_status,
+        RadrootsActiveTradeFulfillmentState::Delivered
+            | RadrootsActiveTradeFulfillmentState::SellerCancelled
+    );
+    let inventory_released = matches!(
+        fulfillment_status,
+        RadrootsActiveTradeFulfillmentState::SellerCancelled
+    );
+    let prev_event_id = fulfillment_prev_event_id.or_else(|| {
+        if fulfillment_event_id.is_none() {
+            decision_event_id
+        } else {
+            None
+        }
+    });
+    Some(OrderStatusFulfillmentView {
+        state: fulfillment_state_name(fulfillment_status).to_owned(),
+        event_id: fulfillment_event_id,
+        root_event_id: fulfillment_root_event_id.or(request_event_id),
+        prev_event_id,
+        terminal,
+        inventory_released,
+        issues,
+    })
+}
+
+fn fulfillment_issue_code(code: &str) -> bool {
+    matches!(
+        code,
+        "fulfillment_without_accepted_decision"
+            | "invalid_fulfillment_payload"
+            | "fulfillment_order_id_mismatch"
+            | "fulfillment_author_mismatch"
+            | "fulfillment_counterparty_mismatch"
+            | "fulfillment_buyer_mismatch"
+            | "fulfillment_seller_mismatch"
+            | "invalid_fulfillment_listing_address"
+            | "fulfillment_listing_mismatch"
+            | "fulfillment_root_mismatch"
+            | "fulfillment_previous_mismatch"
+            | "fulfillment_status_not_publishable"
+            | "fulfillment_unsupported_transition"
+            | "forked_fulfillments"
+    )
 }
 
 fn inventory_bins_from_decision(
@@ -3315,6 +3453,16 @@ fn order_listing_decision_filter(listing_addr: &str) -> Result<RadrootsNostrFilt
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "a", vec![listing_addr.to_owned()])
         .map_err(|error| RuntimeError::Config(format!("build order decision filter: {error}")))
+}
+
+fn order_listing_fulfillment_filter(
+    listing_addr: &str,
+) -> Result<RadrootsNostrFilter, RuntimeError> {
+    let filter = RadrootsNostrFilter::new()
+        .kind(radroots_nostr_kind(KIND_TRADE_FULFILLMENT_UPDATE as u16))
+        .limit(1_000);
+    radroots_nostr_filter_tag(filter, "a", vec![listing_addr.to_owned()])
+        .map_err(|error| RuntimeError::Config(format!("build fulfillment filter: {error}")))
 }
 
 fn order_status_filter(order_id: &str) -> Result<RadrootsNostrFilter, RuntimeError> {
@@ -5516,6 +5664,7 @@ mod tests {
         assert_eq!(view.decoded_count, 0);
         assert_eq!(view.skipped_count, 0);
         assert!(view.request_event_id.is_none());
+        assert!(view.fulfillment.is_none());
         assert!(view.reducer_issues.is_empty());
     }
 
@@ -5556,6 +5705,7 @@ mod tests {
         );
         assert_eq!(view.decoded_count, 1);
         assert_eq!(view.skipped_count, 0);
+        assert!(view.fulfillment.is_none());
     }
 
     #[test]
@@ -5785,6 +5935,7 @@ mod tests {
         };
 
         let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let request_event_id = fixture.request_event.id.to_string();
         let decision_event_id = decision_event.id.to_string();
 
         assert_eq!(view.state, "accepted");
@@ -5810,6 +5961,20 @@ mod tests {
         assert_eq!(inventory.bins.len(), 1);
         assert_eq!(inventory.bins[0].bin_id, "bin-1");
         assert_eq!(inventory.bins[0].committed_count, 2);
+        let fulfillment = view.fulfillment.as_ref().expect("fulfillment view");
+        assert_eq!(fulfillment.state, "accepted_not_fulfilled");
+        assert_eq!(fulfillment.event_id, None);
+        assert_eq!(
+            fulfillment.root_event_id.as_deref(),
+            Some(request_event_id.as_str())
+        );
+        assert_eq!(
+            fulfillment.prev_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert_eq!(fulfillment.terminal, false);
+        assert_eq!(fulfillment.inventory_released, false);
+        assert!(fulfillment.issues.is_empty());
         assert!(view.reducer_issues.is_empty());
         assert_eq!(view.decoded_count, 2);
     }
@@ -5847,12 +6012,14 @@ mod tests {
             failed_relays: Vec::new(),
             events: vec![
                 fixture.request_event.clone(),
-                decision_event,
+                decision_event.clone(),
                 fulfillment_event.clone(),
             ],
         };
 
         let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let request_event_id = fixture.request_event.id.to_string();
+        let decision_event_id = decision_event.id.to_string();
         let fulfillment_event_id = fulfillment_event.id.to_string();
 
         assert_eq!(
@@ -5864,8 +6031,142 @@ mod tests {
             view.last_event_id.as_deref(),
             Some(fulfillment_event_id.as_str())
         );
+        let fulfillment = view.fulfillment.as_ref().expect("fulfillment view");
+        assert_eq!(fulfillment.state, "ready_for_pickup");
+        assert_eq!(
+            fulfillment.event_id.as_deref(),
+            Some(fulfillment_event_id.as_str())
+        );
+        assert_eq!(
+            fulfillment.root_event_id.as_deref(),
+            Some(request_event_id.as_str())
+        );
+        assert_eq!(
+            fulfillment.prev_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert_eq!(fulfillment.terminal, false);
+        assert_eq!(fulfillment.inventory_released, false);
+        assert!(fulfillment.issues.is_empty());
         assert_eq!(view.decoded_count, 3);
         assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_seller_cancelled_inventory_release_flag() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::SellerCancelled,
+        );
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![
+                fixture.request_event.clone(),
+                decision_event,
+                fulfillment_event.clone(),
+            ],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let fulfillment_event_id = fulfillment_event.id.to_string();
+        let fulfillment = view.fulfillment.as_ref().expect("fulfillment view");
+
+        assert_eq!(view.state, "accepted");
+        assert_eq!(fulfillment.state, "seller_cancelled");
+        assert_eq!(
+            fulfillment.event_id.as_deref(),
+            Some(fulfillment_event_id.as_str())
+        );
+        assert_eq!(fulfillment.terminal, true);
+        assert_eq!(fulfillment.inventory_released, true);
+        assert!(fulfillment.issues.is_empty());
+    }
+
+    #[test]
+    fn order_status_from_receipt_exposes_forked_fulfillment_issues() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let first_fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::Preparing,
+        );
+        let second_fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+        );
+        let mut expected_event_ids = vec![
+            first_fulfillment_event.id.to_string(),
+            second_fulfillment_event.id.to_string(),
+        ];
+        expected_event_ids.sort();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![
+                fixture.request_event.clone(),
+                decision_event,
+                first_fulfillment_event,
+                second_fulfillment_event,
+            ],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let fulfillment = view.fulfillment.as_ref().expect("fulfillment view");
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(fulfillment.state, "invalid");
+        assert_eq!(fulfillment.issues.len(), 1);
+        assert_eq!(fulfillment.issues[0].code, "forked_fulfillments");
+        assert_eq!(fulfillment.issues[0].event_ids, expected_event_ids);
     }
 
     #[test]
@@ -6009,6 +6310,14 @@ mod tests {
         .expect("terminal fulfillment preflight");
 
         assert_eq!(view.state, "invalid");
+        let fulfillment = reduction
+            .view
+            .fulfillment
+            .as_ref()
+            .expect("fulfillment view");
+        assert_eq!(fulfillment.state, "delivered");
+        assert_eq!(fulfillment.terminal, true);
+        assert_eq!(fulfillment.inventory_released, false);
         assert_eq!(view.issues[0].code, "fulfillment_unsupported_transition");
         assert_eq!(view.issues[0].event_ids, vec![fulfillment_event_id]);
         assert!(view.event_id.is_none());
@@ -6292,6 +6601,7 @@ mod tests {
         assert_eq!(inventory.state, "not_reserved");
         assert_eq!(inventory.commitment_valid, true);
         assert!(inventory.bins.is_empty());
+        assert!(view.fulfillment.is_none());
         assert!(view.reducer_issues.is_empty());
         assert_eq!(view.decoded_count, 2);
     }

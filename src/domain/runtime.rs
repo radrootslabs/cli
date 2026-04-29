@@ -1359,6 +1359,8 @@ pub struct OrderStatusView {
     pub last_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inventory: Option<OrderInventoryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fulfillment: Option<OrderStatusFulfillmentView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reducer_issues: Vec<OrderIssueView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1377,6 +1379,23 @@ pub struct OrderStatusView {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderStatusFulfillmentView {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_event_id: Option<String>,
+    #[serde(default)]
+    pub terminal: bool,
+    #[serde(default)]
+    pub inventory_released: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
