@@ -863,6 +863,7 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
     let mut skipped_count = 0usize;
     let mut requests = Vec::new();
     let mut decisions = Vec::new();
+    let mut candidate_issues = Vec::new();
 
     for event in events {
         match order_status_record_from_event(&event) {
@@ -874,18 +875,43 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
                 decoded_count += 1;
                 decisions.push(record);
             }
-            Err(_) => skipped_count += 1,
+            Err(error) => {
+                skipped_count += 1;
+                if order_status_request_candidate(&event, order_id) {
+                    let event_id = event.id.to_string();
+                    candidate_issues.push(issue_with_events(
+                        "invalid_request_candidate",
+                        "request_event_id",
+                        format!(
+                            "request event `{event_id}` failed order status validation: {error}"
+                        ),
+                        vec![event_id],
+                    ));
+                }
+            }
         }
     }
+    candidate_issues.sort_by(|left, right| {
+        left.event_ids
+            .cmp(&right.event_ids)
+            .then_with(|| left.message.cmp(&right.message))
+    });
 
     let projection = reduce_active_order_events(order_id, requests, decisions);
-    let state = active_order_status_state(&projection.status).to_owned();
-    let reason = active_order_status_reason(&projection.status, order_id);
-    let reducer_issues = projection
+    let mut state = active_order_status_state(&projection.status).to_owned();
+    let mut reason = active_order_status_reason(&projection.status, order_id);
+    let mut reducer_issues = projection
         .issues
         .into_iter()
         .map(active_order_reducer_issue_view)
-        .collect();
+        .collect::<Vec<_>>();
+    if !candidate_issues.is_empty() {
+        state = "invalid".to_owned();
+        reason = Some(format!(
+            "active order request candidates for `{order_id}` failed status validation"
+        ));
+        reducer_issues.extend(candidate_issues);
+    }
 
     OrderStatusView {
         state,
@@ -909,6 +935,11 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
     }
 }
 
+fn order_status_request_candidate(event: &RadrootsNostrEvent, order_id: &str) -> bool {
+    event_kind_u32(event) == KIND_TRADE_ORDER_REQUEST
+        && event_matches_tag_value(event, "d", order_id)
+}
+
 fn order_status_record_from_event(
     event: &RadrootsNostrEvent,
 ) -> Result<OrderStatusRecord, RuntimeError> {
@@ -924,6 +955,13 @@ fn order_status_record_from_event(
                     "active order request event used the wrong message type".to_owned(),
                 ));
             }
+            active_trade_event_context_from_tags(
+                RadrootsActiveTradeMessageType::TradeOrderRequested,
+                &event.tags,
+            )
+            .map_err(|error| {
+                RuntimeError::Config(format!("decode active order request tags: {error}"))
+            })?;
             Ok(OrderStatusRecord::Request(
                 RadrootsActiveOrderRequestRecord {
                     event_id: event.id,
@@ -3597,6 +3635,82 @@ mod tests {
             issue.message,
             "active order reducer reported conflicting decisions"
         );
+        assert_eq!(issue.event_ids, expected_event_ids);
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_invalid_same_order_request_candidate() {
+        let fixture = order_status_fixture();
+        let invalid_event = signed_malformed_order_request_event(
+            &fixture.buyer,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            "2".repeat(64).as_str(),
+        );
+        let invalid_event_id = invalid_event.id.to_string();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), invalid_event],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.decoded_count, 1);
+        assert_eq!(view.skipped_count, 1);
+        assert_eq!(
+            view.reason.as_deref(),
+            Some(
+                "active order request candidates for `ord_AAAAAAAAAAAAAAAAAAAAAg` failed status validation"
+            )
+        );
+        let issue = view
+            .reducer_issues
+            .iter()
+            .find(|issue| issue.code == "invalid_request_candidate")
+            .expect("invalid request candidate issue");
+        assert_eq!(issue.field, "request_event_id");
+        assert_eq!(issue.event_ids, vec![invalid_event_id]);
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_multiple_request_candidates_invalid() {
+        let fixture = order_status_fixture();
+        let second_request_event = signed_order_request_event(
+            &fixture.buyer,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            "2".repeat(64).as_str(),
+        );
+        let mut expected_event_ids = vec![
+            fixture.request_event.id.to_string(),
+            second_request_event.id.to_string(),
+        ];
+        expected_event_ids.sort();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), second_request_event],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.decoded_count, 2);
+        assert_eq!(view.skipped_count, 0);
+        let issue = view
+            .reducer_issues
+            .iter()
+            .find(|issue| issue.code == "multiple_requests")
+            .expect("multiple request issue");
+        assert_eq!(issue.field, "request_event_id");
         assert_eq!(issue.event_ids, expected_event_ids);
     }
 
