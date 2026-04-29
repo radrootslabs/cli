@@ -32,9 +32,10 @@ use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
     RadrootsActiveOrderDecisionRecord, RadrootsActiveOrderReducerIssue,
     RadrootsActiveOrderRequestRecord, RadrootsActiveOrderStatus,
-    RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryBinAvailability,
-    canonicalize_active_order_decision_for_signer, canonicalize_active_order_request_for_signer,
-    reduce_active_order_events, reduce_listing_inventory_accounting,
+    RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryAccountingProjection,
+    RadrootsListingInventoryBinAvailability, canonicalize_active_order_decision_for_signer,
+    canonicalize_active_order_request_for_signer, reduce_active_order_events,
+    reduce_listing_inventory_accounting,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1753,8 +1754,21 @@ fn order_accept_inventory_preflight_view(
         requests,
         decisions,
     );
+    Ok(order_accept_inventory_preflight_view_from_projection(
+        config, args, request, resolution, status, projection,
+    ))
+}
+
+fn order_accept_inventory_preflight_view_from_projection(
+    config: &RuntimeConfig,
+    args: &OrderDecisionArgs,
+    request: &ResolvedSellerOrderRequest,
+    resolution: &SellerOrderRequestResolution,
+    status: &OrderStatusView,
+    projection: RadrootsListingInventoryAccountingProjection,
+) -> Option<OrderDecisionView> {
     if projection.issues.is_empty() {
-        return Ok(None);
+        return None;
     }
 
     let issues = projection
@@ -1762,7 +1776,7 @@ fn order_accept_inventory_preflight_view(
         .into_iter()
         .map(listing_inventory_accounting_issue_view)
         .collect::<Vec<_>>();
-    Ok(Some(order_decision_inventory_invalid_view(
+    Some(order_decision_inventory_invalid_view(
         config,
         args,
         request,
@@ -1770,7 +1784,7 @@ fn order_accept_inventory_preflight_view(
         status,
         "order accept refused because visible inventory accounting is invalid",
         issues,
-    )))
+    ))
 }
 
 fn fetch_current_inventory_listing(
@@ -3853,19 +3867,23 @@ mod tests {
     use radroots_nostr::prelude::{radroots_event_from_nostr, radroots_nostr_build_event};
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
-    use radroots_trade::order::canonicalize_active_order_decision_for_signer;
+    use radroots_trade::order::{
+        RadrootsActiveOrderDecisionRecord, RadrootsListingInventoryBinAvailability,
+        canonicalize_active_order_decision_for_signer, reduce_listing_inventory_accounting,
+    };
     use tempfile::tempdir;
 
     use super::{
         LoadedOrderDraft, ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem,
-        SellerOrderRequestResolution, accepted_order_decision_payload_from_request,
+        ResolvedSellerOrderRequest, SellerOrderRequestResolution,
+        accepted_order_decision_payload_from_request, active_request_record_from_resolved,
         canonical_order_request_payload_from_loaded, collect_issues,
         declined_order_decision_payload_from_request, inspect_document, next_order_id,
-        order_decision_dry_run_view, order_decision_preflight_view_from_status,
-        order_decision_view_from_resolution, order_history_entry_from_event,
-        order_history_from_receipt, order_request_filter, order_status_from_receipt,
-        order_submit_existing_request_view_from_receipt,
-        seller_order_request_resolution_from_receipt,
+        order_accept_inventory_preflight_view_from_projection, order_decision_dry_run_view,
+        order_decision_preflight_view_from_status, order_decision_view_from_resolution,
+        order_history_entry_from_event, order_history_from_receipt, order_request_filter,
+        order_status_from_receipt, order_submit_existing_request_view_from_receipt,
+        proposed_accept_decision_record, seller_order_request_resolution_from_receipt,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -4718,6 +4736,96 @@ mod tests {
                 .expect("reason")
                 .contains("already has a visible `accepted` seller decision")
         );
+    }
+
+    #[test]
+    fn order_accept_inventory_preflight_rejects_over_reserved_projection() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let resolution = request_resolution_for_fixture(&fixture);
+        let request = resolution.requests[0].clone();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone()],
+            },
+        );
+        let existing_order_id = "ord_AAAAAAAAAAAAAAAAAAAAAw";
+        let existing_request_event = signed_order_request_event(
+            &fixture.buyer,
+            existing_order_id,
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            fixture.listing_event_id.as_str(),
+        );
+        let existing_request = ResolvedSellerOrderRequest {
+            request_event_id: existing_request_event.id.to_string(),
+            listing_event_id: Some(fixture.listing_event_id.clone()),
+            order_id: existing_order_id.to_owned(),
+            listing_addr: fixture.listing_addr.clone(),
+            buyer_pubkey: fixture.buyer_pubkey.clone(),
+            seller_pubkey: fixture.seller_pubkey.clone(),
+            items: vec![RadrootsTradeOrderItem {
+                bin_id: "bin-1".to_owned(),
+                bin_count: 2,
+            }],
+        };
+        let existing_decision_payload =
+            accepted_order_decision_payload_from_request(&existing_request);
+        let existing_decision_payload = canonicalize_active_order_decision_for_signer(
+            existing_decision_payload,
+            fixture.seller_pubkey.as_str(),
+        )
+        .expect("canonical existing decision");
+        let projection = reduce_listing_inventory_accounting(
+            fixture.listing_addr.as_str(),
+            fixture.listing_event_id.as_str(),
+            vec![RadrootsListingInventoryBinAvailability {
+                bin_id: "bin-1".to_owned(),
+                available_count: 2,
+            }],
+            vec![
+                active_request_record_from_resolved(&existing_request),
+                active_request_record_from_resolved(&request),
+            ],
+            vec![
+                RadrootsActiveOrderDecisionRecord {
+                    event_id: "existing_decision".to_owned(),
+                    author_pubkey: fixture.seller_pubkey.clone(),
+                    root_event_id: existing_request.request_event_id.clone(),
+                    prev_event_id: existing_request.request_event_id.clone(),
+                    payload: existing_decision_payload,
+                },
+                proposed_accept_decision_record(&request).expect("proposed accept decision"),
+            ],
+        );
+        let args = OrderDecisionArgs {
+            key: fixture.order_id.clone(),
+            decision: OrderDecisionArg::Accept,
+            reason: None,
+            idempotency_key: None,
+        };
+
+        let view = order_accept_inventory_preflight_view_from_projection(
+            &config,
+            &args,
+            &request,
+            &resolution,
+            &status_view,
+            projection,
+        )
+        .expect("invalid inventory preflight view");
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.issues.len(), 1);
+        assert_eq!(view.issues[0].code, "listing_inventory_over_reserved");
+        assert!(view.event_id.is_none());
     }
 
     #[test]
