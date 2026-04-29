@@ -1230,6 +1230,8 @@ pub struct OrderDecisionView {
     pub event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_kind: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<OrderInventoryView>,
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
