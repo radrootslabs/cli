@@ -227,22 +227,21 @@ fn decision_result<R>(
 where
     R: OperationResultData,
 {
-    if matches!(view.state.as_str(), "already_decided" | "invalid") {
-        let message = view.reason.clone().unwrap_or_else(|| {
-            format!(
-                "order decision failed validation with state `{}`",
-                view.state
-            )
-        });
-        return Err(OperationAdapterError::validation_failed_with_detail(
-            operation_id,
-            message,
-            order_decision_error_detail(view),
-        ));
-    }
-
     match view.disposition() {
         CommandDisposition::Success => serialized_target_result::<R, _>(view),
+        CommandDisposition::ValidationFailed => {
+            let message = view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "order decision failed validation with state `{}`",
+                    view.state
+                )
+            });
+            Err(OperationAdapterError::validation_failed_with_detail(
+                operation_id,
+                message,
+                order_decision_error_detail(view),
+            ))
+        }
         disposition => {
             let message = view
                 .reason
@@ -279,6 +278,7 @@ fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
         "state": &view.state,
         "order_id": &view.order_id,
         "listing_addr": &view.listing_addr,
+        "listing_event_id": &view.listing_event_id,
         "request_event_id": &view.request_event_id,
         "root_event_id": &view.root_event_id,
         "prev_event_id": &view.prev_event_id,
@@ -295,6 +295,8 @@ fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
         "fetched_count": view.fetched_count,
         "decoded_count": view.decoded_count,
         "skipped_count": view.skipped_count,
+        "idempotency_key": &view.idempotency_key,
+        "signer_mode": &view.signer_mode,
         "issues": &view.issues,
         "actions": &view.actions,
     })
@@ -587,8 +589,11 @@ mod tests {
         let detail = output_error.detail.expect("validation detail");
         assert_eq!(detail["state"], "already_decided");
         assert_eq!(detail["operation_id"], "order.accept");
+        assert_eq!(detail["listing_event_id"], "l".repeat(64));
         assert_eq!(detail["event_id"], "d".repeat(64));
         assert_eq!(detail["event_kind"], 3423);
+        assert_eq!(detail["idempotency_key"], "idem_test");
+        assert_eq!(detail["signer_mode"], "local");
         assert_eq!(detail["actions"][0], "radroots order status get ord_test");
     }
 
@@ -807,7 +812,7 @@ mod tests {
             fetched_count: 2,
             decoded_count: 2,
             skipped_count: 0,
-            idempotency_key: None,
+            idempotency_key: Some("idem_test".to_owned()),
             signer_mode: Some("local".to_owned()),
             reason: Some(
                 "order accept refused because order `ord_test` already has a visible `accepted` seller decision"

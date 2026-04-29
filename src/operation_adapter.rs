@@ -413,6 +413,10 @@ impl OperationAdapterError {
                 operation_id: operation_id.to_owned(),
                 message,
             },
+            CommandDisposition::ValidationFailed => Self::ValidationFailed {
+                operation_id: operation_id.to_owned(),
+                message,
+            },
             CommandDisposition::Unconfigured => Self::unconfigured(operation_id, message),
             CommandDisposition::ExternalUnavailable => Self::unavailable(operation_id, message),
             CommandDisposition::Unsupported => Self::InvalidInput {

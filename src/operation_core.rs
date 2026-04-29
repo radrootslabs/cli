@@ -553,6 +553,7 @@ fn local_backup_result(
             view.reason.clone().unwrap_or_else(|| match disposition {
                 CommandDisposition::Success => "store backup succeeded".to_owned(),
                 CommandDisposition::NotFound => "store backup target was not found".to_owned(),
+                CommandDisposition::ValidationFailed => "store backup validation failed".to_owned(),
                 CommandDisposition::Unconfigured => "store backup is unconfigured".to_owned(),
                 CommandDisposition::ExternalUnavailable => "store backup is unavailable".to_owned(),
                 CommandDisposition::Unsupported => "store backup is unsupported".to_owned(),

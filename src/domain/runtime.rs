@@ -12,6 +12,7 @@ use serde::Serialize;
 pub enum CommandDisposition {
     Success,
     NotFound,
+    ValidationFailed,
     Unconfigured,
     ExternalUnavailable,
     Unsupported,
@@ -23,6 +24,7 @@ impl CommandDisposition {
         match self {
             Self::Success => ExitCode::SUCCESS,
             Self::NotFound => ExitCode::from(4),
+            Self::ValidationFailed => ExitCode::from(10),
             Self::Unconfigured => ExitCode::from(3),
             Self::ExternalUnavailable => ExitCode::from(4),
             Self::Unsupported => ExitCode::from(5),
@@ -1259,6 +1261,7 @@ impl OrderDecisionView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "missing" => CommandDisposition::NotFound,
+            "invalid" | "already_decided" => CommandDisposition::ValidationFailed,
             "unconfigured" => CommandDisposition::Unconfigured,
             "unavailable" => CommandDisposition::ExternalUnavailable,
             "error" => CommandDisposition::InternalError,

@@ -227,6 +227,7 @@ fn farm_publish_result(
             view.reason.clone().unwrap_or_else(|| match disposition {
                 CommandDisposition::Success => "farm publish succeeded".to_owned(),
                 CommandDisposition::NotFound => "farm publish target was not found".to_owned(),
+                CommandDisposition::ValidationFailed => "farm publish validation failed".to_owned(),
                 CommandDisposition::Unconfigured => "farm publish is unconfigured".to_owned(),
                 CommandDisposition::ExternalUnavailable => "farm publish is unavailable".to_owned(),
                 CommandDisposition::Unsupported => "farm publish is unsupported".to_owned(),
