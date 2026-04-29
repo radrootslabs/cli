@@ -916,7 +916,17 @@ pub fn status(
         Err(error) => return Err(RuntimeError::Network(error.to_string())),
     };
 
-    let mut view = order_status_from_receipt(args.key.as_str(), receipt);
+    let selected_account = accounts::resolve_account(config)?;
+    let selected_account_pubkey = selected_account
+        .as_ref()
+        .map(|account| account.record.public_identity.public_key_hex.as_str());
+    let mut view = order_status_from_receipt_with_context(
+        OrderStatusContext {
+            order_id: args.key.as_str(),
+            selected_account_pubkey,
+        },
+        receipt,
+    );
     enrich_order_status_inventory(config, &mut view)?;
     Ok(view)
 }
@@ -935,7 +945,26 @@ struct OrderRequestCandidateContext<'a> {
     seller_pubkey: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct OrderStatusContext<'a> {
+    order_id: &'a str,
+    selected_account_pubkey: Option<&'a str>,
+}
+
 fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -> OrderStatusView {
+    order_status_from_receipt_with_context(
+        OrderStatusContext {
+            order_id,
+            selected_account_pubkey: None,
+        },
+        receipt,
+    )
+}
+
+fn order_status_from_receipt_with_context(
+    context: OrderStatusContext<'_>,
+    receipt: DirectRelayFetchReceipt,
+) -> OrderStatusView {
     let DirectRelayFetchReceipt {
         target_relays,
         connected_relays,
@@ -956,6 +985,10 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
                 listing_event_id,
                 record,
             }) => {
+                if !order_status_request_matches_context(&record, context) {
+                    skipped_count += 1;
+                    continue;
+                }
                 decoded_count += 1;
                 request_listing_events.push((record.event_id.clone(), listing_event_id));
                 requests.push(record);
@@ -966,7 +999,7 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
             }
             Err(error) => {
                 skipped_count += 1;
-                if order_status_request_candidate(&event, order_id) {
+                if order_status_request_candidate(&event, context) {
                     let event_id = event.id.to_string();
                     candidate_issues.push(issue_with_events(
                         "invalid_request_candidate",
@@ -986,6 +1019,7 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
             .then_with(|| left.message.cmp(&right.message))
     });
 
+    let order_id = context.order_id;
     let projection = reduce_active_order_events(order_id, requests, decisions.clone());
     let listing_event_id = projection
         .request_event_id
@@ -1040,6 +1074,18 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
         reason,
         actions: Vec::new(),
     }
+}
+
+fn order_status_request_matches_context(
+    record: &RadrootsActiveOrderRequestRecord,
+    context: OrderStatusContext<'_>,
+) -> bool {
+    if record.payload.order_id != context.order_id {
+        return false;
+    }
+    context.selected_account_pubkey.is_none_or(|pubkey| {
+        record.payload.buyer_pubkey == pubkey || record.payload.seller_pubkey == pubkey
+    })
 }
 
 fn enrich_order_status_inventory(
@@ -1207,14 +1253,18 @@ fn listing_inventory_issue_involves_order(
     }
 }
 
-fn order_status_request_candidate(event: &RadrootsNostrEvent, order_id: &str) -> bool {
-    order_request_candidate_matches(
-        event,
-        OrderRequestCandidateContext {
-            order_id,
-            seller_pubkey: None,
-        },
-    )
+fn order_status_request_candidate(
+    event: &RadrootsNostrEvent,
+    context: OrderStatusContext<'_>,
+) -> bool {
+    if event_kind_u32(event) != KIND_TRADE_ORDER_REQUEST
+        || !event_matches_tag_value(event, "d", context.order_id)
+    {
+        return false;
+    }
+    context.selected_account_pubkey.is_none_or(|pubkey| {
+        event.pubkey.to_string() == pubkey || event_matches_tag_value(event, "p", pubkey)
+    })
 }
 
 fn order_request_candidate_matches(
@@ -4149,15 +4199,16 @@ mod tests {
 
     use super::{
         LoadedOrderDraft, ORDER_DRAFT_KIND, OrderDraft, OrderDraftDocument, OrderDraftItem,
-        ResolvedSellerOrderRequest, SellerOrderRequestResolution,
+        OrderStatusContext, ResolvedSellerOrderRequest, SellerOrderRequestResolution,
         accepted_order_decision_payload_from_request, active_request_record_from_resolved,
         canonical_order_request_payload_from_loaded, collect_issues,
         declined_order_decision_payload_from_request, inspect_document, next_order_id,
         order_accept_inventory_preflight_view_from_projection, order_decision_dry_run_view,
         order_decision_preflight_view_from_status, order_decision_view_from_resolution,
         order_history_entry_from_event, order_history_from_receipt, order_request_filter,
-        order_status_from_receipt, order_submit_existing_request_view_from_receipt,
-        proposed_accept_decision_record, seller_order_request_resolution_from_receipt,
+        order_status_from_receipt, order_status_from_receipt_with_context,
+        order_submit_existing_request_view_from_receipt, proposed_accept_decision_record,
+        seller_order_request_resolution_from_receipt,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -4762,6 +4813,81 @@ mod tests {
         );
         assert_eq!(view.decoded_count, 1);
         assert_eq!(view.skipped_count, 0);
+    }
+
+    #[test]
+    fn order_status_with_selected_seller_skips_wrong_seller_same_order_request() {
+        let fixture = order_status_fixture();
+        let other_seller = RadrootsIdentity::generate();
+        let other_seller_pubkey = other_seller.public_key_hex();
+        let other_listing_addr = format!("30402:{other_seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAw");
+        let other_request_event = signed_order_request_event(
+            &fixture.buyer,
+            fixture.order_id.as_str(),
+            other_listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            other_seller_pubkey.as_str(),
+            "2".repeat(64).as_str(),
+        );
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), other_request_event],
+        };
+        let expected_request_event_id = fixture.request_event.id.to_string();
+
+        let view = order_status_from_receipt_with_context(
+            OrderStatusContext {
+                order_id: fixture.order_id.as_str(),
+                selected_account_pubkey: Some(fixture.seller_pubkey.as_str()),
+            },
+            receipt,
+        );
+
+        assert_eq!(view.state, "requested");
+        assert_eq!(view.decoded_count, 1);
+        assert_eq!(view.skipped_count, 1);
+        assert_eq!(
+            view.request_event_id.as_deref(),
+            Some(expected_request_event_id.as_str())
+        );
+        assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
+    fn order_status_with_selected_seller_ignores_malformed_wrong_seller_candidate() {
+        let fixture = order_status_fixture();
+        let other_seller = RadrootsIdentity::generate();
+        let other_seller_pubkey = other_seller.public_key_hex();
+        let other_listing_addr = format!("30402:{other_seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAw");
+        let invalid_event = signed_malformed_order_request_event(
+            &fixture.buyer,
+            fixture.order_id.as_str(),
+            other_listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            other_seller_pubkey.as_str(),
+            "2".repeat(64).as_str(),
+        );
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), invalid_event],
+        };
+
+        let view = order_status_from_receipt_with_context(
+            OrderStatusContext {
+                order_id: fixture.order_id.as_str(),
+                selected_account_pubkey: Some(fixture.seller_pubkey.as_str()),
+            },
+            receipt,
+        );
+
+        assert_eq!(view.state, "requested");
+        assert_eq!(view.decoded_count, 1);
+        assert_eq!(view.skipped_count, 1);
+        assert!(view.reducer_issues.is_empty());
     }
 
     #[test]
