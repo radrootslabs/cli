@@ -40,8 +40,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
     OrderDecisionView, OrderDraftItemView, OrderGetView, OrderHistoryEntryView, OrderHistoryView,
-    OrderIssueView, OrderListView, OrderNewView, OrderStatusView, OrderSubmitView,
-    OrderSummaryView, OrderWatchView, RelayFailureView,
+    OrderInventoryBinView, OrderInventoryView, OrderIssueView, OrderListView, OrderNewView,
+    OrderStatusView, OrderSubmitView, OrderSummaryView, OrderWatchView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -847,10 +847,12 @@ pub fn status(
             order_id: args.key.clone(),
             request_event_id: None,
             decision_event_id: None,
+            listing_event_id: None,
             listing_addr: None,
             buyer_pubkey: None,
             seller_pubkey: None,
             last_event_id: None,
+            inventory: None,
             reducer_issues: Vec::new(),
             target_relays: Vec::new(),
             connected_relays: Vec::new(),
@@ -877,10 +879,12 @@ pub fn status(
                 order_id: args.key.clone(),
                 request_event_id: None,
                 decision_event_id: None,
+                listing_event_id: None,
                 listing_addr: None,
                 buyer_pubkey: None,
                 seller_pubkey: None,
                 last_event_id: None,
+                inventory: None,
                 reducer_issues: Vec::new(),
                 target_relays,
                 connected_relays: Vec::new(),
@@ -899,7 +903,10 @@ pub fn status(
 }
 
 enum OrderStatusRecord {
-    Request(RadrootsActiveOrderRequestRecord),
+    Request {
+        listing_event_id: Option<String>,
+        record: RadrootsActiveOrderRequestRecord,
+    },
     Decision(RadrootsActiveOrderDecisionRecord),
 }
 
@@ -921,12 +928,17 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
     let mut skipped_count = 0usize;
     let mut requests = Vec::new();
     let mut decisions = Vec::new();
+    let mut request_listing_events = Vec::new();
     let mut candidate_issues = Vec::new();
 
     for event in events {
         match order_status_record_from_event(&event) {
-            Ok(OrderStatusRecord::Request(record)) => {
+            Ok(OrderStatusRecord::Request {
+                listing_event_id,
+                record,
+            }) => {
                 decoded_count += 1;
+                request_listing_events.push((record.event_id.clone(), listing_event_id));
                 requests.push(record);
             }
             Ok(OrderStatusRecord::Decision(record)) => {
@@ -955,7 +967,16 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
             .then_with(|| left.message.cmp(&right.message))
     });
 
-    let projection = reduce_active_order_events(order_id, requests, decisions);
+    let projection = reduce_active_order_events(order_id, requests, decisions.clone());
+    let listing_event_id = projection
+        .request_event_id
+        .as_ref()
+        .and_then(|request_event_id| {
+            request_listing_events
+                .iter()
+                .find(|(event_id, _)| event_id == request_event_id)
+                .and_then(|(_, listing_event_id)| listing_event_id.clone())
+        });
     let mut state = active_order_status_state(&projection.status).to_owned();
     let mut reason = active_order_status_reason(&projection.status, order_id);
     let mut reducer_issues = projection
@@ -970,6 +991,13 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
         ));
         reducer_issues.extend(candidate_issues);
     }
+    let inventory = order_status_inventory_view(
+        &projection.status,
+        listing_event_id.clone(),
+        projection.decision_event_id.as_deref(),
+        &decisions,
+        reducer_issues.as_slice(),
+    );
 
     OrderStatusView {
         state,
@@ -977,10 +1005,12 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
         order_id: projection.order_id,
         request_event_id: projection.request_event_id,
         decision_event_id: projection.decision_event_id,
+        listing_event_id,
         listing_addr: projection.listing_addr,
         buyer_pubkey: projection.buyer_pubkey,
         seller_pubkey: projection.seller_pubkey,
         last_event_id: projection.last_event_id,
+        inventory,
         reducer_issues,
         target_relays,
         connected_relays,
@@ -1055,13 +1085,14 @@ fn order_status_record_from_event(
                     "active order request listing_addr is outside seller authority".to_owned(),
                 ));
             }
-            Ok(OrderStatusRecord::Request(
-                RadrootsActiveOrderRequestRecord {
+            Ok(OrderStatusRecord::Request {
+                listing_event_id: context.listing_event.as_ref().map(|event| event.id.clone()),
+                record: RadrootsActiveOrderRequestRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
                     payload: envelope.payload,
                 },
-            ))
+            })
         }
         KIND_TRADE_ORDER_DECISION => {
             let event = radroots_event_from_nostr(event);
@@ -1120,6 +1151,94 @@ fn active_order_status_reason(
             "active order events for `{order_id}` failed reducer validation"
         )),
         _ => None,
+    }
+}
+
+fn order_status_inventory_view(
+    status: &RadrootsActiveOrderStatus,
+    listing_event_id: Option<String>,
+    decision_event_id: Option<&str>,
+    decisions: &[RadrootsActiveOrderDecisionRecord],
+    reducer_issues: &[OrderIssueView],
+) -> Option<OrderInventoryView> {
+    let inventory_issues = reducer_issues
+        .iter()
+        .filter(|issue| {
+            matches!(
+                issue.code.as_str(),
+                "missing_decision_inventory_commitments"
+                    | "decision_inventory_commitment_mismatch"
+                    | "unknown_inventory_bin"
+                    | "listing_inventory_over_reserved"
+                    | "invalid_inventory_order"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    match status {
+        RadrootsActiveOrderStatus::Accepted => {
+            let bins = decision_event_id
+                .and_then(|event_id| {
+                    decisions
+                        .iter()
+                        .find(|decision| decision.event_id == event_id)
+                })
+                .map(|decision| inventory_bins_from_decision(&decision.payload.decision))
+                .unwrap_or_default();
+            Some(OrderInventoryView {
+                state: if inventory_issues.is_empty() {
+                    "reserved".to_owned()
+                } else {
+                    "invalid".to_owned()
+                },
+                listing_event_id,
+                commitment_valid: inventory_issues.is_empty(),
+                bins,
+                issues: inventory_issues,
+            })
+        }
+        RadrootsActiveOrderStatus::Declined => Some(OrderInventoryView {
+            state: "not_reserved".to_owned(),
+            listing_event_id,
+            commitment_valid: true,
+            bins: Vec::new(),
+            issues: inventory_issues,
+        }),
+        RadrootsActiveOrderStatus::Invalid if !inventory_issues.is_empty() => {
+            Some(OrderInventoryView {
+                state: "invalid".to_owned(),
+                listing_event_id,
+                commitment_valid: false,
+                bins: Vec::new(),
+                issues: inventory_issues,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn inventory_bins_from_decision(
+    decision: &RadrootsTradeOrderDecision,
+) -> Vec<OrderInventoryBinView> {
+    match decision {
+        RadrootsTradeOrderDecision::Accepted {
+            inventory_commitments,
+        } => {
+            let mut bins = inventory_commitments
+                .iter()
+                .map(|commitment| OrderInventoryBinView {
+                    bin_id: commitment.bin_id.clone(),
+                    committed_count: u64::from(commitment.bin_count),
+                    available_count: None,
+                    remaining_count: None,
+                    over_reserved: false,
+                })
+                .collect::<Vec<_>>();
+            bins.sort_by(|left, right| left.bin_id.cmp(&right.bin_id));
+            bins
+        }
+        RadrootsTradeOrderDecision::Declined { .. } => Vec::new(),
     }
 }
 
@@ -1820,7 +1939,7 @@ fn fetch_listing_accounting_decisions(
         }
         match order_status_record_from_event(&event)? {
             OrderStatusRecord::Decision(record) => records.push(record),
-            OrderStatusRecord::Request(_) => {}
+            OrderStatusRecord::Request { .. } => {}
         }
     }
     Ok(records)
@@ -4338,6 +4457,10 @@ mod tests {
             Some(fixture.listing_addr.as_str())
         );
         assert_eq!(
+            view.listing_event_id.as_deref(),
+            Some(fixture.listing_event_id.as_str())
+        );
+        assert_eq!(
             view.buyer_pubkey.as_deref(),
             Some(fixture.buyer_pubkey.as_str())
         );
@@ -4512,6 +4635,20 @@ mod tests {
             view.last_event_id.as_deref(),
             Some(decision_event_id.as_str())
         );
+        assert_eq!(
+            view.listing_event_id.as_deref(),
+            Some(fixture.listing_event_id.as_str())
+        );
+        let inventory = view.inventory.as_ref().expect("inventory view");
+        assert_eq!(inventory.state, "reserved");
+        assert_eq!(inventory.commitment_valid, true);
+        assert_eq!(
+            inventory.listing_event_id.as_deref(),
+            Some(fixture.listing_event_id.as_str())
+        );
+        assert_eq!(inventory.bins.len(), 1);
+        assert_eq!(inventory.bins[0].bin_id, "bin-1");
+        assert_eq!(inventory.bins[0].committed_count, 2);
         assert!(view.reducer_issues.is_empty());
         assert_eq!(view.decoded_count, 2);
     }
@@ -4584,6 +4721,49 @@ mod tests {
     }
 
     #[test]
+    fn order_status_from_receipt_reports_mismatched_commitment_inventory_invalid() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 1,
+                }],
+            },
+        );
+        let decision_event_id = decision_event.id.to_string();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![fixture.request_event.clone(), decision_event],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+
+        assert_eq!(view.state, "invalid");
+        let issue = view
+            .reducer_issues
+            .iter()
+            .find(|issue| issue.code == "decision_inventory_commitment_mismatch")
+            .expect("commitment mismatch issue");
+        assert_eq!(issue.event_ids, vec![decision_event_id]);
+        let inventory = view.inventory.as_ref().expect("inventory view");
+        assert_eq!(inventory.state, "invalid");
+        assert_eq!(inventory.commitment_valid, false);
+        assert_eq!(
+            inventory.issues[0].code,
+            "decision_inventory_commitment_mismatch"
+        );
+    }
+
+    #[test]
     fn order_status_from_receipt_reports_declined() {
         let fixture = order_status_fixture();
         let decision_event = signed_order_decision_event(
@@ -4612,6 +4792,10 @@ mod tests {
             view.decision_event_id.as_deref(),
             Some(decision_event_id.as_str())
         );
+        let inventory = view.inventory.as_ref().expect("inventory view");
+        assert_eq!(inventory.state, "not_reserved");
+        assert_eq!(inventory.commitment_valid, true);
+        assert!(inventory.bins.is_empty());
         assert!(view.reducer_issues.is_empty());
         assert_eq!(view.decoded_count, 2);
     }
@@ -4953,6 +5137,7 @@ mod tests {
         seller: RadrootsIdentity,
         order_id: String,
         listing_addr: String,
+        listing_event_id: String,
         buyer_pubkey: String,
         seller_pubkey: String,
         request_event: radroots_nostr::prelude::RadrootsNostrEvent,
@@ -4980,6 +5165,7 @@ mod tests {
             seller,
             order_id,
             listing_addr,
+            listing_event_id,
             buyer_pubkey,
             seller_pubkey,
             request_event,
@@ -4996,7 +5182,7 @@ mod tests {
                 order: OrderDraft {
                     order_id: fixture.order_id.clone(),
                     listing_addr: fixture.listing_addr.clone(),
-                    listing_event_id: "1".repeat(64),
+                    listing_event_id: fixture.listing_event_id.clone(),
                     buyer_pubkey: fixture.buyer_pubkey.clone(),
                     seller_pubkey: fixture.seller_pubkey.clone(),
                     items: vec![OrderDraftItem {

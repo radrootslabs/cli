@@ -1281,6 +1281,8 @@ pub struct OrderStatusView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_pubkey: Option<String>,
@@ -1288,6 +1290,8 @@ pub struct OrderStatusView {
     pub seller_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<OrderInventoryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reducer_issues: Vec<OrderIssueView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1306,6 +1310,32 @@ pub struct OrderStatusView {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderInventoryView {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_event_id: Option<String>,
+    #[serde(default)]
+    pub commitment_valid: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bins: Vec<OrderInventoryBinView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderInventoryBinView {
+    pub bin_id: String,
+    #[serde(default)]
+    pub committed_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining_count: Option<u64>,
+    #[serde(default)]
+    pub over_reserved: bool,
 }
 
 impl OrderStatusView {
