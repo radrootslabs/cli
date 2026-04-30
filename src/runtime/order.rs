@@ -74,8 +74,8 @@ use crate::domain::runtime::{
     OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderReceiptView,
     OrderRevisionDecisionView, OrderRevisionProposalView, OrderStatusFulfillmentView,
     OrderStatusLifecycleCancellationView, OrderStatusLifecycleReceiptView,
-    OrderStatusLifecycleView, OrderStatusView, OrderSubmitView, OrderSummaryView, OrderWatchView,
-    RelayFailureView,
+    OrderStatusLifecycleView, OrderStatusRevisionView, OrderStatusView, OrderSubmitView,
+    OrderSummaryView, OrderWatchView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -1497,6 +1497,7 @@ pub fn status(
             seller_pubkey: None,
             economics: None,
             last_event_id: None,
+            revision: None,
             inventory: None,
             fulfillment: None,
             lifecycle: None,
@@ -1533,6 +1534,7 @@ pub fn status(
                 seller_pubkey: None,
                 economics: None,
                 last_event_id: None,
+                revision: None,
                 inventory: None,
                 fulfillment: None,
                 lifecycle: None,
@@ -1707,6 +1709,8 @@ fn order_status_reduction_from_receipt_with_context(
     });
 
     let order_id = context.order_id;
+    let revision_proposal_records = revision_proposals.clone();
+    let revision_decision_records = revision_decisions.clone();
     let fulfillment_records = fulfillments.clone();
     let cancellation_records = cancellations.clone();
     let receipt_records = receipts.clone();
@@ -1828,6 +1832,12 @@ fn order_status_reduction_from_receipt_with_context(
         }),
         reducer_issues.as_slice(),
     );
+    let revision = order_status_revision_view(
+        projection.last_event_id.as_deref(),
+        projection.agreement_event_id.as_deref(),
+        &revision_proposal_records,
+        &revision_decision_records,
+    );
 
     let view = OrderStatusView {
         state,
@@ -1842,6 +1852,7 @@ fn order_status_reduction_from_receipt_with_context(
         seller_pubkey: projection.seller_pubkey,
         economics: projection.economics,
         last_event_id: projection.last_event_id,
+        revision,
         inventory,
         fulfillment,
         lifecycle: Some(lifecycle),
@@ -2680,6 +2691,63 @@ fn order_status_lifecycle_view(
         settlement_required,
         settlement_reason,
         issues: reducer_issues.to_vec(),
+    }
+}
+
+fn order_status_revision_view(
+    last_event_id: Option<&str>,
+    agreement_event_id: Option<&str>,
+    proposals: &[RadrootsActiveOrderRevisionProposalRecord],
+    decisions: &[RadrootsActiveOrderRevisionDecisionRecord],
+) -> Option<OrderStatusRevisionView> {
+    if let Some(proposal) = last_event_id
+        .and_then(|event_id| proposals.iter().find(|record| record.event_id == event_id))
+    {
+        return Some(OrderStatusRevisionView {
+            state: "pending".to_owned(),
+            revision_id: Some(proposal.payload.revision_id.clone()),
+            proposal_event_id: Some(proposal.event_id.clone()),
+            decision_event_id: None,
+            root_event_id: Some(proposal.root_event_id.clone()),
+            prev_event_id: Some(proposal.prev_event_id.clone()),
+            agreement_event_id: None,
+            reason: Some(proposal.payload.reason.clone()),
+        });
+    }
+
+    if let Some(decision) = last_event_id
+        .and_then(|event_id| decisions.iter().find(|record| record.event_id == event_id))
+    {
+        return Some(order_status_revision_view_from_decision(
+            decision,
+            agreement_event_id,
+        ));
+    }
+
+    agreement_event_id
+        .and_then(|event_id| decisions.iter().find(|record| record.event_id == event_id))
+        .map(|decision| order_status_revision_view_from_decision(decision, agreement_event_id))
+}
+
+fn order_status_revision_view_from_decision(
+    decision: &RadrootsActiveOrderRevisionDecisionRecord,
+    agreement_event_id: Option<&str>,
+) -> OrderStatusRevisionView {
+    let (state, reason) = match &decision.payload.decision {
+        RadrootsTradeOrderRevisionDecision::Accepted => ("accepted", None),
+        RadrootsTradeOrderRevisionDecision::Declined { reason } => {
+            ("declined", Some(reason.clone()))
+        }
+    };
+    OrderStatusRevisionView {
+        state: state.to_owned(),
+        revision_id: Some(decision.payload.revision_id.clone()),
+        proposal_event_id: Some(decision.prev_event_id.clone()),
+        decision_event_id: Some(decision.event_id.clone()),
+        root_event_id: Some(decision.root_event_id.clone()),
+        prev_event_id: Some(decision.prev_event_id.clone()),
+        agreement_event_id: agreement_event_id.map(str::to_owned),
+        reason,
     }
 }
 

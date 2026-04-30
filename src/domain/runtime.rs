@@ -1658,6 +1658,8 @@ pub struct OrderStatusView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<OrderStatusRevisionView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub inventory: Option<OrderInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fulfillment: Option<OrderStatusFulfillmentView>,
@@ -1681,6 +1683,25 @@ pub struct OrderStatusView {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderStatusRevisionView {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agreement_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
