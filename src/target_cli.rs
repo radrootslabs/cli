@@ -179,6 +179,9 @@ impl TargetCommand {
                 OrderCommand::Accept(_) => "order.accept",
                 OrderCommand::Decline(_) => "order.decline",
                 OrderCommand::Cancel(_) => "order.cancel",
+                OrderCommand::Revision(revision) => match &revision.command {
+                    OrderRevisionCommand::Propose(_) => "order.revision.propose",
+                },
                 OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
                     OrderFulfillmentCommand::Update(_) => "order.fulfillment.update",
                 },
@@ -744,6 +747,7 @@ pub enum OrderCommand {
     Accept(OrderKeyArgs),
     Decline(OrderDeclineArgs),
     Cancel(OrderCancelArgs),
+    Revision(OrderRevisionArgs),
     Fulfillment(OrderFulfillmentArgs),
     Receipt(OrderReceiptArgs),
     Status(OrderStatusArgs),
@@ -772,6 +776,38 @@ pub struct OrderCancelArgs {
     pub order_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderRevisionArgs {
+    #[command(subcommand)]
+    pub command: OrderRevisionCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrderRevisionCommand {
+    Propose(OrderRevisionProposeArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderRevisionProposeArgs {
+    pub order_id: Option<String>,
+    #[arg(long)]
+    pub reason: Option<String>,
+    #[arg(long)]
+    pub bin_id: Option<String>,
+    #[arg(long)]
+    pub bin_count: Option<u32>,
+    #[arg(long)]
+    pub adjustment_id: Option<String>,
+    #[arg(long)]
+    pub adjustment_effect: Option<String>,
+    #[arg(long)]
+    pub adjustment_amount: Option<String>,
+    #[arg(long)]
+    pub adjustment_currency: Option<String>,
+    #[arg(long)]
+    pub adjustment_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -871,7 +907,7 @@ mod tests {
 
     use super::{
         OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg, OrderReceiptCommand,
-        TargetCliArgs, TargetOutputFormat,
+        OrderRevisionCommand, TargetCliArgs, TargetOutputFormat,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
 
@@ -1005,6 +1041,49 @@ mod tests {
         };
         assert_eq!(args.order_id.as_deref(), Some("ord_test"));
         assert_eq!(args.reason.as_deref(), Some("changed plans"));
+    }
+
+    #[test]
+    fn target_parser_accepts_order_revision_propose_inputs() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "revision",
+            "propose",
+            "ord_test",
+            "--reason",
+            "update count",
+            "--bin-id",
+            "bin-1",
+            "--bin-count",
+            "3",
+            "--adjustment-id",
+            "adj_revision",
+            "--adjustment-effect",
+            "increase",
+            "--adjustment-amount",
+            "2",
+            "--adjustment-currency",
+            "USD",
+            "--adjustment-reason",
+            "packing change",
+        ])
+        .expect("target args parse");
+
+        assert_eq!(parsed.command.operation_id(), "order.revision.propose");
+        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Revision(revision) = order.command else {
+            panic!("expected order revision command")
+        };
+        let OrderRevisionCommand::Propose(args) = revision.command;
+        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.reason.as_deref(), Some("update count"));
+        assert_eq!(args.bin_id.as_deref(), Some("bin-1"));
+        assert_eq!(args.bin_count, Some(3));
+        assert_eq!(args.adjustment_id.as_deref(), Some("adj_revision"));
+        assert_eq!(args.adjustment_effect.as_deref(), Some("increase"));
     }
 
     #[test]

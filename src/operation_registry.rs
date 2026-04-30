@@ -917,6 +917,21 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         true
     ),
     operation!(
+        "order.revision.propose",
+        "radroots order revision propose",
+        "order",
+        "order_revision_propose",
+        "OrderRevisionProposeRequest",
+        "OrderRevisionProposeResult",
+        "Propose seller-authored order revision.",
+        Seller,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
         "order.fulfillment.update",
         "radroots order fulfillment update",
         "order",
@@ -1071,6 +1086,7 @@ mod tests {
         "order.accept",
         "order.decline",
         "order.cancel",
+        "order.revision.propose",
         "order.fulfillment.update",
         "order.receipt.record",
         "order.status.get",
@@ -1110,6 +1126,7 @@ mod tests {
         "order.accept",
         "order.decline",
         "order.cancel",
+        "order.revision.propose",
         "order.fulfillment.update",
         "order.receipt.record",
     ];
@@ -1124,7 +1141,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 61);
+        assert_eq!(OPERATION_REGISTRY.len(), 62);
     }
 
     #[test]
@@ -1174,6 +1191,7 @@ mod tests {
             "order.accept",
             "order.decline",
             "order.cancel",
+            "order.revision.propose",
             "order.fulfillment.update",
             "order.receipt.record",
         ]

@@ -275,6 +275,9 @@ fn execute_request(
         TargetOperationRequest::OrderCancel(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
+        TargetOperationRequest::OrderRevisionPropose(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
         TargetOperationRequest::OrderFulfillmentUpdate(request) => {
             execute_with(OrderOperationService::new(config), request)
         }

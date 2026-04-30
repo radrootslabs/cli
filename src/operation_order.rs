@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::domain::runtime::{
     CommandDisposition, OrderCancellationView, OrderDecisionView, OrderFulfillmentView,
-    OrderReceiptView, OrderStatusView, OrderSubmitView,
+    OrderReceiptView, OrderRevisionProposalView, OrderStatusView, OrderSubmitView,
 };
 use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
@@ -12,13 +12,14 @@ use crate::operation_adapter::{
     OrderEventListRequest, OrderEventListResult, OrderEventWatchRequest, OrderEventWatchResult,
     OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, OrderGetRequest, OrderGetResult,
     OrderListRequest, OrderListResult, OrderReceiptRecordRequest, OrderReceiptRecordResult,
-    OrderStatusGetRequest, OrderStatusGetResult, OrderSubmitRequest, OrderSubmitResult,
+    OrderRevisionProposeRequest, OrderRevisionProposeResult, OrderStatusGetRequest,
+    OrderStatusGetResult, OrderSubmitRequest, OrderSubmitResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime_args::{
     OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderReceiptArgs,
-    OrderStatusArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
+    OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
 };
 
 pub struct OrderOperationService<'a> {
@@ -207,6 +208,55 @@ impl OperationService<OrderCancelRequest> for OrderOperationService<'_> {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
         cancellation_result::<OrderCancelResult>(request.operation_id(), &view)
+    }
+}
+
+impl OperationService<OrderRevisionProposeRequest> for OrderOperationService<'_> {
+    type Result = OrderRevisionProposeResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<OrderRevisionProposeRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let reason = string_input(&request, "reason")
+            .map(|reason| reason.trim().to_owned())
+            .filter(|reason| !reason.is_empty())
+            .ok_or_else(|| {
+                invalid_input(
+                    request.operation_id(),
+                    "missing required `reason` input".to_owned(),
+                )
+            })?;
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
+
+        let args = OrderRevisionProposeArgs {
+            key: required_order_key(&request)?,
+            reason,
+            bin_id: string_input(&request, "bin_id"),
+            bin_count: u32_input(&request, "bin_count"),
+            adjustment_id: string_input(&request, "adjustment_id"),
+            adjustment_effect: string_input(&request, "adjustment_effect"),
+            adjustment_amount: string_input(&request, "adjustment_amount"),
+            adjustment_currency: string_input(&request, "adjustment_currency"),
+            adjustment_reason: string_input(&request, "adjustment_reason"),
+            idempotency_key: request
+                .context
+                .idempotency_key
+                .clone()
+                .or_else(|| string_input(&request, "idempotency_key")),
+        };
+        let mut config = self.config.clone();
+        if request.context.dry_run {
+            config.output.dry_run = true;
+        }
+        let view = crate::runtime::order::revision_propose(&config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
+        revision_proposal_result::<OrderRevisionProposeResult>(request.operation_id(), &view)
     }
 }
 
@@ -611,6 +661,99 @@ fn order_cancellation_error_detail(view: &OrderCancellationView) -> Value {
     })
 }
 
+fn revision_proposal_result<R>(
+    operation_id: &str,
+    view: &OrderRevisionProposalView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_target_result::<R, _>(view),
+        CommandDisposition::ValidationFailed => {
+            let message = view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "order revision propose failed validation with state `{}`",
+                    view.state
+                )
+            });
+            Err(OperationAdapterError::validation_failed_with_detail(
+                operation_id,
+                message,
+                order_revision_proposal_error_detail(view),
+            ))
+        }
+        disposition => {
+            let message = view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "order revision propose finished with state `{}`",
+                    view.state
+                )
+            });
+            if disposition == CommandDisposition::ExternalUnavailable {
+                let detail = order_revision_proposal_error_detail(view);
+                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                    Err(OperationAdapterError::network_unavailable_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                } else {
+                    Err(OperationAdapterError::operation_unavailable_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                }
+            } else if disposition == CommandDisposition::Unconfigured {
+                Err(OperationAdapterError::operation_unavailable_with_detail(
+                    operation_id,
+                    message,
+                    order_revision_proposal_error_detail(view),
+                ))
+            } else {
+                Err(OperationAdapterError::from_command_disposition(
+                    operation_id,
+                    disposition,
+                    message,
+                ))
+            }
+        }
+    }
+}
+
+fn order_revision_proposal_error_detail(view: &OrderRevisionProposalView) -> Value {
+    json!({
+        "state": &view.state,
+        "order_id": &view.order_id,
+        "revision_id": &view.revision_id,
+        "listing_addr": &view.listing_addr,
+        "request_event_id": &view.request_event_id,
+        "decision_event_id": &view.decision_event_id,
+        "root_event_id": &view.root_event_id,
+        "prev_event_id": &view.prev_event_id,
+        "event_id": &view.event_id,
+        "event_kind": view.event_kind,
+        "items": &view.items,
+        "economics": &view.economics,
+        "inventory": &view.inventory,
+        "buyer_pubkey": &view.buyer_pubkey,
+        "seller_pubkey": &view.seller_pubkey,
+        "dry_run": view.dry_run,
+        "target_relays": &view.target_relays,
+        "connected_relays": &view.connected_relays,
+        "acknowledged_relays": &view.acknowledged_relays,
+        "failed_relays": &view.failed_relays,
+        "fetched_count": view.fetched_count,
+        "decoded_count": view.decoded_count,
+        "skipped_count": view.skipped_count,
+        "idempotency_key": &view.idempotency_key,
+        "signer_mode": &view.signer_mode,
+        "issues": &view.issues,
+        "actions": &view.actions,
+    })
+}
+
 fn receipt_result<R>(
     operation_id: &str,
     view: &OrderReceiptView,
@@ -869,6 +1012,18 @@ where
         .and_then(|value| usize::try_from(value).ok())
 }
 
+fn u32_input<P>(request: &OperationRequest<P>, key: &str) -> Option<u32>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    request
+        .payload
+        .input()
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+}
+
 fn u64_input<P>(request: &OperationRequest<P>, key: &str) -> Option<u64>
 where
     P: OperationRequestPayload + OperationRequestData,
@@ -902,7 +1057,8 @@ mod tests {
         OperationAdapter, OperationContext, OperationData, OperationRequest, OrderAcceptRequest,
         OrderAcceptResult, OrderCancelRequest, OrderDeclineRequest, OrderDeclineResult,
         OrderEventListRequest, OrderEventWatchRequest, OrderGetRequest, OrderListRequest,
-        OrderReceiptRecordRequest, OrderStatusGetRequest, OrderSubmitRequest,
+        OrderReceiptRecordRequest, OrderRevisionProposeRequest, OrderStatusGetRequest,
+        OrderSubmitRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -1108,6 +1264,44 @@ mod tests {
         )
         .expect("order cancel request");
         let error = service.execute(cancel).expect_err("approval required");
+
+        assert_eq!(error.to_output_error().code, "approval_required");
+    }
+
+    #[test]
+    fn order_revision_propose_requires_reason_before_approval() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let revision = OperationRequest::new(
+            OperationContext::default(),
+            OrderRevisionProposeRequest::from_data(data(&[("order_id", "ord_pending")])),
+        )
+        .expect("order revision request");
+        let error = service.execute(revision).expect_err("reason required");
+        let output_error = error.to_output_error();
+
+        assert_eq!(output_error.code, "invalid_input");
+        assert!(output_error.message.contains("reason"));
+    }
+
+    #[test]
+    fn order_revision_propose_requires_approval_token() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let mut input = data(&[
+            ("order_id", "ord_pending"),
+            ("reason", "update count"),
+            ("bin_id", "bin-1"),
+        ]);
+        input.insert("bin_count".to_owned(), Value::from(3));
+        let revision = OperationRequest::new(
+            OperationContext::default(),
+            OrderRevisionProposeRequest::from_data(input),
+        )
+        .expect("order revision request");
+        let error = service.execute(revision).expect_err("approval required");
 
         assert_eq!(error.to_output_error().code, "approval_required");
     }

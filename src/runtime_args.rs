@@ -245,6 +245,20 @@ pub struct OrderReceiptArgs {
 }
 
 #[derive(Debug, Clone)]
+pub struct OrderRevisionProposeArgs {
+    pub key: String,
+    pub reason: String,
+    pub bin_id: Option<String>,
+    pub bin_count: Option<u32>,
+    pub adjustment_id: Option<String>,
+    pub adjustment_effect: Option<String>,
+    pub adjustment_amount: Option<String>,
+    pub adjustment_currency: Option<String>,
+    pub adjustment_reason: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct OrderStatusArgs {
     pub key: String,
 }

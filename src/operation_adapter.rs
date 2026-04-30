@@ -1055,7 +1055,8 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
         BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
         FarmLocationCommand, FarmProfileCommand, ListingCommand, MarketCommand,
         MarketListingCommand, MarketProductCommand, OrderCommand, OrderEventCommand,
-        OrderFulfillmentCommand, OrderReceiptCommand, OrderStatusCommand, TargetCommand,
+        OrderFulfillmentCommand, OrderReceiptCommand, OrderRevisionCommand, OrderStatusCommand,
+        TargetCommand,
     };
 
     let mut input = OperationData::new();
@@ -1212,6 +1213,24 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 insert_string(&mut input, "order_id", &args.order_id);
                 insert_string(&mut input, "reason", &args.reason);
             }
+            OrderCommand::Revision(revision) => match &revision.command {
+                OrderRevisionCommand::Propose(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id);
+                    insert_string(&mut input, "reason", &args.reason);
+                    insert_string(&mut input, "bin_id", &args.bin_id);
+                    if let Some(bin_count) = args.bin_count {
+                        input.insert(
+                            "bin_count".to_owned(),
+                            Value::Number(serde_json::Number::from(bin_count)),
+                        );
+                    }
+                    insert_string(&mut input, "adjustment_id", &args.adjustment_id);
+                    insert_string(&mut input, "adjustment_effect", &args.adjustment_effect);
+                    insert_string(&mut input, "adjustment_amount", &args.adjustment_amount);
+                    insert_string(&mut input, "adjustment_currency", &args.adjustment_currency);
+                    insert_string(&mut input, "adjustment_reason", &args.adjustment_reason);
+                }
+            },
             OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
                 OrderFulfillmentCommand::Update(args) => {
                     insert_string(&mut input, "order_id", &args.order_id);
@@ -1338,6 +1357,7 @@ target_operation_contracts! {
     OrderAccept => (OrderAcceptRequest, OrderAcceptResult, "order.accept"),
     OrderDecline => (OrderDeclineRequest, OrderDeclineResult, "order.decline"),
     OrderCancel => (OrderCancelRequest, OrderCancelResult, "order.cancel"),
+    OrderRevisionPropose => (OrderRevisionProposeRequest, OrderRevisionProposeResult, "order.revision.propose"),
     OrderFulfillmentUpdate => (OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, "order.fulfillment.update"),
     OrderReceiptRecord => (OrderReceiptRecordRequest, OrderReceiptRecordResult, "order.receipt.record"),
     OrderStatusGet => (OrderStatusGetRequest, OrderStatusGetResult, "order.status.get"),
@@ -1481,6 +1501,101 @@ mod tests {
 
     #[test]
     fn adapter_maps_order_lifecycle_inputs() {
+        let revision = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "revision",
+            "propose",
+            "ord_test",
+            "--reason",
+            "update count",
+            "--bin-id",
+            "bin-1",
+            "--bin-count",
+            "3",
+            "--adjustment-id",
+            "adj-weather",
+            "--adjustment-effect",
+            "increase",
+            "--adjustment-amount",
+            "1.25",
+            "--adjustment-currency",
+            "USD",
+            "--adjustment-reason",
+            "weather delay",
+        ])
+        .expect("target args parse");
+        let request =
+            TargetOperationRequest::from_target_args(&revision).expect("operation request");
+        let TargetOperationRequest::OrderRevisionPropose(request) = request else {
+            panic!("expected order revision propose request")
+        };
+        assert_eq!(request.operation_id(), "order.revision.propose");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("order_id")
+                .and_then(Value::as_str),
+            Some("ord_test")
+        );
+        assert_eq!(
+            request.payload.input.get("reason").and_then(Value::as_str),
+            Some("update count")
+        );
+        assert_eq!(
+            request.payload.input.get("bin_id").and_then(Value::as_str),
+            Some("bin-1")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("bin_count")
+                .and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("adjustment_id")
+                .and_then(Value::as_str),
+            Some("adj-weather")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("adjustment_effect")
+                .and_then(Value::as_str),
+            Some("increase")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("adjustment_amount")
+                .and_then(Value::as_str),
+            Some("1.25")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("adjustment_currency")
+                .and_then(Value::as_str),
+            Some("USD")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("adjustment_reason")
+                .and_then(Value::as_str),
+            Some("weather delay")
+        );
+
         let cancel = TargetCliArgs::try_parse_from([
             "radroots",
             "order",
