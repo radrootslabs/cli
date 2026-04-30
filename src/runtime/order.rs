@@ -6927,6 +6927,56 @@ mod tests {
     }
 
     #[test]
+    fn order_submit_existing_request_preflight_rejects_changed_economics() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let loaded = loaded_order_draft_for_fixture(&fixture);
+        let payload =
+            canonical_order_request_payload_from_loaded(&loaded, fixture.buyer_pubkey.as_str())
+                .expect("canonical order request payload");
+        let changed_event = signed_order_request_event_with_economics(
+            &fixture.buyer,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            fixture.listing_event_id.as_str(),
+            sample_order_economics_with_unit_price(fixture.order_id.as_str(), "bin-1", 2, 7),
+        );
+        let changed_event_id = changed_event.id.to_string();
+        let args = OrderSubmitArgs {
+            key: fixture.order_id.clone(),
+            idempotency_key: None,
+        };
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![changed_event],
+        };
+
+        let view = order_submit_existing_request_view_from_receipt(
+            &config, &loaded, &args, &payload, receipt,
+        )
+        .expect("submit existing request preflight")
+        .expect("invalid view");
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.deduplicated, false);
+        assert_eq!(view.issues.len(), 1);
+        assert_eq!(view.issues[0].code, "existing_request_conflict");
+        assert_eq!(view.issues[0].event_ids, vec![changed_event_id]);
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("conflicts with the local order draft")
+        );
+    }
+
+    #[test]
     fn order_history_counts_decoded_before_order_id_narrowing() {
         let seller = RadrootsIdentity::generate();
         let other_seller = RadrootsIdentity::generate();
@@ -10131,8 +10181,18 @@ mod tests {
         bin_id: &str,
         bin_count: u32,
     ) -> RadrootsTradeOrderEconomics {
+        sample_order_economics_with_unit_price(order_id, bin_id, bin_count, 6)
+    }
+
+    fn sample_order_economics_with_unit_price(
+        order_id: &str,
+        bin_id: &str,
+        bin_count: u32,
+        unit_price: u32,
+    ) -> RadrootsTradeOrderEconomics {
         let currency = RadrootsCoreCurrency::USD;
-        let line_amount = RadrootsCoreDecimal::from(6u32) * RadrootsCoreDecimal::from(bin_count);
+        let unit_price_amount = RadrootsCoreDecimal::from(unit_price);
+        let line_amount = unit_price_amount * RadrootsCoreDecimal::from(bin_count);
         RadrootsTradeOrderEconomics {
             quote_id: format!("quote_{order_id}"),
             quote_version: 1,
@@ -10143,7 +10203,7 @@ mod tests {
                 bin_count,
                 quantity_amount: RadrootsCoreDecimal::ONE,
                 quantity_unit: RadrootsCoreUnit::Each,
-                unit_price_amount: RadrootsCoreDecimal::from(6u32),
+                unit_price_amount,
                 unit_price_currency: currency,
                 line_subtotal: RadrootsCoreMoney::new(line_amount, currency),
             }],
@@ -10522,6 +10582,26 @@ mod tests {
         seller_pubkey: &str,
         listing_event_id: &str,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
+        signed_order_request_event_with_economics(
+            buyer,
+            order_id,
+            listing_addr,
+            buyer_pubkey,
+            seller_pubkey,
+            listing_event_id,
+            sample_order_economics(order_id, "bin-1", 2),
+        )
+    }
+
+    fn signed_order_request_event_with_economics(
+        buyer: &RadrootsIdentity,
+        order_id: &str,
+        listing_addr: &str,
+        buyer_pubkey: &str,
+        seller_pubkey: &str,
+        listing_event_id: &str,
+        economics: RadrootsTradeOrderEconomics,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let payload = RadrootsTradeOrderRequested {
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
@@ -10531,7 +10611,7 @@ mod tests {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
-            economics: sample_order_economics(order_id, "bin-1", 2),
+            economics,
         };
         let parts = active_trade_order_request_event_build(
             &RadrootsNostrEventPtr {
