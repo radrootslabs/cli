@@ -7522,6 +7522,61 @@ mod tests {
     }
 
     #[test]
+    fn order_status_from_receipt_reports_request_cancellation_decision_fork() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let cancellation_event = signed_order_cancellation_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            "buyer cancelled",
+        );
+        let mut expected_event_ids = vec![
+            decision_event.id.to_string(),
+            cancellation_event.id.to_string(),
+        ];
+        expected_event_ids.sort();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![
+                fixture.request_event.clone(),
+                decision_event,
+                cancellation_event,
+            ],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let lifecycle = view.lifecycle.as_ref().expect("lifecycle view");
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(lifecycle.phase, "invalid");
+        assert_eq!(lifecycle.terminal, true);
+        assert_eq!(view.reducer_issues.len(), 1);
+        assert_eq!(view.reducer_issues[0].code, "forked_lifecycle");
+        assert_eq!(view.reducer_issues[0].event_ids, expected_event_ids);
+        assert_eq!(lifecycle.issues[0].code, "forked_lifecycle");
+    }
+
+    #[test]
     fn order_cancellation_event_parts_chain_from_request_or_decision() {
         let fixture = order_status_fixture();
         let dir = tempdir().expect("tempdir");
@@ -7780,6 +7835,86 @@ mod tests {
     }
 
     #[test]
+    fn order_cancellation_preflight_rejects_completed_order_as_terminal() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::Delivered,
+        );
+        let receipt_event = signed_buyer_receipt_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &fulfillment_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            true,
+            None,
+        );
+        let receipt_event_id = receipt_event.id.to_string();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event,
+                    fulfillment_event,
+                    receipt_event,
+                ],
+            },
+        );
+        let args = cancel_args_for_fixture(&fixture, "buyer cancelled");
+
+        let view = order_cancellation_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.buyer_pubkey.as_str(),
+        )
+        .expect("completed cancellation preflight");
+
+        assert_eq!(view.state, "terminal");
+        assert_eq!(
+            view.prev_event_id.as_deref(),
+            Some(receipt_event_id.as_str())
+        );
+        assert_eq!(view.event_id, None);
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("already terminal")
+        );
+    }
+
+    #[test]
     fn order_status_from_receipt_reports_completed_buyer_receipt() {
         let fixture = order_status_fixture();
         let decision_event = signed_order_decision_event(
@@ -7952,6 +8087,84 @@ mod tests {
         assert_eq!(receipt.issue.as_deref(), Some("damaged items"));
         assert_eq!(receipt.received_at, Some(1_777_665_600));
         assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_receipt_fulfillment_fork() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let ready_fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+        );
+        let delivered_fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &ready_fulfillment_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::Delivered,
+        );
+        let receipt_event = signed_buyer_receipt_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &ready_fulfillment_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            true,
+            None,
+        );
+        let mut expected_event_ids = vec![
+            delivered_fulfillment_event.id.to_string(),
+            receipt_event.id.to_string(),
+        ];
+        expected_event_ids.sort();
+        let receipt = DirectRelayFetchReceipt {
+            target_relays: vec!["ws://relay.test".to_owned()],
+            connected_relays: vec!["ws://relay.test".to_owned()],
+            failed_relays: Vec::new(),
+            events: vec![
+                fixture.request_event.clone(),
+                decision_event,
+                ready_fulfillment_event,
+                delivered_fulfillment_event,
+                receipt_event,
+            ],
+        };
+
+        let view = order_status_from_receipt(fixture.order_id.as_str(), receipt);
+        let lifecycle = view.lifecycle.as_ref().expect("lifecycle view");
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(lifecycle.phase, "invalid");
+        assert_eq!(lifecycle.terminal, true);
+        assert_eq!(view.reducer_issues.len(), 1);
+        assert_eq!(view.reducer_issues[0].code, "forked_lifecycle");
+        assert_eq!(view.reducer_issues[0].event_ids, expected_event_ids);
+        assert_eq!(lifecycle.issues[0].code, "forked_lifecycle");
     }
 
     #[test]
