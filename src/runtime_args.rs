@@ -147,6 +147,12 @@ pub struct ListingCreateArgs {
     pub price_per_unit: Option<String>,
     pub available: Option<String>,
     pub label: Option<String>,
+    pub discount_id: Option<String>,
+    pub discount_label: Option<String>,
+    pub discount_kind: Option<String>,
+    pub discount_value: Option<String>,
+    pub discount_amount: Option<String>,
+    pub discount_currency: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +174,16 @@ pub struct OrderDraftCreateArgs {
     pub listing_addr: Option<String>,
     pub bin_id: Option<String>,
     pub bin_count: Option<u32>,
+    pub adjustments: Vec<OrderDraftAdjustmentArgs>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OrderDraftAdjustmentArgs {
+    pub id: String,
+    pub effect: String,
+    pub amount: String,
+    pub currency: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone)]

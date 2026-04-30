@@ -1051,11 +1051,11 @@ fn value_to_data(value: Value) -> OperationData {
 
 fn target_operation_input(command: &crate::target_cli::TargetCommand) -> OperationData {
     use crate::target_cli::{
-        AccountCommand, AccountSelectionCommand, BasketCommand, BasketItemCommand,
-        BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand, FarmLocationCommand,
-        FarmProfileCommand, ListingCommand, MarketCommand, MarketListingCommand,
-        MarketProductCommand, OrderCommand, OrderEventCommand, OrderFulfillmentCommand,
-        OrderReceiptCommand, OrderStatusCommand, TargetCommand,
+        AccountCommand, AccountSelectionCommand, BasketAdjustmentCommand, BasketCommand,
+        BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
+        FarmLocationCommand, FarmProfileCommand, ListingCommand, MarketCommand,
+        MarketListingCommand, MarketProductCommand, OrderCommand, OrderEventCommand,
+        OrderFulfillmentCommand, OrderReceiptCommand, OrderStatusCommand, TargetCommand,
     };
 
     let mut input = OperationData::new();
@@ -1127,6 +1127,12 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 insert_string(&mut input, "price_per_unit", &args.price_per_unit);
                 insert_string(&mut input, "available", &args.available);
                 insert_string(&mut input, "label", &args.label);
+                insert_string(&mut input, "discount_id", &args.discount_id);
+                insert_string(&mut input, "discount_label", &args.discount_label);
+                insert_string(&mut input, "discount_kind", &args.discount_kind);
+                insert_string(&mut input, "discount_value", &args.discount_value);
+                insert_string(&mut input, "discount_amount", &args.discount_amount);
+                insert_string(&mut input, "discount_currency", &args.discount_currency);
             }
             ListingCommand::Get(args) => insert_string(&mut input, "key", &args.key),
             ListingCommand::Update(args)
@@ -1169,6 +1175,20 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 BasketItemCommand::Remove(args) => {
                     insert_string(&mut input, "basket_id", &args.basket_id);
                     insert_string(&mut input, "item_id", &args.item_id);
+                }
+            },
+            BasketCommand::Adjustment(adjustment) => match &adjustment.command {
+                BasketAdjustmentCommand::Add(args) => {
+                    insert_string(&mut input, "basket_id", &args.basket_id);
+                    insert_string(&mut input, "id", &args.id);
+                    insert_string(&mut input, "effect", &args.effect);
+                    insert_string(&mut input, "amount", &args.amount);
+                    insert_string(&mut input, "currency", &args.currency);
+                    insert_string(&mut input, "reason", &args.reason);
+                }
+                BasketAdjustmentCommand::Remove(args) => {
+                    insert_string(&mut input, "basket_id", &args.basket_id);
+                    insert_string(&mut input, "id", &args.id);
                 }
             },
             BasketCommand::Quote(quote) => match &quote.command {
@@ -1308,6 +1328,8 @@ target_operation_contracts! {
     BasketItemAdd => (BasketItemAddRequest, BasketItemAddResult, "basket.item.add"),
     BasketItemUpdate => (BasketItemUpdateRequest, BasketItemUpdateResult, "basket.item.update"),
     BasketItemRemove => (BasketItemRemoveRequest, BasketItemRemoveResult, "basket.item.remove"),
+    BasketAdjustmentAdd => (BasketAdjustmentAddRequest, BasketAdjustmentAddResult, "basket.adjustment.add"),
+    BasketAdjustmentRemove => (BasketAdjustmentRemoveRequest, BasketAdjustmentRemoveResult, "basket.adjustment.remove"),
     BasketValidate => (BasketValidateRequest, BasketValidateResult, "basket.validate"),
     BasketQuoteCreate => (BasketQuoteCreateRequest, BasketQuoteCreateResult, "basket.quote.create"),
     OrderSubmit => (OrderSubmitRequest, OrderSubmitResult, "order.submit"),

@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_core::{
-    RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreMoney, RadrootsCoreQuantity,
-    RadrootsCoreQuantityPrice, RadrootsCoreUnit,
+    RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreDiscount, RadrootsCoreDiscountScope,
+    RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney,
+    RadrootsCorePercent, RadrootsCoreQuantity, RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
 use radroots_events::RadrootsNostrEvent;
 use radroots_events::farm::RadrootsFarmRef;
@@ -65,6 +66,8 @@ struct ListingDraftDocument {
     availability: ListingDraftAvailability,
     delivery: ListingDraftDelivery,
     location: ListingDraftLocation,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    discounts: Vec<ListingDraftDiscount>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +136,25 @@ struct ListingDraftLocation {
     region: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     country: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListingDraftDiscount {
+    id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    label: String,
+    kind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    value: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    amount: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    currency: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bin_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min_bin_count: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -329,8 +351,41 @@ fn build_listing_draft(
             region: None,
             country: None,
         }),
+        discounts: listing_discount_drafts_from_args(args),
     };
     Ok((draft, defaults))
+}
+
+fn listing_discount_drafts_from_args(args: &ListingCreateArgs) -> Vec<ListingDraftDiscount> {
+    let has_discount = args.discount_id.is_some()
+        || args.discount_label.is_some()
+        || args.discount_kind.is_some()
+        || args.discount_value.is_some()
+        || args.discount_amount.is_some()
+        || args.discount_currency.is_some();
+    if !has_discount {
+        return Vec::new();
+    }
+    let kind = args.discount_kind.clone().unwrap_or_else(|| {
+        if args.discount_amount.is_some() {
+            "amount".to_owned()
+        } else {
+            "percent".to_owned()
+        }
+    });
+    vec![ListingDraftDiscount {
+        id: args
+            .discount_id
+            .clone()
+            .unwrap_or_else(|| "discount_1".to_owned()),
+        label: args.discount_label.clone().unwrap_or_default(),
+        kind,
+        value: args.discount_value.clone().unwrap_or_default(),
+        amount: args.discount_amount.clone().unwrap_or_default(),
+        currency: args.discount_currency.clone().unwrap_or_default(),
+        bin_id: None,
+        min_bin_count: None,
+    }]
 }
 
 fn listing_output_path(
@@ -1036,6 +1091,12 @@ fn canonicalize_draft(
     let availability = build_availability(draft, contents)?;
     let delivery_method = build_delivery_method(draft, contents)?;
     let location = build_location(draft);
+    let discounts = build_listing_discounts(
+        draft,
+        contents,
+        draft.primary_bin.bin_id.trim(),
+        price_currency,
+    )?;
 
     let listing = RadrootsListing {
         d_tag: listing_id.clone(),
@@ -1067,7 +1128,7 @@ fn canonicalize_draft(
         }],
         resource_area: None,
         plot: None,
-        discounts: None,
+        discounts,
         inventory_available: Some(inventory_available),
         availability: Some(availability),
         delivery_method: Some(delivery_method),
@@ -1162,6 +1223,102 @@ fn build_location(draft: &ListingDraftDocument) -> RadrootsListingLocation {
         lng: None,
         geohash: None,
     }
+}
+
+fn build_listing_discounts(
+    draft: &ListingDraftDocument,
+    contents: &str,
+    primary_bin_id: &str,
+    price_currency: RadrootsCoreCurrency,
+) -> Result<Option<Vec<RadrootsCoreDiscount>>, ListingValidationIssueView> {
+    let mut discounts = Vec::new();
+    for (index, discount) in draft.discounts.iter().enumerate() {
+        let field_prefix = format!("discounts.{index}");
+        if discount.id.trim().is_empty() {
+            return Err(issue_for_field(
+                contents,
+                field_prefix.as_str(),
+                "discount id must not be empty",
+            ));
+        }
+        let bin_id = discount
+            .bin_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(primary_bin_id)
+            .to_owned();
+        let min = discount.min_bin_count.unwrap_or(1);
+        if min == 0 {
+            return Err(issue_for_field(
+                contents,
+                field_prefix.as_str(),
+                "discount min_bin_count must be greater than zero",
+            ));
+        }
+        let value = match discount.kind.trim() {
+            "percent" => {
+                let raw = discount.value.trim();
+                if raw.is_empty() {
+                    return Err(issue_for_field(
+                        contents,
+                        field_prefix.as_str(),
+                        "percent discount requires value",
+                    ));
+                }
+                let percent = raw.parse::<RadrootsCorePercent>().map_err(|error| {
+                    issue_for_field(
+                        contents,
+                        field_prefix.as_str(),
+                        format!("percent discount value is invalid: {error}"),
+                    )
+                })?;
+                RadrootsCoreDiscountValue::Percent(percent)
+            }
+            "amount" => {
+                let raw_amount = discount.amount.trim();
+                if raw_amount.is_empty() {
+                    return Err(issue_for_field(
+                        contents,
+                        field_prefix.as_str(),
+                        "amount discount requires amount",
+                    ));
+                }
+                let amount = parse_decimal_field(raw_amount, contents, field_prefix.as_str())?;
+                let currency = if discount.currency.trim().is_empty() {
+                    price_currency
+                } else {
+                    parse_currency_field(
+                        discount.currency.as_str(),
+                        contents,
+                        field_prefix.as_str(),
+                    )?
+                };
+                RadrootsCoreDiscountValue::MoneyPerBin(RadrootsCoreMoney::new(amount, currency))
+            }
+            other => {
+                return Err(issue_for_field(
+                    contents,
+                    field_prefix.as_str(),
+                    format!("unsupported discount kind `{other}`"),
+                ));
+            }
+        };
+        let discount = RadrootsCoreDiscount {
+            scope: RadrootsCoreDiscountScope::Bin,
+            threshold: RadrootsCoreDiscountThreshold::BinCount { bin_id, min },
+            value,
+        };
+        if !discount.is_non_negative() {
+            return Err(issue_for_field(
+                contents,
+                field_prefix.as_str(),
+                "discount value must not be negative",
+            ));
+        }
+        discounts.push(discount);
+    }
+    Ok((!discounts.is_empty()).then_some(discounts))
 }
 
 fn invalid_validation_view(
@@ -1644,6 +1801,7 @@ fn line_for_field(contents: &str, field: &str) -> Option<usize> {
         "availability.status" => &["status ="],
         "delivery.method" => &["method ="],
         "location.primary" => &["primary ="],
+        field if field.starts_with("discounts.") => &["[[discounts]]"],
         _ => &[],
     };
     for needle in needles {
@@ -1774,8 +1932,88 @@ mod tests {
                 region: None,
                 country: None,
             },
+            discounts: Vec::new(),
         };
         let rendered = toml::to_string_pretty(&document).expect("render draft");
         assert!(rendered.contains("kind = \"listing_draft_v1\""));
+    }
+
+    #[test]
+    fn listing_draft_canonicalization_preserves_discounts() {
+        let seller_pubkey = "a".repeat(64);
+        let document = ListingDraftDocument {
+            version: 1,
+            kind: DRAFT_KIND.to_owned(),
+            listing: super::ListingDraftMeta {
+                d_tag: "AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                farm_d_tag: "AAAAAAAAAAAAAAAAAAAAAw".to_owned(),
+                seller_pubkey: seller_pubkey.clone(),
+            },
+            product: super::ListingDraftProduct {
+                key: "sku".to_owned(),
+                title: "Widget".to_owned(),
+                category: "produce".to_owned(),
+                summary: "Fresh".to_owned(),
+            },
+            primary_bin: super::ListingDraftPrimaryBin {
+                bin_id: "bin-1".to_owned(),
+                quantity_amount: "1".to_owned(),
+                quantity_unit: "each".to_owned(),
+                price_amount: "10".to_owned(),
+                price_currency: "USD".to_owned(),
+                price_per_amount: "1".to_owned(),
+                price_per_unit: "each".to_owned(),
+                label: "each".to_owned(),
+            },
+            inventory: super::ListingDraftInventory {
+                available: "2".to_owned(),
+            },
+            availability: super::ListingDraftAvailability {
+                kind: "status".to_owned(),
+                status: "active".to_owned(),
+                start: None,
+                end: None,
+            },
+            delivery: super::ListingDraftDelivery {
+                method: "pickup".to_owned(),
+            },
+            location: super::ListingDraftLocation {
+                primary: "Asheville".to_owned(),
+                city: None,
+                region: None,
+                country: None,
+            },
+            discounts: vec![super::ListingDraftDiscount {
+                id: "discount_farmstand".to_owned(),
+                label: "farmstand pickup".to_owned(),
+                kind: "percent".to_owned(),
+                value: "10".to_owned(),
+                amount: String::new(),
+                currency: String::new(),
+                bin_id: None,
+                min_bin_count: None,
+            }],
+        };
+        let contents = toml::to_string_pretty(&document).expect("render draft");
+        let context = super::ListingValidationContext {
+            selected_account_id: Some("acct_seller".to_owned()),
+            selected_account_pubkey: Some(seller_pubkey),
+            selected_farm_d_tag: Some("AAAAAAAAAAAAAAAAAAAAAw".to_owned()),
+            farm_setup_action: "radroots farm create".to_owned(),
+        };
+
+        let canonical =
+            super::canonicalize_draft(&document, contents.as_str(), &context).expect("canonical");
+
+        assert!(contents.contains("[[discounts]]"));
+        assert_eq!(
+            canonical
+                .listing
+                .discounts
+                .as_ref()
+                .expect("discounts")
+                .len(),
+            1
+        );
     }
 }

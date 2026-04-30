@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_core::{
-    RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreMoney, RadrootsCoreUnit,
+    RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreDiscount, RadrootsCoreDiscountScope,
+    RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney, RadrootsCoreUnit,
     convert_unit_decimal,
 };
 use radroots_events::RadrootsNostrEventPtr;
@@ -17,10 +18,11 @@ use radroots_events::listing::{
 };
 use radroots_events::trade::{
     RadrootsActiveTradeFulfillmentState, RadrootsActiveTradeMessageType, RadrootsTradeBuyerReceipt,
+    RadrootsTradeEconomicActor, RadrootsTradeEconomicEffect, RadrootsTradeEconomicLineKind,
     RadrootsTradeFulfillmentUpdated, RadrootsTradeInventoryCommitment, RadrootsTradeOrderCancelled,
     RadrootsTradeOrderDecision, RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderEconomicItem,
-    RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
-    RadrootsTradePricingBasis,
+    RadrootsTradeOrderEconomicLine, RadrootsTradeOrderEconomics, RadrootsTradeOrderItem,
+    RadrootsTradeOrderRequested, RadrootsTradePricingBasis,
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::decode::listing_from_event;
@@ -156,6 +158,7 @@ struct ResolvedOrderEconomicsProduct {
     price_qty_amt: u32,
     price_qty_unit: String,
     primary_bin_id: Option<String>,
+    notes: Option<String>,
 }
 
 impl ResolvedOrderEconomicsProduct {
@@ -168,6 +171,7 @@ impl ResolvedOrderEconomicsProduct {
             price_qty_amt: row.price_qty_amt,
             price_qty_unit: row.price_qty_unit.clone(),
             primary_bin_id: row.primary_bin_id.clone(),
+            notes: row.notes.clone(),
         }
     }
 
@@ -180,8 +184,15 @@ impl ResolvedOrderEconomicsProduct {
             price_qty_amt: row.price_qty_amt,
             price_qty_unit: row.price_qty_unit,
             primary_bin_id: row.primary_bin_id,
+            notes: row.notes,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ResolvedTradeProductNotes {
+    #[serde(default)]
+    listing_discounts: Vec<RadrootsCoreDiscount>,
 }
 
 #[derive(Debug, Clone)]
@@ -283,6 +294,7 @@ pub fn scaffold(
         order_id.as_str(),
         resolved_listing.as_ref(),
         items.as_slice(),
+        args.adjustments.as_slice(),
     )?;
     let drafts_dir = drafts_dir(config);
     fs::create_dir_all(&drafts_dir)?;
@@ -366,6 +378,7 @@ pub fn scaffold_preflight(
         order_id.as_str(),
         resolved_listing.as_ref(),
         items.as_slice(),
+        args.adjustments.as_slice(),
     )?;
     let file = drafts_dir(config).join(format!("{order_id}.toml"));
     let document = OrderDraftDocument {
@@ -5005,6 +5018,7 @@ fn order_economics_from_resolved_listing(
     order_id: &str,
     resolved_listing: Option<&ResolvedOrderListing>,
     items: &[OrderDraftItem],
+    adjustments: &[crate::runtime_args::OrderDraftAdjustmentArgs],
 ) -> Result<Option<RadrootsTradeOrderEconomics>, RuntimeError> {
     let Some(listing) = resolved_listing else {
         return Ok(None);
@@ -5063,6 +5077,14 @@ fn order_economics_from_resolved_listing(
     }
 
     let subtotal = RadrootsCoreMoney::new(subtotal_amount, currency);
+    let discounts = listing_discount_lines_from_product(
+        product,
+        &subtotal,
+        items,
+        quantity_amount,
+        quantity_unit,
+    )?;
+    let adjustments = basket_adjustment_lines(adjustments)?;
     let zero = RadrootsCoreMoney::zero(currency);
     let mut economics = RadrootsTradeOrderEconomics {
         quote_id: format!("quote_{order_id}"),
@@ -5070,8 +5092,8 @@ fn order_economics_from_resolved_listing(
         pricing_basis: RadrootsTradePricingBasis::ListingEvent,
         currency,
         items: economic_items,
-        discounts: Vec::new(),
-        adjustments: Vec::new(),
+        discounts,
+        adjustments,
         subtotal: subtotal.clone(),
         discount_total: zero.clone(),
         adjustment_total: zero,
@@ -5082,6 +5104,136 @@ fn order_economics_from_resolved_listing(
         .validate()
         .map_err(|error| RuntimeError::Config(format!("build order economics: {error}")))?;
     Ok(Some(economics))
+}
+
+fn listing_discount_lines_from_product(
+    product: &ResolvedOrderEconomicsProduct,
+    subtotal: &RadrootsCoreMoney,
+    items: &[OrderDraftItem],
+    quantity_amount: RadrootsCoreDecimal,
+    quantity_unit: RadrootsCoreUnit,
+) -> Result<Vec<RadrootsTradeOrderEconomicLine>, RuntimeError> {
+    let Some(notes) = product.notes.as_deref().and_then(non_empty_ref) else {
+        return Ok(Vec::new());
+    };
+    let parsed = serde_json::from_str::<ResolvedTradeProductNotes>(notes).map_err(|error| {
+        RuntimeError::Config(format!("listing discount metadata is invalid: {error}"))
+    })?;
+    let mut lines = Vec::new();
+    for (index, discount) in parsed.listing_discounts.iter().enumerate() {
+        if !discount_applies(discount, items, quantity_amount, quantity_unit)? {
+            continue;
+        }
+        let amount = listing_discount_amount(discount, subtotal, items)?;
+        if amount.is_zero() {
+            return Err(RuntimeError::Config(
+                "listing discount amount must be greater than zero".to_owned(),
+            ));
+        }
+        lines.push(RadrootsTradeOrderEconomicLine {
+            id: format!("listing_discount_{}", index + 1),
+            kind: RadrootsTradeEconomicLineKind::ListingDiscount,
+            actor: RadrootsTradeEconomicActor::Seller,
+            effect: RadrootsTradeEconomicEffect::Decrease,
+            amount,
+            reason: format!("listing discount {}", index + 1),
+        });
+    }
+    Ok(lines)
+}
+
+fn discount_applies(
+    discount: &RadrootsCoreDiscount,
+    items: &[OrderDraftItem],
+    quantity_amount: RadrootsCoreDecimal,
+    quantity_unit: RadrootsCoreUnit,
+) -> Result<bool, RuntimeError> {
+    match &discount.threshold {
+        RadrootsCoreDiscountThreshold::BinCount { bin_id, min } => Ok(items
+            .iter()
+            .any(|item| item.bin_id == *bin_id && item.bin_count >= *min)),
+        RadrootsCoreDiscountThreshold::OrderQuantity { min } => {
+            let requested = items.iter().fold(RadrootsCoreDecimal::ZERO, |total, item| {
+                total + quantity_amount * RadrootsCoreDecimal::from(item.bin_count)
+            });
+            let converted =
+                convert_unit_decimal(requested, quantity_unit, min.unit).map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "listing discount quantity threshold is incompatible: {error}"
+                    ))
+                })?;
+            Ok(converted >= min.amount)
+        }
+    }
+}
+
+fn listing_discount_amount(
+    discount: &RadrootsCoreDiscount,
+    subtotal: &RadrootsCoreMoney,
+    items: &[OrderDraftItem],
+) -> Result<RadrootsCoreMoney, RuntimeError> {
+    match &discount.value {
+        RadrootsCoreDiscountValue::Percent(percent) => Ok(percent.of_money(subtotal)),
+        RadrootsCoreDiscountValue::MoneyPerBin(money) => {
+            if money.currency != subtotal.currency {
+                return Err(RuntimeError::Config(
+                    "listing discount currency must match listing price currency".to_owned(),
+                ));
+            }
+            let multiplier = match &discount.scope {
+                RadrootsCoreDiscountScope::Bin => {
+                    items.iter().map(|item| item.bin_count).sum::<u32>().max(1)
+                }
+                RadrootsCoreDiscountScope::OrderTotal => 1,
+            };
+            Ok(money.mul_decimal(RadrootsCoreDecimal::from(multiplier)))
+        }
+    }
+}
+
+fn basket_adjustment_lines(
+    adjustments: &[crate::runtime_args::OrderDraftAdjustmentArgs],
+) -> Result<Vec<RadrootsTradeOrderEconomicLine>, RuntimeError> {
+    adjustments
+        .iter()
+        .map(|adjustment| {
+            let currency =
+                parse_economics_currency(adjustment.currency.as_str(), "adjustment_currency")?;
+            let amount = decimal_from_adjustment(adjustment.amount.as_str(), "adjustment_amount")?;
+            if amount.is_zero() {
+                return Err(RuntimeError::Config(
+                    "basket adjustment amount must be greater than zero".to_owned(),
+                ));
+            }
+            let effect = match adjustment.effect.as_str() {
+                "increase" => RadrootsTradeEconomicEffect::Increase,
+                "decrease" => RadrootsTradeEconomicEffect::Decrease,
+                other => {
+                    return Err(RuntimeError::Config(format!(
+                        "basket adjustment effect `{other}` is invalid"
+                    )));
+                }
+            };
+            if adjustment.id.trim().is_empty() {
+                return Err(RuntimeError::Config(
+                    "basket adjustment id must not be empty".to_owned(),
+                ));
+            }
+            if adjustment.reason.trim().is_empty() {
+                return Err(RuntimeError::Config(
+                    "basket adjustment reason must not be empty".to_owned(),
+                ));
+            }
+            Ok(RadrootsTradeOrderEconomicLine {
+                id: adjustment.id.trim().to_owned(),
+                kind: RadrootsTradeEconomicLineKind::BasketAdjustment,
+                actor: RadrootsTradeEconomicActor::Buyer,
+                effect,
+                amount: RadrootsCoreMoney::new(amount, currency),
+                reason: adjustment.reason.trim().to_owned(),
+            })
+        })
+        .collect()
 }
 
 fn parse_economics_currency(
@@ -5124,6 +5276,19 @@ fn decimal_from_non_negative_f64(
         .to_string()
         .parse::<RadrootsCoreDecimal>()
         .map_err(|error| RuntimeError::Config(format!("listing {field} is invalid: {error}")))
+}
+
+fn decimal_from_adjustment(value: &str, field: &str) -> Result<RadrootsCoreDecimal, RuntimeError> {
+    let parsed = value
+        .trim()
+        .parse::<RadrootsCoreDecimal>()
+        .map_err(|error| RuntimeError::Config(format!("basket {field} is invalid: {error}")))?;
+    if parsed.is_sign_negative() {
+        return Err(RuntimeError::Config(format!(
+            "basket {field} must be non-negative"
+        )));
+    }
+    Ok(parsed)
 }
 
 fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
@@ -6601,15 +6766,16 @@ mod tests {
 
     use super::{
         LoadedOrderDraft, ORDER_DRAFT_KIND, ORDER_SUBMIT_SOURCE, OrderDraft, OrderDraftDocument,
-        OrderDraftItem, OrderStatusContext, ResolvedSellerOrderRequest,
-        SellerOrderRequestResolution, accepted_order_decision_payload_from_request,
-        active_request_record_from_resolved, canonical_order_request_payload_from_loaded,
-        collect_issues, declined_order_decision_payload_from_request, inspect_document,
-        next_order_id, order_accept_inventory_preflight_view_from_projection,
-        order_cancellation_dry_run_view, order_cancellation_event_parts,
-        order_cancellation_payload_from_status, order_cancellation_preflight_view_from_status,
-        order_decision_dry_run_view, order_decision_preflight_view_from_status,
-        order_decision_view_from_resolution, order_fulfillment_dry_run_view,
+        OrderDraftItem, OrderStatusContext, ResolvedOrderEconomicsProduct, ResolvedOrderListing,
+        ResolvedSellerOrderRequest, SellerOrderRequestResolution,
+        accepted_order_decision_payload_from_request, active_request_record_from_resolved,
+        canonical_order_request_payload_from_loaded, collect_issues,
+        declined_order_decision_payload_from_request, inspect_document, next_order_id,
+        order_accept_inventory_preflight_view_from_projection, order_cancellation_dry_run_view,
+        order_cancellation_event_parts, order_cancellation_payload_from_status,
+        order_cancellation_preflight_view_from_status, order_decision_dry_run_view,
+        order_decision_preflight_view_from_status, order_decision_view_from_resolution,
+        order_economics_from_resolved_listing, order_fulfillment_dry_run_view,
         order_fulfillment_preflight_view_from_status, order_history_entry_from_event,
         order_history_from_receipt, order_receipt_dry_run_view, order_receipt_event_parts,
         order_receipt_payload_from_status, order_receipt_preflight_view_from_status,
@@ -6629,8 +6795,8 @@ mod tests {
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
     use crate::runtime::signer::ActorWriteBindingError;
     use crate::runtime_args::{
-        OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs,
-        OrderReceiptArgs, OrderSubmitArgs,
+        OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftAdjustmentArgs,
+        OrderFulfillmentArgs, OrderReceiptArgs, OrderSubmitArgs,
     };
 
     #[test]
@@ -6669,6 +6835,80 @@ mod tests {
         assert!(rendered.contains("kind = \"order_draft_v1\""));
         assert!(rendered.contains("order_id = \"ord_AAAAAAAAAAAAAAAAAAAAAg\""));
         assert!(rendered.contains("listing_event_id"));
+    }
+
+    #[test]
+    fn order_economics_applies_listing_discounts_and_basket_adjustments() {
+        let listing = ResolvedOrderListing {
+            listing_addr: "30402:seller:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+            listing_event_id: "1".repeat(64),
+            seller_pubkey: "seller".to_owned(),
+            economics_product: Some(ResolvedOrderEconomicsProduct {
+                qty_amt: 1,
+                qty_unit: "each".to_owned(),
+                price_amt: 10.0,
+                price_currency: "USD".to_owned(),
+                price_qty_amt: 1,
+                price_qty_unit: "each".to_owned(),
+                primary_bin_id: Some("bin-1".to_owned()),
+                notes: Some(
+                    serde_json::json!({
+                        "listing_discounts": [{
+                            "scope": "bin",
+                            "threshold": {
+                                "kind": "bin_count",
+                                "amount": { "bin_id": "bin-1", "min": 1 }
+                            },
+                            "value": {
+                                "kind": "percent",
+                                "amount": { "value": "10" }
+                            }
+                        }]
+                    })
+                    .to_string(),
+                ),
+            }),
+        };
+        let items = vec![OrderDraftItem {
+            bin_id: "bin-1".to_owned(),
+            bin_count: 2,
+        }];
+        let adjustments = vec![OrderDraftAdjustmentArgs {
+            id: "adj_delivery".to_owned(),
+            effect: "increase".to_owned(),
+            amount: "2".to_owned(),
+            currency: "USD".to_owned(),
+            reason: "delivery".to_owned(),
+        }];
+
+        let economics = order_economics_from_resolved_listing(
+            "ord_AAAAAAAAAAAAAAAAAAAAAg",
+            Some(&listing),
+            items.as_slice(),
+            adjustments.as_slice(),
+        )
+        .expect("economics")
+        .expect("economics present");
+
+        assert_eq!(
+            economics.subtotal,
+            RadrootsCoreMoney::new(RadrootsCoreDecimal::from(20), RadrootsCoreCurrency::USD)
+        );
+        assert_eq!(economics.discounts.len(), 1);
+        assert_eq!(
+            economics.discounts[0].amount,
+            RadrootsCoreMoney::new(RadrootsCoreDecimal::from(2), RadrootsCoreCurrency::USD)
+        );
+        assert_eq!(economics.adjustments.len(), 1);
+        assert_eq!(economics.adjustments[0].id, "adj_delivery");
+        assert_eq!(
+            economics.adjustments[0].amount,
+            RadrootsCoreMoney::new(RadrootsCoreDecimal::from(2), RadrootsCoreCurrency::USD)
+        );
+        assert_eq!(
+            economics.total,
+            RadrootsCoreMoney::new(RadrootsCoreDecimal::from(20), RadrootsCoreCurrency::USD)
+        );
     }
 
     #[test]

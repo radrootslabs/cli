@@ -163,6 +163,10 @@ impl TargetCommand {
                     BasketItemCommand::Update(_) => "basket.item.update",
                     BasketItemCommand::Remove(_) => "basket.item.remove",
                 },
+                BasketCommand::Adjustment(adjustment) => match &adjustment.command {
+                    BasketAdjustmentCommand::Add(_) => "basket.adjustment.add",
+                    BasketAdjustmentCommand::Remove(_) => "basket.adjustment.remove",
+                },
                 BasketCommand::Validate(_) => "basket.validate",
                 BasketCommand::Quote(quote) => match quote.command {
                     BasketQuoteCommand::Create(_) => "basket.quote.create",
@@ -548,6 +552,18 @@ pub struct ListingCreateArgs {
     pub available: Option<String>,
     #[arg(long)]
     pub label: Option<String>,
+    #[arg(long = "discount-id")]
+    pub discount_id: Option<String>,
+    #[arg(long = "discount-label")]
+    pub discount_label: Option<String>,
+    #[arg(long = "discount-kind")]
+    pub discount_kind: Option<String>,
+    #[arg(long = "discount-value")]
+    pub discount_value: Option<String>,
+    #[arg(long = "discount-amount")]
+    pub discount_amount: Option<String>,
+    #[arg(long = "discount-currency")]
+    pub discount_currency: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -612,6 +628,7 @@ pub enum BasketCommand {
     Get(BasketKeyArgs),
     List,
     Item(BasketItemArgs),
+    Adjustment(BasketAdjustmentArgs),
     Validate(BasketKeyArgs),
     Quote(BasketQuoteArgs),
 }
@@ -645,6 +662,40 @@ pub enum BasketItemCommand {
     Add(BasketItemMutationArgs),
     Update(BasketItemMutationArgs),
     Remove(BasketItemRemoveArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketAdjustmentArgs {
+    #[command(subcommand)]
+    pub command: BasketAdjustmentCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum BasketAdjustmentCommand {
+    Add(BasketAdjustmentAddArgs),
+    Remove(BasketAdjustmentRemoveArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketAdjustmentAddArgs {
+    pub basket_id: Option<String>,
+    #[arg(long)]
+    pub id: Option<String>,
+    #[arg(long)]
+    pub effect: Option<String>,
+    #[arg(long)]
+    pub amount: Option<String>,
+    #[arg(long)]
+    pub currency: Option<String>,
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BasketAdjustmentRemoveArgs {
+    pub basket_id: Option<String>,
+    #[arg(long)]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

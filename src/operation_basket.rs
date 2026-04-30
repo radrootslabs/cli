@@ -9,16 +9,17 @@ use serde_json::{Value, json};
 
 use crate::domain::runtime::OrderNewView;
 use crate::operation_adapter::{
-    BasketCreateRequest, BasketCreateResult, BasketGetRequest, BasketGetResult,
-    BasketItemAddRequest, BasketItemAddResult, BasketItemRemoveRequest, BasketItemRemoveResult,
-    BasketItemUpdateRequest, BasketItemUpdateResult, BasketListRequest, BasketListResult,
-    BasketQuoteCreateRequest, BasketQuoteCreateResult, BasketValidateRequest, BasketValidateResult,
-    OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
-    OperationResult, OperationResultData, OperationService,
+    BasketAdjustmentAddRequest, BasketAdjustmentAddResult, BasketAdjustmentRemoveRequest,
+    BasketAdjustmentRemoveResult, BasketCreateRequest, BasketCreateResult, BasketGetRequest,
+    BasketGetResult, BasketItemAddRequest, BasketItemAddResult, BasketItemRemoveRequest,
+    BasketItemRemoveResult, BasketItemUpdateRequest, BasketItemUpdateResult, BasketListRequest,
+    BasketListResult, BasketQuoteCreateRequest, BasketQuoteCreateResult, BasketValidateRequest,
+    BasketValidateResult, OperationAdapterError, OperationRequest, OperationRequestData,
+    OperationRequestPayload, OperationResult, OperationResultData, OperationService,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime_args::OrderDraftCreateArgs;
+use crate::runtime_args::{OrderDraftAdjustmentArgs, OrderDraftCreateArgs};
 
 const BASKET_KIND: &str = "basket_v1";
 const BASKET_SOURCE: &str = "local baskets - local first";
@@ -45,6 +46,8 @@ struct BasketState {
     updated_at_unix: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     items: Vec<BasketItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    adjustments: Vec<BasketAdjustment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +60,16 @@ struct BasketItem {
     listing_addr: Option<String>,
     bin_id: String,
     quantity: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BasketAdjustment {
+    id: String,
+    effect: String,
+    amount: String,
+    currency: String,
+    reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +146,7 @@ impl OperationService<BasketCreateRequest> for BasketOperationService<'_> {
                 created_at_unix: now,
                 updated_at_unix: now,
                 items: initial_item.into_iter().collect(),
+                adjustments: Vec::new(),
             },
             quote: None,
         };
@@ -312,6 +326,96 @@ impl OperationService<BasketItemRemoveRequest> for BasketOperationService<'_> {
     }
 }
 
+impl OperationService<BasketAdjustmentAddRequest> for BasketOperationService<'_> {
+    type Result = BasketAdjustmentAddResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<BasketAdjustmentAddRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let basket_id = required_basket_id(&request)?;
+        let mut loaded =
+            load_required_basket(self.config, basket_id.as_str(), request.operation_id())?;
+        let adjustment = required_adjustment_from_request(&request)?;
+        if loaded
+            .document
+            .basket
+            .adjustments
+            .iter()
+            .any(|existing| existing.id == adjustment.id)
+        {
+            return Err(invalid_input(
+                request.operation_id(),
+                format!("basket adjustment `{}` already exists", adjustment.id),
+            ));
+        }
+        if request.context.dry_run {
+            return json_operation_result::<BasketAdjustmentAddResult>(json!({
+                "state": "dry_run",
+                "source": BASKET_SOURCE,
+                "basket_id": basket_id,
+                "adjustment": adjustment,
+                "actions": ["radroots basket adjustment add"],
+            }));
+        }
+
+        loaded.document.basket.adjustments.push(adjustment);
+        touch_basket(&mut loaded.document);
+        loaded.document.quote = None;
+        save_basket(loaded.file.as_path(), &loaded.document)?;
+        json_operation_result::<BasketAdjustmentAddResult>(basket_view(
+            &loaded.document,
+            loaded.file.as_path(),
+            Some("updated"),
+        ))
+    }
+}
+
+impl OperationService<BasketAdjustmentRemoveRequest> for BasketOperationService<'_> {
+    type Result = BasketAdjustmentRemoveResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<BasketAdjustmentRemoveRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let basket_id = required_basket_id(&request)?;
+        let adjustment_id = required_string(&request, "id")?;
+        let mut loaded =
+            load_required_basket(self.config, basket_id.as_str(), request.operation_id())?;
+        let Some(index) = loaded
+            .document
+            .basket
+            .adjustments
+            .iter()
+            .position(|adjustment| adjustment.id == adjustment_id)
+        else {
+            return Err(invalid_input(
+                request.operation_id(),
+                format!("basket adjustment `{adjustment_id}` was not found"),
+            ));
+        };
+        if request.context.dry_run {
+            return json_operation_result::<BasketAdjustmentRemoveResult>(json!({
+                "state": "dry_run",
+                "source": BASKET_SOURCE,
+                "basket_id": basket_id,
+                "adjustment_id": adjustment_id,
+                "actions": ["radroots basket adjustment remove"],
+            }));
+        }
+
+        loaded.document.basket.adjustments.remove(index);
+        touch_basket(&mut loaded.document);
+        loaded.document.quote = None;
+        save_basket(loaded.file.as_path(), &loaded.document)?;
+        json_operation_result::<BasketAdjustmentRemoveResult>(basket_view(
+            &loaded.document,
+            loaded.file.as_path(),
+            Some("updated"),
+        ))
+    }
+}
+
 impl OperationService<BasketValidateRequest> for BasketOperationService<'_> {
     type Result = BasketValidateResult;
 
@@ -371,6 +475,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
                     listing_addr: item.listing_addr.clone(),
                     bin_id: Some(item.bin_id.clone()),
                     bin_count: Some(item.quantity),
+                    adjustments: order_adjustments_from_basket(&loaded.document),
                 },
             ))?;
             return json_operation_result::<BasketQuoteCreateResult>(json!({
@@ -391,6 +496,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
                 listing_addr: item.listing_addr.clone(),
                 bin_id: Some(item.bin_id.clone()),
                 bin_count: Some(item.quantity),
+                adjustments: order_adjustments_from_basket(&loaded.document),
             },
         ))?;
         let quote_economics = order.economics.clone();
@@ -516,6 +622,66 @@ where
     Ok(item)
 }
 
+fn required_adjustment_from_request<P>(
+    request: &OperationRequest<P>,
+) -> Result<BasketAdjustment, OperationAdapterError>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    let id = required_string(request, "id")?.trim().to_owned();
+    if id.is_empty() {
+        return Err(invalid_input(
+            request.operation_id(),
+            "`id` must not be empty".to_owned(),
+        ));
+    }
+    let effect = required_string(request, "effect")?.trim().to_owned();
+    if effect != "increase" && effect != "decrease" {
+        return Err(invalid_input(
+            request.operation_id(),
+            "`effect` must be increase or decrease".to_owned(),
+        ));
+    }
+    let amount = required_string(request, "amount")?.trim().to_owned();
+    let parsed_amount = amount
+        .parse::<radroots_core::RadrootsCoreDecimal>()
+        .map_err(|_| {
+            invalid_input(
+                request.operation_id(),
+                "`amount` must be a valid decimal value".to_owned(),
+            )
+        })?;
+    if parsed_amount.is_sign_negative() || parsed_amount.is_zero() {
+        return Err(invalid_input(
+            request.operation_id(),
+            "`amount` must be greater than zero".to_owned(),
+        ));
+    }
+    let currency = required_string(request, "currency")?
+        .trim()
+        .to_ascii_uppercase();
+    if radroots_core::RadrootsCoreCurrency::from_str_upper(currency.as_str()).is_err() {
+        return Err(invalid_input(
+            request.operation_id(),
+            "`currency` must be a valid ISO currency code".to_owned(),
+        ));
+    }
+    let reason = required_string(request, "reason")?.trim().to_owned();
+    if reason.is_empty() {
+        return Err(invalid_input(
+            request.operation_id(),
+            "`reason` must not be empty".to_owned(),
+        ));
+    }
+    Ok(BasketAdjustment {
+        id,
+        effect,
+        amount,
+        currency,
+        reason,
+    })
+}
+
 fn basket_view(document: &BasketDocument, file: &Path, state: Option<&str>) -> Value {
     json!({
         "state": state.unwrap_or("ready"),
@@ -524,6 +690,8 @@ fn basket_view(document: &BasketDocument, file: &Path, state: Option<&str>) -> V
         "file": file.display().to_string(),
         "item_count": document.basket.items.len(),
         "items": document.basket.items,
+        "adjustment_count": document.basket.adjustments.len(),
+        "adjustments": document.basket.adjustments,
         "quote": document.quote,
         "ready_for_quote": basket_issues(document).is_empty(),
         "issues": basket_issues(document),
@@ -540,6 +708,7 @@ fn basket_validation_view(document: &BasketDocument, file: &Path) -> Value {
         "file": file.display().to_string(),
         "ready_for_quote": issues.is_empty(),
         "item_count": document.basket.items.len(),
+        "adjustment_count": document.basket.adjustments.len(),
         "issues": issues,
         "actions": basket_actions(document),
     })
@@ -582,6 +751,7 @@ fn list_basket_summaries(config: &RuntimeConfig) -> Result<Vec<Value>, Operation
             "state": if basket_issues(&loaded.document).is_empty() { "ready" } else { "unconfigured" },
             "file": loaded.file.display().to_string(),
             "item_count": loaded.document.basket.items.len(),
+            "adjustment_count": loaded.document.basket.adjustments.len(),
             "ready_for_quote": basket_issues(&loaded.document).is_empty(),
             "quote": loaded.document.quote,
             "updated_at_unix": loaded.document.basket.updated_at_unix,
@@ -670,6 +840,21 @@ fn quote_issues_from_order(order: &OrderNewView) -> Vec<BasketIssue> {
         .map(|issue| BasketIssue {
             field: issue.field.clone(),
             message: issue.message.clone(),
+        })
+        .collect()
+}
+
+fn order_adjustments_from_basket(document: &BasketDocument) -> Vec<OrderDraftAdjustmentArgs> {
+    document
+        .basket
+        .adjustments
+        .iter()
+        .map(|adjustment| OrderDraftAdjustmentArgs {
+            id: adjustment.id.clone(),
+            effect: adjustment.effect.clone(),
+            amount: adjustment.amount.clone(),
+            currency: adjustment.currency.clone(),
+            reason: adjustment.reason.clone(),
         })
         .collect()
 }
@@ -881,9 +1066,10 @@ mod tests {
 
     use super::BasketOperationService;
     use crate::operation_adapter::{
-        BasketCreateRequest, BasketGetRequest, BasketItemAddRequest, BasketItemRemoveRequest,
-        BasketItemUpdateRequest, BasketListRequest, BasketQuoteCreateRequest,
-        BasketValidateRequest, OperationAdapter, OperationContext, OperationData, OperationRequest,
+        BasketAdjustmentAddRequest, BasketAdjustmentRemoveRequest, BasketCreateRequest,
+        BasketGetRequest, BasketItemAddRequest, BasketItemRemoveRequest, BasketItemUpdateRequest,
+        BasketListRequest, BasketQuoteCreateRequest, BasketValidateRequest, OperationAdapter,
+        OperationContext, OperationData, OperationRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -991,6 +1177,48 @@ mod tests {
             .expect("basket validate envelope");
         assert_eq!(validate_envelope.operation_id, "basket.validate");
         assert_eq!(validate_envelope.result["ready_for_quote"], true);
+
+        let adjustment_add = OperationRequest::new(
+            OperationContext::default(),
+            BasketAdjustmentAddRequest::from_data(data(&[
+                ("basket_id", "basket_items"),
+                ("id", "adj_pickup"),
+                ("effect", "decrease"),
+                ("amount", "1.00"),
+                ("currency", "USD"),
+                ("reason", "pickup"),
+            ])),
+        )
+        .expect("basket adjustment add request");
+        let adjustment_add_envelope = service
+            .execute(adjustment_add)
+            .expect("basket adjustment add result")
+            .to_envelope(OperationContext::default().envelope_context("req_basket_adjust_add"))
+            .expect("basket adjustment add envelope");
+        assert_eq!(
+            adjustment_add_envelope.operation_id,
+            "basket.adjustment.add"
+        );
+        assert_eq!(adjustment_add_envelope.result["adjustment_count"], 1);
+
+        let adjustment_remove = OperationRequest::new(
+            OperationContext::default(),
+            BasketAdjustmentRemoveRequest::from_data(data(&[
+                ("basket_id", "basket_items"),
+                ("id", "adj_pickup"),
+            ])),
+        )
+        .expect("basket adjustment remove request");
+        let adjustment_remove_envelope = service
+            .execute(adjustment_remove)
+            .expect("basket adjustment remove result")
+            .to_envelope(OperationContext::default().envelope_context("req_basket_adjust_remove"))
+            .expect("basket adjustment remove envelope");
+        assert_eq!(
+            adjustment_remove_envelope.operation_id,
+            "basket.adjustment.remove"
+        );
+        assert_eq!(adjustment_remove_envelope.result["adjustment_count"], 0);
 
         let remove = OperationRequest::new(
             OperationContext::default(),

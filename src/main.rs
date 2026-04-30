@@ -245,6 +245,12 @@ fn execute_request(
         TargetOperationRequest::BasketItemRemove(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
+        TargetOperationRequest::BasketAdjustmentAdd(request) => {
+            execute_with(BasketOperationService::new(config), request)
+        }
+        TargetOperationRequest::BasketAdjustmentRemove(request) => {
+            execute_with(BasketOperationService::new(config), request)
+        }
         TargetOperationRequest::BasketValidate(request) => {
             execute_with(BasketOperationService::new(config), request)
         }

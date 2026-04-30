@@ -50,6 +50,12 @@ impl OperationService<ListingCreateRequest> for ListingOperationService<'_> {
             price_per_unit: string_input(&request, "price_per_unit"),
             available: string_input(&request, "available"),
             label: string_input(&request, "label"),
+            discount_id: string_input(&request, "discount_id"),
+            discount_label: string_input(&request, "discount_label"),
+            discount_kind: string_input(&request, "discount_kind"),
+            discount_value: string_input(&request, "discount_value"),
+            discount_amount: string_input(&request, "discount_amount"),
+            discount_currency: string_input(&request, "discount_currency"),
         };
         if request.context.dry_run {
             let view = map_runtime(

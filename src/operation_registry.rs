@@ -767,6 +767,36 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         true
     ),
     operation!(
+        "basket.adjustment.add",
+        "radroots basket adjustment add",
+        "basket",
+        "basket_adjustment_add",
+        "BasketAdjustmentAddRequest",
+        "BasketAdjustmentAddResult",
+        "Add buyer basket adjustment.",
+        Buyer,
+        true,
+        None,
+        Medium,
+        false,
+        true
+    ),
+    operation!(
+        "basket.adjustment.remove",
+        "radroots basket adjustment remove",
+        "basket",
+        "basket_adjustment_remove",
+        "BasketAdjustmentRemoveRequest",
+        "BasketAdjustmentRemoveResult",
+        "Remove buyer basket adjustment.",
+        Buyer,
+        true,
+        None,
+        Medium,
+        false,
+        true
+    ),
+    operation!(
         "basket.validate",
         "radroots basket validate",
         "basket",
@@ -1031,6 +1061,8 @@ mod tests {
         "basket.item.add",
         "basket.item.update",
         "basket.item.remove",
+        "basket.adjustment.add",
+        "basket.adjustment.remove",
         "basket.validate",
         "basket.quote.create",
         "order.submit",
@@ -1071,6 +1103,8 @@ mod tests {
         "basket.item.add",
         "basket.item.update",
         "basket.item.remove",
+        "basket.adjustment.add",
+        "basket.adjustment.remove",
         "basket.quote.create",
         "order.submit",
         "order.accept",
@@ -1090,7 +1124,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 59);
+        assert_eq!(OPERATION_REGISTRY.len(), 61);
     }
 
     #[test]
