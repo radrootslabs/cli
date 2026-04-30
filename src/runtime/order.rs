@@ -905,7 +905,7 @@ pub fn fulfillment_update(
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
-            selected_account_pubkey: None,
+            selected_account_pubkey: Some(selected_pubkey.as_str()),
         },
         receipt,
     );
@@ -2537,6 +2537,10 @@ fn order_accept_inventory_preflight_view(
         .filter(|record| request_order_ids.contains(&record.payload.order_id))
         .collect::<Vec<_>>();
     decisions.push(proposed_accept_decision_record(request)?);
+    let fulfillments = fetch_listing_accounting_fulfillments(config, request)?
+        .into_iter()
+        .filter(|record| request_order_ids.contains(&record.payload.order_id))
+        .collect::<Vec<_>>();
 
     let projection = reduce_listing_inventory_accounting(
         request.listing_addr.as_str(),
@@ -2544,7 +2548,7 @@ fn order_accept_inventory_preflight_view(
         listing.bins,
         requests,
         decisions,
-        [],
+        fulfillments,
     );
     Ok(order_accept_inventory_preflight_view_from_projection(
         config, args, request, resolution, status, projection,
@@ -2815,6 +2819,27 @@ fn fetch_listing_accounting_decisions(
             continue;
         }
         if let Ok(OrderStatusRecord::Decision(record)) = order_status_record_from_event(&event) {
+            records.push(record);
+        }
+    }
+    Ok(records)
+}
+
+fn fetch_listing_accounting_fulfillments(
+    config: &RuntimeConfig,
+    request: &ResolvedSellerOrderRequest,
+) -> Result<Vec<RadrootsActiveOrderFulfillmentRecord>, RuntimeError> {
+    let filter = order_listing_fulfillment_filter(request.listing_addr.as_str())?;
+    let receipt = fetch_events_from_relays(&config.relay.urls, filter)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let mut records = Vec::new();
+    for event in receipt.events {
+        if event_kind_u32(&event) != KIND_TRADE_FULFILLMENT_UPDATE
+            || !event_matches_tag_value(&event, "a", request.listing_addr.as_str())
+        {
+            continue;
+        }
+        if let Ok(OrderStatusRecord::Fulfillment(record)) = order_status_record_from_event(&event) {
             records.push(record);
         }
     }
@@ -5013,8 +5038,9 @@ mod tests {
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_trade::order::{
-        RadrootsActiveOrderDecisionRecord, RadrootsListingInventoryBinAvailability,
-        canonicalize_active_order_decision_for_signer, reduce_listing_inventory_accounting,
+        RadrootsActiveOrderDecisionRecord, RadrootsActiveOrderFulfillmentRecord,
+        RadrootsListingInventoryBinAvailability, canonicalize_active_order_decision_for_signer,
+        reduce_listing_inventory_accounting,
     };
     use tempfile::tempdir;
 
@@ -5784,6 +5810,87 @@ mod tests {
         assert_eq!(view.decoded_count, 1);
         assert_eq!(view.skipped_count, 1);
         assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
+    fn order_fulfillment_preflight_uses_selected_seller_context() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let other_seller = RadrootsIdentity::generate();
+        let other_seller_pubkey = other_seller.public_key_hex();
+        let other_listing_addr = format!("30402:{other_seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAw");
+        let other_request_event = signed_order_request_event(
+            &fixture.buyer,
+            fixture.order_id.as_str(),
+            other_listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            other_seller_pubkey.as_str(),
+            "2".repeat(64).as_str(),
+        );
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let unscoped_reduction = order_status_reduction_from_receipt_with_context(
+            OrderStatusContext {
+                order_id: fixture.order_id.as_str(),
+                selected_account_pubkey: None,
+            },
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    other_request_event.clone(),
+                    decision_event.clone(),
+                ],
+            },
+        );
+        let scoped_reduction = order_status_reduction_from_receipt_with_context(
+            OrderStatusContext {
+                order_id: fixture.order_id.as_str(),
+                selected_account_pubkey: Some(fixture.seller_pubkey.as_str()),
+            },
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    other_request_event,
+                    decision_event,
+                ],
+            },
+        );
+        let args = fulfillment_args_for_fixture(&fixture, "ready_for_pickup");
+
+        assert_eq!(unscoped_reduction.view.state, "invalid");
+        assert_eq!(scoped_reduction.view.state, "accepted");
+        assert_eq!(scoped_reduction.view.decoded_count, 2);
+        assert_eq!(scoped_reduction.view.skipped_count, 1);
+        assert!(
+            order_fulfillment_preflight_view_from_status(
+                &config,
+                &args,
+                &scoped_reduction.view,
+                scoped_reduction.fulfillment_status,
+                scoped_reduction.fulfillment_event_id.as_deref(),
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -6723,6 +6830,115 @@ mod tests {
         assert_eq!(view.issues.len(), 1);
         assert_eq!(view.issues[0].code, "listing_inventory_over_reserved");
         assert!(view.event_id.is_none());
+    }
+
+    #[test]
+    fn order_accept_inventory_preflight_counts_seller_cancelled_release() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let resolution = request_resolution_for_fixture(&fixture);
+        let request = resolution.requests[0].clone();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone()],
+            },
+        );
+        let existing_order_id = "ord_AAAAAAAAAAAAAAAAAAAAAw";
+        let existing_request_event = signed_order_request_event(
+            &fixture.buyer,
+            existing_order_id,
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            fixture.listing_event_id.as_str(),
+        );
+        let existing_request = ResolvedSellerOrderRequest {
+            request_event_id: existing_request_event.id.to_string(),
+            listing_event_id: Some(fixture.listing_event_id.clone()),
+            order_id: existing_order_id.to_owned(),
+            listing_addr: fixture.listing_addr.clone(),
+            buyer_pubkey: fixture.buyer_pubkey.clone(),
+            seller_pubkey: fixture.seller_pubkey.clone(),
+            items: vec![RadrootsTradeOrderItem {
+                bin_id: "bin-1".to_owned(),
+                bin_count: 2,
+            }],
+        };
+        let existing_decision_payload =
+            accepted_order_decision_payload_from_request(&existing_request);
+        let existing_decision_payload = canonicalize_active_order_decision_for_signer(
+            existing_decision_payload,
+            fixture.seller_pubkey.as_str(),
+        )
+        .expect("canonical existing decision");
+        let existing_decision_event_id = "existing_decision".to_owned();
+        let projection = reduce_listing_inventory_accounting(
+            fixture.listing_addr.as_str(),
+            fixture.listing_event_id.as_str(),
+            vec![RadrootsListingInventoryBinAvailability {
+                bin_id: "bin-1".to_owned(),
+                available_count: 2,
+            }],
+            vec![
+                active_request_record_from_resolved(&existing_request),
+                active_request_record_from_resolved(&request),
+            ],
+            vec![
+                RadrootsActiveOrderDecisionRecord {
+                    event_id: existing_decision_event_id.clone(),
+                    author_pubkey: fixture.seller_pubkey.clone(),
+                    counterparty_pubkey: fixture.buyer_pubkey.clone(),
+                    root_event_id: existing_request.request_event_id.clone(),
+                    prev_event_id: existing_request.request_event_id.clone(),
+                    payload: existing_decision_payload,
+                },
+                proposed_accept_decision_record(&request).expect("proposed accept decision"),
+            ],
+            vec![RadrootsActiveOrderFulfillmentRecord {
+                event_id: "existing_fulfillment".to_owned(),
+                author_pubkey: fixture.seller_pubkey.clone(),
+                counterparty_pubkey: fixture.buyer_pubkey.clone(),
+                root_event_id: existing_request.request_event_id.clone(),
+                prev_event_id: existing_decision_event_id,
+                payload: RadrootsTradeFulfillmentUpdated {
+                    order_id: existing_request.order_id.clone(),
+                    listing_addr: existing_request.listing_addr.clone(),
+                    buyer_pubkey: existing_request.buyer_pubkey.clone(),
+                    seller_pubkey: existing_request.seller_pubkey.clone(),
+                    status: RadrootsActiveTradeFulfillmentState::SellerCancelled,
+                },
+            }],
+        );
+        let args = OrderDecisionArgs {
+            key: fixture.order_id.clone(),
+            decision: OrderDecisionArg::Accept,
+            reason: None,
+            idempotency_key: None,
+        };
+
+        let preflight = order_accept_inventory_preflight_view_from_projection(
+            &config,
+            &args,
+            &request,
+            &resolution,
+            &status_view,
+            projection,
+        );
+        let inventory = preflight.inventory.expect("valid inventory preflight");
+
+        assert!(preflight.invalid_view.is_none());
+        assert_eq!(inventory.state, "reserved");
+        assert_eq!(inventory.commitment_valid, true);
+        assert_eq!(inventory.bins.len(), 1);
+        assert_eq!(inventory.bins[0].committed_count, 2);
+        assert_eq!(inventory.bins[0].remaining_count, Some(0));
+        assert!(inventory.issues.is_empty());
     }
 
     #[test]
