@@ -1983,7 +1983,11 @@ fn order_status_inventory_view(
             })
         }
         RadrootsActiveOrderStatus::Cancelled => Some(OrderInventoryView {
-            state: "released".to_owned(),
+            state: if decision_event_id.is_some() {
+                "released".to_owned()
+            } else {
+                "not_reserved".to_owned()
+            },
             listing_event_id,
             commitment_valid: inventory_issues.is_empty(),
             bins: Vec::new(),
@@ -2035,7 +2039,12 @@ fn order_status_fulfillment_view(
             issues,
         });
     }
-    if !matches!(status, RadrootsActiveOrderStatus::Accepted) {
+    if !matches!(
+        status,
+        RadrootsActiveOrderStatus::Accepted
+            | RadrootsActiveOrderStatus::Completed
+            | RadrootsActiveOrderStatus::Disputed
+    ) {
         return None;
     }
     let fulfillment_status = fulfillment_status?;
@@ -6323,10 +6332,10 @@ mod tests {
         order_fulfillment_preflight_view_from_status, order_history_entry_from_event,
         order_history_from_receipt, order_receipt_dry_run_view, order_receipt_event_parts,
         order_receipt_payload_from_status, order_receipt_preflight_view_from_status,
-        order_request_filter, order_status_from_receipt, order_status_from_receipt_with_context,
-        order_status_reduction_from_receipt_with_context, order_submit_dry_run_view,
-        order_submit_existing_request_view_from_receipt, proposed_accept_decision_record,
-        resolve_local_order_fulfillment_signing_identity,
+        order_request_filter, order_status_filter, order_status_from_receipt,
+        order_status_from_receipt_with_context, order_status_reduction_from_receipt_with_context,
+        order_submit_dry_run_view, order_submit_existing_request_view_from_receipt,
+        proposed_accept_decision_record, resolve_local_order_fulfillment_signing_identity,
         seller_order_request_resolution_from_receipt,
     };
     use crate::runtime::accounts;
@@ -6461,6 +6470,20 @@ mod tests {
 
         assert_eq!(value["kinds"][0], 3422);
         assert_eq!(value["#p"][0], "a");
+        assert_eq!(value["#d"][0], "ord_AAAAAAAAAAAAAAAAAAAAAg");
+    }
+
+    #[test]
+    fn order_status_filter_includes_active_lifecycle_kinds() {
+        let filter = order_status_filter("ord_AAAAAAAAAAAAAAAAAAAAAg").expect("status filter");
+        let value = serde_json::to_value(filter).expect("filter json");
+        let kinds = value["kinds"].as_array().expect("kinds array");
+
+        assert!(kinds.contains(&serde_json::json!(3422)));
+        assert!(kinds.contains(&serde_json::json!(3423)));
+        assert!(kinds.contains(&serde_json::json!(3433)));
+        assert!(kinds.contains(&serde_json::json!(3432)));
+        assert!(kinds.contains(&serde_json::json!(3434)));
         assert_eq!(value["#d"][0], "ord_AAAAAAAAAAAAAAAAAAAAAg");
     }
 
@@ -7384,6 +7407,7 @@ mod tests {
         let cancellation_event_id = cancellation_event.id.to_string();
         let lifecycle = view.lifecycle.as_ref().expect("lifecycle view");
         let cancellation = lifecycle.cancellation.as_ref().expect("cancellation view");
+        let inventory = view.inventory.as_ref().expect("inventory view");
 
         assert_eq!(
             u32::from(cancellation_event.kind.as_u16()),
@@ -7423,6 +7447,8 @@ mod tests {
             Some(request_event_id.as_str())
         );
         assert_eq!(cancellation.reason.as_deref(), Some("buyer cancelled"));
+        assert_eq!(inventory.state, "not_reserved");
+        assert_eq!(inventory.commitment_valid, true);
         assert!(view.reducer_issues.is_empty());
     }
 
@@ -7810,6 +7836,7 @@ mod tests {
         let lifecycle = view.lifecycle.as_ref().expect("lifecycle view");
         let receipt = lifecycle.receipt.as_ref().expect("receipt view");
         let inventory = view.inventory.as_ref().expect("inventory view");
+        let fulfillment = view.fulfillment.as_ref().expect("fulfillment view");
 
         assert_eq!(u32::from(receipt_event.kind.as_u16()), KIND_TRADE_RECEIPT);
         assert_eq!(view.state, "completed");
@@ -7818,6 +7845,11 @@ mod tests {
             Some(receipt_event_id.as_str())
         );
         assert_eq!(inventory.state, "reserved");
+        assert_eq!(fulfillment.state, "delivered");
+        assert_eq!(
+            fulfillment.event_id.as_deref(),
+            Some(fulfillment_event_id.as_str())
+        );
         assert_eq!(lifecycle.phase, "completed");
         assert_eq!(lifecycle.terminal, true);
         assert_eq!(
@@ -7888,16 +7920,23 @@ mod tests {
                 events: vec![
                     fixture.request_event.clone(),
                     decision_event,
-                    fulfillment_event,
+                    fulfillment_event.clone(),
                     receipt_event.clone(),
                 ],
             },
         );
         let receipt_event_id = receipt_event.id.to_string();
+        let fulfillment_event_id = fulfillment_event.id.to_string();
         let lifecycle = view.lifecycle.as_ref().expect("lifecycle view");
         let receipt = lifecycle.receipt.as_ref().expect("receipt view");
+        let fulfillment = view.fulfillment.as_ref().expect("fulfillment view");
 
         assert_eq!(view.state, "disputed");
+        assert_eq!(fulfillment.state, "ready_for_pickup");
+        assert_eq!(
+            fulfillment.event_id.as_deref(),
+            Some(fulfillment_event_id.as_str())
+        );
         assert_eq!(lifecycle.phase, "disputed");
         assert_eq!(lifecycle.terminal, true);
         assert_eq!(
