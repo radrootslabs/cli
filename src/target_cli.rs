@@ -174,8 +174,12 @@ impl TargetCommand {
                 OrderCommand::List => "order.list",
                 OrderCommand::Accept(_) => "order.accept",
                 OrderCommand::Decline(_) => "order.decline",
+                OrderCommand::Cancel(_) => "order.cancel",
                 OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
                     OrderFulfillmentCommand::Update(_) => "order.fulfillment.update",
+                },
+                OrderCommand::Receipt(receipt) => match &receipt.command {
+                    OrderReceiptCommand::Record(_) => "order.receipt.record",
                 },
                 OrderCommand::Status(status) => match &status.command {
                     OrderStatusCommand::Get(_) => "order.status.get",
@@ -688,7 +692,9 @@ pub enum OrderCommand {
     List,
     Accept(OrderKeyArgs),
     Decline(OrderDeclineArgs),
+    Cancel(OrderCancelArgs),
     Fulfillment(OrderFulfillmentArgs),
+    Receipt(OrderReceiptArgs),
     Status(OrderStatusArgs),
     Event(OrderEventArgs),
 }
@@ -705,6 +711,13 @@ pub struct OrderKeyArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct OrderDeclineArgs {
+    pub order_id: Option<String>,
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderCancelArgs {
     pub order_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
@@ -751,6 +764,26 @@ impl OrderFulfillmentStateArg {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct OrderReceiptArgs {
+    #[command(subcommand)]
+    pub command: OrderReceiptCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrderReceiptCommand {
+    Record(OrderReceiptRecordArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderReceiptRecordArgs {
+    pub order_id: Option<String>,
+    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "issue")]
+    pub received: bool,
+    #[arg(long)]
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct OrderStatusArgs {
     #[command(subcommand)]
     pub command: OrderStatusCommand,
@@ -786,8 +819,8 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{
-        OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg, TargetCliArgs,
-        TargetOutputFormat,
+        OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg, OrderReceiptCommand,
+        TargetCliArgs, TargetOutputFormat,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
 
@@ -898,6 +931,65 @@ mod tests {
         let OrderFulfillmentCommand::Update(args) = fulfillment.command;
         assert_eq!(args.order_id.as_deref(), Some("ord_test"));
         assert_eq!(args.state, Some(OrderFulfillmentStateArg::ReadyForPickup));
+    }
+
+    #[test]
+    fn target_parser_accepts_order_cancel_reason() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "cancel",
+            "ord_test",
+            "--reason",
+            "changed plans",
+        ])
+        .expect("target args parse");
+
+        assert_eq!(parsed.command.operation_id(), "order.cancel");
+        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Cancel(args) = order.command else {
+            panic!("expected order cancel command")
+        };
+        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.reason.as_deref(), Some("changed plans"));
+    }
+
+    #[test]
+    fn target_parser_accepts_order_receipt_record_outcomes() {
+        let received = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "receipt",
+            "record",
+            "ord_test",
+            "--received",
+        ])
+        .expect("target args parse");
+        assert_eq!(received.command.operation_id(), "order.receipt.record");
+        let crate::target_cli::TargetCommand::Order(order) = received.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Receipt(receipt) = order.command else {
+            panic!("expected order receipt command")
+        };
+        let OrderReceiptCommand::Record(args) = receipt.command;
+        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert!(args.received);
+        assert_eq!(args.issue, None);
+
+        let issue = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "receipt",
+            "record",
+            "ord_test",
+            "--issue",
+            "damaged items",
+        ])
+        .expect("target args parse");
+        assert_eq!(issue.command.operation_id(), "order.receipt.record");
     }
 
     #[test]

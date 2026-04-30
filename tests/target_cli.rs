@@ -140,6 +140,20 @@ fn seller_order_decision_and_status_commands_are_public() {
             .as_slice(),
         ),
         (
+            "order.cancel",
+            [
+                "--format",
+                "json",
+                "--dry-run",
+                "order",
+                "cancel",
+                "ord_public",
+                "--reason",
+                "changed plans",
+            ]
+            .as_slice(),
+        ),
+        (
             "order.status.get",
             ["--format", "json", "order", "status", "get", "ord_public"].as_slice(),
         ),
@@ -155,6 +169,20 @@ fn seller_order_decision_and_status_commands_are_public() {
                 "ord_public",
                 "--state",
                 "ready_for_pickup",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.receipt.record",
+            [
+                "--format",
+                "json",
+                "--dry-run",
+                "order",
+                "receipt",
+                "record",
+                "ord_public",
+                "--received",
             ]
             .as_slice(),
         ),
@@ -477,6 +505,20 @@ fn offline_forbids_external_network_operations() {
             ["--format", "json", "--offline", "order", "submit"].as_slice(),
         ),
         (
+            "order.cancel",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "order",
+                "cancel",
+                "ord_offline_cancel",
+                "--reason",
+                "changed plans",
+            ]
+            .as_slice(),
+        ),
+        (
             "order.fulfillment.update",
             [
                 "--format",
@@ -488,6 +530,20 @@ fn offline_forbids_external_network_operations() {
                 "ord_offline_fulfillment",
                 "--state",
                 "ready_for_pickup",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.receipt.record",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "order",
+                "receipt",
+                "record",
+                "ord_offline_receipt",
+                "--received",
             ]
             .as_slice(),
         ),
@@ -560,6 +616,21 @@ fn offline_rejects_order_decision_dry_run() {
             .as_slice(),
         ),
         (
+            "order.cancel",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "--dry-run",
+                "order",
+                "cancel",
+                "ord_offline_decision",
+                "--reason",
+                "changed plans",
+            ]
+            .as_slice(),
+        ),
+        (
             "order.fulfillment.update",
             [
                 "--format",
@@ -572,6 +643,22 @@ fn offline_rejects_order_decision_dry_run() {
                 "ord_offline_decision",
                 "--state",
                 "ready_for_pickup",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.receipt.record",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "--dry-run",
+                "order",
+                "receipt",
+                "record",
+                "ord_offline_decision",
+                "--issue",
+                "damaged items",
             ]
             .as_slice(),
         ),
@@ -675,6 +762,20 @@ fn online_requires_relay_for_external_network_operations() {
             .as_slice(),
         ),
         (
+            "order.cancel",
+            [
+                "--format",
+                "json",
+                "--online",
+                "order",
+                "cancel",
+                "ord_missing",
+                "--reason",
+                "changed plans",
+            ]
+            .as_slice(),
+        ),
+        (
             "order.fulfillment.update",
             [
                 "--format",
@@ -686,6 +787,20 @@ fn online_requires_relay_for_external_network_operations() {
                 "ord_missing",
                 "--state",
                 "ready_for_pickup",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.receipt.record",
+            [
+                "--format",
+                "json",
+                "--online",
+                "order",
+                "receipt",
+                "record",
+                "ord_missing",
+                "--received",
             ]
             .as_slice(),
         ),
@@ -1147,6 +1262,11 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
     );
     assert_required_approval_token_rejected(
         &sandbox,
+        "order.cancel",
+        &["order", "cancel", "--reason", "changed plans"],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
         "order.fulfillment.update",
         &[
             "order",
@@ -1156,6 +1276,11 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
             "--state",
             "ready_for_pickup",
         ],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "order.receipt.record",
+        &["order", "receipt", "record", "ord_pending", "--received"],
     );
 }
 

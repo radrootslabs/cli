@@ -1055,7 +1055,7 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
         BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand, FarmLocationCommand,
         FarmProfileCommand, ListingCommand, MarketCommand, MarketListingCommand,
         MarketProductCommand, OrderCommand, OrderEventCommand, OrderFulfillmentCommand,
-        OrderStatusCommand, TargetCommand,
+        OrderReceiptCommand, OrderStatusCommand, TargetCommand,
     };
 
     let mut input = OperationData::new();
@@ -1188,6 +1188,10 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 insert_string(&mut input, "order_id", &args.order_id);
                 insert_string(&mut input, "reason", &args.reason);
             }
+            OrderCommand::Cancel(args) => {
+                insert_string(&mut input, "order_id", &args.order_id);
+                insert_string(&mut input, "reason", &args.reason);
+            }
             OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
                 OrderFulfillmentCommand::Update(args) => {
                     insert_string(&mut input, "order_id", &args.order_id);
@@ -1197,6 +1201,15 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                             Value::String(state.as_protocol_state().to_owned()),
                         );
                     }
+                }
+            },
+            OrderCommand::Receipt(receipt) => match &receipt.command {
+                OrderReceiptCommand::Record(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id);
+                    if args.received {
+                        input.insert("received".to_owned(), Value::Bool(true));
+                    }
+                    insert_string(&mut input, "issue", &args.issue);
                 }
             },
             OrderCommand::Status(status) => match &status.command {
@@ -1302,7 +1315,9 @@ target_operation_contracts! {
     OrderList => (OrderListRequest, OrderListResult, "order.list"),
     OrderAccept => (OrderAcceptRequest, OrderAcceptResult, "order.accept"),
     OrderDecline => (OrderDeclineRequest, OrderDeclineResult, "order.decline"),
+    OrderCancel => (OrderCancelRequest, OrderCancelResult, "order.cancel"),
     OrderFulfillmentUpdate => (OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, "order.fulfillment.update"),
+    OrderReceiptRecord => (OrderReceiptRecordRequest, OrderReceiptRecordResult, "order.receipt.record"),
     OrderStatusGet => (OrderStatusGetRequest, OrderStatusGetResult, "order.status.get"),
     OrderEventList => (OrderEventListRequest, OrderEventListResult, "order.event.list"),
     OrderEventWatch => (OrderEventWatchRequest, OrderEventWatchResult, "order.event.watch"),
@@ -1439,6 +1454,65 @@ mod tests {
         assert_eq!(
             request.payload.input.get("state").and_then(Value::as_str),
             Some("seller_cancelled")
+        );
+    }
+
+    #[test]
+    fn adapter_maps_order_lifecycle_inputs() {
+        let cancel = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "cancel",
+            "ord_test",
+            "--reason",
+            "changed plans",
+        ])
+        .expect("target args parse");
+        let request = TargetOperationRequest::from_target_args(&cancel).expect("operation request");
+        let TargetOperationRequest::OrderCancel(request) = request else {
+            panic!("expected order cancel request")
+        };
+        assert_eq!(request.operation_id(), "order.cancel");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("order_id")
+                .and_then(Value::as_str),
+            Some("ord_test")
+        );
+        assert_eq!(
+            request.payload.input.get("reason").and_then(Value::as_str),
+            Some("changed plans")
+        );
+
+        let receipt = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "receipt",
+            "record",
+            "ord_test",
+            "--issue",
+            "damaged items",
+        ])
+        .expect("target args parse");
+        let request =
+            TargetOperationRequest::from_target_args(&receipt).expect("operation request");
+        let TargetOperationRequest::OrderReceiptRecord(request) = request else {
+            panic!("expected order receipt record request")
+        };
+        assert_eq!(request.operation_id(), "order.receipt.record");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("order_id")
+                .and_then(Value::as_str),
+            Some("ord_test")
+        );
+        assert_eq!(
+            request.payload.input.get("issue").and_then(Value::as_str),
+            Some("damaged items")
         );
     }
 

@@ -872,6 +872,21 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         true
     ),
     operation!(
+        "order.cancel",
+        "radroots order cancel",
+        "order",
+        "order_cancel",
+        "OrderCancelRequest",
+        "OrderCancelResult",
+        "Cancel a buyer order before fulfillment.",
+        Buyer,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
         "order.fulfillment.update",
         "radroots order fulfillment update",
         "order",
@@ -880,6 +895,21 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         "OrderFulfillmentUpdateResult",
         "Update seller-authored order fulfillment state.",
         Seller,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
+        "order.receipt.record",
+        "radroots order receipt record",
+        "order",
+        "order_receipt_record",
+        "OrderReceiptRecordRequest",
+        "OrderReceiptRecordResult",
+        "Record buyer receipt outcome.",
+        Buyer,
         true,
         Required,
         High,
@@ -1008,7 +1038,9 @@ mod tests {
         "order.list",
         "order.accept",
         "order.decline",
+        "order.cancel",
         "order.fulfillment.update",
+        "order.receipt.record",
         "order.status.get",
         "order.event.list",
         "order.event.watch",
@@ -1043,7 +1075,9 @@ mod tests {
         "order.submit",
         "order.accept",
         "order.decline",
+        "order.cancel",
         "order.fulfillment.update",
+        "order.receipt.record",
     ];
 
     const INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[];
@@ -1056,7 +1090,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 57);
+        assert_eq!(OPERATION_REGISTRY.len(), 59);
     }
 
     #[test]
@@ -1105,7 +1139,9 @@ mod tests {
             "order.submit",
             "order.accept",
             "order.decline",
+            "order.cancel",
             "order.fulfillment.update",
+            "order.receipt.record",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

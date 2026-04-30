@@ -207,9 +207,24 @@ pub struct OrderDecisionArgs {
 }
 
 #[derive(Debug, Clone)]
+pub struct OrderCancelArgs {
+    pub key: String,
+    pub reason: String,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct OrderFulfillmentArgs {
     pub key: String,
     pub state: String,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderReceiptArgs {
+    pub key: String,
+    pub received: bool,
+    pub issue: Option<String>,
     pub idempotency_key: Option<String>,
 }
 

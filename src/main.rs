@@ -266,7 +266,13 @@ fn execute_request(
         TargetOperationRequest::OrderDecline(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
+        TargetOperationRequest::OrderCancel(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
         TargetOperationRequest::OrderFulfillmentUpdate(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
+        TargetOperationRequest::OrderReceiptRecord(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
         TargetOperationRequest::OrderStatusGet(request) => {
@@ -385,7 +391,11 @@ fn validate_network_contract(
 fn dry_run_requires_network(operation_id: &str) -> bool {
     matches!(
         operation_id,
-        "order.accept" | "order.decline" | "order.fulfillment.update"
+        "order.accept"
+            | "order.decline"
+            | "order.cancel"
+            | "order.fulfillment.update"
+            | "order.receipt.record"
     )
 }
 
@@ -402,7 +412,9 @@ fn external_network_operation(operation_id: &str) -> bool {
             | "order.submit"
             | "order.accept"
             | "order.decline"
+            | "order.cancel"
             | "order.fulfillment.update"
+            | "order.receipt.record"
             | "order.status.get"
             | "order.event.list"
             | "order.event.watch"
