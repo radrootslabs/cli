@@ -1267,6 +1267,32 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
     );
     assert_required_approval_token_rejected(
         &sandbox,
+        "order.revision.accept",
+        &[
+            "order",
+            "revision",
+            "accept",
+            "ord_pending",
+            "--revision-id",
+            "rev_pending",
+        ],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "order.revision.decline",
+        &[
+            "order",
+            "revision",
+            "decline",
+            "ord_pending",
+            "--revision-id",
+            "rev_pending",
+            "--reason",
+            "keep original order",
+        ],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
         "order.fulfillment.update",
         &[
             "order",

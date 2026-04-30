@@ -278,6 +278,12 @@ fn execute_request(
         TargetOperationRequest::OrderRevisionPropose(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
+        TargetOperationRequest::OrderRevisionAccept(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
+        TargetOperationRequest::OrderRevisionDecline(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
         TargetOperationRequest::OrderFulfillmentUpdate(request) => {
             execute_with(OrderOperationService::new(config), request)
         }

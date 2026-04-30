@@ -181,6 +181,8 @@ impl TargetCommand {
                 OrderCommand::Cancel(_) => "order.cancel",
                 OrderCommand::Revision(revision) => match &revision.command {
                     OrderRevisionCommand::Propose(_) => "order.revision.propose",
+                    OrderRevisionCommand::Accept(_) => "order.revision.accept",
+                    OrderRevisionCommand::Decline(_) => "order.revision.decline",
                 },
                 OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
                     OrderFulfillmentCommand::Update(_) => "order.fulfillment.update",
@@ -787,6 +789,8 @@ pub struct OrderRevisionArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum OrderRevisionCommand {
     Propose(OrderRevisionProposeArgs),
+    Accept(OrderRevisionDecisionArgs),
+    Decline(OrderRevisionDeclineArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -808,6 +812,22 @@ pub struct OrderRevisionProposeArgs {
     pub adjustment_currency: Option<String>,
     #[arg(long)]
     pub adjustment_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderRevisionDecisionArgs {
+    pub order_id: Option<String>,
+    #[arg(long)]
+    pub revision_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderRevisionDeclineArgs {
+    pub order_id: Option<String>,
+    #[arg(long)]
+    pub revision_id: Option<String>,
+    #[arg(long)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1077,13 +1097,69 @@ mod tests {
         let OrderCommand::Revision(revision) = order.command else {
             panic!("expected order revision command")
         };
-        let OrderRevisionCommand::Propose(args) = revision.command;
+        let OrderRevisionCommand::Propose(args) = revision.command else {
+            panic!("expected order revision propose command")
+        };
         assert_eq!(args.order_id.as_deref(), Some("ord_test"));
         assert_eq!(args.reason.as_deref(), Some("update count"));
         assert_eq!(args.bin_id.as_deref(), Some("bin-1"));
         assert_eq!(args.bin_count, Some(3));
         assert_eq!(args.adjustment_id.as_deref(), Some("adj_revision"));
         assert_eq!(args.adjustment_effect.as_deref(), Some("increase"));
+    }
+
+    #[test]
+    fn target_parser_accepts_order_revision_decision_inputs() {
+        let accepted = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "revision",
+            "accept",
+            "ord_test",
+            "--revision-id",
+            "rev_test",
+        ])
+        .expect("target args parse");
+
+        assert_eq!(accepted.command.operation_id(), "order.revision.accept");
+        let crate::target_cli::TargetCommand::Order(order) = accepted.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Revision(revision) = order.command else {
+            panic!("expected order revision command")
+        };
+        let OrderRevisionCommand::Accept(args) = revision.command else {
+            panic!("expected order revision accept command")
+        };
+        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.revision_id.as_deref(), Some("rev_test"));
+
+        let declined = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "revision",
+            "decline",
+            "ord_test",
+            "--revision-id",
+            "rev_test",
+            "--reason",
+            "keep original order",
+        ])
+        .expect("target args parse");
+
+        assert_eq!(declined.command.operation_id(), "order.revision.decline");
+        let crate::target_cli::TargetCommand::Order(order) = declined.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Revision(revision) = order.command else {
+            panic!("expected order revision command")
+        };
+        let OrderRevisionCommand::Decline(args) = revision.command else {
+            panic!("expected order revision decline command")
+        };
+        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.revision_id.as_deref(), Some("rev_test"));
+        assert_eq!(args.reason.as_deref(), Some("keep original order"));
     }
 
     #[test]

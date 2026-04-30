@@ -1547,7 +1547,83 @@ impl OrderRevisionProposalView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "missing" => CommandDisposition::NotFound,
-            "invalid" | "requested" | "declined" | "fulfilled" | "terminal" | "forked" => {
+            "invalid" | "requested" | "order_declined" | "fulfilled" | "terminal" | "forked" => {
+                CommandDisposition::ValidationFailed
+            }
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderRevisionDecisionView {
+    pub state: String,
+    pub source: String,
+    pub order_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agreement_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_kind: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub economics: Option<RadrootsTradeOrderEconomics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<OrderInventoryView>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connected_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acknowledged_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_relays: Vec<RelayFailureView>,
+    #[serde(default)]
+    pub fetched_count: usize,
+    #[serde(default)]
+    pub decoded_count: usize,
+    #[serde(default)]
+    pub skipped_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderRevisionDecisionView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "missing" => CommandDisposition::NotFound,
+            "invalid" | "requested" | "order_declined" | "fulfilled" | "terminal" | "forked" => {
                 CommandDisposition::ValidationFailed
             }
             "unconfigured" => CommandDisposition::Unconfigured,
@@ -1567,6 +1643,8 @@ pub struct OrderStatusView {
     pub request_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agreement_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

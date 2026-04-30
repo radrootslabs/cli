@@ -258,6 +258,37 @@ pub struct OrderRevisionProposeArgs {
     pub idempotency_key: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderRevisionDecisionArg {
+    Accept,
+    Decline,
+}
+
+impl OrderRevisionDecisionArg {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accept => "accepted",
+            Self::Decline => "declined",
+        }
+    }
+
+    pub fn command(self) -> &'static str {
+        match self {
+            Self::Accept => "accept",
+            Self::Decline => "decline",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderRevisionDecisionArgs {
+    pub key: String,
+    pub revision_id: String,
+    pub decision: OrderRevisionDecisionArg,
+    pub reason: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct OrderStatusArgs {
     pub key: String,

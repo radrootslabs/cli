@@ -932,6 +932,36 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         true
     ),
     operation!(
+        "order.revision.accept",
+        "radroots order revision accept",
+        "order",
+        "order_revision_accept",
+        "OrderRevisionAcceptRequest",
+        "OrderRevisionAcceptResult",
+        "Accept a seller-authored order revision.",
+        Buyer,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
+        "order.revision.decline",
+        "radroots order revision decline",
+        "order",
+        "order_revision_decline",
+        "OrderRevisionDeclineRequest",
+        "OrderRevisionDeclineResult",
+        "Decline a seller-authored order revision.",
+        Buyer,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
         "order.fulfillment.update",
         "radroots order fulfillment update",
         "order",
@@ -1087,6 +1117,8 @@ mod tests {
         "order.decline",
         "order.cancel",
         "order.revision.propose",
+        "order.revision.accept",
+        "order.revision.decline",
         "order.fulfillment.update",
         "order.receipt.record",
         "order.status.get",
@@ -1127,6 +1159,8 @@ mod tests {
         "order.decline",
         "order.cancel",
         "order.revision.propose",
+        "order.revision.accept",
+        "order.revision.decline",
         "order.fulfillment.update",
         "order.receipt.record",
     ];
@@ -1141,7 +1175,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 62);
+        assert_eq!(OPERATION_REGISTRY.len(), 64);
     }
 
     #[test]
@@ -1192,6 +1226,8 @@ mod tests {
             "order.decline",
             "order.cancel",
             "order.revision.propose",
+            "order.revision.accept",
+            "order.revision.decline",
             "order.fulfillment.update",
             "order.receipt.record",
         ]

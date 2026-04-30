@@ -1230,6 +1230,15 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                     insert_string(&mut input, "adjustment_currency", &args.adjustment_currency);
                     insert_string(&mut input, "adjustment_reason", &args.adjustment_reason);
                 }
+                OrderRevisionCommand::Accept(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id);
+                    insert_string(&mut input, "revision_id", &args.revision_id);
+                }
+                OrderRevisionCommand::Decline(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id);
+                    insert_string(&mut input, "revision_id", &args.revision_id);
+                    insert_string(&mut input, "reason", &args.reason);
+                }
             },
             OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
                 OrderFulfillmentCommand::Update(args) => {
@@ -1358,6 +1367,8 @@ target_operation_contracts! {
     OrderDecline => (OrderDeclineRequest, OrderDeclineResult, "order.decline"),
     OrderCancel => (OrderCancelRequest, OrderCancelResult, "order.cancel"),
     OrderRevisionPropose => (OrderRevisionProposeRequest, OrderRevisionProposeResult, "order.revision.propose"),
+    OrderRevisionAccept => (OrderRevisionAcceptRequest, OrderRevisionAcceptResult, "order.revision.accept"),
+    OrderRevisionDecline => (OrderRevisionDeclineRequest, OrderRevisionDeclineResult, "order.revision.decline"),
     OrderFulfillmentUpdate => (OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, "order.fulfillment.update"),
     OrderReceiptRecord => (OrderReceiptRecordRequest, OrderReceiptRecordResult, "order.receipt.record"),
     OrderStatusGet => (OrderStatusGetRequest, OrderStatusGetResult, "order.status.get"),
@@ -1594,6 +1605,78 @@ mod tests {
                 .get("adjustment_reason")
                 .and_then(Value::as_str),
             Some("weather delay")
+        );
+
+        let revision_accept = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "revision",
+            "accept",
+            "ord_test",
+            "--revision-id",
+            "rev_test",
+        ])
+        .expect("target args parse");
+        let request =
+            TargetOperationRequest::from_target_args(&revision_accept).expect("operation request");
+        let TargetOperationRequest::OrderRevisionAccept(request) = request else {
+            panic!("expected order revision accept request")
+        };
+        assert_eq!(request.operation_id(), "order.revision.accept");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("order_id")
+                .and_then(Value::as_str),
+            Some("ord_test")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("revision_id")
+                .and_then(Value::as_str),
+            Some("rev_test")
+        );
+
+        let revision_decline = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "revision",
+            "decline",
+            "ord_test",
+            "--revision-id",
+            "rev_test",
+            "--reason",
+            "keep original order",
+        ])
+        .expect("target args parse");
+        let request =
+            TargetOperationRequest::from_target_args(&revision_decline).expect("operation request");
+        let TargetOperationRequest::OrderRevisionDecline(request) = request else {
+            panic!("expected order revision decline request")
+        };
+        assert_eq!(request.operation_id(), "order.revision.decline");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("order_id")
+                .and_then(Value::as_str),
+            Some("ord_test")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("revision_id")
+                .and_then(Value::as_str),
+            Some("rev_test")
+        );
+        assert_eq!(
+            request.payload.input.get("reason").and_then(Value::as_str),
+            Some("keep original order")
         );
 
         let cancel = TargetCliArgs::try_parse_from([
