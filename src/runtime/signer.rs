@@ -341,7 +341,7 @@ fn local_availability(value: RadrootsNostrLocalSignerAvailability) -> &'static s
 
 #[cfg(test)]
 mod tests {
-    use radroots_events::kinds::KIND_TRADE_DISCOUNT_DECLINE;
+    use radroots_events::kinds::KIND_TRADE_FORBIDDEN_3431;
 
     use super::{KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST, cli_write_kinds};
 
@@ -353,7 +353,7 @@ mod tests {
             .expect("order submit readiness");
 
         assert_eq!(write_kind.event_kind, KIND_TRADE_ORDER_REQUEST);
-        assert_ne!(write_kind.event_kind, KIND_TRADE_DISCOUNT_DECLINE);
+        assert_ne!(write_kind.event_kind, KIND_TRADE_FORBIDDEN_3431);
     }
 
     #[test]
@@ -365,7 +365,7 @@ mod tests {
                 .expect("order decision readiness");
 
             assert_eq!(write_kind.event_kind, KIND_TRADE_ORDER_DECISION);
-            assert_ne!(write_kind.event_kind, KIND_TRADE_DISCOUNT_DECLINE);
+            assert_ne!(write_kind.event_kind, KIND_TRADE_FORBIDDEN_3431);
         }
     }
 }
