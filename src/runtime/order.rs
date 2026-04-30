@@ -1204,6 +1204,7 @@ pub fn status(
             listing_addr: None,
             buyer_pubkey: None,
             seller_pubkey: None,
+            economics: None,
             last_event_id: None,
             inventory: None,
             fulfillment: None,
@@ -1238,6 +1239,7 @@ pub fn status(
                 listing_addr: None,
                 buyer_pubkey: None,
                 seller_pubkey: None,
+                economics: None,
                 last_event_id: None,
                 inventory: None,
                 fulfillment: None,
@@ -1522,6 +1524,7 @@ fn order_status_reduction_from_receipt_with_context(
         listing_addr: projection.listing_addr,
         buyer_pubkey: projection.buyer_pubkey,
         seller_pubkey: projection.seller_pubkey,
+        economics: projection.economics,
         last_event_id: projection.last_event_id,
         inventory,
         fulfillment,
@@ -7325,6 +7328,7 @@ mod tests {
         assert_eq!(view.decoded_count, 0);
         assert_eq!(view.skipped_count, 0);
         assert!(view.request_event_id.is_none());
+        assert!(view.economics.is_none());
         assert!(view.fulfillment.is_none());
         assert!(view.reducer_issues.is_empty());
     }
@@ -7363,6 +7367,14 @@ mod tests {
         assert_eq!(
             view.seller_pubkey.as_deref(),
             Some(fixture.seller_pubkey.as_str())
+        );
+        assert_eq!(
+            view.economics,
+            Some(sample_order_economics(
+                fixture.order_id.as_str(),
+                "bin-1",
+                2
+            ))
         );
         assert_eq!(view.decoded_count, 1);
         assert_eq!(view.skipped_count, 0);
@@ -7405,6 +7417,14 @@ mod tests {
         assert_eq!(
             view.request_event_id.as_deref(),
             Some(expected_request_event_id.as_str())
+        );
+        assert_eq!(
+            view.economics,
+            Some(sample_order_economics(
+                fixture.order_id.as_str(),
+                "bin-1",
+                2
+            ))
         );
         assert!(view.reducer_issues.is_empty());
     }
@@ -7681,6 +7701,14 @@ mod tests {
         let decision_event_id = decision_event.id.to_string();
 
         assert_eq!(view.state, "accepted");
+        assert_eq!(
+            view.economics,
+            Some(sample_order_economics(
+                fixture.order_id.as_str(),
+                "bin-1",
+                2
+            ))
+        );
         assert_eq!(
             view.decision_event_id.as_deref(),
             Some(decision_event_id.as_str())
@@ -9799,6 +9827,7 @@ mod tests {
         assert_eq!(inventory.state, "not_reserved");
         assert_eq!(inventory.commitment_valid, true);
         assert!(inventory.bins.is_empty());
+        assert!(view.economics.is_none());
         assert!(view.fulfillment.is_none());
         assert!(view.reducer_issues.is_empty());
         assert_eq!(view.decoded_count, 2);

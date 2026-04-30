@@ -1502,6 +1502,8 @@ pub struct OrderStatusView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub economics: Option<RadrootsTradeOrderEconomics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inventory: Option<OrderInventoryView>,
