@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use radroots_core::{
+    RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreMoney, RadrootsCoreUnit,
+    convert_unit_decimal,
+};
 use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::kinds::{
     KIND_LISTING, KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION,
@@ -14,8 +18,9 @@ use radroots_events::listing::{
 use radroots_events::trade::{
     RadrootsActiveTradeFulfillmentState, RadrootsActiveTradeMessageType, RadrootsTradeBuyerReceipt,
     RadrootsTradeFulfillmentUpdated, RadrootsTradeInventoryCommitment, RadrootsTradeOrderCancelled,
-    RadrootsTradeOrderDecision, RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderItem,
-    RadrootsTradeOrderRequested,
+    RadrootsTradeOrderDecision, RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderEconomicItem,
+    RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
+    RadrootsTradePricingBasis,
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::decode::listing_from_event;
@@ -32,11 +37,15 @@ use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
     radroots_nostr_kind,
 };
-use radroots_replica_db::{ReplicaSql, nostr_event_state, trade_product};
+use radroots_replica_db::{
+    ReplicaSql, ReplicaTradeProductSummaryRow, nostr_event_state, trade_product,
+};
 use radroots_replica_db_schema::nostr_event_state::{
     INostrEventStateFindOne, INostrEventStateFindOneArgs, NostrEventStateQueryBindValues,
 };
-use radroots_replica_db_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
+use radroots_replica_db_schema::trade_product::{
+    ITradeProductFieldsFilter, ITradeProductFindMany, TradeProduct,
+};
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
     RadrootsActiveOrderCancellationRecord, RadrootsActiveOrderDecisionRecord,
@@ -112,6 +121,8 @@ struct OrderDraft {
     seller_pubkey: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     items: Vec<OrderDraftItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    economics: Option<RadrootsTradeOrderEconomics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +144,44 @@ struct ResolvedOrderListing {
     listing_addr: String,
     listing_event_id: String,
     seller_pubkey: String,
+    economics_product: Option<ResolvedOrderEconomicsProduct>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedOrderEconomicsProduct {
+    qty_amt: i64,
+    qty_unit: String,
+    price_amt: f64,
+    price_currency: String,
+    price_qty_amt: u32,
+    price_qty_unit: String,
+    primary_bin_id: Option<String>,
+}
+
+impl ResolvedOrderEconomicsProduct {
+    fn from_summary(row: &ReplicaTradeProductSummaryRow) -> Self {
+        Self {
+            qty_amt: row.qty_amt,
+            qty_unit: row.qty_unit.clone(),
+            price_amt: row.price_amt,
+            price_currency: row.price_currency.clone(),
+            price_qty_amt: row.price_qty_amt,
+            price_qty_unit: row.price_qty_unit.clone(),
+            primary_bin_id: row.primary_bin_id.clone(),
+        }
+    }
+
+    fn from_product(row: TradeProduct) -> Self {
+        Self {
+            qty_amt: row.qty_amt,
+            qty_unit: row.qty_unit,
+            price_amt: row.price_amt,
+            price_currency: row.price_currency,
+            price_qty_amt: row.price_qty_amt,
+            price_qty_unit: row.price_qty_unit,
+            primary_bin_id: row.primary_bin_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +193,7 @@ struct ResolvedSellerOrderRequest {
     buyer_pubkey: String,
     seller_pubkey: String,
     items: Vec<RadrootsTradeOrderItem>,
+    economics: RadrootsTradeOrderEconomics,
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +279,11 @@ pub fn scaffold(
     };
 
     let order_id = next_order_id();
+    let economics = order_economics_from_resolved_listing(
+        order_id.as_str(),
+        resolved_listing.as_ref(),
+        items.as_slice(),
+    )?;
     let drafts_dir = drafts_dir(config);
     fs::create_dir_all(&drafts_dir)?;
     let file = drafts_dir.join(format!("{order_id}.toml"));
@@ -243,6 +298,7 @@ pub fn scaffold(
             buyer_pubkey,
             seller_pubkey,
             items,
+            economics,
         },
         listing_lookup,
         buyer_account_id,
@@ -306,6 +362,11 @@ pub fn scaffold_preflight(
     };
 
     let order_id = next_order_id();
+    let economics = order_economics_from_resolved_listing(
+        order_id.as_str(),
+        resolved_listing.as_ref(),
+        items.as_slice(),
+    )?;
     let file = drafts_dir(config).join(format!("{order_id}.toml"));
     let document = OrderDraftDocument {
         version: 1,
@@ -317,6 +378,7 @@ pub fn scaffold_preflight(
             buyer_pubkey,
             seller_pubkey,
             items,
+            economics,
         },
         listing_lookup,
         buyer_account_id,
@@ -353,6 +415,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             seller_pubkey: None,
             ready_for_submit: false,
             items: Vec::new(),
+            economics: None,
             updated_at_unix: None,
             job: None,
             workflow: None,
@@ -381,6 +444,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             seller_pubkey: None,
             ready_for_submit: false,
             items: Vec::new(),
+            economics: None,
             updated_at_unix: None,
             job: None,
             workflow: None,
@@ -3840,6 +3904,7 @@ fn active_request_record_from_resolved(
             buyer_pubkey: request.buyer_pubkey.clone(),
             seller_pubkey: request.seller_pubkey.clone(),
             items: request.items.clone(),
+            economics: request.economics.clone(),
         },
     }
 }
@@ -4439,6 +4504,7 @@ fn seller_order_request_from_event(
         buyer_pubkey: envelope.payload.buyer_pubkey,
         seller_pubkey: envelope.payload.seller_pubkey,
         items: envelope.payload.items,
+        economics: envelope.payload.economics,
     })
 }
 
@@ -4753,10 +4819,12 @@ fn resolve_order_listing(
         }
         let listing_event_id =
             resolve_active_listing_event_id(config, listing_addr, &parsed)?.unwrap_or_default();
+        let economics_product = resolve_trade_product_by_listing_addr(config, listing_addr)?;
         return Ok(Some(ResolvedOrderListing {
             listing_addr: listing_addr.to_owned(),
             listing_event_id,
             seller_pubkey: parsed.seller_pubkey,
+            economics_product,
         }));
     }
 
@@ -4778,6 +4846,7 @@ fn resolve_order_listing(
         ))),
         1 => {
             let row = rows.into_iter().next().expect("one row");
+            let economics_product = ResolvedOrderEconomicsProduct::from_summary(&row);
             let listing_addr = normalize_optional(row.listing_addr.as_deref()).ok_or_else(|| {
                 RuntimeError::Config(format!(
                     "listing `{listing_lookup}` is missing a canonical listing address; run `radroots market refresh` or pass `--listing-addr`"
@@ -4809,10 +4878,41 @@ fn resolve_order_listing(
                 listing_addr,
                 listing_event_id,
                 seller_pubkey: parsed.seller_pubkey,
+                economics_product: Some(economics_product),
             }))
         }
         count => Err(RuntimeError::Config(format!(
             "listing lookup `{listing_lookup}` matched {count} local listings; use a unique product key or pass `--listing-addr`"
+        ))),
+    }
+}
+
+fn resolve_trade_product_by_listing_addr(
+    config: &RuntimeConfig,
+    listing_addr: &str,
+) -> Result<Option<ResolvedOrderEconomicsProduct>, RuntimeError> {
+    if !config.local.replica_db_path.exists() {
+        return Ok(None);
+    }
+
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let product_rows = trade_product::find_many(
+        &executor,
+        &ITradeProductFindMany {
+            filter: Some(trade_product_listing_addr_filter(listing_addr)),
+        },
+    )
+    .map_err(|error| RuntimeError::Config(format!("resolve listing product state: {error:?}")))?
+    .results;
+
+    match product_rows.len() {
+        0 => Ok(None),
+        1 => Ok(product_rows
+            .into_iter()
+            .next()
+            .map(ResolvedOrderEconomicsProduct::from_product)),
+        count => Err(RuntimeError::Config(format!(
+            "listing address `{listing_addr}` matched {count} active local listing rows"
         ))),
     }
 }
@@ -4898,6 +4998,131 @@ fn trade_product_listing_addr_filter(listing_addr: &str) -> ITradeProductFieldsF
     }
 }
 
+fn order_economics_from_resolved_listing(
+    order_id: &str,
+    resolved_listing: Option<&ResolvedOrderListing>,
+    items: &[OrderDraftItem],
+) -> Result<Option<RadrootsTradeOrderEconomics>, RuntimeError> {
+    let Some(listing) = resolved_listing else {
+        return Ok(None);
+    };
+    let Some(product) = listing.economics_product.as_ref() else {
+        return Ok(None);
+    };
+    let Some(primary_bin_id) = product.primary_bin_id.as_deref().and_then(non_empty_ref) else {
+        return Ok(None);
+    };
+    if items.is_empty()
+        || items
+            .iter()
+            .any(|item| item.bin_id.as_str() != primary_bin_id)
+    {
+        return Ok(None);
+    }
+
+    let currency = parse_economics_currency(product.price_currency.as_str(), "price_currency")?;
+    let quantity_amount = decimal_from_non_negative_i64(product.qty_amt, "qty_amt")?;
+    let quantity_unit = parse_economics_unit(product.qty_unit.as_str(), "qty_unit")?;
+    let price_amount = decimal_from_non_negative_f64(product.price_amt, "price_amt")?;
+    let price_quantity_amount = if product.price_qty_amt == 0 {
+        return Err(RuntimeError::Config(
+            "listing price_qty_amt must be greater than zero".to_owned(),
+        ));
+    } else {
+        RadrootsCoreDecimal::from(product.price_qty_amt)
+    };
+    let price_unit = parse_economics_unit(product.price_qty_unit.as_str(), "price_qty_unit")?;
+    let quantity_unit_in_price_units =
+        convert_unit_decimal(RadrootsCoreDecimal::ONE, quantity_unit, price_unit).map_err(
+            |error| {
+                RuntimeError::Config(format!(
+                    "listing quantity unit and price unit are incompatible: {error}"
+                ))
+            },
+        )?;
+    let unit_price_amount = (price_amount / price_quantity_amount) * quantity_unit_in_price_units;
+
+    let mut subtotal_amount = RadrootsCoreDecimal::ZERO;
+    let mut economic_items = Vec::with_capacity(items.len());
+    for item in items {
+        let line_amount =
+            unit_price_amount * quantity_amount * RadrootsCoreDecimal::from(item.bin_count);
+        subtotal_amount = subtotal_amount + line_amount;
+        economic_items.push(RadrootsTradeOrderEconomicItem {
+            bin_id: item.bin_id.clone(),
+            bin_count: item.bin_count,
+            quantity_amount,
+            quantity_unit,
+            unit_price_amount,
+            unit_price_currency: currency,
+            line_subtotal: RadrootsCoreMoney::new(line_amount, currency),
+        });
+    }
+
+    let subtotal = RadrootsCoreMoney::new(subtotal_amount, currency);
+    let zero = RadrootsCoreMoney::zero(currency);
+    let mut economics = RadrootsTradeOrderEconomics {
+        quote_id: format!("quote_{order_id}"),
+        quote_version: 1,
+        pricing_basis: RadrootsTradePricingBasis::ListingEvent,
+        currency,
+        items: economic_items,
+        discounts: Vec::new(),
+        adjustments: Vec::new(),
+        subtotal: subtotal.clone(),
+        discount_total: zero.clone(),
+        adjustment_total: zero,
+        total: subtotal,
+    };
+    economics.canonicalize();
+    economics
+        .validate()
+        .map_err(|error| RuntimeError::Config(format!("build order economics: {error}")))?;
+    Ok(Some(economics))
+}
+
+fn parse_economics_currency(
+    value: &str,
+    field: &str,
+) -> Result<RadrootsCoreCurrency, RuntimeError> {
+    value
+        .parse::<RadrootsCoreCurrency>()
+        .map_err(|error| RuntimeError::Config(format!("listing {field} is invalid: {error}")))
+}
+
+fn parse_economics_unit(value: &str, field: &str) -> Result<RadrootsCoreUnit, RuntimeError> {
+    value
+        .parse::<RadrootsCoreUnit>()
+        .map_err(|error| RuntimeError::Config(format!("listing {field} is invalid: {error}")))
+}
+
+fn decimal_from_non_negative_i64(
+    value: i64,
+    field: &str,
+) -> Result<RadrootsCoreDecimal, RuntimeError> {
+    if value < 0 {
+        return Err(RuntimeError::Config(format!(
+            "listing {field} must be non-negative"
+        )));
+    }
+    Ok(RadrootsCoreDecimal::from(value))
+}
+
+fn decimal_from_non_negative_f64(
+    value: f64,
+    field: &str,
+) -> Result<RadrootsCoreDecimal, RuntimeError> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(RuntimeError::Config(format!(
+            "listing {field} must be a finite non-negative decimal"
+        )));
+    }
+    value
+        .to_string()
+        .parse::<RadrootsCoreDecimal>()
+        .map_err(|error| RuntimeError::Config(format!("listing {field} is invalid: {error}")))
+}
+
 fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
     let OrderInspection {
         state,
@@ -4933,6 +5158,7 @@ fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
                 bin_count: item.bin_count,
             })
             .collect(),
+        economics: loaded.document.order.economics.clone(),
         updated_at_unix: Some(loaded.updated_at_unix),
         job: None,
         workflow: None,
@@ -4962,6 +5188,7 @@ fn summary_from_loaded(loaded: &LoadedOrderDraft) -> OrderSummaryView {
         listing_event_id,
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         item_count: loaded.document.order.items.len(),
+        economics: loaded.document.order.economics.clone(),
         updated_at_unix: loaded.updated_at_unix,
         job: None,
         issues,
@@ -4984,6 +5211,7 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
         listing_event_id: None,
         buyer_account_id: None,
         item_count: 0,
+        economics: None,
         updated_at_unix: modified_unix(path).unwrap_or_default(),
         job: None,
         issues: vec![issue_with_code("invalid_order_draft", "draft", reason)],
@@ -5100,6 +5328,27 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
         }
     }
 
+    match &document.order.economics {
+        Some(economics) => {
+            if let Err(error) = economics.validate() {
+                issues.push(issue(
+                    "order.economics",
+                    format!("order economics is invalid: {error}"),
+                ));
+            }
+            if !order_items_match_economics(document.order.items.as_slice(), economics) {
+                issues.push(issue(
+                    "order.economics",
+                    "order economics must match the order item bin ids and counts",
+                ));
+            }
+        }
+        None => issues.push(issue(
+            "order.economics",
+            "quote economics is required before order submit; run `radroots basket quote create` from current local market data",
+        )),
+    }
+
     if document
         .buyer_account_id
         .as_deref()
@@ -5113,6 +5362,24 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
     }
 
     issues
+}
+
+fn order_items_match_economics(
+    items: &[OrderDraftItem],
+    economics: &RadrootsTradeOrderEconomics,
+) -> bool {
+    let mut order_items = items
+        .iter()
+        .map(|item| (item.bin_id.as_str(), item.bin_count))
+        .collect::<Vec<_>>();
+    let mut economic_items = economics
+        .items
+        .iter()
+        .map(|item| (item.bin_id.as_str(), item.bin_count))
+        .collect::<Vec<_>>();
+    order_items.sort_unstable();
+    economic_items.sort_unstable();
+    order_items == economic_items
 }
 
 fn actions_for_document(
@@ -5761,6 +6028,10 @@ fn canonical_order_request_payload_from_loaded(
     loaded: &LoadedOrderDraft,
     signer_pubkey: &str,
 ) -> Result<RadrootsTradeOrderRequested, RuntimeError> {
+    let economics =
+        loaded.document.order.economics.clone().ok_or_else(|| {
+            RuntimeError::Config("order draft is missing quote economics".to_owned())
+        })?;
     let payload = RadrootsTradeOrderRequested {
         order_id: loaded.document.order.order_id.clone(),
         listing_addr: loaded.document.order.listing_addr.clone(),
@@ -5776,6 +6047,7 @@ fn canonical_order_request_payload_from_loaded(
                 bin_count: item.bin_count,
             })
             .collect(),
+        economics,
     };
     canonicalize_active_order_request_for_signer(payload, signer_pubkey)
         .map_err(|error| RuntimeError::Config(format!("canonicalize order request: {error}")))
@@ -6279,6 +6551,7 @@ impl From<OrderGetView> for OrderNewView {
             seller_pubkey: view.seller_pubkey,
             ready_for_submit: view.ready_for_submit,
             items: view.items,
+            economics: view.economics,
             issues: view.issues,
             actions: view.actions,
         }
@@ -6289,6 +6562,9 @@ impl From<OrderGetView> for OrderNewView {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use radroots_core::{
+        RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreMoney, RadrootsCoreUnit,
+    };
     use radroots_events::RadrootsNostrEventPtr;
     use radroots_events::kinds::{
         KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION,
@@ -6298,7 +6574,9 @@ mod tests {
         RadrootsActiveTradeFulfillmentState, RadrootsActiveTradeMessageType,
         RadrootsTradeBuyerReceipt, RadrootsTradeFulfillmentUpdated,
         RadrootsTradeInventoryCommitment, RadrootsTradeOrderCancelled, RadrootsTradeOrderDecision,
-        RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
+        RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderEconomicItem,
+        RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
+        RadrootsTradePricingBasis,
     };
     use radroots_events_codec::trade::{
         active_trade_buyer_receipt_event_build, active_trade_event_context_from_tags,
@@ -6374,6 +6652,11 @@ mod tests {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
+                economics: Some(sample_order_economics(
+                    "ord_AAAAAAAAAAAAAAAAAAAAAg",
+                    "bin-1",
+                    2,
+                )),
             },
             listing_lookup: Some("fresh-eggs".to_owned()),
             buyer_account_id: Some("acct_demo".to_owned()),
@@ -6400,6 +6683,11 @@ mod tests {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
+                economics: Some(sample_order_economics(
+                    "ord_AAAAAAAAAAAAAAAAAAAAAg",
+                    "bin-1",
+                    2,
+                )),
             },
             listing_lookup: Some("fresh-eggs".to_owned()),
             buyer_account_id: Some("acct_demo".to_owned()),
@@ -6432,6 +6720,7 @@ mod tests {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
+            economics: sample_order_economics("ord_AAAAAAAAAAAAAAAAAAAAAg", "bin-1", 2),
         };
         let parts = active_trade_order_request_event_build(
             &RadrootsNostrEventPtr {
@@ -9213,6 +9502,7 @@ mod tests {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
+            economics: sample_order_economics(existing_order_id, "bin-1", 2),
         };
         let existing_decision_payload =
             accepted_order_decision_payload_from_request(&existing_request);
@@ -9308,6 +9598,7 @@ mod tests {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
+            economics: sample_order_economics(existing_order_id, "bin-1", 2),
         };
         let existing_decision_payload =
             accepted_order_decision_payload_from_request(&existing_request);
@@ -9835,6 +10126,36 @@ mod tests {
         }
     }
 
+    fn sample_order_economics(
+        order_id: &str,
+        bin_id: &str,
+        bin_count: u32,
+    ) -> RadrootsTradeOrderEconomics {
+        let currency = RadrootsCoreCurrency::USD;
+        let line_amount = RadrootsCoreDecimal::from(6u32) * RadrootsCoreDecimal::from(bin_count);
+        RadrootsTradeOrderEconomics {
+            quote_id: format!("quote_{order_id}"),
+            quote_version: 1,
+            pricing_basis: RadrootsTradePricingBasis::ListingEvent,
+            currency,
+            items: vec![RadrootsTradeOrderEconomicItem {
+                bin_id: bin_id.to_owned(),
+                bin_count,
+                quantity_amount: RadrootsCoreDecimal::ONE,
+                quantity_unit: RadrootsCoreUnit::Each,
+                unit_price_amount: RadrootsCoreDecimal::from(6u32),
+                unit_price_currency: currency,
+                line_subtotal: RadrootsCoreMoney::new(line_amount, currency),
+            }],
+            discounts: Vec::new(),
+            adjustments: Vec::new(),
+            subtotal: RadrootsCoreMoney::new(line_amount, currency),
+            discount_total: RadrootsCoreMoney::zero(currency),
+            adjustment_total: RadrootsCoreMoney::zero(currency),
+            total: RadrootsCoreMoney::new(line_amount, currency),
+        }
+    }
+
     fn loaded_order_draft_for_fixture(fixture: &OrderStatusFixture) -> LoadedOrderDraft {
         LoadedOrderDraft {
             file: PathBuf::from(format!("{}.toml", fixture.order_id)),
@@ -9852,6 +10173,11 @@ mod tests {
                         bin_id: "bin-1".to_owned(),
                         bin_count: 2,
                     }],
+                    economics: Some(sample_order_economics(
+                        fixture.order_id.as_str(),
+                        "bin-1",
+                        2,
+                    )),
                 },
                 listing_lookup: Some("test-listing".to_owned()),
                 buyer_account_id: Some("acct_test".to_owned()),
@@ -10172,6 +10498,7 @@ mod tests {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
+            economics: sample_order_economics(order_id, "bin-1", 2),
         };
         let parts = active_trade_order_request_event_build(
             &RadrootsNostrEventPtr {
@@ -10204,6 +10531,7 @@ mod tests {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
+            economics: sample_order_economics(order_id, "bin-1", 2),
         };
         let parts = active_trade_order_request_event_build(
             &RadrootsNostrEventPtr {

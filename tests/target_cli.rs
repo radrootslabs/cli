@@ -1471,7 +1471,30 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     let order_id = quote["result"]["quote"]["order_id"]
         .as_str()
         .expect("order id");
+    let quote_economics = &quote["result"]["quote"]["economics"];
+    let order_file = quote["result"]["order"]["file"]
+        .as_str()
+        .expect("order file");
     assert_eq!(quote["result"]["quote"]["ready_for_submit"], true);
+    assert_eq!(quote["result"]["quote"]["quote_version"], 1);
+    assert_eq!(
+        quote["result"]["quote"]["quote_id"],
+        quote_economics["quote_id"]
+    );
+    assert_eq!(quote_economics["quote_version"], 1);
+    assert_eq!(quote_economics["pricing_basis"], "listing_event");
+    assert_eq!(quote_economics["currency"], "USD");
+    assert_eq!(quote_economics["items"][0]["bin_id"], "bin-1");
+    assert_eq!(quote_economics["items"][0]["bin_count"], 2);
+    assert_eq!(quote_economics["discounts"], Value::Array(Vec::new()));
+    assert_eq!(quote_economics["adjustments"], Value::Array(Vec::new()));
+    assert_eq!(
+        quote["result"]["order"]["economics"],
+        quote_economics.clone()
+    );
+    let order_draft = fs::read_to_string(order_file).expect("read order draft");
+    assert!(order_draft.contains("[order.economics]"));
+    assert!(order_draft.contains("pricing_basis = \"listing_event\""));
     assert_eq!(quote["result"]["order"]["buyer_account_id"], account_id);
     assert_eq!(
         quote["result"]["order"]["listing_event_id"],
@@ -1491,6 +1514,10 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(
         orders["result"]["orders"][0]["buyer_account_id"],
         account_id
+    );
+    assert_eq!(
+        orders["result"]["orders"][0]["economics"],
+        quote_economics.clone()
     );
     assert_eq!(orders["result"]["orders"][0]["issues"], Value::Null);
     assert_no_removed_command_reference(&orders, &["order", "list"]);
@@ -1551,6 +1578,10 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     let order_after_submit = sandbox.json_success(&["--format", "json", "order", "get", order_id]);
     assert_eq!(order_after_submit["operation_id"], "order.get");
     assert_eq!(order_after_submit["result"]["state"], "ready");
+    assert_eq!(
+        order_after_submit["result"]["economics"],
+        quote_economics.clone()
+    );
     assert_eq!(order_after_submit["result"]["job"], Value::Null);
     assert_eq!(order_after_submit["result"]["workflow"], Value::Null);
     assert_no_daemon_runtime_reference(&order_after_submit, &["order", "get"]);

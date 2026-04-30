@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use radroots_events::trade::RadrootsTradeOrderEconomics;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -62,8 +63,11 @@ struct BasketItem {
 #[serde(deny_unknown_fields)]
 struct BasketQuote {
     quote_id: String,
+    quote_version: u32,
     order_id: String,
     order_file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    economics: Option<RadrootsTradeOrderEconomics>,
     ready_for_submit: bool,
     created_at_unix: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -389,10 +393,19 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
                 bin_count: Some(item.quantity),
             },
         ))?;
+        let quote_economics = order.economics.clone();
         let quote = BasketQuote {
-            quote_id: format!("quote_{}", loaded.document.basket.basket_id),
+            quote_id: quote_economics
+                .as_ref()
+                .map(|economics| economics.quote_id.clone())
+                .unwrap_or_else(|| format!("quote_{}", loaded.document.basket.basket_id)),
+            quote_version: quote_economics
+                .as_ref()
+                .map(|economics| economics.quote_version)
+                .unwrap_or(1),
             order_id: order.order_id.clone(),
             order_file: order.file.clone(),
+            economics: quote_economics,
             ready_for_submit: order.ready_for_submit,
             created_at_unix: now_unix(),
             issues: quote_issues_from_order(&order),
@@ -599,7 +612,7 @@ fn basket_issues(document: &BasketDocument) -> Vec<BasketIssue> {
     if document.basket.items.len() > 1 {
         issues.push(BasketIssue {
             field: "basket.items".to_owned(),
-            message: "MVP basket quotes support exactly one item".to_owned(),
+            message: "basket quotes support exactly one item".to_owned(),
         });
     }
     for item in &document.basket.items {

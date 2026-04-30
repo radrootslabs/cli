@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use radroots_events::farm::RadrootsFarm;
 use radroots_events::listing::RadrootsListingLocation;
 use radroots_events::profile::RadrootsProfile;
+use radroots_events::trade::RadrootsTradeOrderEconomics;
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
 use serde::Serialize;
 
@@ -1061,6 +1062,8 @@ pub struct OrderNewView {
     pub ready_for_submit: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<OrderDraftItemView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub economics: Option<RadrootsTradeOrderEconomics>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<OrderIssueView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1100,6 +1103,8 @@ pub struct OrderGetView {
     pub ready_for_submit: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<OrderDraftItemView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub economics: Option<RadrootsTradeOrderEconomics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1788,6 +1793,8 @@ pub struct OrderSummaryView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     pub item_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub economics: Option<RadrootsTradeOrderEconomics>,
     pub updated_at_unix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<OrderJobView>,
