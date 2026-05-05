@@ -1056,7 +1056,7 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
         FarmLocationCommand, FarmProfileCommand, ListingCommand, MarketCommand,
         MarketListingCommand, MarketProductCommand, OrderCommand, OrderEventCommand,
         OrderFulfillmentCommand, OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand,
-        OrderStatusCommand, TargetCommand,
+        OrderSettlementCommand, OrderStatusCommand, TargetCommand,
     };
 
     let mut input = OperationData::new();
@@ -1280,6 +1280,17 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                     }
                 }
             },
+            OrderCommand::Settlement(settlement) => match &settlement.command {
+                OrderSettlementCommand::Accept(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id);
+                    insert_string(&mut input, "payment_event_id", &args.payment_event_id);
+                }
+                OrderSettlementCommand::Reject(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id);
+                    insert_string(&mut input, "payment_event_id", &args.payment_event_id);
+                    insert_string(&mut input, "reason", &args.reason);
+                }
+            },
             OrderCommand::Status(status) => match &status.command {
                 OrderStatusCommand::Get(args) => {
                     insert_string(&mut input, "order_id", &args.order_id)
@@ -1392,6 +1403,8 @@ target_operation_contracts! {
     OrderFulfillmentUpdate => (OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, "order.fulfillment.update"),
     OrderReceiptRecord => (OrderReceiptRecordRequest, OrderReceiptRecordResult, "order.receipt.record"),
     OrderPaymentRecord => (OrderPaymentRecordRequest, OrderPaymentRecordResult, "order.payment.record"),
+    OrderSettlementAccept => (OrderSettlementAcceptRequest, OrderSettlementAcceptResult, "order.settlement.accept"),
+    OrderSettlementReject => (OrderSettlementRejectRequest, OrderSettlementRejectResult, "order.settlement.reject"),
     OrderStatusGet => (OrderStatusGetRequest, OrderStatusGetResult, "order.status.get"),
     OrderEventList => (OrderEventListRequest, OrderEventListResult, "order.event.list"),
     OrderEventWatch => (OrderEventWatchRequest, OrderEventWatchResult, "order.event.watch"),
@@ -1815,6 +1828,45 @@ mod tests {
         assert_eq!(
             request.payload.input.get("paid_at").and_then(Value::as_u64),
             Some(1_777_666_000)
+        );
+
+        let settlement = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "settlement",
+            "reject",
+            "ord_test",
+            "--payment-event-id",
+            "pay_event",
+            "--reason",
+            "reference mismatch",
+        ])
+        .expect("target args parse");
+        let request =
+            TargetOperationRequest::from_target_args(&settlement).expect("operation request");
+        let TargetOperationRequest::OrderSettlementReject(request) = request else {
+            panic!("expected order settlement reject request")
+        };
+        assert_eq!(request.operation_id(), "order.settlement.reject");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("order_id")
+                .and_then(Value::as_str),
+            Some("ord_test")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("payment_event_id")
+                .and_then(Value::as_str),
+            Some("pay_event")
+        );
+        assert_eq!(
+            request.payload.input.get("reason").and_then(Value::as_str),
+            Some("reference mismatch")
         );
     }
 

@@ -205,6 +205,38 @@ fn seller_order_decision_and_status_commands_are_public() {
             ]
             .as_slice(),
         ),
+        (
+            "order.settlement.accept",
+            [
+                "--format",
+                "json",
+                "--dry-run",
+                "order",
+                "settlement",
+                "accept",
+                "ord_public",
+                "--payment-event-id",
+                "1",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.reject",
+            [
+                "--format",
+                "json",
+                "--dry-run",
+                "order",
+                "settlement",
+                "reject",
+                "ord_public",
+                "--payment-event-id",
+                "1",
+                "--reason",
+                "reference mismatch",
+            ]
+            .as_slice(),
+        ),
     ] {
         let output = radroots()
             .args(args)
@@ -642,6 +674,38 @@ fn offline_forbids_external_network_operations() {
             ]
             .as_slice(),
         ),
+        (
+            "order.settlement.accept",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "order",
+                "settlement",
+                "accept",
+                "ord_offline_settlement",
+                "--payment-event-id",
+                "pay_event",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.reject",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "order",
+                "settlement",
+                "reject",
+                "ord_offline_settlement",
+                "--payment-event-id",
+                "pay_event",
+                "--reason",
+                "reference mismatch",
+            ]
+            .as_slice(),
+        ),
     ] {
         let output = radroots()
             .args(args)
@@ -828,6 +892,40 @@ fn offline_rejects_order_decision_dry_run() {
                 "USD",
                 "--method",
                 "manual_transfer",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.accept",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "--dry-run",
+                "order",
+                "settlement",
+                "accept",
+                "ord_offline_decision",
+                "--payment-event-id",
+                "pay_event",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.reject",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "--dry-run",
+                "order",
+                "settlement",
+                "reject",
+                "ord_offline_decision",
+                "--payment-event-id",
+                "pay_event",
+                "--reason",
+                "reference mismatch",
             ]
             .as_slice(),
         ),
@@ -1044,6 +1142,38 @@ fn online_requires_relay_for_external_network_operations() {
                 "USD",
                 "--method",
                 "cash",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.accept",
+            [
+                "--format",
+                "json",
+                "--online",
+                "order",
+                "settlement",
+                "accept",
+                "ord_missing",
+                "--payment-event-id",
+                "pay_event",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.reject",
+            [
+                "--format",
+                "json",
+                "--online",
+                "order",
+                "settlement",
+                "reject",
+                "ord_missing",
+                "--payment-event-id",
+                "pay_event",
+                "--reason",
+                "reference mismatch",
             ]
             .as_slice(),
         ),
@@ -1550,6 +1680,48 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
         &sandbox,
         "order.receipt.record",
         &["order", "receipt", "record", "ord_pending", "--received"],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "order.payment.record",
+        &[
+            "order",
+            "payment",
+            "record",
+            "ord_pending",
+            "--amount",
+            "12",
+            "--currency",
+            "USD",
+            "--method",
+            "cash",
+        ],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "order.settlement.accept",
+        &[
+            "order",
+            "settlement",
+            "accept",
+            "ord_pending",
+            "--payment-event-id",
+            "pay_pending",
+        ],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "order.settlement.reject",
+        &[
+            "order",
+            "settlement",
+            "reject",
+            "ord_pending",
+            "--payment-event-id",
+            "pay_pending",
+            "--reason",
+            "reference mismatch",
+        ],
     );
 }
 

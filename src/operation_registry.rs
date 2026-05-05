@@ -1007,6 +1007,36 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         true
     ),
     operation!(
+        "order.settlement.accept",
+        "radroots order settlement accept",
+        "order",
+        "order_settlement_accept",
+        "OrderSettlementAcceptRequest",
+        "OrderSettlementAcceptResult",
+        "Accept seller settlement of a recorded payment.",
+        Seller,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
+        "order.settlement.reject",
+        "radroots order settlement reject",
+        "order",
+        "order_settlement_reject",
+        "OrderSettlementRejectRequest",
+        "OrderSettlementRejectResult",
+        "Reject seller settlement of a recorded payment.",
+        Seller,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
         "order.status.get",
         "radroots order status get",
         "order",
@@ -1137,6 +1167,8 @@ mod tests {
         "order.fulfillment.update",
         "order.receipt.record",
         "order.payment.record",
+        "order.settlement.accept",
+        "order.settlement.reject",
         "order.status.get",
         "order.event.list",
         "order.event.watch",
@@ -1180,6 +1212,8 @@ mod tests {
         "order.fulfillment.update",
         "order.receipt.record",
         "order.payment.record",
+        "order.settlement.accept",
+        "order.settlement.reject",
     ];
 
     const INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[];
@@ -1192,7 +1226,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 65);
+        assert_eq!(OPERATION_REGISTRY.len(), 67);
     }
 
     #[test]
@@ -1248,6 +1282,8 @@ mod tests {
             "order.fulfillment.update",
             "order.receipt.record",
             "order.payment.record",
+            "order.settlement.accept",
+            "order.settlement.reject",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

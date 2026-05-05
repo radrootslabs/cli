@@ -26,6 +26,7 @@ use radroots_events::trade::{
     RadrootsTradeOrderRequested, RadrootsTradeOrderRevisionDecision,
     RadrootsTradeOrderRevisionDecisionEvent, RadrootsTradeOrderRevisionProposed,
     RadrootsTradePaymentMethod, RadrootsTradePaymentRecorded, RadrootsTradePricingBasis,
+    RadrootsTradeSettlementDecision, RadrootsTradeSettlementDecisionEvent,
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::decode::listing_from_event;
@@ -40,7 +41,8 @@ use radroots_events_codec::trade::{
     active_trade_order_revision_decision_from_event,
     active_trade_order_revision_proposal_event_build,
     active_trade_order_revision_proposal_from_event, active_trade_payment_recorded_event_build,
-    active_trade_payment_recorded_from_event, active_trade_settlement_decision_from_event,
+    active_trade_payment_recorded_from_event, active_trade_settlement_decision_event_build,
+    active_trade_settlement_decision_from_event,
 };
 use radroots_events_codec::wire::WireEventParts;
 use radroots_nostr::prelude::{
@@ -76,7 +78,7 @@ use crate::domain::runtime::{
     OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderFulfillmentView,
     OrderGetView, OrderHistoryEntryView, OrderHistoryView, OrderInventoryBinView,
     OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderPaymentView,
-    OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView,
+    OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView, OrderSettlementView,
     OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
     OrderStatusLifecycleReceiptView, OrderStatusLifecycleView, OrderStatusPaymentView,
     OrderStatusRevisionView, OrderStatusView, OrderSubmitView, OrderSummaryView, OrderWatchView,
@@ -93,8 +95,8 @@ use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime_args::{
     OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftCreateArgs,
     OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
-    OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs,
-    OrderWatchArgs, RecordLookupArgs,
+    OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderSettlementArgs,
+    OrderSettlementDecisionArg, OrderStatusArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
 };
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
@@ -109,6 +111,7 @@ const ORDER_FULFILLMENT_SOURCE: &str = "direct Nostr relay fulfillment publish �
 const ORDER_CANCELLATION_SOURCE: &str = "direct Nostr relay cancellation publish · local key";
 const ORDER_RECEIPT_SOURCE: &str = "direct Nostr relay receipt publish · local key";
 const ORDER_PAYMENT_SOURCE: &str = "direct Nostr relay payment publish · local key";
+const ORDER_SETTLEMENT_SOURCE: &str = "direct Nostr relay settlement publish · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
 const ORDER_STATUS_SOURCE: &str = "direct Nostr relay status fetch · active order reducer";
 const ORDER_EVENT_WATCH_UNAVAILABLE_REASON: &str =
@@ -1573,6 +1576,96 @@ pub fn payment_record(
         ));
     }
     publish_order_payment(config, args, status_view, signing, payload)
+}
+
+pub fn settlement_decision(
+    config: &RuntimeConfig,
+    args: &OrderSettlementArgs,
+) -> Result<OrderSettlementView, RuntimeError> {
+    if let Some(view) = order_settlement_args_preflight_view(config, args) {
+        return Ok(view);
+    }
+    if config.relay.urls.is_empty() {
+        let mut view =
+            order_settlement_base_view(config, args, "unconfigured", config.output.dry_run);
+        view.reason =
+            Some("order settlement decision requires at least one configured relay".to_owned());
+        return Ok(view);
+    }
+
+    let selected_account = match accounts::resolve_account(config)? {
+        Some(account) => account,
+        None => {
+            let mut view =
+                order_settlement_base_view(config, args, "unconfigured", config.output.dry_run);
+            view.reason =
+                Some("order settlement decision requires a selected seller account".to_owned());
+            view.actions = vec!["radroots account create".to_owned()];
+            return Ok(view);
+        }
+    };
+    let selected_pubkey = selected_account.record.public_identity.public_key_hex;
+    let filter = order_status_filter(args.key.as_str())?;
+    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
+        Ok(receipt) => receipt,
+        Err(DirectRelayFetchError::Connect {
+            reason,
+            target_relays,
+            failed_relays,
+        }) => {
+            let mut view =
+                order_settlement_base_view(config, args, "unavailable", config.output.dry_run);
+            view.seller_pubkey = Some(selected_pubkey);
+            view.target_relays = target_relays;
+            view.failed_relays = relay_failures(failed_relays);
+            view.reason = Some(format!("direct relay connection failed: {reason}"));
+            return Ok(view);
+        }
+        Err(error) => return Err(RuntimeError::Network(error.to_string())),
+    };
+
+    let reduction = order_status_reduction_from_receipt_with_context(
+        OrderStatusContext {
+            order_id: args.key.as_str(),
+            selected_account_pubkey: Some(selected_pubkey.as_str()),
+        },
+        receipt,
+    );
+    let status_view = reduction.view;
+    if let Some(view) = order_settlement_preflight_view_from_status(
+        config,
+        args,
+        &status_view,
+        selected_pubkey.as_str(),
+    ) {
+        return Ok(view);
+    }
+
+    let seller_pubkey = status_view.seller_pubkey.as_deref().ok_or_else(|| {
+        RuntimeError::Config("settleable order is missing seller_pubkey".to_owned())
+    })?;
+    let signing = match resolve_local_order_settlement_signing_identity(config, seller_pubkey) {
+        Ok(signing) => signing,
+        Err(error) => {
+            return Ok(order_settlement_binding_error_view(
+                config,
+                args,
+                &status_view,
+                error,
+            ));
+        }
+    };
+    let payload = order_settlement_payload_from_status(args, &status_view)?;
+    let _ = order_settlement_event_parts(&status_view, &payload)?;
+    if config.output.dry_run {
+        return Ok(order_settlement_dry_run_view(
+            config,
+            args,
+            &status_view,
+            &payload,
+        ));
+    }
+    publish_order_settlement(config, args, status_view, signing, payload)
 }
 
 pub fn status(
@@ -4342,6 +4435,65 @@ fn order_payment_base_view(
     }
 }
 
+fn order_settlement_base_view(
+    config: &RuntimeConfig,
+    args: &OrderSettlementArgs,
+    state: &str,
+    dry_run: bool,
+) -> OrderSettlementView {
+    OrderSettlementView {
+        state: state.to_owned(),
+        source: ORDER_SETTLEMENT_SOURCE.to_owned(),
+        order_id: args.key.clone(),
+        listing_addr: None,
+        buyer_pubkey: None,
+        seller_pubkey: None,
+        request_event_id: None,
+        agreement_event_id: None,
+        root_event_id: None,
+        prev_event_id: None,
+        payment_event_id: non_empty_ref(args.payment_event_id.as_str()).map(str::to_owned),
+        event_id: None,
+        event_kind: None,
+        quote_id: None,
+        quote_version: None,
+        economics_digest: None,
+        amount: None,
+        currency: None,
+        decision: Some(settlement_decision_protocol(args.decision)),
+        settlement_reason: args.reason.as_ref().map(|reason| reason.trim().to_owned()),
+        reason: None,
+        dry_run,
+        target_relays: config.relay.urls.clone(),
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: 0,
+        decoded_count: 0,
+        skipped_count: 0,
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        issues: Vec::new(),
+        actions: Vec::new(),
+    }
+}
+
+const fn settlement_decision_protocol(
+    decision: OrderSettlementDecisionArg,
+) -> RadrootsTradeSettlementDecision {
+    match decision {
+        OrderSettlementDecisionArg::Accept => RadrootsTradeSettlementDecision::Accepted,
+        OrderSettlementDecisionArg::Reject => RadrootsTradeSettlementDecision::Rejected,
+    }
+}
+
+const fn settlement_decision_state(decision: OrderSettlementDecisionArg) -> &'static str {
+    match decision {
+        OrderSettlementDecisionArg::Accept => "accepted",
+        OrderSettlementDecisionArg::Reject => "rejected",
+    }
+}
+
 fn apply_order_fulfillment_status(view: &mut OrderFulfillmentView, status: &OrderStatusView) {
     view.order_id = status.order_id.clone();
     view.listing_addr = status.listing_addr.clone();
@@ -4424,6 +4576,41 @@ fn apply_order_payment_status(view: &mut OrderPaymentView, status: &OrderStatusV
     view.decoded_count = status.decoded_count;
     view.skipped_count = status.skipped_count;
     view.issues = status.reducer_issues.clone();
+}
+
+fn apply_order_settlement_status(view: &mut OrderSettlementView, status: &OrderStatusView) {
+    view.order_id = status.order_id.clone();
+    view.listing_addr = status.listing_addr.clone();
+    view.buyer_pubkey = status.buyer_pubkey.clone();
+    view.seller_pubkey = status.seller_pubkey.clone();
+    view.request_event_id = status.request_event_id.clone();
+    view.root_event_id = status.request_event_id.clone();
+    view.target_relays = status.target_relays.clone();
+    view.connected_relays = status.connected_relays.clone();
+    view.failed_relays = status.failed_relays.clone();
+    view.fetched_count = status.fetched_count;
+    view.decoded_count = status.decoded_count;
+    view.skipped_count = status.skipped_count;
+    view.issues = status.reducer_issues.clone();
+    if let Some(payment) = status.payment.as_ref() {
+        view.payment_event_id = payment
+            .payment_event_id
+            .clone()
+            .or_else(|| view.payment_event_id.clone());
+        view.event_id = payment.settlement_event_id.clone();
+        view.event_kind = payment
+            .settlement_event_id
+            .as_ref()
+            .map(|_| KIND_TRADE_SETTLEMENT_DECISION);
+        view.agreement_event_id = payment.agreement_event_id.clone();
+        view.prev_event_id = payment.payment_event_id.clone();
+        view.quote_id = payment.quote_id.clone();
+        view.quote_version = payment.quote_version;
+        view.economics_digest = payment.economics_digest.clone();
+        view.amount = payment.amount;
+        view.currency = payment.currency;
+        view.settlement_reason = payment.reason.clone().or(view.settlement_reason.clone());
+    }
 }
 
 fn order_receipt_prev_event_id(status: &OrderStatusView) -> Option<String> {
@@ -4857,6 +5044,151 @@ fn order_payment_terms_preflight_view_from_status(
         return Some(view);
     }
     None
+}
+
+fn order_settlement_args_preflight_view(
+    config: &RuntimeConfig,
+    args: &OrderSettlementArgs,
+) -> Option<OrderSettlementView> {
+    let (reason, issue) = if args.payment_event_id.trim().is_empty() {
+        (
+            "order settlement decision requires --payment-event-id".to_owned(),
+            issue_with_code(
+                "missing_payment_event_id",
+                "payment_event_id",
+                "payment event id is required",
+            ),
+        )
+    } else if matches!(args.decision, OrderSettlementDecisionArg::Reject)
+        && args.reason.as_deref().and_then(non_empty_ref).is_none()
+    {
+        (
+            "order settlement reject requires --reason".to_owned(),
+            issue_with_code(
+                "missing_settlement_reason",
+                "reason",
+                "settlement rejection reason is required",
+            ),
+        )
+    } else if matches!(args.decision, OrderSettlementDecisionArg::Accept)
+        && args.reason.as_deref().and_then(non_empty_ref).is_some()
+    {
+        (
+            "order settlement accept does not accept --reason".to_owned(),
+            issue_with_code(
+                "unexpected_settlement_reason",
+                "reason",
+                "settlement acceptance must not carry a reason",
+            ),
+        )
+    } else {
+        return None;
+    };
+    let mut view = order_settlement_base_view(config, args, "invalid", config.output.dry_run);
+    view.reason = Some(reason);
+    view.issues = vec![issue];
+    Some(view)
+}
+
+fn order_settlement_preflight_view_from_status(
+    config: &RuntimeConfig,
+    args: &OrderSettlementArgs,
+    status: &OrderStatusView,
+    selected_pubkey: &str,
+) -> Option<OrderSettlementView> {
+    let seller_matches = status
+        .seller_pubkey
+        .as_deref()
+        .is_some_and(|seller| seller.eq_ignore_ascii_case(selected_pubkey));
+    let payment = status.payment.as_ref();
+    let current_payment_id = payment.and_then(|payment| payment.payment_event_id.as_deref());
+    if matches!(status.state.as_str(), "accepted" | "completed" | "disputed")
+        && seller_matches
+        && payment.is_some_and(|payment| {
+            payment.state == "recorded" && payment.settlement_state == "pending"
+        })
+        && current_payment_id == Some(args.payment_event_id.as_str())
+    {
+        return None;
+    }
+
+    let state = match status.state.as_str() {
+        "missing" | "requested" | "declined" | "cancelled" | "invalid" | "unavailable"
+        | "unconfigured" => status.state.as_str(),
+        "accepted" | "completed" | "disputed" if !seller_matches => "invalid",
+        "accepted" | "completed" | "disputed" => match payment {
+            None => "not_recorded",
+            Some(payment) => {
+                if payment.payment_event_id.as_deref() != Some(args.payment_event_id.as_str()) {
+                    "invalid"
+                } else if matches!(payment.settlement_state.as_str(), "accepted" | "rejected") {
+                    "already_decided"
+                } else if payment.state != "recorded" {
+                    payment.state.as_str()
+                } else {
+                    payment.settlement_state.as_str()
+                }
+            }
+        },
+        _ => "invalid",
+    };
+    let mut view = order_settlement_base_view(config, args, state, config.output.dry_run);
+    apply_order_settlement_status(&mut view, status);
+    view.reason = Some(match state {
+        "missing" => format!("no active order events matched `{}`", args.key),
+        "requested" => format!(
+            "order settlement decision refused because order `{}` has no accepted seller decision",
+            args.key
+        ),
+        "declined" => format!(
+            "order settlement decision refused because order `{}` was declined",
+            args.key
+        ),
+        "cancelled" => format!(
+            "order settlement decision refused because order `{}` was cancelled",
+            args.key
+        ),
+        "not_recorded" => format!(
+            "order settlement decision refused because order `{}` has no recorded payment",
+            args.key
+        ),
+        "already_decided" => format!(
+            "order settlement decision skipped because payment `{}` already has settlement state `{}`",
+            args.payment_event_id,
+            payment
+                .map(|payment| payment.settlement_state.as_str())
+                .unwrap_or("unknown")
+        ),
+        "invalid" if !seller_matches && status.seller_pubkey.is_some() => format!(
+            "order settlement decision refused because selected account is not seller for order `{}`",
+            args.key
+        ),
+        "invalid" if current_payment_id.is_some() => format!(
+            "order settlement decision refused because payment event `{}` is not the current recorded payment",
+            args.payment_event_id
+        ),
+        "invalid" => status.reason.clone().unwrap_or_else(|| {
+            format!(
+                "order settlement decision refused because active order events for `{}` are invalid",
+                args.key
+            )
+        }),
+        _ => status.reason.clone().unwrap_or_else(|| {
+            format!(
+                "order settlement decision status preflight failed with state `{}`",
+                status.state
+            )
+        }),
+    });
+    if state == "invalid" && current_payment_id.is_some() && seller_matches {
+        view.issues = vec![issue_with_code(
+            "stale_payment_event",
+            "payment_event_id",
+            "settlement payment event id must match the current recorded payment",
+        )];
+    }
+    view.actions = vec![format!("radroots order status get {}", args.key)];
+    Some(view)
 }
 
 fn order_fulfillment_preflight_view_from_status(
@@ -6722,6 +7054,94 @@ fn order_payment_event_parts(
         .map_err(|error| RuntimeError::Config(format!("encode payment recorded event: {error}")))
 }
 
+fn order_settlement_payload_from_status(
+    args: &OrderSettlementArgs,
+    status: &OrderStatusView,
+) -> Result<RadrootsTradeSettlementDecisionEvent, RuntimeError> {
+    let payment = status
+        .payment
+        .as_ref()
+        .ok_or_else(|| RuntimeError::Config("settleable order is missing payment".to_owned()))?;
+    let payment_event_id = payment.payment_event_id.clone().ok_or_else(|| {
+        RuntimeError::Config("settleable order is missing payment_event_id".to_owned())
+    })?;
+    if payment_event_id != args.payment_event_id {
+        return Err(RuntimeError::Config(
+            "settlement payment event id must match current recorded payment".to_owned(),
+        ));
+    }
+    if payment.state != "recorded" || payment.settlement_state != "pending" {
+        return Err(RuntimeError::Config(
+            "settlement requires a recorded payment with pending settlement".to_owned(),
+        ));
+    }
+    let decision = settlement_decision_protocol(args.decision);
+    Ok(RadrootsTradeSettlementDecisionEvent {
+        order_id: status.order_id.clone(),
+        listing_addr: status.listing_addr.clone().ok_or_else(|| {
+            RuntimeError::Config("settleable order is missing listing_addr".to_owned())
+        })?,
+        seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
+            RuntimeError::Config("settleable order is missing seller_pubkey".to_owned())
+        })?,
+        buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
+            RuntimeError::Config("settleable order is missing buyer_pubkey".to_owned())
+        })?,
+        root_event_id: status.request_event_id.clone().ok_or_else(|| {
+            RuntimeError::Config("settleable order is missing request_event_id".to_owned())
+        })?,
+        previous_event_id: payment_event_id.clone(),
+        agreement_event_id: payment.agreement_event_id.clone().ok_or_else(|| {
+            RuntimeError::Config("settleable order is missing agreement_event_id".to_owned())
+        })?,
+        payment_event_id,
+        quote_id: payment.quote_id.clone().ok_or_else(|| {
+            RuntimeError::Config("settleable order is missing quote_id".to_owned())
+        })?,
+        quote_version: payment.quote_version.ok_or_else(|| {
+            RuntimeError::Config("settleable order is missing quote_version".to_owned())
+        })?,
+        economics_digest: payment.economics_digest.clone().ok_or_else(|| {
+            RuntimeError::Config("settleable order is missing economics_digest".to_owned())
+        })?,
+        amount: payment
+            .amount
+            .ok_or_else(|| RuntimeError::Config("settleable order is missing amount".to_owned()))?,
+        currency: payment.currency.ok_or_else(|| {
+            RuntimeError::Config("settleable order is missing currency".to_owned())
+        })?,
+        decision,
+        reason: if matches!(args.decision, OrderSettlementDecisionArg::Reject) {
+            Some(
+                args.reason
+                    .as_deref()
+                    .and_then(non_empty_ref)
+                    .ok_or_else(|| {
+                        RuntimeError::Config("settlement rejection reason is required".to_owned())
+                    })?
+                    .to_owned(),
+            )
+        } else {
+            None
+        },
+    })
+}
+
+fn order_settlement_event_parts(
+    status: &OrderStatusView,
+    payload: &RadrootsTradeSettlementDecisionEvent,
+) -> Result<WireEventParts, RuntimeError> {
+    let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
+        RuntimeError::Config("settleable order is missing request_event_id".to_owned())
+    })?;
+    active_trade_settlement_decision_event_build(
+        root_event_id,
+        payload.payment_event_id.as_str(),
+        payload,
+    )
+    .map_err(|error| RuntimeError::Config(format!("encode settlement decision event: {error}")))
+}
+
 fn apply_order_payment_payload(
     view: &mut OrderPaymentView,
     payload: &RadrootsTradePaymentRecorded,
@@ -6737,6 +7157,23 @@ fn apply_order_payment_payload(
     view.method = Some(payload.method);
     view.reference = payload.reference.clone();
     view.paid_at = payload.paid_at;
+}
+
+fn apply_order_settlement_payload(
+    view: &mut OrderSettlementView,
+    payload: &RadrootsTradeSettlementDecisionEvent,
+) {
+    view.root_event_id = Some(payload.root_event_id.clone());
+    view.prev_event_id = Some(payload.previous_event_id.clone());
+    view.payment_event_id = Some(payload.payment_event_id.clone());
+    view.agreement_event_id = Some(payload.agreement_event_id.clone());
+    view.quote_id = Some(payload.quote_id.clone());
+    view.quote_version = Some(payload.quote_version);
+    view.economics_digest = Some(payload.economics_digest.clone());
+    view.amount = Some(payload.amount);
+    view.currency = Some(payload.currency);
+    view.decision = Some(payload.decision);
+    view.settlement_reason = payload.reason.clone();
 }
 
 fn order_cancellation_dry_run_view(
@@ -6778,6 +7215,20 @@ fn order_payment_dry_run_view(
     apply_order_payment_status(&mut view, status);
     apply_order_payment_payload(&mut view, payload);
     view.reason = Some("dry run requested; buyer payment publication skipped".to_owned());
+    view.actions = vec![format!("radroots order status get {}", status.order_id)];
+    view
+}
+
+fn order_settlement_dry_run_view(
+    config: &RuntimeConfig,
+    args: &OrderSettlementArgs,
+    status: &OrderStatusView,
+    payload: &RadrootsTradeSettlementDecisionEvent,
+) -> OrderSettlementView {
+    let mut view = order_settlement_base_view(config, args, "dry_run", true);
+    apply_order_settlement_status(&mut view, status);
+    apply_order_settlement_payload(&mut view, payload);
+    view.reason = Some("dry run requested; seller settlement publication skipped".to_owned());
     view.actions = vec![format!("radroots order status get {}", status.order_id)];
     view
 }
@@ -6952,6 +7403,22 @@ fn publish_order_payment(
     ))
 }
 
+fn publish_order_settlement(
+    config: &RuntimeConfig,
+    args: &OrderSettlementArgs,
+    status: OrderStatusView,
+    signing: accounts::AccountSigningIdentity,
+    payload: RadrootsTradeSettlementDecisionEvent,
+) -> Result<OrderSettlementView, RuntimeError> {
+    let parts = order_settlement_event_parts(&status, &payload)?;
+    let event_kind = parts.kind;
+    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    Ok(published_order_settlement_view(
+        config, args, &status, &payload, event_kind, receipt,
+    ))
+}
+
 fn published_order_fulfillment_view(
     config: &RuntimeConfig,
     args: &OrderFulfillmentArgs,
@@ -7058,6 +7525,38 @@ fn published_order_payment_view(
     let mut view = order_payment_base_view(config, args, "recorded", false);
     apply_order_payment_status(&mut view, status);
     apply_order_payment_payload(&mut view, payload);
+    view.event_id = Some(event_id);
+    view.event_kind = Some(event_kind);
+    view.target_relays = target_relays;
+    view.acknowledged_relays = acknowledged_relays;
+    view.failed_relays = relay_failures(failed_relays);
+    view
+}
+
+fn published_order_settlement_view(
+    config: &RuntimeConfig,
+    args: &OrderSettlementArgs,
+    status: &OrderStatusView,
+    payload: &RadrootsTradeSettlementDecisionEvent,
+    event_kind: u32,
+    receipt: DirectRelayPublishReceipt,
+) -> OrderSettlementView {
+    let DirectRelayPublishReceipt {
+        event_id,
+        created_at: _,
+        signature: _,
+        target_relays,
+        acknowledged_relays,
+        failed_relays,
+    } = receipt;
+    let mut view = order_settlement_base_view(
+        config,
+        args,
+        settlement_decision_state(args.decision),
+        false,
+    );
+    apply_order_settlement_status(&mut view, status);
+    apply_order_settlement_payload(&mut view, payload);
     view.event_id = Some(event_id);
     view.event_kind = Some(event_kind);
     view.target_relays = target_relays;
@@ -7183,6 +7682,26 @@ fn order_payment_binding_error_view(
     };
     let mut view = order_payment_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_payment_status(&mut view, status);
+    view.reason = Some(reason);
+    view.actions = actions;
+    view
+}
+
+fn order_settlement_binding_error_view(
+    config: &RuntimeConfig,
+    args: &OrderSettlementArgs,
+    status: &OrderStatusView,
+    error: ActorWriteBindingError,
+) -> OrderSettlementView {
+    let (state, reason, actions) = match error {
+        ActorWriteBindingError::Unconfigured(reason) => (
+            "unconfigured".to_owned(),
+            reason,
+            vec!["run radroots signer status get".to_owned()],
+        ),
+    };
+    let mut view = order_settlement_base_view(config, args, state.as_str(), config.output.dry_run);
+    apply_order_settlement_status(&mut view, status);
     view.reason = Some(reason);
     view.actions = actions;
     view
@@ -9314,6 +9833,31 @@ fn resolve_local_order_payment_signing_identity(
     Ok(signing)
 }
 
+fn resolve_local_order_settlement_signing_identity(
+    config: &RuntimeConfig,
+    seller_pubkey: &str,
+) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+    if !matches!(config.signer.backend, SignerBackend::Local) {
+        return Err(ActorWriteBindingError::Unconfigured(
+            "order settlement decision requires signer mode `local`".to_owned(),
+        ));
+    }
+    let signing = accounts::resolve_local_signing_identity(config)
+        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+    let selected_pubkey = signing
+        .account
+        .record
+        .public_identity
+        .public_key_hex
+        .as_str();
+    if !selected_pubkey.eq_ignore_ascii_case(seller_pubkey) {
+        return Err(ActorWriteBindingError::Unconfigured(format!(
+            "selected local account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
+        )));
+    }
+    Ok(signing)
+}
+
 fn resolve_local_order_revision_decision_signing_identity(
     config: &RuntimeConfig,
     buyer_pubkey: &str,
@@ -9626,7 +10170,7 @@ mod tests {
     use radroots_events::kinds::{
         KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION,
         KIND_TRADE_ORDER_REVISION, KIND_TRADE_ORDER_REVISION_RESPONSE, KIND_TRADE_PAYMENT_RECORDED,
-        KIND_TRADE_RECEIPT,
+        KIND_TRADE_RECEIPT, KIND_TRADE_SETTLEMENT_DECISION,
     };
     use radroots_events::trade::{
         RadrootsActiveTradeFulfillmentState, RadrootsActiveTradeMessageType,
@@ -9636,7 +10180,8 @@ mod tests {
         RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
         RadrootsTradeOrderRevisionDecision, RadrootsTradeOrderRevisionDecisionEvent,
         RadrootsTradeOrderRevisionProposed, RadrootsTradePaymentMethod,
-        RadrootsTradePaymentRecorded, RadrootsTradePricingBasis,
+        RadrootsTradePaymentRecorded, RadrootsTradePricingBasis, RadrootsTradeSettlementDecision,
+        RadrootsTradeSettlementDecisionEvent,
     };
     use radroots_events_codec::trade::{
         active_trade_buyer_receipt_event_build, active_trade_event_context_from_tags,
@@ -9644,7 +10189,7 @@ mod tests {
         active_trade_order_decision_event_build, active_trade_order_decision_from_event,
         active_trade_order_request_event_build, active_trade_order_revision_decision_event_build,
         active_trade_order_revision_proposal_event_build,
-        active_trade_payment_recorded_event_build,
+        active_trade_payment_recorded_event_build, active_trade_settlement_decision_event_build,
     };
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{radroots_event_from_nostr, radroots_nostr_build_event};
@@ -9680,6 +10225,8 @@ mod tests {
         order_revision_decision_preflight_view_from_status, order_revision_event_parts,
         order_revision_inventory_preflight_view, order_revision_payload_from_status,
         order_revision_preflight_view_from_status, order_revision_proposals_from_events,
+        order_settlement_dry_run_view, order_settlement_event_parts,
+        order_settlement_payload_from_status, order_settlement_preflight_view_from_status,
         order_status_filter, order_status_from_receipt, order_status_from_receipt_with_context,
         order_status_reduction_from_receipt_with_context, order_submit_dry_run_view,
         order_submit_existing_request_view_from_receipt, proposed_accept_decision_record,
@@ -9698,7 +10245,8 @@ mod tests {
     use crate::runtime_args::{
         OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftAdjustmentArgs,
         OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
-        OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderSubmitArgs,
+        OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderSettlementArgs,
+        OrderSettlementDecisionArg, OrderSubmitArgs,
     };
 
     #[test]
@@ -12872,6 +13420,481 @@ mod tests {
     }
 
     #[test]
+    fn order_settlement_event_parts_bind_recorded_payment_terms() {
+        let fixture = order_status_fixture();
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let payment_event_id = payment_event.id.to_string();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event.clone(),
+                    payment_event,
+                ],
+            },
+        );
+        let args = settlement_args_for_fixture(
+            &fixture,
+            payment_event_id.as_str(),
+            OrderSettlementDecisionArg::Accept,
+        );
+
+        assert!(
+            order_settlement_preflight_view_from_status(
+                &config,
+                &args,
+                &status_view,
+                fixture.seller_pubkey.as_str()
+            )
+            .is_none()
+        );
+        let payload =
+            order_settlement_payload_from_status(&args, &status_view).expect("settlement payload");
+        let parts = order_settlement_event_parts(&status_view, &payload).expect("settlement parts");
+        let request_event_id = fixture.request_event.id.to_string();
+        let decision_event_id = decision_event.id.to_string();
+        let context = active_trade_event_context_from_tags(
+            RadrootsActiveTradeMessageType::TradeSettlementDecision,
+            &parts.tags,
+        )
+        .expect("settlement context");
+
+        assert_eq!(parts.kind, KIND_TRADE_SETTLEMENT_DECISION);
+        assert_eq!(
+            context.root_event_id.as_deref(),
+            Some(request_event_id.as_str())
+        );
+        assert_eq!(
+            context.prev_event_id.as_deref(),
+            Some(payment_event_id.as_str())
+        );
+        assert_eq!(payload.previous_event_id, payment_event_id);
+        assert_eq!(payload.agreement_event_id, decision_event_id);
+        assert_eq!(payload.payment_event_id, payload.previous_event_id);
+        assert_eq!(payload.amount, RadrootsCoreDecimal::from(12u32));
+        assert_eq!(payload.currency, RadrootsCoreCurrency::USD);
+        assert_eq!(payload.decision, RadrootsTradeSettlementDecision::Accepted);
+        assert_eq!(payload.reason, None);
+    }
+
+    #[test]
+    fn order_settlement_dry_run_view_preserves_rejection_payload_without_event_id() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let payment_event_id = payment_event.id.to_string();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event, payment_event],
+            },
+        );
+        let mut args = settlement_args_for_fixture(
+            &fixture,
+            payment_event_id.as_str(),
+            OrderSettlementDecisionArg::Reject,
+        );
+        args.idempotency_key = Some("idem_settlement".to_owned());
+        let payload =
+            order_settlement_payload_from_status(&args, &status_view).expect("settlement payload");
+
+        let view = order_settlement_dry_run_view(&config, &args, &status_view, &payload);
+
+        assert_eq!(view.state, "dry_run");
+        assert_eq!(view.dry_run, true);
+        assert_eq!(
+            view.prev_event_id.as_deref(),
+            Some(payment_event_id.as_str())
+        );
+        assert_eq!(
+            view.payment_event_id.as_deref(),
+            Some(payment_event_id.as_str())
+        );
+        assert_eq!(view.event_id, None);
+        assert_eq!(view.event_kind, None);
+        assert_eq!(view.amount, Some(RadrootsCoreDecimal::from(12u32)));
+        assert_eq!(view.currency, Some(RadrootsCoreCurrency::USD));
+        assert_eq!(
+            view.decision,
+            Some(RadrootsTradeSettlementDecision::Rejected)
+        );
+        assert_eq!(
+            view.settlement_reason.as_deref(),
+            Some("reference mismatch")
+        );
+        assert_eq!(view.target_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.connected_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.fetched_count, 3);
+        assert_eq!(view.decoded_count, 3);
+        assert_eq!(view.idempotency_key.as_deref(), Some("idem_settlement"));
+    }
+
+    #[test]
+    fn order_settlement_preflight_rejects_selected_non_seller_account() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let payment_event_id = payment_event.id.to_string();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event, payment_event],
+            },
+        );
+        let args = settlement_args_for_fixture(
+            &fixture,
+            payment_event_id.as_str(),
+            OrderSettlementDecisionArg::Accept,
+        );
+
+        let view = order_settlement_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.buyer_pubkey.as_str(),
+        )
+        .expect("non seller settlement preflight");
+
+        assert_eq!(view.state, "invalid");
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("selected account is not seller")
+        );
+    }
+
+    #[test]
+    fn order_settlement_preflight_rejects_stale_payment_event_id() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event, payment_event],
+            },
+        );
+        let args = settlement_args_for_fixture(
+            &fixture,
+            "2".repeat(64).as_str(),
+            OrderSettlementDecisionArg::Accept,
+        );
+
+        let view = order_settlement_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.seller_pubkey.as_str(),
+        )
+        .expect("stale settlement preflight");
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.issues.len(), 1);
+        assert_eq!(view.issues[0].code, "stale_payment_event");
+    }
+
+    #[test]
+    fn order_settlement_preflight_rejects_duplicate_decision() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let settlement_event = signed_settlement_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &payment_event,
+            RadrootsTradeSettlementDecision::Accepted,
+        );
+        let payment_event_id = payment_event.id.to_string();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event,
+                    payment_event,
+                    settlement_event,
+                ],
+            },
+        );
+        let args = settlement_args_for_fixture(
+            &fixture,
+            payment_event_id.as_str(),
+            OrderSettlementDecisionArg::Accept,
+        );
+
+        let view = order_settlement_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.seller_pubkey.as_str(),
+        )
+        .expect("duplicate settlement preflight");
+
+        assert_eq!(view.state, "already_decided");
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("already has settlement state")
+        );
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_accepted_settlement_axis() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let settlement_event = signed_settlement_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &payment_event,
+            RadrootsTradeSettlementDecision::Accepted,
+        );
+        let settlement_event_id = settlement_event.id.to_string();
+        let view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event,
+                    payment_event,
+                    settlement_event,
+                ],
+            },
+        );
+        let payment = view.payment.as_ref().expect("payment view");
+
+        assert_eq!(payment.state, "settled");
+        assert_eq!(payment.settlement_state, "accepted");
+        assert_eq!(
+            payment.settlement_event_id.as_deref(),
+            Some(settlement_event_id.as_str())
+        );
+        assert_eq!(payment.reason, None);
+        assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_rejected_settlement_axis() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let settlement_event = signed_settlement_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &payment_event,
+            RadrootsTradeSettlementDecision::Rejected,
+        );
+        let view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event,
+                    payment_event,
+                    settlement_event,
+                ],
+            },
+        );
+        let payment = view.payment.as_ref().expect("payment view");
+
+        assert_eq!(payment.state, "rejected");
+        assert_eq!(payment.settlement_state, "rejected");
+        assert_eq!(payment.reason.as_deref(), Some("reference mismatch"));
+        assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
     fn order_receipt_preflight_rejects_ineligible_fulfillment() {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
@@ -14519,6 +15542,24 @@ mod tests {
         }
     }
 
+    fn settlement_args_for_fixture(
+        fixture: &OrderStatusFixture,
+        payment_event_id: &str,
+        decision: OrderSettlementDecisionArg,
+    ) -> OrderSettlementArgs {
+        OrderSettlementArgs {
+            key: fixture.order_id.clone(),
+            payment_event_id: payment_event_id.to_owned(),
+            decision,
+            reason: if decision == OrderSettlementDecisionArg::Reject {
+                Some("reference mismatch".to_owned())
+            } else {
+                None
+            },
+            idempotency_key: None,
+        }
+    }
+
     fn revision_args_for_fixture(
         fixture: &OrderStatusFixture,
         bin_count: u32,
@@ -14918,6 +15959,46 @@ mod tests {
             .expect("nostr event builder")
             .sign_with_keys(buyer.keys())
             .expect("signed payment recorded")
+    }
+
+    fn signed_settlement_decision_event(
+        seller: &RadrootsIdentity,
+        request_event: &radroots_nostr::prelude::RadrootsNostrEvent,
+        payment_event: &radroots_nostr::prelude::RadrootsNostrEvent,
+        decision: RadrootsTradeSettlementDecision,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
+        let payment = radroots_event_from_nostr(payment_event);
+        let envelope =
+            radroots_events_codec::trade::active_trade_payment_recorded_from_event(&payment)
+                .expect("decoded payment");
+        let payload = RadrootsTradeSettlementDecisionEvent {
+            order_id: envelope.payload.order_id.clone(),
+            listing_addr: envelope.payload.listing_addr.clone(),
+            seller_pubkey: envelope.payload.seller_pubkey.clone(),
+            buyer_pubkey: envelope.payload.buyer_pubkey.clone(),
+            root_event_id: request_event.id.to_string(),
+            previous_event_id: payment_event.id.to_string(),
+            agreement_event_id: envelope.payload.agreement_event_id.clone(),
+            payment_event_id: payment_event.id.to_string(),
+            quote_id: envelope.payload.quote_id.clone(),
+            quote_version: envelope.payload.quote_version,
+            economics_digest: envelope.payload.economics_digest.clone(),
+            amount: envelope.payload.amount,
+            currency: envelope.payload.currency,
+            decision,
+            reason: (decision == RadrootsTradeSettlementDecision::Rejected)
+                .then(|| "reference mismatch".to_owned()),
+        };
+        let parts = active_trade_settlement_decision_event_build(
+            payload.root_event_id.as_str(),
+            payload.previous_event_id.as_str(),
+            &payload,
+        )
+        .expect("settlement decision parts");
+        radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+            .expect("nostr event builder")
+            .sign_with_keys(seller.keys())
+            .expect("signed settlement decision")
     }
 
     fn signed_malformed_order_request_event(

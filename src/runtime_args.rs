@@ -300,6 +300,21 @@ pub struct OrderRevisionDecisionArgs {
     pub idempotency_key: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderSettlementDecisionArg {
+    Accept,
+    Reject,
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderSettlementArgs {
+    pub key: String,
+    pub payment_event_id: String,
+    pub decision: OrderSettlementDecisionArg,
+    pub reason: Option<String>,
+    pub idempotency_key: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct OrderStatusArgs {
     pub key: String,

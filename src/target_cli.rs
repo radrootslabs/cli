@@ -193,6 +193,10 @@ impl TargetCommand {
                 OrderCommand::Payment(payment) => match &payment.command {
                     OrderPaymentCommand::Record(_) => "order.payment.record",
                 },
+                OrderCommand::Settlement(settlement) => match &settlement.command {
+                    OrderSettlementCommand::Accept(_) => "order.settlement.accept",
+                    OrderSettlementCommand::Reject(_) => "order.settlement.reject",
+                },
                 OrderCommand::Status(status) => match &status.command {
                     OrderStatusCommand::Get(_) => "order.status.get",
                 },
@@ -756,6 +760,7 @@ pub enum OrderCommand {
     Fulfillment(OrderFulfillmentArgs),
     Receipt(OrderReceiptArgs),
     Payment(OrderPaymentArgs),
+    Settlement(OrderSettlementArgs),
     Status(OrderStatusArgs),
     Event(OrderEventArgs),
 }
@@ -939,6 +944,34 @@ impl OrderPaymentMethodArg {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct OrderSettlementArgs {
+    #[command(subcommand)]
+    pub command: OrderSettlementCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrderSettlementCommand {
+    Accept(OrderSettlementAcceptArgs),
+    Reject(OrderSettlementRejectArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderSettlementAcceptArgs {
+    pub order_id: Option<String>,
+    #[arg(long)]
+    pub payment_event_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderSettlementRejectArgs {
+    pub order_id: Option<String>,
+    #[arg(long)]
+    pub payment_event_id: Option<String>,
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct OrderStatusArgs {
     #[command(subcommand)]
     pub command: OrderStatusCommand,
@@ -975,8 +1008,8 @@ mod tests {
 
     use super::{
         OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg, OrderPaymentCommand,
-        OrderPaymentMethodArg, OrderReceiptCommand, OrderRevisionCommand, TargetCliArgs,
-        TargetOutputFormat,
+        OrderPaymentMethodArg, OrderReceiptCommand, OrderRevisionCommand, OrderSettlementCommand,
+        TargetCliArgs, TargetOutputFormat,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
 
@@ -1281,6 +1314,46 @@ mod tests {
         assert_eq!(args.method, Some(OrderPaymentMethodArg::ManualTransfer));
         assert_eq!(args.reference.as_deref(), Some("memo-1"));
         assert_eq!(args.paid_at, Some(1_777_666_000));
+    }
+
+    #[test]
+    fn target_parser_accepts_order_settlement_decisions() {
+        let accept = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "settlement",
+            "accept",
+            "ord_test",
+            "--payment-event-id",
+            "pay_event",
+        ])
+        .expect("target args parse");
+        assert_eq!(accept.command.operation_id(), "order.settlement.accept");
+        let crate::target_cli::TargetCommand::Order(order) = accept.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Settlement(settlement) = order.command else {
+            panic!("expected order settlement command")
+        };
+        let OrderSettlementCommand::Accept(args) = settlement.command else {
+            panic!("expected settlement accept command")
+        };
+        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.payment_event_id.as_deref(), Some("pay_event"));
+
+        let reject = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "settlement",
+            "reject",
+            "ord_test",
+            "--payment-event-id",
+            "pay_event",
+            "--reason",
+            "reference mismatch",
+        ])
+        .expect("target args parse");
+        assert_eq!(reject.command.operation_id(), "order.settlement.reject");
     }
 
     #[test]
