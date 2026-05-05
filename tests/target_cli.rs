@@ -186,6 +186,25 @@ fn seller_order_decision_and_status_commands_are_public() {
             ]
             .as_slice(),
         ),
+        (
+            "order.payment.record",
+            [
+                "--format",
+                "json",
+                "--dry-run",
+                "order",
+                "payment",
+                "record",
+                "ord_public",
+                "--amount",
+                "12",
+                "--currency",
+                "USD",
+                "--method",
+                "cash",
+            ]
+            .as_slice(),
+        ),
     ] {
         let output = radroots()
             .args(args)
@@ -604,6 +623,25 @@ fn offline_forbids_external_network_operations() {
             ]
             .as_slice(),
         ),
+        (
+            "order.payment.record",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "order",
+                "payment",
+                "record",
+                "ord_offline_payment",
+                "--amount",
+                "12",
+                "--currency",
+                "USD",
+                "--method",
+                "cash",
+            ]
+            .as_slice(),
+        ),
     ] {
         let output = radroots()
             .args(args)
@@ -770,6 +808,26 @@ fn offline_rejects_order_decision_dry_run() {
                 "ord_offline_decision",
                 "--issue",
                 "damaged items",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.payment.record",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "--dry-run",
+                "order",
+                "payment",
+                "record",
+                "ord_offline_decision",
+                "--amount",
+                "12",
+                "--currency",
+                "USD",
+                "--method",
+                "manual_transfer",
             ]
             .as_slice(),
         ),
@@ -967,6 +1025,25 @@ fn online_requires_relay_for_external_network_operations() {
                 "record",
                 "ord_missing",
                 "--received",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.payment.record",
+            [
+                "--format",
+                "json",
+                "--online",
+                "order",
+                "payment",
+                "record",
+                "ord_missing",
+                "--amount",
+                "12",
+                "--currency",
+                "USD",
+                "--method",
+                "cash",
             ]
             .as_slice(),
         ),

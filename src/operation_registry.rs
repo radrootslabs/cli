@@ -992,6 +992,21 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         true
     ),
     operation!(
+        "order.payment.record",
+        "radroots order payment record",
+        "order",
+        "order_payment_record",
+        "OrderPaymentRecordRequest",
+        "OrderPaymentRecordResult",
+        "Record buyer manual payment.",
+        Buyer,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
         "order.status.get",
         "radroots order status get",
         "order",
@@ -1121,6 +1136,7 @@ mod tests {
         "order.revision.decline",
         "order.fulfillment.update",
         "order.receipt.record",
+        "order.payment.record",
         "order.status.get",
         "order.event.list",
         "order.event.watch",
@@ -1163,6 +1179,7 @@ mod tests {
         "order.revision.decline",
         "order.fulfillment.update",
         "order.receipt.record",
+        "order.payment.record",
     ];
 
     const INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[];
@@ -1175,7 +1192,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 64);
+        assert_eq!(OPERATION_REGISTRY.len(), 65);
     }
 
     #[test]
@@ -1230,6 +1247,7 @@ mod tests {
             "order.revision.decline",
             "order.fulfillment.update",
             "order.receipt.record",
+            "order.payment.record",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

@@ -290,6 +290,9 @@ fn execute_request(
         TargetOperationRequest::OrderReceiptRecord(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
+        TargetOperationRequest::OrderPaymentRecord(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
         TargetOperationRequest::OrderStatusGet(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
@@ -417,6 +420,7 @@ fn dry_run_requires_network(operation_id: &str) -> bool {
             | "order.revision.decline"
             | "order.fulfillment.update"
             | "order.receipt.record"
+            | "order.payment.record"
     )
 }
 
@@ -439,6 +443,7 @@ fn external_network_operation(operation_id: &str) -> bool {
             | "order.revision.decline"
             | "order.fulfillment.update"
             | "order.receipt.record"
+            | "order.payment.record"
             | "order.status.get"
             | "order.event.list"
             | "order.event.watch"

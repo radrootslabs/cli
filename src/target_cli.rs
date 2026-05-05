@@ -190,6 +190,9 @@ impl TargetCommand {
                 OrderCommand::Receipt(receipt) => match &receipt.command {
                     OrderReceiptCommand::Record(_) => "order.receipt.record",
                 },
+                OrderCommand::Payment(payment) => match &payment.command {
+                    OrderPaymentCommand::Record(_) => "order.payment.record",
+                },
                 OrderCommand::Status(status) => match &status.command {
                     OrderStatusCommand::Get(_) => "order.status.get",
                 },
@@ -752,6 +755,7 @@ pub enum OrderCommand {
     Revision(OrderRevisionArgs),
     Fulfillment(OrderFulfillmentArgs),
     Receipt(OrderReceiptArgs),
+    Payment(OrderPaymentArgs),
     Status(OrderStatusArgs),
     Event(OrderEventArgs),
 }
@@ -891,6 +895,50 @@ pub struct OrderReceiptRecordArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct OrderPaymentArgs {
+    #[command(subcommand)]
+    pub command: OrderPaymentCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrderPaymentCommand {
+    Record(OrderPaymentRecordArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderPaymentRecordArgs {
+    pub order_id: Option<String>,
+    #[arg(long)]
+    pub amount: Option<String>,
+    #[arg(long)]
+    pub currency: Option<String>,
+    #[arg(long, value_enum)]
+    pub method: Option<OrderPaymentMethodArg>,
+    #[arg(long)]
+    pub reference: Option<String>,
+    #[arg(long)]
+    pub paid_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub enum OrderPaymentMethodArg {
+    Cash,
+    ManualTransfer,
+    Other,
+}
+
+impl OrderPaymentMethodArg {
+    pub const fn as_protocol_method(self) -> &'static str {
+        match self {
+            Self::Cash => "cash",
+            Self::ManualTransfer => "manual_transfer",
+            Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct OrderStatusArgs {
     #[command(subcommand)]
     pub command: OrderStatusCommand,
@@ -926,8 +974,9 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{
-        OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg, OrderReceiptCommand,
-        OrderRevisionCommand, TargetCliArgs, TargetOutputFormat,
+        OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg, OrderPaymentCommand,
+        OrderPaymentMethodArg, OrderReceiptCommand, OrderRevisionCommand, TargetCliArgs,
+        TargetOutputFormat,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
 
@@ -1196,6 +1245,42 @@ mod tests {
         ])
         .expect("target args parse");
         assert_eq!(issue.command.operation_id(), "order.receipt.record");
+    }
+
+    #[test]
+    fn target_parser_accepts_order_payment_record_methods() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "payment",
+            "record",
+            "ord_test",
+            "--amount",
+            "12",
+            "--currency",
+            "USD",
+            "--method",
+            "manual_transfer",
+            "--reference",
+            "memo-1",
+            "--paid-at",
+            "1777666000",
+        ])
+        .expect("target args parse");
+        assert_eq!(parsed.command.operation_id(), "order.payment.record");
+        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Payment(payment) = order.command else {
+            panic!("expected order payment command")
+        };
+        let OrderPaymentCommand::Record(args) = payment.command;
+        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.amount.as_deref(), Some("12"));
+        assert_eq!(args.currency.as_deref(), Some("USD"));
+        assert_eq!(args.method, Some(OrderPaymentMethodArg::ManualTransfer));
+        assert_eq!(args.reference.as_deref(), Some("memo-1"));
+        assert_eq!(args.paid_at, Some(1_777_666_000));
     }
 
     #[test]

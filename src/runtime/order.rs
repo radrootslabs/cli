@@ -12,7 +12,7 @@ use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::kinds::{
     KIND_LISTING, KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION,
     KIND_TRADE_ORDER_REQUEST, KIND_TRADE_ORDER_REVISION, KIND_TRADE_ORDER_REVISION_RESPONSE,
-    KIND_TRADE_RECEIPT,
+    KIND_TRADE_PAYMENT_RECORDED, KIND_TRADE_RECEIPT, KIND_TRADE_SETTLEMENT_DECISION,
 };
 use radroots_events::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingStatus,
@@ -25,7 +25,7 @@ use radroots_events::trade::{
     RadrootsTradeOrderEconomicLine, RadrootsTradeOrderEconomics, RadrootsTradeOrderItem,
     RadrootsTradeOrderRequested, RadrootsTradeOrderRevisionDecision,
     RadrootsTradeOrderRevisionDecisionEvent, RadrootsTradeOrderRevisionProposed,
-    RadrootsTradePricingBasis,
+    RadrootsTradePaymentMethod, RadrootsTradePaymentRecorded, RadrootsTradePricingBasis,
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::decode::listing_from_event;
@@ -39,7 +39,8 @@ use radroots_events_codec::trade::{
     active_trade_order_revision_decision_event_build,
     active_trade_order_revision_decision_from_event,
     active_trade_order_revision_proposal_event_build,
-    active_trade_order_revision_proposal_from_event,
+    active_trade_order_revision_proposal_from_event, active_trade_payment_recorded_event_build,
+    active_trade_payment_recorded_from_event, active_trade_settlement_decision_from_event,
 };
 use radroots_events_codec::wire::WireEventParts;
 use radroots_nostr::prelude::{
@@ -66,19 +67,20 @@ use radroots_trade::order::{
     RadrootsActiveOrderSettlementState, RadrootsActiveOrderStatus,
     RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryAccountingProjection,
     RadrootsListingInventoryBinAvailability, canonicalize_active_order_decision_for_signer,
-    canonicalize_active_order_request_for_signer, reduce_active_order_events,
-    reduce_listing_inventory_accounting,
+    canonicalize_active_order_request_for_signer, radroots_trade_order_economics_digest,
+    reduce_active_order_events, reduce_listing_inventory_accounting,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
     OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderFulfillmentView,
     OrderGetView, OrderHistoryEntryView, OrderHistoryView, OrderInventoryBinView,
-    OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderReceiptView,
-    OrderRevisionDecisionView, OrderRevisionProposalView, OrderStatusFulfillmentView,
-    OrderStatusLifecycleCancellationView, OrderStatusLifecycleReceiptView,
-    OrderStatusLifecycleView, OrderStatusPaymentView, OrderStatusRevisionView, OrderStatusView,
-    OrderSubmitView, OrderSummaryView, OrderWatchView, RelayFailureView,
+    OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderPaymentView,
+    OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView,
+    OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
+    OrderStatusLifecycleReceiptView, OrderStatusLifecycleView, OrderStatusPaymentView,
+    OrderStatusRevisionView, OrderStatusView, OrderSubmitView, OrderSummaryView, OrderWatchView,
+    RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -90,8 +92,9 @@ use crate::runtime::direct_relay::{
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime_args::{
     OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftCreateArgs,
-    OrderFulfillmentArgs, OrderReceiptArgs, OrderRevisionDecisionArg, OrderRevisionDecisionArgs,
-    OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
+    OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
+    OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs,
+    OrderWatchArgs, RecordLookupArgs,
 };
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
@@ -105,6 +108,7 @@ const ORDER_REVISION_DECISION_SOURCE: &str =
 const ORDER_FULFILLMENT_SOURCE: &str = "direct Nostr relay fulfillment publish · local key";
 const ORDER_CANCELLATION_SOURCE: &str = "direct Nostr relay cancellation publish · local key";
 const ORDER_RECEIPT_SOURCE: &str = "direct Nostr relay receipt publish · local key";
+const ORDER_PAYMENT_SOURCE: &str = "direct Nostr relay payment publish · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
 const ORDER_STATUS_SOURCE: &str = "direct Nostr relay status fetch · active order reducer";
 const ORDER_EVENT_WATCH_UNAVAILABLE_REASON: &str =
@@ -1482,6 +1486,95 @@ pub fn receipt_record(
     publish_order_receipt(config, args, status_view, signing, payload)
 }
 
+pub fn payment_record(
+    config: &RuntimeConfig,
+    args: &OrderPaymentArgs,
+) -> Result<OrderPaymentView, RuntimeError> {
+    if let Some(view) = order_payment_args_preflight_view(config, args) {
+        return Ok(view);
+    }
+    if config.relay.urls.is_empty() {
+        let mut view = order_payment_base_view(config, args, "unconfigured", config.output.dry_run);
+        view.reason =
+            Some("order payment record requires at least one configured relay".to_owned());
+        return Ok(view);
+    }
+
+    let selected_account = match accounts::resolve_account(config)? {
+        Some(account) => account,
+        None => {
+            let mut view =
+                order_payment_base_view(config, args, "unconfigured", config.output.dry_run);
+            view.reason = Some("order payment record requires a selected buyer account".to_owned());
+            view.actions = vec!["radroots account create".to_owned()];
+            return Ok(view);
+        }
+    };
+    let selected_pubkey = selected_account.record.public_identity.public_key_hex;
+    let filter = order_status_filter(args.key.as_str())?;
+    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
+        Ok(receipt) => receipt,
+        Err(DirectRelayFetchError::Connect {
+            reason,
+            target_relays,
+            failed_relays,
+        }) => {
+            let mut view =
+                order_payment_base_view(config, args, "unavailable", config.output.dry_run);
+            view.buyer_pubkey = Some(selected_pubkey);
+            view.target_relays = target_relays;
+            view.failed_relays = relay_failures(failed_relays);
+            view.reason = Some(format!("direct relay connection failed: {reason}"));
+            return Ok(view);
+        }
+        Err(error) => return Err(RuntimeError::Network(error.to_string())),
+    };
+
+    let reduction = order_status_reduction_from_receipt_with_context(
+        OrderStatusContext {
+            order_id: args.key.as_str(),
+            selected_account_pubkey: Some(selected_pubkey.as_str()),
+        },
+        receipt,
+    );
+    let status_view = reduction.view;
+    if let Some(view) = order_payment_preflight_view_from_status(
+        config,
+        args,
+        &status_view,
+        selected_pubkey.as_str(),
+    ) {
+        return Ok(view);
+    }
+
+    let buyer_pubkey = status_view
+        .buyer_pubkey
+        .as_deref()
+        .ok_or_else(|| RuntimeError::Config("payable order is missing buyer_pubkey".to_owned()))?;
+    let signing = match resolve_local_order_payment_signing_identity(config, buyer_pubkey) {
+        Ok(signing) => signing,
+        Err(error) => {
+            return Ok(order_payment_binding_error_view(
+                config,
+                args,
+                &status_view,
+                error,
+            ));
+        }
+    };
+    let payload = order_payment_payload_from_status(args, &status_view)?;
+    let _ = order_payment_event_parts(&status_view, &payload)?;
+    if config.output.dry_run {
+        return Ok(order_payment_dry_run_view(
+            config,
+            args,
+            &status_view,
+            &payload,
+        ));
+    }
+    publish_order_payment(config, args, status_view, signing, payload)
+}
+
 pub fn status(
     config: &RuntimeConfig,
     args: &OrderStatusArgs,
@@ -1583,6 +1676,8 @@ enum OrderStatusRecord {
     Fulfillment(RadrootsActiveOrderFulfillmentRecord),
     Cancellation(RadrootsActiveOrderCancellationRecord),
     Receipt(RadrootsActiveOrderReceiptRecord),
+    Payment(RadrootsActiveOrderPaymentRecord),
+    Settlement(RadrootsActiveOrderSettlementRecord),
 }
 
 type OrderRevisionProposalRecord = RadrootsActiveOrderRevisionProposalRecord;
@@ -1651,6 +1746,8 @@ fn order_status_reduction_from_receipt_with_context(
     let mut fulfillments = Vec::new();
     let mut cancellations = Vec::new();
     let mut receipts = Vec::new();
+    let mut payments = Vec::new();
+    let mut settlements = Vec::new();
     let mut request_listing_events = Vec::new();
     let mut candidate_issues = Vec::new();
 
@@ -1692,6 +1789,14 @@ fn order_status_reduction_from_receipt_with_context(
                 decoded_count += 1;
                 receipts.push(record);
             }
+            Ok(OrderStatusRecord::Payment(record)) => {
+                decoded_count += 1;
+                payments.push(record);
+            }
+            Ok(OrderStatusRecord::Settlement(record)) => {
+                decoded_count += 1;
+                settlements.push(record);
+            }
             Err(error) => {
                 skipped_count += 1;
                 if order_status_request_candidate(&event, context) {
@@ -1729,8 +1834,8 @@ fn order_status_reduction_from_receipt_with_context(
         fulfillments,
         cancellations,
         receipts,
-        Vec::<RadrootsActiveOrderPaymentRecord>::new(),
-        Vec::<RadrootsActiveOrderSettlementRecord>::new(),
+        payments,
+        settlements,
     );
     let fulfillment_event_id = projection.fulfillment_event_id.clone();
     let fulfillment_status = projection.fulfillment_status;
@@ -2444,6 +2549,55 @@ fn order_status_record_from_event(
                 },
             ))
         }
+        KIND_TRADE_PAYMENT_RECORDED => {
+            let event = radroots_event_from_nostr(event);
+            let envelope = active_trade_payment_recorded_from_event(&event).map_err(|error| {
+                RuntimeError::Config(format!("decode active payment recorded event: {error}"))
+            })?;
+            let context = active_trade_event_context_from_tags(
+                RadrootsActiveTradeMessageType::TradePaymentRecorded,
+                &event.tags,
+            )
+            .map_err(|error| {
+                RuntimeError::Config(format!("decode active payment recorded tags: {error}"))
+            })?;
+            Ok(OrderStatusRecord::Payment(
+                RadrootsActiveOrderPaymentRecord {
+                    event_id: event.id,
+                    author_pubkey: event.author,
+                    counterparty_pubkey: context.counterparty_pubkey,
+                    root_event_id: context.root_event_id.unwrap_or_default(),
+                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    payload: envelope.payload,
+                },
+            ))
+        }
+        KIND_TRADE_SETTLEMENT_DECISION => {
+            let event = radroots_event_from_nostr(event);
+            let envelope =
+                active_trade_settlement_decision_from_event(&event).map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "decode active settlement decision event: {error}"
+                    ))
+                })?;
+            let context = active_trade_event_context_from_tags(
+                RadrootsActiveTradeMessageType::TradeSettlementDecision,
+                &event.tags,
+            )
+            .map_err(|error| {
+                RuntimeError::Config(format!("decode active settlement decision tags: {error}"))
+            })?;
+            Ok(OrderStatusRecord::Settlement(
+                RadrootsActiveOrderSettlementRecord {
+                    event_id: event.id,
+                    author_pubkey: event.author,
+                    counterparty_pubkey: context.counterparty_pubkey,
+                    root_event_id: context.root_event_id.unwrap_or_default(),
+                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    payload: envelope.payload,
+                },
+            ))
+        }
         event_kind => Err(RuntimeError::Config(format!(
             "order status received unexpected kind `{event_kind}`"
         ))),
@@ -2515,6 +2669,36 @@ fn active_order_settlement_state(status: &RadrootsActiveOrderSettlementState) ->
         RadrootsActiveOrderSettlementState::Rejected => "rejected",
         RadrootsActiveOrderSettlementState::Invalid => "invalid",
     }
+}
+
+fn parse_payment_method(value: &str) -> Result<RadrootsTradePaymentMethod, RuntimeError> {
+    match value.trim() {
+        "cash" => Ok(RadrootsTradePaymentMethod::Cash),
+        "manual_transfer" => Ok(RadrootsTradePaymentMethod::ManualTransfer),
+        "other" => Ok(RadrootsTradePaymentMethod::Other),
+        other => Err(RuntimeError::Config(format!(
+            "unsupported payment method `{other}`"
+        ))),
+    }
+}
+
+fn parse_payment_amount(value: &str) -> Result<RadrootsCoreDecimal, RuntimeError> {
+    let parsed = value
+        .trim()
+        .parse::<RadrootsCoreDecimal>()
+        .map_err(|error| RuntimeError::Config(format!("payment amount is invalid: {error}")))?;
+    if parsed.is_zero() || parsed.is_sign_negative() {
+        return Err(RuntimeError::Config(
+            "payment amount must be greater than zero".to_owned(),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_payment_currency(value: &str) -> Result<RadrootsCoreCurrency, RuntimeError> {
+    value
+        .parse::<RadrootsCoreCurrency>()
+        .map_err(|error| RuntimeError::Config(format!("payment currency is invalid: {error}")))
 }
 
 fn active_order_status_reason(
@@ -4112,6 +4296,52 @@ fn order_receipt_base_view(
     }
 }
 
+fn order_payment_base_view(
+    config: &RuntimeConfig,
+    args: &OrderPaymentArgs,
+    state: &str,
+    dry_run: bool,
+) -> OrderPaymentView {
+    OrderPaymentView {
+        state: state.to_owned(),
+        source: ORDER_PAYMENT_SOURCE.to_owned(),
+        order_id: args.key.clone(),
+        listing_addr: None,
+        buyer_pubkey: None,
+        seller_pubkey: None,
+        request_event_id: None,
+        agreement_event_id: None,
+        root_event_id: None,
+        prev_event_id: None,
+        event_id: None,
+        event_kind: None,
+        quote_id: None,
+        quote_version: None,
+        economics_digest: None,
+        amount: parse_payment_amount(args.amount.as_str()).ok(),
+        currency: parse_payment_currency(args.currency.as_str()).ok(),
+        method: parse_payment_method(args.method.as_str()).ok(),
+        reference: args
+            .reference
+            .as_ref()
+            .map(|reference| reference.trim().to_owned()),
+        paid_at: args.paid_at,
+        dry_run,
+        target_relays: config.relay.urls.clone(),
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: 0,
+        decoded_count: 0,
+        skipped_count: 0,
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        reason: None,
+        issues: Vec::new(),
+        actions: Vec::new(),
+    }
+}
+
 fn apply_order_fulfillment_status(view: &mut OrderFulfillmentView, status: &OrderStatusView) {
     view.order_id = status.order_id.clone();
     view.listing_addr = status.listing_addr.clone();
@@ -4171,12 +4401,50 @@ fn apply_order_receipt_status(view: &mut OrderReceiptView, status: &OrderStatusV
     view.issues = status.reducer_issues.clone();
 }
 
+fn apply_order_payment_status(view: &mut OrderPaymentView, status: &OrderStatusView) {
+    view.order_id = status.order_id.clone();
+    view.listing_addr = status.listing_addr.clone();
+    view.buyer_pubkey = status.buyer_pubkey.clone();
+    view.seller_pubkey = status.seller_pubkey.clone();
+    view.request_event_id = status.request_event_id.clone();
+    view.agreement_event_id = status.agreement_event_id.clone();
+    view.root_event_id = status.request_event_id.clone();
+    view.prev_event_id = order_payment_prev_event_id(status);
+    if let Some(economics) = status.economics.as_ref() {
+        view.quote_id = Some(economics.quote_id.clone());
+        view.quote_version = Some(economics.quote_version);
+        view.economics_digest = radroots_trade_order_economics_digest(economics).ok();
+        view.amount = Some(economics.total.amount);
+        view.currency = Some(economics.total.currency);
+    }
+    view.target_relays = status.target_relays.clone();
+    view.connected_relays = status.connected_relays.clone();
+    view.failed_relays = status.failed_relays.clone();
+    view.fetched_count = status.fetched_count;
+    view.decoded_count = status.decoded_count;
+    view.skipped_count = status.skipped_count;
+    view.issues = status.reducer_issues.clone();
+}
+
 fn order_receipt_prev_event_id(status: &OrderStatusView) -> Option<String> {
     status.fulfillment.as_ref().and_then(|fulfillment| {
         if matches!(fulfillment.state.as_str(), "ready_for_pickup" | "delivered") {
             fulfillment.event_id.clone()
         } else {
             None
+        }
+    })
+}
+
+fn order_payment_prev_event_id(status: &OrderStatusView) -> Option<String> {
+    status.payment.as_ref().and_then(|payment| {
+        if payment.state == "rejected" {
+            payment
+                .settlement_event_id
+                .clone()
+                .or_else(|| status.agreement_event_id.clone())
+        } else {
+            status.agreement_event_id.clone()
         }
     })
 }
@@ -4369,6 +4637,226 @@ fn order_receipt_preflight_view_from_status(
     });
     view.actions = vec![format!("radroots order status get {}", args.key)];
     Some(view)
+}
+
+fn order_payment_args_preflight_view(
+    config: &RuntimeConfig,
+    args: &OrderPaymentArgs,
+) -> Option<OrderPaymentView> {
+    let (reason, issue) = if args.amount.trim().is_empty() {
+        (
+            "order payment record requires --amount".to_owned(),
+            issue_with_code(
+                "missing_payment_amount",
+                "amount",
+                "payment amount is required",
+            ),
+        )
+    } else if parse_payment_amount(args.amount.as_str()).is_err() {
+        (
+            format!(
+                "order payment record received invalid amount `{}`",
+                args.amount
+            ),
+            issue_with_code(
+                "invalid_payment_amount",
+                "amount",
+                "payment amount must be greater than zero",
+            ),
+        )
+    } else if args.currency.trim().is_empty() {
+        (
+            "order payment record requires --currency".to_owned(),
+            issue_with_code(
+                "missing_payment_currency",
+                "currency",
+                "payment currency is required",
+            ),
+        )
+    } else if parse_payment_currency(args.currency.as_str()).is_err() {
+        (
+            format!(
+                "order payment record received invalid currency `{}`",
+                args.currency
+            ),
+            issue_with_code(
+                "invalid_payment_currency",
+                "currency",
+                "payment currency must be a 3-letter code",
+            ),
+        )
+    } else if args.method.trim().is_empty() {
+        (
+            "order payment record requires --method".to_owned(),
+            issue_with_code(
+                "missing_payment_method",
+                "method",
+                "payment method is required",
+            ),
+        )
+    } else if parse_payment_method(args.method.as_str()).is_err() {
+        (
+            format!(
+                "order payment record received unsupported method `{}`",
+                args.method
+            ),
+            issue_with_code(
+                "invalid_payment_method",
+                "method",
+                "payment method must be cash, manual_transfer, or other",
+            ),
+        )
+    } else {
+        return None;
+    };
+    let mut view = order_payment_base_view(config, args, "invalid", config.output.dry_run);
+    view.reason = Some(reason);
+    view.issues = vec![issue];
+    Some(view)
+}
+
+fn order_payment_preflight_view_from_status(
+    config: &RuntimeConfig,
+    args: &OrderPaymentArgs,
+    status: &OrderStatusView,
+    selected_pubkey: &str,
+) -> Option<OrderPaymentView> {
+    let buyer_matches = status
+        .buyer_pubkey
+        .as_deref()
+        .is_some_and(|buyer| buyer.eq_ignore_ascii_case(selected_pubkey));
+    let payment_state = status
+        .payment
+        .as_ref()
+        .map(|payment| payment.state.as_str())
+        .unwrap_or("not_recorded");
+    let payment_open = matches!(payment_state, "not_recorded" | "rejected");
+    let state = match status.state.as_str() {
+        "accepted" | "completed" | "disputed" if buyer_matches && payment_open => {
+            if let Some(view) = order_payment_terms_preflight_view_from_status(config, args, status)
+            {
+                return Some(view);
+            }
+            return None;
+        }
+        "accepted" | "completed" | "disputed" if buyer_matches => payment_state,
+        "missing" | "requested" | "declined" | "cancelled" | "invalid" | "unavailable"
+        | "unconfigured" => status.state.as_str(),
+        _ => "invalid",
+    };
+    let mut view = order_payment_base_view(config, args, state, config.output.dry_run);
+    apply_order_payment_status(&mut view, status);
+    if let Some(payment) = status.payment.as_ref() {
+        view.event_id = payment.payment_event_id.clone();
+        view.event_kind = payment
+            .payment_event_id
+            .as_ref()
+            .map(|_| KIND_TRADE_PAYMENT_RECORDED);
+        view.quote_id = payment.quote_id.clone().or(view.quote_id);
+        view.quote_version = payment.quote_version.or(view.quote_version);
+        view.economics_digest = payment.economics_digest.clone().or(view.economics_digest);
+        view.amount = payment.amount.or(view.amount);
+        view.currency = payment.currency.or(view.currency);
+        view.method = payment.method.or(view.method);
+        view.reference = payment.reference.clone().or(view.reference);
+        view.paid_at = payment.paid_at.or(view.paid_at);
+    }
+    view.reason = Some(match state {
+        "missing" => format!("no active order events matched `{}`", args.key),
+        "requested" => format!(
+            "order payment record refused because order `{}` has no accepted seller decision",
+            args.key
+        ),
+        "declined" => format!(
+            "order payment record refused because order `{}` was declined",
+            args.key
+        ),
+        "cancelled" => format!(
+            "order payment record refused because order `{}` was cancelled",
+            args.key
+        ),
+        "recorded" | "settled" => format!(
+            "order payment record skipped because order `{}` already has payment state `{state}`",
+            args.key
+        ),
+        "invalid" if !buyer_matches && status.buyer_pubkey.is_some() => format!(
+            "order payment record refused because selected account is not buyer for order `{}`",
+            args.key
+        ),
+        "invalid" => status.reason.clone().unwrap_or_else(|| {
+            format!(
+                "order payment record refused because active order events for `{}` are invalid",
+                args.key
+            )
+        }),
+        _ => status.reason.clone().unwrap_or_else(|| {
+            format!(
+                "order payment record status preflight failed with state `{}`",
+                status.state
+            )
+        }),
+    });
+    view.actions = vec![format!("radroots order status get {}", args.key)];
+    Some(view)
+}
+
+fn order_payment_terms_preflight_view_from_status(
+    config: &RuntimeConfig,
+    args: &OrderPaymentArgs,
+    status: &OrderStatusView,
+) -> Option<OrderPaymentView> {
+    let requested_amount = parse_payment_amount(args.amount.as_str()).ok()?;
+    let requested_currency = parse_payment_currency(args.currency.as_str()).ok()?;
+    let Some(economics) = status.economics.as_ref() else {
+        let mut view = order_payment_base_view(config, args, "invalid", config.output.dry_run);
+        apply_order_payment_status(&mut view, status);
+        view.reason = Some(format!(
+            "order payment record refused because order `{}` has no accepted economics",
+            args.key
+        ));
+        view.issues = vec![issue_with_code(
+            "missing_payment_economics",
+            "amount",
+            "active order has no accepted economics for payment comparison",
+        )];
+        view.actions = vec![format!("radroots order status get {}", args.key)];
+        return Some(view);
+    };
+    if requested_amount != economics.total.amount {
+        let mut view = order_payment_base_view(config, args, "invalid", config.output.dry_run);
+        apply_order_payment_status(&mut view, status);
+        view.amount = Some(requested_amount);
+        view.currency = Some(requested_currency);
+        view.reason = Some(format!(
+            "order payment record refused because amount `{}` does not match current agreement total `{}`",
+            args.amount, economics.total.amount
+        ));
+        view.issues = vec![issue_with_code(
+            "payment_amount_mismatch",
+            "amount",
+            "payment amount must match the current accepted agreement total",
+        )];
+        view.actions = vec![format!("radroots order status get {}", args.key)];
+        return Some(view);
+    }
+    if requested_currency != economics.total.currency {
+        let mut view = order_payment_base_view(config, args, "invalid", config.output.dry_run);
+        apply_order_payment_status(&mut view, status);
+        view.amount = Some(requested_amount);
+        view.currency = Some(requested_currency);
+        view.reason = Some(format!(
+            "order payment record refused because currency `{}` does not match current agreement currency `{}`",
+            args.currency, economics.total.currency
+        ));
+        view.issues = vec![issue_with_code(
+            "payment_currency_mismatch",
+            "currency",
+            "payment currency must match the current accepted agreement currency",
+        )];
+        view.actions = vec![format!("radroots order status get {}", args.key)];
+        return Some(view);
+    }
+    None
 }
 
 fn order_fulfillment_preflight_view_from_status(
@@ -6162,6 +6650,95 @@ fn order_receipt_event_parts(
         .map_err(|error| RuntimeError::Config(format!("encode buyer receipt event: {error}")))
 }
 
+fn order_payment_payload_from_status(
+    args: &OrderPaymentArgs,
+    status: &OrderStatusView,
+) -> Result<RadrootsTradePaymentRecorded, RuntimeError> {
+    let economics = status
+        .economics
+        .as_ref()
+        .ok_or_else(|| RuntimeError::Config("payable order is missing economics".to_owned()))?;
+    let agreement_event_id = status.agreement_event_id.clone().ok_or_else(|| {
+        RuntimeError::Config("payable order is missing agreement_event_id".to_owned())
+    })?;
+    let amount = parse_payment_amount(args.amount.as_str())?;
+    let currency = parse_payment_currency(args.currency.as_str())?;
+    if amount != economics.total.amount {
+        return Err(RuntimeError::Config(
+            "payment amount must match accepted agreement total".to_owned(),
+        ));
+    }
+    if currency != economics.total.currency {
+        return Err(RuntimeError::Config(
+            "payment currency must match accepted agreement currency".to_owned(),
+        ));
+    }
+    Ok(RadrootsTradePaymentRecorded {
+        order_id: status.order_id.clone(),
+        listing_addr: status.listing_addr.clone().ok_or_else(|| {
+            RuntimeError::Config("payable order is missing listing_addr".to_owned())
+        })?,
+        buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
+            RuntimeError::Config("payable order is missing buyer_pubkey".to_owned())
+        })?,
+        seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
+            RuntimeError::Config("payable order is missing seller_pubkey".to_owned())
+        })?,
+        root_event_id: status.request_event_id.clone().ok_or_else(|| {
+            RuntimeError::Config("payable order is missing request_event_id".to_owned())
+        })?,
+        previous_event_id: order_payment_prev_event_id(status).ok_or_else(|| {
+            RuntimeError::Config("payable order is missing payment previous event id".to_owned())
+        })?,
+        agreement_event_id,
+        quote_id: economics.quote_id.clone(),
+        quote_version: economics.quote_version,
+        economics_digest: radroots_trade_order_economics_digest(economics)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        amount,
+        currency,
+        method: parse_payment_method(args.method.as_str())?,
+        reference: args
+            .reference
+            .as_deref()
+            .map(str::trim)
+            .filter(|reference| !reference.is_empty())
+            .map(str::to_owned),
+        paid_at: args.paid_at,
+    })
+}
+
+fn order_payment_event_parts(
+    status: &OrderStatusView,
+    payload: &RadrootsTradePaymentRecorded,
+) -> Result<WireEventParts, RuntimeError> {
+    let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
+        RuntimeError::Config("payable order is missing request_event_id".to_owned())
+    })?;
+    let prev_event_id = order_payment_prev_event_id(status).ok_or_else(|| {
+        RuntimeError::Config("payable order is missing payment previous event id".to_owned())
+    })?;
+    active_trade_payment_recorded_event_build(root_event_id, prev_event_id.as_str(), payload)
+        .map_err(|error| RuntimeError::Config(format!("encode payment recorded event: {error}")))
+}
+
+fn apply_order_payment_payload(
+    view: &mut OrderPaymentView,
+    payload: &RadrootsTradePaymentRecorded,
+) {
+    view.root_event_id = Some(payload.root_event_id.clone());
+    view.prev_event_id = Some(payload.previous_event_id.clone());
+    view.agreement_event_id = Some(payload.agreement_event_id.clone());
+    view.quote_id = Some(payload.quote_id.clone());
+    view.quote_version = Some(payload.quote_version);
+    view.economics_digest = Some(payload.economics_digest.clone());
+    view.amount = Some(payload.amount);
+    view.currency = Some(payload.currency);
+    view.method = Some(payload.method);
+    view.reference = payload.reference.clone();
+    view.paid_at = payload.paid_at;
+}
+
 fn order_cancellation_dry_run_view(
     config: &RuntimeConfig,
     args: &OrderCancelArgs,
@@ -6187,6 +6764,20 @@ fn order_receipt_dry_run_view(
     view.issue = payload.issue.clone();
     view.received_at = Some(payload.received_at);
     view.reason = Some("dry run requested; buyer receipt publication skipped".to_owned());
+    view.actions = vec![format!("radroots order status get {}", status.order_id)];
+    view
+}
+
+fn order_payment_dry_run_view(
+    config: &RuntimeConfig,
+    args: &OrderPaymentArgs,
+    status: &OrderStatusView,
+    payload: &RadrootsTradePaymentRecorded,
+) -> OrderPaymentView {
+    let mut view = order_payment_base_view(config, args, "dry_run", true);
+    apply_order_payment_status(&mut view, status);
+    apply_order_payment_payload(&mut view, payload);
+    view.reason = Some("dry run requested; buyer payment publication skipped".to_owned());
     view.actions = vec![format!("radroots order status get {}", status.order_id)];
     view
 }
@@ -6345,6 +6936,22 @@ fn publish_order_receipt(
     ))
 }
 
+fn publish_order_payment(
+    config: &RuntimeConfig,
+    args: &OrderPaymentArgs,
+    status: OrderStatusView,
+    signing: accounts::AccountSigningIdentity,
+    payload: RadrootsTradePaymentRecorded,
+) -> Result<OrderPaymentView, RuntimeError> {
+    let parts = order_payment_event_parts(&status, &payload)?;
+    let event_kind = parts.kind;
+    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    Ok(published_order_payment_view(
+        config, args, &status, &payload, event_kind, receipt,
+    ))
+}
+
 fn published_order_fulfillment_view(
     config: &RuntimeConfig,
     args: &OrderFulfillmentArgs,
@@ -6424,6 +7031,33 @@ fn published_order_receipt_view(
     view.received = payload.received;
     view.issue = payload.issue.clone();
     view.received_at = Some(payload.received_at);
+    view.event_id = Some(event_id);
+    view.event_kind = Some(event_kind);
+    view.target_relays = target_relays;
+    view.acknowledged_relays = acknowledged_relays;
+    view.failed_relays = relay_failures(failed_relays);
+    view
+}
+
+fn published_order_payment_view(
+    config: &RuntimeConfig,
+    args: &OrderPaymentArgs,
+    status: &OrderStatusView,
+    payload: &RadrootsTradePaymentRecorded,
+    event_kind: u32,
+    receipt: DirectRelayPublishReceipt,
+) -> OrderPaymentView {
+    let DirectRelayPublishReceipt {
+        event_id,
+        created_at: _,
+        signature: _,
+        target_relays,
+        acknowledged_relays,
+        failed_relays,
+    } = receipt;
+    let mut view = order_payment_base_view(config, args, "recorded", false);
+    apply_order_payment_status(&mut view, status);
+    apply_order_payment_payload(&mut view, payload);
     view.event_id = Some(event_id);
     view.event_kind = Some(event_kind);
     view.target_relays = target_relays;
@@ -6529,6 +7163,26 @@ fn order_receipt_binding_error_view(
     };
     let mut view = order_receipt_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_receipt_status(&mut view, status);
+    view.reason = Some(reason);
+    view.actions = actions;
+    view
+}
+
+fn order_payment_binding_error_view(
+    config: &RuntimeConfig,
+    args: &OrderPaymentArgs,
+    status: &OrderStatusView,
+    error: ActorWriteBindingError,
+) -> OrderPaymentView {
+    let (state, reason, actions) = match error {
+        ActorWriteBindingError::Unconfigured(reason) => (
+            "unconfigured".to_owned(),
+            reason,
+            vec!["run radroots signer status get".to_owned()],
+        ),
+    };
+    let mut view = order_payment_base_view(config, args, state.as_str(), config.output.dry_run);
+    apply_order_payment_status(&mut view, status);
     view.reason = Some(reason);
     view.actions = actions;
     view
@@ -6954,6 +7608,8 @@ fn order_status_filter(order_id: &str) -> Result<RadrootsNostrFilter, RuntimeErr
             radroots_nostr_kind(KIND_TRADE_FULFILLMENT_UPDATE as u16),
             radroots_nostr_kind(KIND_TRADE_CANCEL as u16),
             radroots_nostr_kind(KIND_TRADE_RECEIPT as u16),
+            radroots_nostr_kind(KIND_TRADE_PAYMENT_RECORDED as u16),
+            radroots_nostr_kind(KIND_TRADE_SETTLEMENT_DECISION as u16),
         ])
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "d", vec![order_id.to_owned()])
@@ -8633,6 +9289,31 @@ fn resolve_local_order_receipt_signing_identity(
     Ok(signing)
 }
 
+fn resolve_local_order_payment_signing_identity(
+    config: &RuntimeConfig,
+    buyer_pubkey: &str,
+) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+    if !matches!(config.signer.backend, SignerBackend::Local) {
+        return Err(ActorWriteBindingError::Unconfigured(
+            "order payment record requires signer mode `local`".to_owned(),
+        ));
+    }
+    let signing = accounts::resolve_local_signing_identity(config)
+        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+    let selected_pubkey = signing
+        .account
+        .record
+        .public_identity
+        .public_key_hex
+        .as_str();
+    if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
+        return Err(ActorWriteBindingError::Unconfigured(format!(
+            "selected local account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
+        )));
+    }
+    Ok(signing)
+}
+
 fn resolve_local_order_revision_decision_signing_identity(
     config: &RuntimeConfig,
     buyer_pubkey: &str,
@@ -8944,7 +9625,8 @@ mod tests {
     use radroots_events::RadrootsNostrEventPtr;
     use radroots_events::kinds::{
         KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION,
-        KIND_TRADE_ORDER_REVISION, KIND_TRADE_ORDER_REVISION_RESPONSE, KIND_TRADE_RECEIPT,
+        KIND_TRADE_ORDER_REVISION, KIND_TRADE_ORDER_REVISION_RESPONSE, KIND_TRADE_PAYMENT_RECORDED,
+        KIND_TRADE_RECEIPT,
     };
     use radroots_events::trade::{
         RadrootsActiveTradeFulfillmentState, RadrootsActiveTradeMessageType,
@@ -8953,7 +9635,8 @@ mod tests {
         RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderEconomicItem,
         RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
         RadrootsTradeOrderRevisionDecision, RadrootsTradeOrderRevisionDecisionEvent,
-        RadrootsTradeOrderRevisionProposed, RadrootsTradePricingBasis,
+        RadrootsTradeOrderRevisionProposed, RadrootsTradePaymentMethod,
+        RadrootsTradePaymentRecorded, RadrootsTradePricingBasis,
     };
     use radroots_events_codec::trade::{
         active_trade_buyer_receipt_event_build, active_trade_event_context_from_tags,
@@ -8961,6 +9644,7 @@ mod tests {
         active_trade_order_decision_event_build, active_trade_order_decision_from_event,
         active_trade_order_request_event_build, active_trade_order_revision_decision_event_build,
         active_trade_order_revision_proposal_event_build,
+        active_trade_payment_recorded_event_build,
     };
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{radroots_event_from_nostr, radroots_nostr_build_event};
@@ -8988,10 +9672,11 @@ mod tests {
         order_decision_preflight_view_from_status, order_decision_view_from_resolution,
         order_economics_from_resolved_listing, order_fulfillment_dry_run_view,
         order_fulfillment_preflight_view_from_status, order_history_entry_from_event,
-        order_history_from_receipt, order_receipt_dry_run_view, order_receipt_event_parts,
-        order_receipt_payload_from_status, order_receipt_preflight_view_from_status,
-        order_request_filter, order_revision_decision_event_parts,
-        order_revision_decision_payload_from_proposal,
+        order_history_from_receipt, order_payment_dry_run_view, order_payment_event_parts,
+        order_payment_payload_from_status, order_payment_preflight_view_from_status,
+        order_receipt_dry_run_view, order_receipt_event_parts, order_receipt_payload_from_status,
+        order_receipt_preflight_view_from_status, order_request_filter,
+        order_revision_decision_event_parts, order_revision_decision_payload_from_proposal,
         order_revision_decision_preflight_view_from_status, order_revision_event_parts,
         order_revision_inventory_preflight_view, order_revision_payload_from_status,
         order_revision_preflight_view_from_status, order_revision_proposals_from_events,
@@ -9012,7 +9697,7 @@ mod tests {
     use crate::runtime::signer::ActorWriteBindingError;
     use crate::runtime_args::{
         OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftAdjustmentArgs,
-        OrderFulfillmentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
+        OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
         OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderSubmitArgs,
     };
 
@@ -9312,6 +9997,8 @@ mod tests {
         assert!(kinds.contains(&serde_json::json!(3433)));
         assert!(kinds.contains(&serde_json::json!(3432)));
         assert!(kinds.contains(&serde_json::json!(3434)));
+        assert!(kinds.contains(&serde_json::json!(3435)));
+        assert!(kinds.contains(&serde_json::json!(3436)));
         assert_eq!(value["#d"][0], "ord_AAAAAAAAAAAAAAAAAAAAAg");
     }
 
@@ -11773,6 +12460,418 @@ mod tests {
     }
 
     #[test]
+    fn order_payment_event_parts_bind_current_agreement_terms() {
+        let fixture = order_status_fixture();
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event.clone()],
+            },
+        );
+        let args = payment_args_for_fixture(&fixture);
+
+        assert!(
+            order_payment_preflight_view_from_status(
+                &config,
+                &args,
+                &status_view,
+                fixture.buyer_pubkey.as_str()
+            )
+            .is_none()
+        );
+        let payload =
+            order_payment_payload_from_status(&args, &status_view).expect("payment payload");
+        let parts = order_payment_event_parts(&status_view, &payload).expect("payment parts");
+        let request_event_id = fixture.request_event.id.to_string();
+        let decision_event_id = decision_event.id.to_string();
+        let context = active_trade_event_context_from_tags(
+            RadrootsActiveTradeMessageType::TradePaymentRecorded,
+            &parts.tags,
+        )
+        .expect("payment context");
+
+        assert_eq!(parts.kind, KIND_TRADE_PAYMENT_RECORDED);
+        assert_eq!(
+            context.root_event_id.as_deref(),
+            Some(request_event_id.as_str())
+        );
+        assert_eq!(
+            context.prev_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert_eq!(payload.agreement_event_id, decision_event_id);
+        assert_eq!(payload.quote_id, format!("quote_{}", fixture.order_id));
+        assert_eq!(payload.quote_version, 1);
+        assert_eq!(payload.amount, RadrootsCoreDecimal::from(12u32));
+        assert_eq!(payload.currency, RadrootsCoreCurrency::USD);
+        assert_eq!(payload.method, RadrootsTradePaymentMethod::ManualTransfer);
+        assert_eq!(payload.reference.as_deref(), Some("memo-1"));
+        assert_eq!(payload.paid_at, Some(1_777_666_000));
+    }
+
+    #[test]
+    fn order_payment_dry_run_view_preserves_payment_payload_without_event_id() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event.clone()],
+            },
+        );
+        let mut args = payment_args_for_fixture(&fixture);
+        args.idempotency_key = Some("idem_payment".to_owned());
+        let payload =
+            order_payment_payload_from_status(&args, &status_view).expect("payment payload");
+
+        let view = order_payment_dry_run_view(&config, &args, &status_view, &payload);
+        let request_event_id = fixture.request_event.id.to_string();
+        let decision_event_id = decision_event.id.to_string();
+
+        assert_eq!(view.state, "dry_run");
+        assert_eq!(view.dry_run, true);
+        assert_eq!(
+            view.root_event_id.as_deref(),
+            Some(request_event_id.as_str())
+        );
+        assert_eq!(
+            view.prev_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert_eq!(
+            view.agreement_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert_eq!(view.event_id, None);
+        assert_eq!(view.event_kind, None);
+        assert_eq!(view.amount, Some(RadrootsCoreDecimal::from(12u32)));
+        assert_eq!(view.currency, Some(RadrootsCoreCurrency::USD));
+        assert_eq!(
+            view.method,
+            Some(RadrootsTradePaymentMethod::ManualTransfer)
+        );
+        assert_eq!(view.reference.as_deref(), Some("memo-1"));
+        assert_eq!(view.paid_at, Some(1_777_666_000));
+        assert_eq!(view.target_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.connected_relays, vec!["ws://relay.test"]);
+        assert_eq!(view.fetched_count, 2);
+        assert_eq!(view.decoded_count, 2);
+        assert_eq!(view.idempotency_key.as_deref(), Some("idem_payment"));
+    }
+
+    #[test]
+    fn order_payment_preflight_rejects_selected_non_buyer_account() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event],
+            },
+        );
+        let args = payment_args_for_fixture(&fixture);
+
+        let view = order_payment_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.seller_pubkey.as_str(),
+        )
+        .expect("non buyer payment preflight");
+
+        assert_eq!(view.state, "invalid");
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("selected account is not buyer")
+        );
+    }
+
+    #[test]
+    fn order_payment_preflight_rejects_amount_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event],
+            },
+        );
+        let mut args = payment_args_for_fixture(&fixture);
+        args.amount = "11.99".to_owned();
+
+        let view = order_payment_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.buyer_pubkey.as_str(),
+        )
+        .expect("amount mismatch preflight");
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(view.amount, Some("11.99".parse().expect("decimal")));
+        assert_eq!(view.issues.len(), 1);
+        assert_eq!(view.issues[0].code, "payment_amount_mismatch");
+    }
+
+    #[test]
+    fn order_payment_preflight_rejects_cancelled_order() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let cancel_event = signed_order_cancellation_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            "changed plans",
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event, cancel_event],
+            },
+        );
+        let args = payment_args_for_fixture(&fixture);
+
+        let view = order_payment_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.buyer_pubkey.as_str(),
+        )
+        .expect("cancelled payment preflight");
+
+        assert_eq!(view.state, "cancelled");
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("was cancelled")
+        );
+    }
+
+    #[test]
+    fn order_payment_preflight_skips_existing_recorded_payment() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let payment_event_id = payment_event.id.to_string();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event, payment_event],
+            },
+        );
+        let args = payment_args_for_fixture(&fixture);
+
+        let view = order_payment_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.buyer_pubkey.as_str(),
+        )
+        .expect("recorded payment preflight");
+
+        assert_eq!(view.state, "recorded");
+        assert_eq!(view.event_id.as_deref(), Some(payment_event_id.as_str()));
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("already has payment state")
+        );
+    }
+
+    #[test]
+    fn order_status_from_receipt_reports_recorded_payment_axis() {
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let payment_event_id = payment_event.id.to_string();
+        let view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event.clone(),
+                    payment_event,
+                ],
+            },
+        );
+        let payment = view.payment.as_ref().expect("payment view");
+
+        assert_eq!(view.state, "accepted");
+        assert_eq!(payment.state, "recorded");
+        assert_eq!(payment.settlement_state, "pending");
+        assert_eq!(
+            payment.payment_event_id.as_deref(),
+            Some(payment_event_id.as_str())
+        );
+        assert_eq!(
+            payment.agreement_event_id.as_deref(),
+            Some(decision_event.id.to_string().as_str())
+        );
+        assert_eq!(payment.amount, Some(RadrootsCoreDecimal::from(12u32)));
+        assert_eq!(payment.currency, Some(RadrootsCoreCurrency::USD));
+        assert_eq!(
+            payment.method,
+            Some(RadrootsTradePaymentMethod::ManualTransfer)
+        );
+        assert!(payment.issues.is_empty());
+        assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
     fn order_receipt_preflight_rejects_ineligible_fulfillment() {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
@@ -13408,6 +14507,18 @@ mod tests {
         }
     }
 
+    fn payment_args_for_fixture(fixture: &OrderStatusFixture) -> OrderPaymentArgs {
+        OrderPaymentArgs {
+            key: fixture.order_id.clone(),
+            amount: "12".to_owned(),
+            currency: "USD".to_owned(),
+            method: "manual_transfer".to_owned(),
+            reference: Some("memo-1".to_owned()),
+            paid_at: Some(1_777_666_000),
+            idempotency_key: None,
+        }
+    }
+
     fn revision_args_for_fixture(
         fixture: &OrderStatusFixture,
         bin_count: u32,
@@ -13764,6 +14875,49 @@ mod tests {
             .expect("nostr event builder")
             .sign_with_keys(buyer.keys())
             .expect("signed buyer receipt")
+    }
+
+    fn signed_payment_recorded_event(
+        buyer: &RadrootsIdentity,
+        request_event: &radroots_nostr::prelude::RadrootsNostrEvent,
+        prev_event: &radroots_nostr::prelude::RadrootsNostrEvent,
+        agreement_event: &radroots_nostr::prelude::RadrootsNostrEvent,
+        order_id: &str,
+        listing_addr: &str,
+        buyer_pubkey: &str,
+        seller_pubkey: &str,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
+        let economics = sample_order_economics(order_id, "bin-1", 2);
+        let payload = RadrootsTradePaymentRecorded {
+            order_id: order_id.to_owned(),
+            listing_addr: listing_addr.to_owned(),
+            buyer_pubkey: buyer_pubkey.to_owned(),
+            seller_pubkey: seller_pubkey.to_owned(),
+            root_event_id: request_event.id.to_string(),
+            previous_event_id: prev_event.id.to_string(),
+            agreement_event_id: agreement_event.id.to_string(),
+            quote_id: economics.quote_id.clone(),
+            quote_version: economics.quote_version,
+            economics_digest: radroots_trade::order::radroots_trade_order_economics_digest(
+                &economics,
+            )
+            .expect("economics digest"),
+            amount: economics.total.amount,
+            currency: economics.total.currency,
+            method: RadrootsTradePaymentMethod::ManualTransfer,
+            reference: Some("memo-1".to_owned()),
+            paid_at: Some(1_777_666_000),
+        };
+        let parts = active_trade_payment_recorded_event_build(
+            payload.root_event_id.as_str(),
+            payload.previous_event_id.as_str(),
+            &payload,
+        )
+        .expect("payment recorded parts");
+        radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+            .expect("nostr event builder")
+            .sign_with_keys(buyer.keys())
+            .expect("signed payment recorded")
     }
 
     fn signed_malformed_order_request_event(

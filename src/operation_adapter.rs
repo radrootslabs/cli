@@ -1055,8 +1055,8 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
         BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
         FarmLocationCommand, FarmProfileCommand, ListingCommand, MarketCommand,
         MarketListingCommand, MarketProductCommand, OrderCommand, OrderEventCommand,
-        OrderFulfillmentCommand, OrderReceiptCommand, OrderRevisionCommand, OrderStatusCommand,
-        TargetCommand,
+        OrderFulfillmentCommand, OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand,
+        OrderStatusCommand, TargetCommand,
     };
 
     let mut input = OperationData::new();
@@ -1260,6 +1260,26 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                     insert_string(&mut input, "issue", &args.issue);
                 }
             },
+            OrderCommand::Payment(payment) => match &payment.command {
+                OrderPaymentCommand::Record(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id);
+                    insert_string(&mut input, "amount", &args.amount);
+                    insert_string(&mut input, "currency", &args.currency);
+                    if let Some(method) = args.method {
+                        input.insert(
+                            "method".to_owned(),
+                            Value::String(method.as_protocol_method().to_owned()),
+                        );
+                    }
+                    insert_string(&mut input, "reference", &args.reference);
+                    if let Some(paid_at) = args.paid_at {
+                        input.insert(
+                            "paid_at".to_owned(),
+                            Value::Number(serde_json::Number::from(paid_at)),
+                        );
+                    }
+                }
+            },
             OrderCommand::Status(status) => match &status.command {
                 OrderStatusCommand::Get(args) => {
                     insert_string(&mut input, "order_id", &args.order_id)
@@ -1371,6 +1391,7 @@ target_operation_contracts! {
     OrderRevisionDecline => (OrderRevisionDeclineRequest, OrderRevisionDeclineResult, "order.revision.decline"),
     OrderFulfillmentUpdate => (OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, "order.fulfillment.update"),
     OrderReceiptRecord => (OrderReceiptRecordRequest, OrderReceiptRecordResult, "order.receipt.record"),
+    OrderPaymentRecord => (OrderPaymentRecordRequest, OrderPaymentRecordResult, "order.payment.record"),
     OrderStatusGet => (OrderStatusGetRequest, OrderStatusGetResult, "order.status.get"),
     OrderEventList => (OrderEventListRequest, OrderEventListResult, "order.event.list"),
     OrderEventWatch => (OrderEventWatchRequest, OrderEventWatchResult, "order.event.watch"),
@@ -1733,6 +1754,67 @@ mod tests {
         assert_eq!(
             request.payload.input.get("issue").and_then(Value::as_str),
             Some("damaged items")
+        );
+
+        let payment = TargetCliArgs::try_parse_from([
+            "radroots",
+            "order",
+            "payment",
+            "record",
+            "ord_test",
+            "--amount",
+            "12",
+            "--currency",
+            "USD",
+            "--method",
+            "manual_transfer",
+            "--reference",
+            "memo-1",
+            "--paid-at",
+            "1777666000",
+        ])
+        .expect("target args parse");
+        let request =
+            TargetOperationRequest::from_target_args(&payment).expect("operation request");
+        let TargetOperationRequest::OrderPaymentRecord(request) = request else {
+            panic!("expected order payment record request")
+        };
+        assert_eq!(request.operation_id(), "order.payment.record");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("order_id")
+                .and_then(Value::as_str),
+            Some("ord_test")
+        );
+        assert_eq!(
+            request.payload.input.get("amount").and_then(Value::as_str),
+            Some("12")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("currency")
+                .and_then(Value::as_str),
+            Some("USD")
+        );
+        assert_eq!(
+            request.payload.input.get("method").and_then(Value::as_str),
+            Some("manual_transfer")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("reference")
+                .and_then(Value::as_str),
+            Some("memo-1")
+        );
+        assert_eq!(
+            request.payload.input.get("paid_at").and_then(Value::as_u64),
+            Some(1_777_666_000)
         );
     }
 

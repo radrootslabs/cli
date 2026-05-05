@@ -245,6 +245,17 @@ pub struct OrderReceiptArgs {
 }
 
 #[derive(Debug, Clone)]
+pub struct OrderPaymentArgs {
+    pub key: String,
+    pub amount: String,
+    pub currency: String,
+    pub method: String,
+    pub reference: Option<String>,
+    pub paid_at: Option<u64>,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct OrderRevisionProposeArgs {
     pub key: String,
     pub reason: String,
