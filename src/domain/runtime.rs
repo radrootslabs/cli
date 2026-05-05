@@ -2428,7 +2428,7 @@ pub struct FindResultHyfView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FindQuantityView {
-    pub total_amount: i64,
+    pub total_amount: f64,
     pub total_unit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -2440,7 +2440,7 @@ pub struct FindQuantityView {
 pub struct FindPriceView {
     pub amount: f64,
     pub currency: String,
-    pub per_amount: u32,
+    pub per_amount: f64,
     pub per_unit: String,
 }
 

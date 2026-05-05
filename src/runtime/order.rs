@@ -8825,6 +8825,43 @@ mod tests {
     }
 
     #[test]
+    fn order_economics_fails_when_exact_listing_source_is_missing() {
+        let listing = ResolvedOrderListing {
+            listing_addr: "30402:seller:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+            listing_event_id: "1".repeat(64),
+            seller_pubkey: "seller".to_owned(),
+            economics_product: Some(ResolvedOrderEconomicsProduct {
+                qty_amt_exact: None,
+                qty_unit: "kg".to_owned(),
+                price_amt_exact: Some("3.25".to_owned()),
+                price_currency: "USD".to_owned(),
+                price_qty_amt_exact: Some("1".to_owned()),
+                price_qty_unit: "kg".to_owned(),
+                primary_bin_id: Some("bin-a".to_owned()),
+                notes: None,
+            }),
+        };
+        let items = vec![OrderDraftItem {
+            bin_id: "bin-a".to_owned(),
+            bin_count: 1,
+        }];
+
+        let error = order_economics_from_resolved_listing(
+            "ord_AAAAAAAAAAAAAAAAAAAAAg",
+            Some(&listing),
+            items.as_slice(),
+            &[],
+        )
+        .expect_err("missing exact source should fail");
+
+        assert!(matches!(
+            error,
+            crate::runtime::RuntimeError::Config(message)
+                if message.contains("listing qty_amt_exact exact source is missing")
+        ));
+    }
+
+    #[test]
     fn order_draft_requires_listing_event_id_for_submit_readiness() {
         let document = OrderDraftDocument {
             version: 1,

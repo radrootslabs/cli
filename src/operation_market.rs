@@ -495,7 +495,7 @@ mod tests {
 
     fn quantity() -> FindQuantityView {
         FindQuantityView {
-            total_amount: 1,
+            total_amount: 1.0,
             total_unit: "each".to_owned(),
             label: None,
             available_amount: Some(1),
@@ -506,7 +506,7 @@ mod tests {
         FindPriceView {
             amount: 6.0,
             currency: "USD".to_owned(),
-            per_amount: 1,
+            per_amount: 1.0,
             per_unit: "each".to_owned(),
         }
     }
