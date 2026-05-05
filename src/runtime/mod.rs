@@ -11,6 +11,7 @@ pub mod logging;
 pub mod network;
 pub mod order;
 pub mod paths;
+#[cfg(test)]
 pub mod provider;
 pub mod signer;
 pub mod sync;

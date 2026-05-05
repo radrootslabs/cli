@@ -36,8 +36,6 @@ pub struct AccountRecordView {
 
 #[derive(Debug, Clone)]
 pub struct AccountSecretBackendStatus {
-    pub configured_primary: String,
-    pub configured_fallback: Option<String>,
     pub state: String,
     pub active_backend: Option<String>,
     pub used_fallback: bool,
@@ -380,32 +378,20 @@ pub fn unresolved_account_reason(config: &RuntimeConfig) -> Result<String, Runti
 }
 
 pub fn secret_backend_status(config: &RuntimeConfig) -> AccountSecretBackendStatus {
-    let configured_primary = config.account.secret_backend.kind().to_string();
-    let configured_fallback = config
-        .account
-        .secret_fallback
-        .map(|backend| backend.kind().to_string());
-
     match resolve_secret_backend(config) {
         Ok(resolved) => AccountSecretBackendStatus {
-            configured_primary,
-            configured_fallback,
             state: "ready".to_owned(),
             active_backend: Some(resolved.backend.kind().to_string()),
             used_fallback: resolved.used_fallback,
             reason: None,
         },
         Err(SecretBackendResolutionError::Unavailable(reason)) => AccountSecretBackendStatus {
-            configured_primary,
-            configured_fallback,
             state: "unavailable".to_owned(),
             active_backend: None,
             used_fallback: false,
             reason: Some(reason),
         },
         Err(SecretBackendResolutionError::Invalid(reason)) => AccountSecretBackendStatus {
-            configured_primary,
-            configured_fallback,
             state: "error".to_owned(),
             active_backend: None,
             used_fallback: false,

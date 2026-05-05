@@ -164,11 +164,11 @@ struct ResolvedOrderListing {
 
 #[derive(Debug, Clone)]
 struct ResolvedOrderEconomicsProduct {
-    qty_amt: i64,
+    qty_amt_exact: Option<String>,
     qty_unit: String,
-    price_amt: f64,
+    price_amt_exact: Option<String>,
     price_currency: String,
-    price_qty_amt: u32,
+    price_qty_amt_exact: Option<String>,
     price_qty_unit: String,
     primary_bin_id: Option<String>,
     notes: Option<String>,
@@ -177,11 +177,11 @@ struct ResolvedOrderEconomicsProduct {
 impl ResolvedOrderEconomicsProduct {
     fn from_summary(row: &ReplicaTradeProductSummaryRow) -> Self {
         Self {
-            qty_amt: row.qty_amt,
+            qty_amt_exact: row.qty_amt_exact.clone(),
             qty_unit: row.qty_unit.clone(),
-            price_amt: row.price_amt,
+            price_amt_exact: row.price_amt_exact.clone(),
             price_currency: row.price_currency.clone(),
-            price_qty_amt: row.price_qty_amt,
+            price_qty_amt_exact: row.price_qty_amt_exact.clone(),
             price_qty_unit: row.price_qty_unit.clone(),
             primary_bin_id: row.primary_bin_id.clone(),
             notes: row.notes.clone(),
@@ -190,11 +190,11 @@ impl ResolvedOrderEconomicsProduct {
 
     fn from_product(row: TradeProduct) -> Self {
         Self {
-            qty_amt: row.qty_amt,
+            qty_amt_exact: row.qty_amt_exact,
             qty_unit: row.qty_unit,
-            price_amt: row.price_amt,
+            price_amt_exact: row.price_amt_exact,
             price_currency: row.price_currency,
-            price_qty_amt: row.price_qty_amt,
+            price_qty_amt_exact: row.price_qty_amt_exact,
             price_qty_unit: row.price_qty_unit,
             primary_bin_id: row.primary_bin_id,
             notes: row.notes,
@@ -1608,6 +1608,7 @@ struct OrderStatusContext<'a> {
     selected_account_pubkey: Option<&'a str>,
 }
 
+#[cfg(test)]
 fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -> OrderStatusView {
     order_status_from_receipt_with_context(
         OrderStatusContext {
@@ -6813,12 +6814,15 @@ fn trade_product_listing_addr_filter(listing_addr: &str) -> ITradeProductFieldsF
         profile: None,
         year: None,
         qty_amt: None,
+        qty_amt_exact: None,
         qty_unit: None,
         qty_label: None,
         qty_avail: None,
         price_amt: None,
+        price_amt_exact: None,
         price_currency: None,
         price_qty_amt: None,
+        price_qty_amt_exact: None,
         price_qty_unit: None,
         listing_addr: Some(listing_addr.to_owned()),
         primary_bin_id: None,
@@ -6850,16 +6854,15 @@ fn order_economics_from_resolved_listing(
     }
 
     let currency = parse_economics_currency(product.price_currency.as_str(), "price_currency")?;
-    let quantity_amount = decimal_from_non_negative_i64(product.qty_amt, "qty_amt")?;
+    let quantity_amount =
+        exact_non_negative_decimal(product.qty_amt_exact.as_deref(), "qty_amt_exact")?;
     let quantity_unit = parse_economics_unit(product.qty_unit.as_str(), "qty_unit")?;
-    let price_amount = decimal_from_non_negative_f64(product.price_amt, "price_amt")?;
-    let price_quantity_amount = if product.price_qty_amt == 0 {
-        return Err(RuntimeError::Config(
-            "listing price_qty_amt must be greater than zero".to_owned(),
-        ));
-    } else {
-        RadrootsCoreDecimal::from(product.price_qty_amt)
-    };
+    let price_amount =
+        exact_non_negative_decimal(product.price_amt_exact.as_deref(), "price_amt_exact")?;
+    let price_quantity_amount = exact_positive_decimal(
+        product.price_qty_amt_exact.as_deref(),
+        "price_qty_amt_exact",
+    )?;
     let price_unit = parse_economics_unit(product.price_qty_unit.as_str(), "price_qty_unit")?;
     let quantity_unit_in_price_units =
         convert_unit_decimal(RadrootsCoreDecimal::ONE, quantity_unit, price_unit).map_err(
@@ -7063,29 +7066,39 @@ fn parse_economics_unit(value: &str, field: &str) -> Result<RadrootsCoreUnit, Ru
         .map_err(|error| RuntimeError::Config(format!("listing {field} is invalid: {error}")))
 }
 
-fn decimal_from_non_negative_i64(
-    value: i64,
+fn exact_non_negative_decimal(
+    value: Option<&str>,
     field: &str,
 ) -> Result<RadrootsCoreDecimal, RuntimeError> {
-    if value < 0 {
+    let parsed = exact_decimal(value, field)?;
+    if parsed.is_sign_negative() {
         return Err(RuntimeError::Config(format!(
             "listing {field} must be non-negative"
         )));
     }
-    Ok(RadrootsCoreDecimal::from(value))
+    Ok(parsed)
 }
 
-fn decimal_from_non_negative_f64(
-    value: f64,
+fn exact_positive_decimal(
+    value: Option<&str>,
     field: &str,
 ) -> Result<RadrootsCoreDecimal, RuntimeError> {
-    if !value.is_finite() || value < 0.0 {
+    let parsed = exact_non_negative_decimal(value, field)?;
+    if parsed.is_zero() {
         return Err(RuntimeError::Config(format!(
-            "listing {field} must be a finite non-negative decimal"
+            "listing {field} must be greater than zero"
         )));
     }
+    Ok(parsed)
+}
+
+fn exact_decimal(value: Option<&str>, field: &str) -> Result<RadrootsCoreDecimal, RuntimeError> {
+    let Some(value) = value.and_then(non_empty_ref) else {
+        return Err(RuntimeError::Config(format!(
+            "listing {field} exact source is missing"
+        )));
+    };
     value
-        .to_string()
         .parse::<RadrootsCoreDecimal>()
         .map_err(|error| RuntimeError::Config(format!("listing {field} is invalid: {error}")))
 }
@@ -8704,11 +8717,11 @@ mod tests {
             listing_event_id: "1".repeat(64),
             seller_pubkey: "seller".to_owned(),
             economics_product: Some(ResolvedOrderEconomicsProduct {
-                qty_amt: 1,
+                qty_amt_exact: Some("1".to_owned()),
                 qty_unit: "each".to_owned(),
-                price_amt: 10.0,
+                price_amt_exact: Some("10".to_owned()),
                 price_currency: "USD".to_owned(),
-                price_qty_amt: 1,
+                price_qty_amt_exact: Some("1".to_owned()),
                 price_qty_unit: "each".to_owned(),
                 primary_bin_id: Some("bin-1".to_owned()),
                 notes: Some(
@@ -8768,6 +8781,46 @@ mod tests {
         assert_eq!(
             economics.total,
             RadrootsCoreMoney::new(RadrootsCoreDecimal::from(20), RadrootsCoreCurrency::USD)
+        );
+    }
+
+    #[test]
+    fn order_economics_uses_exact_listing_values_over_display_projection() {
+        let listing = ResolvedOrderListing {
+            listing_addr: "30402:seller:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+            listing_event_id: "1".repeat(64),
+            seller_pubkey: "seller".to_owned(),
+            economics_product: Some(ResolvedOrderEconomicsProduct {
+                qty_amt_exact: Some("0.5".to_owned()),
+                qty_unit: "each".to_owned(),
+                price_amt_exact: Some("10.25".to_owned()),
+                price_currency: "USD".to_owned(),
+                price_qty_amt_exact: Some("1".to_owned()),
+                price_qty_unit: "each".to_owned(),
+                primary_bin_id: Some("bin-1".to_owned()),
+                notes: None,
+            }),
+        };
+        let items = vec![OrderDraftItem {
+            bin_id: "bin-1".to_owned(),
+            bin_count: 2,
+        }];
+
+        let economics = order_economics_from_resolved_listing(
+            "ord_AAAAAAAAAAAAAAAAAAAAAg",
+            Some(&listing),
+            items.as_slice(),
+            &[],
+        )
+        .expect("economics")
+        .expect("economics present");
+
+        assert_eq!(
+            economics.subtotal,
+            RadrootsCoreMoney::new(
+                "10.25".parse::<RadrootsCoreDecimal>().unwrap(),
+                RadrootsCoreCurrency::USD
+            )
         );
     }
 

@@ -247,6 +247,7 @@ pub enum CapabilityBindingTargetKind {
     ExplicitEndpoint,
 }
 
+#[cfg(test)]
 impl CapabilityBindingTargetKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -262,6 +263,7 @@ pub enum CapabilityBindingSource {
     WorkspaceConfig,
 }
 
+#[cfg(test)]
 impl CapabilityBindingSource {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -283,6 +285,7 @@ pub struct CapabilityBindingConfig {
     pub source: CapabilityBindingSource,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityBindingInspectionState {
     Configured,
@@ -290,16 +293,7 @@ pub enum CapabilityBindingInspectionState {
     Disabled,
 }
 
-impl CapabilityBindingInspectionState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Configured => "configured",
-            Self::NotConfigured => "not_configured",
-            Self::Disabled => "disabled",
-        }
-    }
-}
-
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityBindingInspection {
     pub capability_id: String,
@@ -408,7 +402,6 @@ struct CapabilityBindingSpec {
 }
 
 pub(crate) const SIGNER_REMOTE_NIP46_CAPABILITY: &str = "signer.remote_nip46";
-pub(crate) const WORKFLOW_TRADE_CAPABILITY: &str = "workflow.trade";
 pub(crate) const INFERENCE_HYF_STDIO_CAPABILITY: &str = "inference.hyf_stdio";
 
 const CAPABILITY_BINDING_SPECS: &[CapabilityBindingSpec] = &[
@@ -618,6 +611,7 @@ impl RuntimeConfig {
         })
     }
 
+    #[cfg(test)]
     pub fn inspect_capability_bindings(&self) -> Vec<CapabilityBindingInspection> {
         CAPABILITY_BINDING_SPECS
             .iter()

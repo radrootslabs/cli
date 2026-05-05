@@ -389,7 +389,10 @@ fn validate_network_contract(
             Ok(())
         }
         OperationNetworkMode::Online => {
-            if external && !request.context().dry_run && config.relay.urls.is_empty() {
+            if external
+                && (!request.context().dry_run || dry_run_requires_network(request.operation_id()))
+                && config.relay.urls.is_empty()
+            {
                 return Err(OperationAdapterError::NetworkUnavailable {
                     operation_id: spec.operation_id.to_owned(),
                     message: format!(
@@ -409,6 +412,9 @@ fn dry_run_requires_network(operation_id: &str) -> bool {
         "order.accept"
             | "order.decline"
             | "order.cancel"
+            | "order.revision.propose"
+            | "order.revision.accept"
+            | "order.revision.decline"
             | "order.fulfillment.update"
             | "order.receipt.record"
     )
@@ -428,6 +434,9 @@ fn external_network_operation(operation_id: &str) -> bool {
             | "order.accept"
             | "order.decline"
             | "order.cancel"
+            | "order.revision.propose"
+            | "order.revision.accept"
+            | "order.revision.decline"
             | "order.fulfillment.update"
             | "order.receipt.record"
             | "order.status.get"
