@@ -4636,6 +4636,14 @@ fn order_payment_prev_event_id(status: &OrderStatusView) -> Option<String> {
     })
 }
 
+fn unrejected_payment_state(status: &OrderStatusView) -> Option<&str> {
+    status
+        .payment
+        .as_ref()
+        .map(|payment| payment.state.as_str())
+        .filter(|state| matches!(*state, "recorded" | "settled"))
+}
+
 fn order_cancellation_prev_event_id(status: &OrderStatusView) -> Option<String> {
     match status.state.as_str() {
         "requested" => status.request_event_id.clone(),
@@ -4657,8 +4665,10 @@ fn order_cancellation_preflight_view_from_status(
         .buyer_pubkey
         .as_deref()
         .is_some_and(|buyer| buyer.eq_ignore_ascii_case(selected_pubkey));
+    let payment_state = unrejected_payment_state(status);
     let state = match status.state.as_str() {
         "requested" if buyer_matches => return None,
+        "accepted" if buyer_matches && payment_state.is_some() => "invalid",
         "accepted"
             if buyer_matches
                 && status
@@ -4701,6 +4711,21 @@ fn order_cancellation_preflight_view_from_status(
             "order cancel refused because order `{}` already has seller fulfillment",
             args.key
         ),
+        "invalid" if buyer_matches && payment_state.is_some() => {
+            if let Some(payment_state) = payment_state {
+                format!(
+                    "order cancel refused because order `{}` already has unrejected payment state `{payment_state}`",
+                    args.key
+                )
+            } else {
+                status.reason.clone().unwrap_or_else(|| {
+                    format!(
+                        "order cancel refused because active order events for `{}` are invalid",
+                        args.key
+                    )
+                })
+            }
+        }
         "invalid" if !buyer_matches && status.buyer_pubkey.is_some() => format!(
             "order cancel refused because selected account is not buyer for order `{}`",
             args.key
@@ -4718,6 +4743,13 @@ fn order_cancellation_preflight_view_from_status(
             )
         }),
     });
+    if state == "invalid" && buyer_matches && payment_state.is_some() {
+        view.issues.push(issue_with_code(
+            "payment_blocks_cancellation",
+            "payment.state",
+            "orders with unrejected recorded payment cannot be cancelled",
+        ));
+    }
     view.actions = vec![format!("radroots order status get {}", args.key)];
     Some(view)
 }
@@ -4918,6 +4950,12 @@ fn order_payment_preflight_view_from_status(
         .map(|payment| payment.state.as_str())
         .unwrap_or("not_recorded");
     let payment_open = matches!(payment_state, "not_recorded" | "rejected");
+    let different_existing_payment = matches!(payment_state, "recorded" | "settled")
+        && buyer_matches
+        && !status
+            .payment
+            .as_ref()
+            .is_some_and(|payment| payment_args_match_existing_payment(args, payment));
     let state = match status.state.as_str() {
         "accepted" | "completed" | "disputed" if buyer_matches && payment_open => {
             if let Some(view) = order_payment_terms_preflight_view_from_status(config, args, status)
@@ -4926,6 +4964,7 @@ fn order_payment_preflight_view_from_status(
             }
             return None;
         }
+        "accepted" | "completed" | "disputed" if different_existing_payment => "invalid",
         "accepted" | "completed" | "disputed" if buyer_matches => payment_state,
         "missing" | "requested" | "declined" | "cancelled" | "invalid" | "unavailable"
         | "unconfigured" => status.state.as_str(),
@@ -4966,6 +5005,10 @@ fn order_payment_preflight_view_from_status(
             "order payment record skipped because order `{}` already has payment state `{state}`",
             args.key
         ),
+        "invalid" if different_existing_payment => format!(
+            "order payment record refused because order `{}` already has a different unrejected payment",
+            args.key
+        ),
         "invalid" if !buyer_matches && status.buyer_pubkey.is_some() => format!(
             "order payment record refused because selected account is not buyer for order `{}`",
             args.key
@@ -4983,8 +5026,40 @@ fn order_payment_preflight_view_from_status(
             )
         }),
     });
+    if different_existing_payment {
+        view.issues = vec![issue_with_code(
+            "duplicate_payment_attempt",
+            "payment",
+            "a different payment already exists for this unrejected payment state",
+        )];
+    }
     view.actions = vec![format!("radroots order status get {}", args.key)];
     Some(view)
+}
+
+fn payment_args_match_existing_payment(
+    args: &OrderPaymentArgs,
+    payment: &OrderStatusPaymentView,
+) -> bool {
+    let amount_matches = parse_payment_amount(args.amount.as_str())
+        .ok()
+        .is_some_and(|amount| Some(amount) == payment.amount);
+    let currency_matches = parse_payment_currency(args.currency.as_str())
+        .ok()
+        .is_some_and(|currency| Some(currency) == payment.currency);
+    let method_matches = parse_payment_method(args.method.as_str())
+        .ok()
+        .is_some_and(|method| Some(method) == payment.method);
+    let reference = args
+        .reference
+        .as_deref()
+        .map(str::trim)
+        .filter(|reference| !reference.is_empty());
+    amount_matches
+        && currency_matches
+        && method_matches
+        && reference == payment.reference.as_deref()
+        && args.paid_at == payment.paid_at
 }
 
 fn order_payment_terms_preflight_view_from_status(
@@ -5589,9 +5664,11 @@ fn order_revision_preflight_view_from_status(
         .seller_pubkey
         .as_deref()
         .is_some_and(|seller| seller.eq_ignore_ascii_case(selected_pubkey));
+    let payment_state = unrejected_payment_state(status);
     let state = match status.state.as_str() {
         "accepted"
             if seller_matches
+                && payment_state.is_none()
                 && status
                     .fulfillment
                     .as_ref()
@@ -5603,6 +5680,7 @@ fn order_revision_preflight_view_from_status(
             return None;
         }
         "accepted" if !seller_matches => "invalid",
+        "accepted" if payment_state.is_some() => "invalid",
         "accepted"
             if status
                 .fulfillment
@@ -5649,6 +5727,21 @@ fn order_revision_preflight_view_from_status(
             "order revision propose refused because order `{}` already has a pending revision proposal",
             args.key
         ),
+        "invalid" if seller_matches && payment_state.is_some() => {
+            if let Some(payment_state) = payment_state {
+                format!(
+                    "order revision propose refused because order `{}` already has unrejected payment state `{payment_state}`",
+                    args.key
+                )
+            } else {
+                status.reason.clone().unwrap_or_else(|| {
+                    format!(
+                        "order revision propose refused because active order events for `{}` are invalid",
+                        args.key
+                    )
+                })
+            }
+        }
         "invalid" if !seller_matches && status.seller_pubkey.is_some() => format!(
             "order revision propose refused because selected account is not seller for order `{}`",
             args.key
@@ -5681,6 +5774,13 @@ fn order_revision_preflight_view_from_status(
                 .filter(|record| Some(record.event_id.as_str()) == status.last_event_id.as_deref())
                 .map(|record| record.event_id.clone())
                 .collect(),
+        ));
+    }
+    if state == "invalid" && seller_matches && payment_state.is_some() {
+        view.issues.push(issue_with_code(
+            "payment_blocks_revision",
+            "payment.state",
+            "orders with unrejected recorded payment cannot be economically revised",
         ));
     }
     view.issues.extend(candidates.issues.clone());
@@ -10992,6 +11092,72 @@ mod tests {
     }
 
     #[test]
+    fn order_revision_preflight_rejects_unrejected_payment() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event, payment_event],
+            },
+        );
+        let args = revision_args_for_fixture(&fixture, 3);
+        let candidates = order_revision_proposals_from_events(fixture.order_id.as_str(), &[]);
+
+        let view = order_revision_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.seller_pubkey.as_str(),
+            &candidates,
+        )
+        .expect("paid revision preflight");
+
+        assert_eq!(view.state, "invalid");
+        assert!(view.event_id.is_none());
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("unrejected payment state `recorded`")
+        );
+        assert!(
+            view.issues
+                .iter()
+                .any(|issue| issue.code == "payment_blocks_revision")
+        );
+    }
+
+    #[test]
     fn order_revision_preflight_rejects_pending_revision_candidate() {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
@@ -12487,6 +12653,70 @@ mod tests {
     }
 
     #[test]
+    fn order_cancellation_preflight_rejects_unrejected_payment() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event, payment_event],
+            },
+        );
+        let args = cancel_args_for_fixture(&fixture, "buyer cancelled");
+
+        let view = order_cancellation_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.buyer_pubkey.as_str(),
+        )
+        .expect("paid cancellation preflight");
+
+        assert_eq!(view.state, "invalid");
+        assert!(view.event_id.is_none());
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("unrejected payment state `recorded`")
+        );
+        assert!(
+            view.issues
+                .iter()
+                .any(|issue| issue.code == "payment_blocks_cancellation")
+        );
+    }
+
+    #[test]
     fn order_cancellation_preflight_rejects_selected_non_buyer_account() {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
@@ -13353,6 +13583,66 @@ mod tests {
                 .expect("reason")
                 .contains("already has payment state")
         );
+    }
+
+    #[test]
+    fn order_payment_preflight_rejects_second_different_recorded_payment() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let payment_event = signed_payment_recorded_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &decision_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event, payment_event],
+            },
+        );
+        let mut args = payment_args_for_fixture(&fixture);
+        args.reference = Some("different memo".to_owned());
+
+        let view = order_payment_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.buyer_pubkey.as_str(),
+        )
+        .expect("different payment preflight");
+
+        assert_eq!(view.state, "invalid");
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("already has a different unrejected payment")
+        );
+        assert_eq!(view.issues.len(), 1);
+        assert_eq!(view.issues[0].code, "duplicate_payment_attempt");
     }
 
     #[test]
