@@ -58,13 +58,16 @@ use radroots_replica_db_schema::trade_product::{
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
     RadrootsActiveOrderCancellationRecord, RadrootsActiveOrderDecisionRecord,
-    RadrootsActiveOrderFulfillmentRecord, RadrootsActiveOrderReceiptRecord,
-    RadrootsActiveOrderReducerIssue, RadrootsActiveOrderRequestRecord,
-    RadrootsActiveOrderRevisionDecisionRecord, RadrootsActiveOrderRevisionProposalRecord,
-    RadrootsActiveOrderStatus, RadrootsListingInventoryAccountingIssue,
-    RadrootsListingInventoryAccountingProjection, RadrootsListingInventoryBinAvailability,
-    canonicalize_active_order_decision_for_signer, canonicalize_active_order_request_for_signer,
-    reduce_active_order_events, reduce_listing_inventory_accounting,
+    RadrootsActiveOrderFulfillmentRecord, RadrootsActiveOrderPaymentProjection,
+    RadrootsActiveOrderPaymentRecord, RadrootsActiveOrderPaymentState,
+    RadrootsActiveOrderReceiptRecord, RadrootsActiveOrderReducerIssue,
+    RadrootsActiveOrderRequestRecord, RadrootsActiveOrderRevisionDecisionRecord,
+    RadrootsActiveOrderRevisionProposalRecord, RadrootsActiveOrderSettlementRecord,
+    RadrootsActiveOrderSettlementState, RadrootsActiveOrderStatus,
+    RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryAccountingProjection,
+    RadrootsListingInventoryBinAvailability, canonicalize_active_order_decision_for_signer,
+    canonicalize_active_order_request_for_signer, reduce_active_order_events,
+    reduce_listing_inventory_accounting,
 };
 use serde::{Deserialize, Serialize};
 
@@ -74,8 +77,8 @@ use crate::domain::runtime::{
     OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderReceiptView,
     OrderRevisionDecisionView, OrderRevisionProposalView, OrderStatusFulfillmentView,
     OrderStatusLifecycleCancellationView, OrderStatusLifecycleReceiptView,
-    OrderStatusLifecycleView, OrderStatusRevisionView, OrderStatusView, OrderSubmitView,
-    OrderSummaryView, OrderWatchView, RelayFailureView,
+    OrderStatusLifecycleView, OrderStatusPaymentView, OrderStatusRevisionView, OrderStatusView,
+    OrderSubmitView, OrderSummaryView, OrderWatchView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -1501,6 +1504,7 @@ pub fn status(
             inventory: None,
             fulfillment: None,
             lifecycle: None,
+            payment: None,
             reducer_issues: Vec::new(),
             target_relays: Vec::new(),
             connected_relays: Vec::new(),
@@ -1538,6 +1542,7 @@ pub fn status(
                 inventory: None,
                 fulfillment: None,
                 lifecycle: None,
+                payment: None,
                 reducer_issues: Vec::new(),
                 target_relays,
                 connected_relays: Vec::new(),
@@ -1724,6 +1729,8 @@ fn order_status_reduction_from_receipt_with_context(
         fulfillments,
         cancellations,
         receipts,
+        Vec::<RadrootsActiveOrderPaymentRecord>::new(),
+        Vec::<RadrootsActiveOrderSettlementRecord>::new(),
     );
     let fulfillment_event_id = projection.fulfillment_event_id.clone();
     let fulfillment_status = projection.fulfillment_status;
@@ -1759,6 +1766,15 @@ fn order_status_reduction_from_receipt_with_context(
                     .find(|record| &record.event_id == event_id)
                     .map(|record| record.prev_event_id.clone())
             });
+    let cancellation_reason = projection
+        .cancellation_event_id
+        .as_ref()
+        .and_then(|event_id| {
+            cancellation_records
+                .iter()
+                .find(|record| &record.event_id == event_id)
+                .map(|record| record.payload.reason.clone())
+        });
     let receipt_root_event_id = projection.receipt_event_id.as_ref().and_then(|event_id| {
         receipt_records
             .iter()
@@ -1819,8 +1835,9 @@ fn order_status_reduction_from_receipt_with_context(
         projection.cancellation_event_id.clone(),
         cancellation_root_event_id,
         cancellation_prev_event_id,
-        projection.settlement_pending,
-        projection.settlement_reason.clone(),
+        cancellation_reason,
+        false,
+        None,
         projection.receipt_event_id.clone(),
         receipt_root_event_id,
         receipt_prev_event_id,
@@ -1839,6 +1856,10 @@ fn order_status_reduction_from_receipt_with_context(
         &revision_proposal_records,
         &revision_decision_records,
     );
+    let payment = Some(order_status_payment_view(
+        projection.payment,
+        reducer_issues.as_slice(),
+    ));
 
     let view = OrderStatusView {
         state,
@@ -1857,6 +1878,7 @@ fn order_status_reduction_from_receipt_with_context(
         inventory,
         fulfillment,
         lifecycle: Some(lifecycle),
+        payment,
         reducer_issues,
         target_relays,
         connected_relays,
@@ -2475,6 +2497,26 @@ fn active_order_status_state(status: &RadrootsActiveOrderStatus) -> &'static str
     }
 }
 
+fn active_order_payment_state(status: &RadrootsActiveOrderPaymentState) -> &'static str {
+    match status {
+        RadrootsActiveOrderPaymentState::NotRecorded => "not_recorded",
+        RadrootsActiveOrderPaymentState::Recorded => "recorded",
+        RadrootsActiveOrderPaymentState::Settled => "settled",
+        RadrootsActiveOrderPaymentState::Rejected => "rejected",
+        RadrootsActiveOrderPaymentState::Invalid => "invalid",
+    }
+}
+
+fn active_order_settlement_state(status: &RadrootsActiveOrderSettlementState) -> &'static str {
+    match status {
+        RadrootsActiveOrderSettlementState::NotRequired => "not_required",
+        RadrootsActiveOrderSettlementState::Pending => "pending",
+        RadrootsActiveOrderSettlementState::Accepted => "accepted",
+        RadrootsActiveOrderSettlementState::Rejected => "rejected",
+        RadrootsActiveOrderSettlementState::Invalid => "invalid",
+    }
+}
+
 fn active_order_status_reason(
     status: &RadrootsActiveOrderStatus,
     order_id: &str,
@@ -2631,6 +2673,29 @@ fn order_status_fulfillment_view(
     })
 }
 
+fn order_status_payment_view(
+    projection: RadrootsActiveOrderPaymentProjection,
+    reducer_issues: &[OrderIssueView],
+) -> OrderStatusPaymentView {
+    OrderStatusPaymentView {
+        state: active_order_payment_state(&projection.state).to_owned(),
+        settlement_state: active_order_settlement_state(&projection.settlement_state).to_owned(),
+        payment_event_id: projection.payment_event_id,
+        settlement_event_id: projection.settlement_event_id,
+        agreement_event_id: projection.agreement_event_id,
+        quote_id: projection.quote_id,
+        quote_version: projection.quote_version,
+        economics_digest: projection.economics_digest,
+        amount: projection.amount,
+        currency: projection.currency,
+        method: projection.method,
+        reference: projection.reference,
+        paid_at: projection.paid_at,
+        reason: projection.reason,
+        issues: reducer_issues.to_vec(),
+    }
+}
+
 fn order_status_lifecycle_view(
     status: &RadrootsActiveOrderStatus,
     request_event_id: Option<String>,
@@ -2639,6 +2704,7 @@ fn order_status_lifecycle_view(
     cancellation_event_id: Option<String>,
     cancellation_root_event_id: Option<String>,
     cancellation_prev_event_id: Option<String>,
+    cancellation_reason: Option<String>,
     settlement_required: bool,
     settlement_reason: Option<String>,
     receipt_event_id: Option<String>,
@@ -2664,7 +2730,7 @@ fn order_status_lifecycle_view(
                     .clone()
                     .or(request_event_id.clone()),
                 prev_event_id: cancellation_prev_event_id.clone(),
-                reason: settlement_reason.clone(),
+                reason: cancellation_reason.clone(),
             });
     let receipt_view = receipt_event_id.as_ref().map(|event_id| {
         let (received, issue, received_at) = receipt.clone().unwrap_or((false, None, None));
@@ -3423,6 +3489,284 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
             "prev_event_id",
             "active order reducer reported receipt previous mismatch",
             vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentWithoutAcceptedAgreement { event_id } => {
+            issue_with_events(
+                "payment_without_accepted_agreement",
+                "payment_event_id",
+                "active order reducer reported payment without accepted agreement",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::PaymentPayloadInvalid { event_id } => issue_with_events(
+            "invalid_payment_payload",
+            "payment_payload",
+            "active order reducer reported invalid payment payload",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentOrderIdMismatch { event_id } => issue_with_events(
+            "payment_order_id_mismatch",
+            "order_id",
+            "active order reducer reported payment order id mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentAuthorMismatch { event_id } => issue_with_events(
+            "payment_author_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported payment author mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentCounterpartyMismatch { event_id } => {
+            issue_with_events(
+                "payment_counterparty_mismatch",
+                "seller_pubkey",
+                "active order reducer reported payment counterparty mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::PaymentBuyerMismatch { event_id } => issue_with_events(
+            "payment_buyer_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported payment buyer mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentSellerMismatch { event_id } => issue_with_events(
+            "payment_seller_mismatch",
+            "seller_pubkey",
+            "active order reducer reported payment seller mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentListingAddressInvalid { event_id } => {
+            issue_with_events(
+                "invalid_payment_listing_address",
+                "listing_addr",
+                "active order reducer reported invalid payment listing address",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::PaymentListingMismatch { event_id } => issue_with_events(
+            "payment_listing_mismatch",
+            "listing_addr",
+            "active order reducer reported payment listing mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentRootMismatch { event_id } => issue_with_events(
+            "payment_root_mismatch",
+            "root_event_id",
+            "active order reducer reported payment root mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentPreviousMismatch { event_id } => issue_with_events(
+            "payment_previous_mismatch",
+            "prev_event_id",
+            "active order reducer reported payment previous mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentAgreementMismatch { event_id } => {
+            issue_with_events(
+                "payment_agreement_mismatch",
+                "agreement_event_id",
+                "active order reducer reported payment agreement mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::PaymentQuoteMismatch { event_id } => issue_with_events(
+            "payment_quote_mismatch",
+            "quote_id",
+            "active order reducer reported payment quote mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentQuoteVersionMismatch { event_id } => {
+            issue_with_events(
+                "payment_quote_version_mismatch",
+                "quote_version",
+                "active order reducer reported payment quote version mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::PaymentEconomicsDigestMismatch { event_id } => {
+            issue_with_events(
+                "payment_economics_digest_mismatch",
+                "economics_digest",
+                "active order reducer reported payment economics digest mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::PaymentAmountMismatch { event_id } => issue_with_events(
+            "payment_amount_mismatch",
+            "amount",
+            "active order reducer reported payment amount mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentCurrencyMismatch { event_id } => issue_with_events(
+            "payment_currency_mismatch",
+            "currency",
+            "active order reducer reported payment currency mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::PaymentAfterCancellation { event_id } => {
+            issue_with_events(
+                "payment_after_cancellation",
+                "payment_event_id",
+                "active order reducer reported payment after cancellation",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::RevisionAfterPayment { event_id } => issue_with_events(
+            "revision_after_payment",
+            "revision_event_id",
+            "active order reducer reported revision after payment",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::DuplicatePayments { event_ids } => issue_with_events(
+            "duplicate_payments",
+            "payment_event_id",
+            "active order reducer reported duplicate payment events",
+            event_ids,
+        ),
+        RadrootsActiveOrderReducerIssue::SettlementWithoutValidPayment { event_id } => {
+            issue_with_events(
+                "settlement_without_valid_payment",
+                "settlement_event_id",
+                "active order reducer reported settlement without valid payment",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementPayloadInvalid { event_id } => {
+            issue_with_events(
+                "invalid_settlement_payload",
+                "settlement_payload",
+                "active order reducer reported invalid settlement payload",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementOrderIdMismatch { event_id } => {
+            issue_with_events(
+                "settlement_order_id_mismatch",
+                "order_id",
+                "active order reducer reported settlement order id mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementAuthorMismatch { event_id } => {
+            issue_with_events(
+                "settlement_author_mismatch",
+                "seller_pubkey",
+                "active order reducer reported settlement author mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementCounterpartyMismatch { event_id } => {
+            issue_with_events(
+                "settlement_counterparty_mismatch",
+                "buyer_pubkey",
+                "active order reducer reported settlement counterparty mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementBuyerMismatch { event_id } => issue_with_events(
+            "settlement_buyer_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported settlement buyer mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::SettlementSellerMismatch { event_id } => {
+            issue_with_events(
+                "settlement_seller_mismatch",
+                "seller_pubkey",
+                "active order reducer reported settlement seller mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementListingAddressInvalid { event_id } => {
+            issue_with_events(
+                "invalid_settlement_listing_address",
+                "listing_addr",
+                "active order reducer reported invalid settlement listing address",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementListingMismatch { event_id } => {
+            issue_with_events(
+                "settlement_listing_mismatch",
+                "listing_addr",
+                "active order reducer reported settlement listing mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementRootMismatch { event_id } => issue_with_events(
+            "settlement_root_mismatch",
+            "root_event_id",
+            "active order reducer reported settlement root mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::SettlementPreviousMismatch { event_id } => {
+            issue_with_events(
+                "settlement_previous_mismatch",
+                "prev_event_id",
+                "active order reducer reported settlement previous mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementPaymentEventMismatch { event_id } => {
+            issue_with_events(
+                "settlement_payment_event_mismatch",
+                "payment_event_id",
+                "active order reducer reported settlement payment event mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementAgreementMismatch { event_id } => {
+            issue_with_events(
+                "settlement_agreement_mismatch",
+                "agreement_event_id",
+                "active order reducer reported settlement agreement mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementQuoteMismatch { event_id } => issue_with_events(
+            "settlement_quote_mismatch",
+            "quote_id",
+            "active order reducer reported settlement quote mismatch",
+            vec![event_id],
+        ),
+        RadrootsActiveOrderReducerIssue::SettlementQuoteVersionMismatch { event_id } => {
+            issue_with_events(
+                "settlement_quote_version_mismatch",
+                "quote_version",
+                "active order reducer reported settlement quote version mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementEconomicsDigestMismatch { event_id } => {
+            issue_with_events(
+                "settlement_economics_digest_mismatch",
+                "economics_digest",
+                "active order reducer reported settlement economics digest mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementAmountMismatch { event_id } => {
+            issue_with_events(
+                "settlement_amount_mismatch",
+                "amount",
+                "active order reducer reported settlement amount mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::SettlementCurrencyMismatch { event_id } => {
+            issue_with_events(
+                "settlement_currency_mismatch",
+                "currency",
+                "active order reducer reported settlement currency mismatch",
+                vec![event_id],
+            )
+        }
+        RadrootsActiveOrderReducerIssue::DuplicateSettlements { event_ids } => issue_with_events(
+            "duplicate_settlements",
+            "settlement_event_id",
+            "active order reducer reported duplicate settlement events",
+            event_ids,
         ),
         RadrootsActiveOrderReducerIssue::ForkedLifecycle { event_ids } => issue_with_events(
             "forked_lifecycle",
@@ -10546,11 +10890,8 @@ mod tests {
             lifecycle.prev_event_id.as_deref(),
             Some(request_event_id.as_str())
         );
-        assert_eq!(lifecycle.settlement_required, true);
-        assert_eq!(
-            lifecycle.settlement_reason.as_deref(),
-            Some("buyer cancelled")
-        );
+        assert_eq!(lifecycle.settlement_required, false);
+        assert_eq!(lifecycle.settlement_reason, None);
         assert_eq!(cancellation.event_id, cancellation_event_id);
         assert_eq!(
             cancellation.root_event_id.as_deref(),
@@ -10627,11 +10968,8 @@ mod tests {
             lifecycle.prev_event_id.as_deref(),
             Some(decision_event_id.as_str())
         );
-        assert_eq!(lifecycle.settlement_required, true);
-        assert_eq!(
-            lifecycle.settlement_reason.as_deref(),
-            Some("buyer cannot collect")
-        );
+        assert_eq!(lifecycle.settlement_required, false);
+        assert_eq!(lifecycle.settlement_reason, None);
         assert!(view.reducer_issues.is_empty());
     }
 
@@ -11192,11 +11530,8 @@ mod tests {
             lifecycle.event_id.as_deref(),
             Some(receipt_event_id.as_str())
         );
-        assert_eq!(lifecycle.settlement_required, true);
-        assert_eq!(
-            lifecycle.settlement_reason.as_deref(),
-            Some("damaged items")
-        );
+        assert_eq!(lifecycle.settlement_required, false);
+        assert_eq!(lifecycle.settlement_reason, None);
         assert_eq!(receipt.received, false);
         assert_eq!(receipt.issue.as_deref(), Some("damaged items"));
         assert_eq!(receipt.received_at, Some(1_777_665_600));

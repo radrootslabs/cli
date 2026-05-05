@@ -2,10 +2,11 @@
 
 use std::process::ExitCode;
 
+use radroots_core::{RadrootsCoreCurrency, RadrootsCoreDecimal};
 use radroots_events::farm::RadrootsFarm;
 use radroots_events::listing::RadrootsListingLocation;
 use radroots_events::profile::RadrootsProfile;
-use radroots_events::trade::RadrootsTradeOrderEconomics;
+use radroots_events::trade::{RadrootsTradeOrderEconomics, RadrootsTradePaymentMethod};
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
 use serde::Serialize;
 
@@ -1665,6 +1666,8 @@ pub struct OrderStatusView {
     pub fulfillment: Option<OrderStatusFulfillmentView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<OrderStatusLifecycleView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment: Option<OrderStatusPaymentView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reducer_issues: Vec<OrderIssueView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1717,6 +1720,38 @@ pub struct OrderStatusFulfillmentView {
     pub terminal: bool,
     #[serde(default)]
     pub inventory_released: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderStatusPaymentView {
+    pub state: String,
+    pub settlement_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settlement_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agreement_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub economics_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<RadrootsCoreDecimal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<RadrootsCoreCurrency>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<RadrootsTradePaymentMethod>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paid_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<OrderIssueView>,
 }
