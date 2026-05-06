@@ -283,6 +283,22 @@ fn payment_commands_return_not_implemented_before_mutation_preflight() {
             [
                 "--format",
                 "json",
+                "--relay",
+                "not-a-url",
+                "order",
+                "payment",
+                "record",
+                "ord_pending",
+                "--method",
+                "card",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.payment.record",
+            [
+                "--format",
+                "json",
                 "--offline",
                 "order",
                 "payment",
@@ -308,7 +324,23 @@ fn payment_commands_return_not_implemented_before_mutation_preflight() {
             [
                 "--format",
                 "json",
+                "--relay",
+                "not-a-url",
+                "order",
+                "settlement",
+                "accept",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.accept",
+            [
+                "--format",
+                "json",
                 "--online",
+                "--relay",
+                "not-a-url",
                 "order",
                 "settlement",
                 "accept",

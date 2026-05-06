@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::deferred_payment::deferred_payment_message;
 use crate::domain::runtime::{
     CommandDisposition, OrderCancellationView, OrderDecisionView, OrderFulfillmentView,
     OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView, OrderStatusView,
@@ -1267,10 +1268,7 @@ fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapter
 }
 
 fn deferred_payment_error(operation_id: &str) -> OperationAdapterError {
-    OperationAdapterError::not_implemented(
-        operation_id,
-        "payments and settlement are not implemented in this Radroots release; order coordination is available now, and payment support is planned for a future phase".to_owned(),
-    )
+    OperationAdapterError::not_implemented(operation_id, deferred_payment_message())
 }
 
 fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {

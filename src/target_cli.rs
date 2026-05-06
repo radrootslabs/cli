@@ -917,30 +917,12 @@ pub struct OrderPaymentRecordArgs {
     pub amount: Option<String>,
     #[arg(long)]
     pub currency: Option<String>,
-    #[arg(long, value_enum)]
-    pub method: Option<OrderPaymentMethodArg>,
+    #[arg(long)]
+    pub method: Option<String>,
     #[arg(long)]
     pub reference: Option<String>,
     #[arg(long)]
     pub paid_at: Option<u64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub enum OrderPaymentMethodArg {
-    Cash,
-    ManualTransfer,
-    Other,
-}
-
-impl OrderPaymentMethodArg {
-    pub const fn as_protocol_method(self) -> &'static str {
-        match self {
-            Self::Cash => "cash",
-            Self::ManualTransfer => "manual_transfer",
-            Self::Other => "other",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1008,8 +990,8 @@ mod tests {
 
     use super::{
         OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg, OrderPaymentCommand,
-        OrderPaymentMethodArg, OrderReceiptCommand, OrderRevisionCommand, OrderSettlementCommand,
-        TargetCliArgs, TargetOutputFormat,
+        OrderReceiptCommand, OrderRevisionCommand, OrderSettlementCommand, TargetCliArgs,
+        TargetOutputFormat,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
 
@@ -1311,9 +1293,22 @@ mod tests {
         assert_eq!(args.order_id.as_deref(), Some("ord_test"));
         assert_eq!(args.amount.as_deref(), Some("12"));
         assert_eq!(args.currency.as_deref(), Some("USD"));
-        assert_eq!(args.method, Some(OrderPaymentMethodArg::ManualTransfer));
+        assert_eq!(args.method.as_deref(), Some("manual_transfer"));
         assert_eq!(args.reference.as_deref(), Some("memo-1"));
         assert_eq!(args.paid_at, Some(1_777_666_000));
+
+        let future_method = TargetCliArgs::try_parse_from([
+            "radroots", "order", "payment", "record", "ord_test", "--method", "card",
+        ])
+        .expect("target args parse");
+        let crate::target_cli::TargetCommand::Order(order) = future_method.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Payment(payment) = order.command else {
+            panic!("expected order payment command")
+        };
+        let OrderPaymentCommand::Record(args) = payment.command;
+        assert_eq!(args.method.as_deref(), Some("card"));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod deferred_payment;
 mod domain;
 mod operation_adapter;
 mod operation_basket;
@@ -22,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 
+use crate::deferred_payment::{deferred_payment_message, is_deferred_payment_operation};
 use crate::operation_adapter::{
     OperationAdapter, OperationAdapterError, OperationNetworkMode, OperationOutputFormat,
     OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
@@ -56,10 +58,15 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
     debug_assert!(operation_registry::registry_linkage_is_valid());
     debug_assert!(operation_adapter::adapter_registry_linkage_is_valid());
     let args = TargetCliArgs::parse();
-    let config = RuntimeConfig::from_system(&runtime_args_from_target(&args))?;
-    let logging = initialize_logging(&config.logging)?;
     let request =
         TargetOperationRequest::from_target_args(&args).map_err(operation_config_error)?;
+    if let Err(error) = validate_pre_runtime_request_contract(&request) {
+        let envelope = failure_envelope(&request, error);
+        render_envelope(&envelope, args.format)?;
+        return Ok(envelope_exit_code(&envelope));
+    }
+    let config = RuntimeConfig::from_system(&runtime_args_from_target(&args))?;
+    let logging = initialize_logging(&config.logging)?;
     let envelope = match validate_request_contract(&request, &config) {
         Ok(()) => execute_request(request, &config, &logging),
         Err(error) => failure_envelope(&request, error),
@@ -336,6 +343,15 @@ fn validate_request_contract(
     request: &TargetOperationRequest,
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
+    validate_pre_runtime_request_contract(request)?;
+    validate_signer_mode_contract(request, config)?;
+    validate_network_contract(request, config)?;
+    Ok(())
+}
+
+fn validate_pre_runtime_request_contract(
+    request: &TargetOperationRequest,
+) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
     if matches!(
         request.context().output_format,
@@ -353,14 +369,12 @@ fn validate_request_contract(
             message: format!("`{}` does not support --dry-run", spec.cli_path),
         });
     }
-    if deferred_payment_operation(spec.operation_id) {
+    if is_deferred_payment_operation(spec.operation_id) {
         return Err(OperationAdapterError::not_implemented(
             spec.operation_id,
             deferred_payment_message(),
         ));
     }
-    validate_signer_mode_contract(request, config)?;
-    validate_network_contract(request, config)?;
     Ok(())
 }
 
@@ -458,17 +472,6 @@ fn external_network_operation(operation_id: &str) -> bool {
             | "order.event.list"
             | "order.event.watch"
     )
-}
-
-fn deferred_payment_operation(operation_id: &str) -> bool {
-    matches!(
-        operation_id,
-        "order.payment.record" | "order.settlement.accept" | "order.settlement.reject"
-    )
-}
-
-fn deferred_payment_message() -> String {
-    "payments and settlement are not implemented in this Radroots release; order coordination is available now, and payment support is planned for a future phase".to_owned()
 }
 
 fn failure_envelope(

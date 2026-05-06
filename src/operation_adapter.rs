@@ -1287,12 +1287,7 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                     insert_string(&mut input, "order_id", &args.order_id);
                     insert_string(&mut input, "amount", &args.amount);
                     insert_string(&mut input, "currency", &args.currency);
-                    if let Some(method) = args.method {
-                        input.insert(
-                            "method".to_owned(),
-                            Value::String(method.as_protocol_method().to_owned()),
-                        );
-                    }
+                    insert_string(&mut input, "method", &args.method);
                     insert_string(&mut input, "reference", &args.reference);
                     if let Some(paid_at) = args.paid_at {
                         input.insert(
