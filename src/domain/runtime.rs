@@ -1831,7 +1831,7 @@ pub struct OrderStatusView {
     pub fulfillment: Option<OrderStatusFulfillmentView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<OrderStatusLifecycleView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "inactive_status_payment")]
     pub payment: Option<OrderStatusPaymentView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reducer_issues: Vec<OrderIssueView>,
@@ -1919,6 +1919,16 @@ pub struct OrderStatusPaymentView {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<OrderIssueView>,
+}
+
+fn inactive_status_payment(payment: &Option<OrderStatusPaymentView>) -> bool {
+    payment.as_ref().is_none_or(|payment| {
+        payment.state == "not_recorded"
+            && payment.settlement_state == "not_required"
+            && payment.payment_event_id.is_none()
+            && payment.settlement_event_id.is_none()
+            && payment.issues.is_empty()
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
