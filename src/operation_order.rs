@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 
 use crate::domain::runtime::{
     CommandDisposition, OrderCancellationView, OrderDecisionView, OrderFulfillmentView,
-    OrderPaymentView, OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView,
-    OrderSettlementView, OrderStatusView, OrderSubmitView,
+    OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView, OrderStatusView,
+    OrderSubmitView,
 };
 use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
@@ -22,9 +22,8 @@ use crate::operation_adapter::{
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime_args::{
-    OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderPaymentArgs,
-    OrderReceiptArgs, OrderRevisionDecisionArg, OrderRevisionDecisionArgs,
-    OrderRevisionProposeArgs, OrderSettlementArgs, OrderSettlementDecisionArg, OrderStatusArgs,
+    OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderReceiptArgs,
+    OrderRevisionDecisionArg, OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderStatusArgs,
     OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
 };
 
@@ -445,64 +444,7 @@ impl OperationService<OrderPaymentRecordRequest> for OrderOperationService<'_> {
         &self,
         request: OperationRequest<OrderPaymentRecordRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let amount = string_input(&request, "amount")
-            .map(|amount| amount.trim().to_owned())
-            .filter(|amount| !amount.is_empty())
-            .ok_or_else(|| {
-                invalid_input(
-                    request.operation_id(),
-                    "missing required payment amount input".to_owned(),
-                )
-            })?;
-        let currency = string_input(&request, "currency")
-            .map(|currency| currency.trim().to_owned())
-            .filter(|currency| !currency.is_empty())
-            .ok_or_else(|| {
-                invalid_input(
-                    request.operation_id(),
-                    "missing required payment currency input".to_owned(),
-                )
-            })?;
-        let method = string_input(&request, "method")
-            .map(|method| method.trim().to_owned())
-            .filter(|method| !method.is_empty())
-            .ok_or_else(|| {
-                invalid_input(
-                    request.operation_id(),
-                    "missing required payment method input".to_owned(),
-                )
-            })?;
-        let reference = string_input(&request, "reference")
-            .map(|reference| reference.trim().to_owned())
-            .filter(|reference| !reference.is_empty());
-        let paid_at = u64_input(&request, "paid_at");
-        if request.context.requires_approval_token() {
-            return Err(OperationAdapterError::approval_required(
-                request.operation_id(),
-            ));
-        }
-
-        let args = OrderPaymentArgs {
-            key: required_order_key(&request)?,
-            amount,
-            currency,
-            method,
-            reference,
-            paid_at,
-            idempotency_key: request
-                .context
-                .idempotency_key
-                .clone()
-                .or_else(|| string_input(&request, "idempotency_key")),
-        };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = crate::runtime::order::payment_record(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
-        })?;
-        payment_result::<OrderPaymentRecordResult>(request.operation_id(), &view)
+        Err(deferred_payment_error(request.operation_id()))
     }
 }
 
@@ -513,32 +455,7 @@ impl OperationService<OrderSettlementAcceptRequest> for OrderOperationService<'_
         &self,
         request: OperationRequest<OrderSettlementAcceptRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let payment_event_id = required_payment_event_id(&request)?;
-        if request.context.requires_approval_token() {
-            return Err(OperationAdapterError::approval_required(
-                request.operation_id(),
-            ));
-        }
-
-        let args = OrderSettlementArgs {
-            key: required_order_key(&request)?,
-            payment_event_id,
-            decision: OrderSettlementDecisionArg::Accept,
-            reason: None,
-            idempotency_key: request
-                .context
-                .idempotency_key
-                .clone()
-                .or_else(|| string_input(&request, "idempotency_key")),
-        };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = crate::runtime::order::settlement_decision(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
-        })?;
-        settlement_result::<OrderSettlementAcceptResult>(request.operation_id(), &view)
+        Err(deferred_payment_error(request.operation_id()))
     }
 }
 
@@ -549,41 +466,7 @@ impl OperationService<OrderSettlementRejectRequest> for OrderOperationService<'_
         &self,
         request: OperationRequest<OrderSettlementRejectRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let payment_event_id = required_payment_event_id(&request)?;
-        let reason = string_input(&request, "reason")
-            .map(|reason| reason.trim().to_owned())
-            .filter(|reason| !reason.is_empty())
-            .ok_or_else(|| {
-                invalid_input(
-                    request.operation_id(),
-                    "missing required settlement rejection reason input".to_owned(),
-                )
-            })?;
-        if request.context.requires_approval_token() {
-            return Err(OperationAdapterError::approval_required(
-                request.operation_id(),
-            ));
-        }
-
-        let args = OrderSettlementArgs {
-            key: required_order_key(&request)?,
-            payment_event_id,
-            decision: OrderSettlementDecisionArg::Reject,
-            reason: Some(reason),
-            idempotency_key: request
-                .context
-                .idempotency_key
-                .clone()
-                .or_else(|| string_input(&request, "idempotency_key")),
-        };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = crate::runtime::order::settlement_decision(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
-        })?;
-        settlement_result::<OrderSettlementRejectResult>(request.operation_id(), &view)
+        Err(deferred_payment_error(request.operation_id()))
     }
 }
 
@@ -1142,198 +1025,6 @@ where
     }
 }
 
-fn payment_result<R>(
-    operation_id: &str,
-    view: &OrderPaymentView,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    match view.disposition() {
-        CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        CommandDisposition::ValidationFailed => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!(
-                    "order payment record failed validation with state `{}`",
-                    view.state
-                )
-            });
-            Err(OperationAdapterError::validation_failed_with_detail(
-                operation_id,
-                message,
-                order_payment_error_detail(view),
-            ))
-        }
-        disposition => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!("order payment record finished with state `{}`", view.state)
-            });
-            if disposition == CommandDisposition::ExternalUnavailable {
-                let detail = order_payment_error_detail(view);
-                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
-                    Err(OperationAdapterError::network_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                } else {
-                    Err(OperationAdapterError::operation_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                }
-            } else if disposition == CommandDisposition::Unconfigured {
-                Err(OperationAdapterError::operation_unavailable_with_detail(
-                    operation_id,
-                    message,
-                    order_payment_error_detail(view),
-                ))
-            } else {
-                Err(OperationAdapterError::from_command_disposition(
-                    operation_id,
-                    disposition,
-                    message,
-                ))
-            }
-        }
-    }
-}
-
-fn settlement_result<R>(
-    operation_id: &str,
-    view: &OrderSettlementView,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    match view.disposition() {
-        CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        CommandDisposition::ValidationFailed => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!(
-                    "order settlement decision failed validation with state `{}`",
-                    view.state
-                )
-            });
-            Err(OperationAdapterError::validation_failed_with_detail(
-                operation_id,
-                message,
-                order_settlement_error_detail(view),
-            ))
-        }
-        disposition => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!(
-                    "order settlement decision finished with state `{}`",
-                    view.state
-                )
-            });
-            if disposition == CommandDisposition::ExternalUnavailable {
-                let detail = order_settlement_error_detail(view);
-                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
-                    Err(OperationAdapterError::network_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                } else {
-                    Err(OperationAdapterError::operation_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                }
-            } else if disposition == CommandDisposition::Unconfigured {
-                Err(OperationAdapterError::operation_unavailable_with_detail(
-                    operation_id,
-                    message,
-                    order_settlement_error_detail(view),
-                ))
-            } else {
-                Err(OperationAdapterError::from_command_disposition(
-                    operation_id,
-                    disposition,
-                    message,
-                ))
-            }
-        }
-    }
-}
-
-fn order_payment_error_detail(view: &OrderPaymentView) -> Value {
-    json!({
-        "state": &view.state,
-        "order_id": &view.order_id,
-        "listing_addr": &view.listing_addr,
-        "request_event_id": &view.request_event_id,
-        "agreement_event_id": &view.agreement_event_id,
-        "root_event_id": &view.root_event_id,
-        "prev_event_id": &view.prev_event_id,
-        "event_id": &view.event_id,
-        "event_kind": view.event_kind,
-        "buyer_pubkey": &view.buyer_pubkey,
-        "seller_pubkey": &view.seller_pubkey,
-        "quote_id": &view.quote_id,
-        "quote_version": view.quote_version,
-        "economics_digest": &view.economics_digest,
-        "amount": &view.amount,
-        "currency": &view.currency,
-        "method": &view.method,
-        "reference": &view.reference,
-        "paid_at": &view.paid_at,
-        "dry_run": view.dry_run,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "acknowledged_relays": &view.acknowledged_relays,
-        "failed_relays": &view.failed_relays,
-        "fetched_count": view.fetched_count,
-        "decoded_count": view.decoded_count,
-        "skipped_count": view.skipped_count,
-        "idempotency_key": &view.idempotency_key,
-        "signer_mode": &view.signer_mode,
-        "issues": &view.issues,
-        "actions": &view.actions,
-    })
-}
-
-fn order_settlement_error_detail(view: &OrderSettlementView) -> Value {
-    json!({
-        "state": &view.state,
-        "order_id": &view.order_id,
-        "listing_addr": &view.listing_addr,
-        "request_event_id": &view.request_event_id,
-        "agreement_event_id": &view.agreement_event_id,
-        "root_event_id": &view.root_event_id,
-        "prev_event_id": &view.prev_event_id,
-        "payment_event_id": &view.payment_event_id,
-        "event_id": &view.event_id,
-        "event_kind": view.event_kind,
-        "buyer_pubkey": &view.buyer_pubkey,
-        "seller_pubkey": &view.seller_pubkey,
-        "quote_id": &view.quote_id,
-        "quote_version": view.quote_version,
-        "economics_digest": &view.economics_digest,
-        "amount": &view.amount,
-        "currency": &view.currency,
-        "decision": &view.decision,
-        "settlement_reason": &view.settlement_reason,
-        "reason": &view.reason,
-        "dry_run": view.dry_run,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "acknowledged_relays": &view.acknowledged_relays,
-        "failed_relays": &view.failed_relays,
-        "fetched_count": view.fetched_count,
-        "decoded_count": view.decoded_count,
-        "skipped_count": view.skipped_count,
-        "idempotency_key": &view.idempotency_key,
-        "signer_mode": &view.signer_mode,
-        "issues": &view.issues,
-        "actions": &view.actions,
-    })
-}
-
 fn order_receipt_error_detail(view: &OrderReceiptView) -> Value {
     json!({
         "state": &view.state,
@@ -1503,15 +1194,6 @@ where
         })
 }
 
-fn required_payment_event_id<P>(
-    request: &OperationRequest<P>,
-) -> Result<String, OperationAdapterError>
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    required_string_input(request, "payment_event_id")
-}
-
 fn required_string_input<P>(
     request: &OperationRequest<P>,
     key: &str,
@@ -1582,6 +1264,13 @@ where
 
 fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
     result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
+}
+
+fn deferred_payment_error(operation_id: &str) -> OperationAdapterError {
+    OperationAdapterError::not_implemented(
+        operation_id,
+        "payments and settlement are not implemented in this Radroots release; order coordination is available now, and payment support is planned for a future phase".to_owned(),
+    )
 }
 
 fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
@@ -1948,141 +1637,44 @@ mod tests {
     }
 
     #[test]
-    fn order_payment_record_requires_amount_before_approval() {
+    fn deferred_payment_commands_return_not_implemented_before_input_or_approval() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(OrderOperationService::new(&config));
+
         let payment = OperationRequest::new(
             OperationContext::default(),
-            OrderPaymentRecordRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
-                ("currency", "USD"),
-                ("method", "cash"),
-            ])),
+            OrderPaymentRecordRequest::from_data(data(&[("order_id", "ord_pending")])),
         )
         .expect("order payment request");
-        let error = service.execute(payment).expect_err("amount required");
-        let output_error = error.to_output_error();
+        let payment_error = service.execute(payment).expect_err("payment deferred");
+        assert_eq!(payment_error.to_output_error().code, "not_implemented");
 
-        assert_eq!(output_error.code, "invalid_input");
-        assert!(output_error.message.contains("amount"));
-    }
-
-    #[test]
-    fn order_payment_record_requires_method_before_approval() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
-        let payment = OperationRequest::new(
-            OperationContext::default(),
-            OrderPaymentRecordRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
-                ("amount", "12"),
-                ("currency", "USD"),
-            ])),
-        )
-        .expect("order payment request");
-        let error = service.execute(payment).expect_err("method required");
-        let output_error = error.to_output_error();
-
-        assert_eq!(output_error.code, "invalid_input");
-        assert!(output_error.message.contains("method"));
-    }
-
-    #[test]
-    fn order_payment_record_requires_approval_token() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
-        let payment = OperationRequest::new(
-            OperationContext::default(),
-            OrderPaymentRecordRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
-                ("amount", "12"),
-                ("currency", "USD"),
-                ("method", "cash"),
-            ])),
-        )
-        .expect("order payment request");
-        let error = service.execute(payment).expect_err("approval required");
-
-        assert_eq!(error.to_output_error().code, "approval_required");
-    }
-
-    #[test]
-    fn order_settlement_accept_requires_payment_event_before_approval() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
-        let settlement = OperationRequest::new(
+        let settlement_accept = OperationRequest::new(
             OperationContext::default(),
             OrderSettlementAcceptRequest::from_data(data(&[("order_id", "ord_pending")])),
         )
         .expect("order settlement accept request");
-        let error = service
-            .execute(settlement)
-            .expect_err("payment event required");
-        let output_error = error.to_output_error();
+        let settlement_accept_error = service
+            .execute(settlement_accept)
+            .expect_err("settlement accept deferred");
+        assert_eq!(
+            settlement_accept_error.to_output_error().code,
+            "not_implemented"
+        );
 
-        assert_eq!(output_error.code, "invalid_input");
-        assert!(output_error.message.contains("payment_event_id"));
-    }
-
-    #[test]
-    fn order_settlement_accept_requires_approval_token() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
-        let settlement = OperationRequest::new(
+        let settlement_reject = OperationRequest::new(
             OperationContext::default(),
-            OrderSettlementAcceptRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
-                ("payment_event_id", "pay_pending"),
-            ])),
-        )
-        .expect("order settlement accept request");
-        let error = service.execute(settlement).expect_err("approval required");
-
-        assert_eq!(error.to_output_error().code, "approval_required");
-    }
-
-    #[test]
-    fn order_settlement_reject_requires_reason_before_approval() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
-        let settlement = OperationRequest::new(
-            OperationContext::default(),
-            OrderSettlementRejectRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
-                ("payment_event_id", "pay_pending"),
-            ])),
+            OrderSettlementRejectRequest::from_data(data(&[("order_id", "ord_pending")])),
         )
         .expect("order settlement reject request");
-        let error = service.execute(settlement).expect_err("reason required");
-        let output_error = error.to_output_error();
-
-        assert_eq!(output_error.code, "invalid_input");
-        assert!(output_error.message.contains("reason"));
-    }
-
-    #[test]
-    fn order_settlement_reject_requires_approval_token() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
-        let settlement = OperationRequest::new(
-            OperationContext::default(),
-            OrderSettlementRejectRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
-                ("payment_event_id", "pay_pending"),
-                ("reason", "reference mismatch"),
-            ])),
-        )
-        .expect("order settlement reject request");
-        let error = service.execute(settlement).expect_err("approval required");
-
-        assert_eq!(error.to_output_error().code, "approval_required");
+        let settlement_reject_error = service
+            .execute(settlement_reject)
+            .expect_err("settlement reject deferred");
+        assert_eq!(
+            settlement_reject_error.to_output_error().code,
+            "not_implemented"
+        );
     }
 
     #[test]

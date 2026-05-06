@@ -262,6 +262,104 @@ fn seller_order_decision_and_status_commands_are_public() {
 }
 
 #[test]
+fn payment_commands_return_not_implemented_before_mutation_preflight() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    for (operation_id, args) in [
+        (
+            "order.payment.record",
+            [
+                "--format",
+                "json",
+                "order",
+                "payment",
+                "record",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.payment.record",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "order",
+                "payment",
+                "record",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.accept",
+            [
+                "--format",
+                "json",
+                "order",
+                "settlement",
+                "accept",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.accept",
+            [
+                "--format",
+                "json",
+                "--online",
+                "order",
+                "settlement",
+                "accept",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.reject",
+            [
+                "--format",
+                "json",
+                "order",
+                "settlement",
+                "reject",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.reject",
+            [
+                "--format",
+                "json",
+                "--offline",
+                "--dry-run",
+                "order",
+                "settlement",
+                "reject",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+    ] {
+        let (output, value) = sandbox.json_output(args);
+
+        assert!(!output.status.success());
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(value["operation_id"], operation_id);
+        assert_eq!(value["result"], Value::Null);
+        assert_eq!(value["errors"][0]["code"], "not_implemented");
+        assert_eq!(value["errors"][0]["exit_code"], 3);
+        let message = value["errors"][0]["message"].as_str().expect("message");
+        assert!(message.contains("not implemented"));
+        assert!(message.contains("future phase"));
+        assert!(!message.contains("approval_token"));
+        assert!(!message.contains("relay"));
+    }
+}
+
+#[test]
 fn target_outputs_do_not_suggest_removed_command_families() {
     let sandbox = RadrootsCliSandbox::new();
 
@@ -655,57 +753,6 @@ fn offline_forbids_external_network_operations() {
             ]
             .as_slice(),
         ),
-        (
-            "order.payment.record",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "order",
-                "payment",
-                "record",
-                "ord_offline_payment",
-                "--amount",
-                "12",
-                "--currency",
-                "USD",
-                "--method",
-                "cash",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.accept",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "order",
-                "settlement",
-                "accept",
-                "ord_offline_settlement",
-                "--payment-event-id",
-                "pay_event",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.reject",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "order",
-                "settlement",
-                "reject",
-                "ord_offline_settlement",
-                "--payment-event-id",
-                "pay_event",
-                "--reason",
-                "reference mismatch",
-            ]
-            .as_slice(),
-        ),
     ] {
         let output = radroots()
             .args(args)
@@ -872,60 +919,6 @@ fn offline_rejects_order_decision_dry_run() {
                 "ord_offline_decision",
                 "--issue",
                 "damaged items",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.payment.record",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "--dry-run",
-                "order",
-                "payment",
-                "record",
-                "ord_offline_decision",
-                "--amount",
-                "12",
-                "--currency",
-                "USD",
-                "--method",
-                "manual_transfer",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.accept",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "--dry-run",
-                "order",
-                "settlement",
-                "accept",
-                "ord_offline_decision",
-                "--payment-event-id",
-                "pay_event",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.reject",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "--dry-run",
-                "order",
-                "settlement",
-                "reject",
-                "ord_offline_decision",
-                "--payment-event-id",
-                "pay_event",
-                "--reason",
-                "reference mismatch",
             ]
             .as_slice(),
         ),
@@ -1123,57 +1116,6 @@ fn online_requires_relay_for_external_network_operations() {
                 "record",
                 "ord_missing",
                 "--received",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.payment.record",
-            [
-                "--format",
-                "json",
-                "--online",
-                "order",
-                "payment",
-                "record",
-                "ord_missing",
-                "--amount",
-                "12",
-                "--currency",
-                "USD",
-                "--method",
-                "cash",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.accept",
-            [
-                "--format",
-                "json",
-                "--online",
-                "order",
-                "settlement",
-                "accept",
-                "ord_missing",
-                "--payment-event-id",
-                "pay_event",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.reject",
-            [
-                "--format",
-                "json",
-                "--online",
-                "order",
-                "settlement",
-                "reject",
-                "ord_missing",
-                "--payment-event-id",
-                "pay_event",
-                "--reason",
-                "reference mismatch",
             ]
             .as_slice(),
         ),
@@ -1680,48 +1622,6 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
         &sandbox,
         "order.receipt.record",
         &["order", "receipt", "record", "ord_pending", "--received"],
-    );
-    assert_required_approval_token_rejected(
-        &sandbox,
-        "order.payment.record",
-        &[
-            "order",
-            "payment",
-            "record",
-            "ord_pending",
-            "--amount",
-            "12",
-            "--currency",
-            "USD",
-            "--method",
-            "cash",
-        ],
-    );
-    assert_required_approval_token_rejected(
-        &sandbox,
-        "order.settlement.accept",
-        &[
-            "order",
-            "settlement",
-            "accept",
-            "ord_pending",
-            "--payment-event-id",
-            "pay_pending",
-        ],
-    );
-    assert_required_approval_token_rejected(
-        &sandbox,
-        "order.settlement.reject",
-        &[
-            "order",
-            "settlement",
-            "reject",
-            "ord_pending",
-            "--payment-event-id",
-            "pay_pending",
-            "--reason",
-            "reference mismatch",
-        ],
     );
 }
 

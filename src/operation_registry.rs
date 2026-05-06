@@ -998,11 +998,11 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         "order_payment_record",
         "OrderPaymentRecordRequest",
         "OrderPaymentRecordResult",
-        "Record buyer manual payment.",
+        "Reserved future buyer manual payment command.",
         Buyer,
-        true,
-        Required,
-        High,
+        false,
+        None,
+        Low,
         false,
         true
     ),
@@ -1013,11 +1013,11 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         "order_settlement_accept",
         "OrderSettlementAcceptRequest",
         "OrderSettlementAcceptResult",
-        "Accept seller settlement of a recorded payment.",
+        "Reserved future seller settlement acceptance command.",
         Seller,
-        true,
-        Required,
-        High,
+        false,
+        None,
+        Low,
         false,
         true
     ),
@@ -1028,11 +1028,11 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         "order_settlement_reject",
         "OrderSettlementRejectRequest",
         "OrderSettlementRejectResult",
-        "Reject seller settlement of a recorded payment.",
+        "Reserved future seller settlement rejection command.",
         Seller,
-        true,
-        Required,
-        High,
+        false,
+        None,
+        Low,
         false,
         true
     ),
@@ -1211,9 +1211,6 @@ mod tests {
         "order.revision.decline",
         "order.fulfillment.update",
         "order.receipt.record",
-        "order.payment.record",
-        "order.settlement.accept",
-        "order.settlement.reject",
     ];
 
     const INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[];
@@ -1281,9 +1278,6 @@ mod tests {
             "order.revision.decline",
             "order.fulfillment.update",
             "order.receipt.record",
-            "order.payment.record",
-            "order.settlement.accept",
-            "order.settlement.reject",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

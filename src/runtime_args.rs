@@ -245,6 +245,7 @@ pub struct OrderReceiptArgs {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct OrderPaymentArgs {
     pub key: String,
     pub amount: String,
@@ -301,12 +302,14 @@ pub struct OrderRevisionDecisionArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum OrderSettlementDecisionArg {
     Accept,
     Reject,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct OrderSettlementArgs {
     pub key: String,
     pub payment_event_id: String,

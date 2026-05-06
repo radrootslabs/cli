@@ -353,6 +353,12 @@ fn validate_request_contract(
             message: format!("`{}` does not support --dry-run", spec.cli_path),
         });
     }
+    if deferred_payment_operation(spec.operation_id) {
+        return Err(OperationAdapterError::not_implemented(
+            spec.operation_id,
+            deferred_payment_message(),
+        ));
+    }
     validate_signer_mode_contract(request, config)?;
     validate_network_contract(request, config)?;
     Ok(())
@@ -426,9 +432,6 @@ fn dry_run_requires_network(operation_id: &str) -> bool {
             | "order.revision.decline"
             | "order.fulfillment.update"
             | "order.receipt.record"
-            | "order.payment.record"
-            | "order.settlement.accept"
-            | "order.settlement.reject"
     )
 }
 
@@ -451,13 +454,21 @@ fn external_network_operation(operation_id: &str) -> bool {
             | "order.revision.decline"
             | "order.fulfillment.update"
             | "order.receipt.record"
-            | "order.payment.record"
-            | "order.settlement.accept"
-            | "order.settlement.reject"
             | "order.status.get"
             | "order.event.list"
             | "order.event.watch"
     )
+}
+
+fn deferred_payment_operation(operation_id: &str) -> bool {
+    matches!(
+        operation_id,
+        "order.payment.record" | "order.settlement.accept" | "order.settlement.reject"
+    )
+}
+
+fn deferred_payment_message() -> String {
+    "payments and settlement are not implemented in this Radroots release; order coordination is available now, and payment support is planned for a future phase".to_owned()
 }
 
 fn failure_envelope(

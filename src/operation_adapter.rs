@@ -381,6 +381,11 @@ pub enum OperationAdapterError {
         operation_id: String,
         message: String,
     },
+    #[error("operation `{operation_id}` is not implemented: {message}")]
+    NotImplemented {
+        operation_id: String,
+        message: String,
+    },
     #[error("operation `{operation_id}` failed: {message}")]
     DetailedFailure {
         operation_id: String,
@@ -447,6 +452,13 @@ impl OperationAdapterError {
             message,
             exit_code: CliExitCode::RuntimeUnavailable,
             detail_json: detail.to_string(),
+        }
+    }
+
+    pub fn not_implemented(operation_id: &str, message: String) -> Self {
+        Self::NotImplemented {
+            operation_id: operation_id.to_owned(),
+            message,
         }
     }
 
@@ -673,6 +685,16 @@ impl OperationAdapterError {
                 message,
             } => runtime_output_error(
                 "operation_unavailable",
+                operation_id,
+                "operation",
+                message,
+                CliExitCode::RuntimeUnavailable,
+            ),
+            Self::NotImplemented {
+                operation_id,
+                message,
+            } => runtime_output_error(
+                "not_implemented",
                 operation_id,
                 "operation",
                 message,
@@ -1909,6 +1931,22 @@ mod tests {
         assert_eq!(output_error.code, "approval_required");
         assert_eq!(output_error.exit_code, 6);
         assert!(output_error.message.contains("approval_token"));
+    }
+
+    #[test]
+    fn not_implemented_errors_map_to_structured_exit_code() {
+        let error = OperationAdapterError::not_implemented(
+            "order.payment.record",
+            "coming soon".to_owned(),
+        );
+        let output_error = error.to_output_error();
+
+        assert_eq!(output_error.code, "not_implemented");
+        assert_eq!(output_error.exit_code, 3);
+        assert_eq!(
+            output_error.detail.expect("detail")["operation_id"],
+            "order.payment.record"
+        );
     }
 
     #[test]
