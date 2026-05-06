@@ -1814,6 +1814,22 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
     )
 }
 
+#[cfg(test)]
+fn order_status_from_receipt_with_deferred_payment(
+    order_id: &str,
+    receipt: DirectRelayFetchReceipt,
+) -> OrderStatusView {
+    order_status_reduction_from_receipt_inner(
+        OrderStatusContext {
+            order_id,
+            selected_account_pubkey: None,
+        },
+        receipt,
+        true,
+    )
+    .view
+}
+
 fn order_status_from_receipt_with_context(
     context: OrderStatusContext<'_>,
     receipt: DirectRelayFetchReceipt,
@@ -1824,6 +1840,14 @@ fn order_status_from_receipt_with_context(
 fn order_status_reduction_from_receipt_with_context(
     context: OrderStatusContext<'_>,
     receipt: DirectRelayFetchReceipt,
+) -> OrderStatusReduction {
+    order_status_reduction_from_receipt_inner(context, receipt, false)
+}
+
+fn order_status_reduction_from_receipt_inner(
+    context: OrderStatusContext<'_>,
+    receipt: DirectRelayFetchReceipt,
+    include_deferred_payment: bool,
 ) -> OrderStatusReduction {
     let DirectRelayFetchReceipt {
         target_relays,
@@ -1847,6 +1871,10 @@ fn order_status_reduction_from_receipt_with_context(
     let mut candidate_issues = Vec::new();
 
     for event in events {
+        if !include_deferred_payment && deferred_payment_status_event(&event) {
+            skipped_count += 1;
+            continue;
+        }
         match order_status_record_from_event(&event) {
             Ok(OrderStatusRecord::Request {
                 listing_event_id,
@@ -2056,10 +2084,8 @@ fn order_status_reduction_from_receipt_with_context(
         &revision_proposal_records,
         &revision_decision_records,
     );
-    let payment = Some(order_status_payment_view(
-        projection.payment,
-        reducer_issues.as_slice(),
-    ));
+    let payment = include_deferred_payment
+        .then(|| order_status_payment_view(projection.payment, reducer_issues.as_slice()));
 
     let view = OrderStatusView {
         state,
@@ -6422,6 +6448,13 @@ fn order_decision_inventory_invalid_view(
     view
 }
 
+fn deferred_payment_status_event(event: &RadrootsNostrEvent) -> bool {
+    matches!(
+        event_kind_u32(event),
+        KIND_TRADE_PAYMENT_RECORDED | KIND_TRADE_SETTLEMENT_DECISION
+    )
+}
+
 fn listing_inventory_accounting_issue_view(
     issue_value: RadrootsListingInventoryAccountingIssue,
 ) -> OrderIssueView {
@@ -8229,8 +8262,6 @@ fn order_status_filter(order_id: &str) -> Result<RadrootsNostrFilter, RuntimeErr
             radroots_nostr_kind(KIND_TRADE_FULFILLMENT_UPDATE as u16),
             radroots_nostr_kind(KIND_TRADE_CANCEL as u16),
             radroots_nostr_kind(KIND_TRADE_RECEIPT as u16),
-            radroots_nostr_kind(KIND_TRADE_PAYMENT_RECORDED as u16),
-            radroots_nostr_kind(KIND_TRADE_SETTLEMENT_DECISION as u16),
         ])
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "d", vec![order_id.to_owned()])
@@ -10330,6 +10361,7 @@ mod tests {
         order_settlement_dry_run_view, order_settlement_event_parts,
         order_settlement_payload_from_status, order_settlement_preflight_view_from_status,
         order_status_filter, order_status_from_receipt, order_status_from_receipt_with_context,
+        order_status_from_receipt_with_deferred_payment,
         order_status_reduction_from_receipt_with_context, order_submit_dry_run_view,
         order_submit_existing_request_view_from_receipt, proposed_accept_decision_record,
         resolve_local_order_fulfillment_signing_identity,
@@ -10635,7 +10667,7 @@ mod tests {
     }
 
     #[test]
-    fn order_status_filter_includes_active_lifecycle_kinds() {
+    fn order_status_filter_includes_only_initial_active_lifecycle_kinds() {
         let filter = order_status_filter("ord_AAAAAAAAAAAAAAAAAAAAAg").expect("status filter");
         let value = serde_json::to_value(filter).expect("filter json");
         let kinds = value["kinds"].as_array().expect("kinds array");
@@ -10647,8 +10679,8 @@ mod tests {
         assert!(kinds.contains(&serde_json::json!(3433)));
         assert!(kinds.contains(&serde_json::json!(3432)));
         assert!(kinds.contains(&serde_json::json!(3434)));
-        assert!(kinds.contains(&serde_json::json!(3435)));
-        assert!(kinds.contains(&serde_json::json!(3436)));
+        assert!(!kinds.contains(&serde_json::json!(3435)));
+        assert!(!kinds.contains(&serde_json::json!(3436)));
         assert_eq!(value["#d"][0], "ord_AAAAAAAAAAAAAAAAAAAAAg");
     }
 
@@ -11094,7 +11126,7 @@ mod tests {
     }
 
     #[test]
-    fn order_revision_preflight_rejects_unrejected_payment() {
+    fn order_revision_preflight_ignores_deferred_payment_events() {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
         config.relay.urls = vec!["ws://relay.test".to_owned()];
@@ -11141,22 +11173,13 @@ mod tests {
             &status_view,
             fixture.seller_pubkey.as_str(),
             &candidates,
-        )
-        .expect("paid revision preflight");
+        );
 
-        assert_eq!(view.state, "invalid");
-        assert!(view.event_id.is_none());
-        assert!(
-            view.reason
-                .as_deref()
-                .expect("reason")
-                .contains("unrejected payment state `recorded`")
-        );
-        assert!(
-            view.issues
-                .iter()
-                .any(|issue| issue.code == "payment_blocks_revision")
-        );
+        assert!(view.is_none());
+        assert_eq!(status_view.fetched_count, 3);
+        assert_eq!(status_view.decoded_count, 2);
+        assert_eq!(status_view.skipped_count, 1);
+        assert!(status_view.payment.is_none());
     }
 
     #[test]
@@ -12655,7 +12678,7 @@ mod tests {
     }
 
     #[test]
-    fn order_cancellation_preflight_rejects_unrejected_payment() {
+    fn order_cancellation_preflight_ignores_deferred_payment_events() {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
         config.relay.urls = vec!["ws://relay.test".to_owned()];
@@ -12700,22 +12723,13 @@ mod tests {
             &args,
             &status_view,
             fixture.buyer_pubkey.as_str(),
-        )
-        .expect("paid cancellation preflight");
+        );
 
-        assert_eq!(view.state, "invalid");
-        assert!(view.event_id.is_none());
-        assert!(
-            view.reason
-                .as_deref()
-                .expect("reason")
-                .contains("unrejected payment state `recorded`")
-        );
-        assert!(
-            view.issues
-                .iter()
-                .any(|issue| issue.code == "payment_blocks_cancellation")
-        );
+        assert!(view.is_none());
+        assert_eq!(status_view.fetched_count, 3);
+        assert_eq!(status_view.decoded_count, 2);
+        assert_eq!(status_view.skipped_count, 1);
+        assert!(status_view.payment.is_none());
     }
 
     #[test]
@@ -13258,7 +13272,7 @@ mod tests {
                 }],
             },
         );
-        let status_view = order_status_from_receipt(
+        let status_view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -13329,7 +13343,7 @@ mod tests {
                 }],
             },
         );
-        let status_view = order_status_from_receipt(
+        let status_view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -13558,7 +13572,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
         );
         let payment_event_id = payment_event.id.to_string();
-        let status_view = order_status_from_receipt(
+        let status_view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -13616,7 +13630,7 @@ mod tests {
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
         );
-        let status_view = order_status_from_receipt(
+        let status_view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -13648,7 +13662,7 @@ mod tests {
     }
 
     #[test]
-    fn order_status_from_receipt_reports_recorded_payment_axis() {
+    fn order_status_from_receipt_ignores_recorded_payment_axis() {
         let fixture = order_status_fixture();
         let decision_event = signed_order_decision_event(
             &fixture.seller,
@@ -13674,7 +13688,6 @@ mod tests {
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
         );
-        let payment_event_id = payment_event.id.to_string();
         let view = order_status_from_receipt(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
@@ -13688,26 +13701,12 @@ mod tests {
                 ],
             },
         );
-        let payment = view.payment.as_ref().expect("payment view");
 
         assert_eq!(view.state, "accepted");
-        assert_eq!(payment.state, "recorded");
-        assert_eq!(payment.settlement_state, "pending");
-        assert_eq!(
-            payment.payment_event_id.as_deref(),
-            Some(payment_event_id.as_str())
-        );
-        assert_eq!(
-            payment.agreement_event_id.as_deref(),
-            Some(decision_event.id.to_string().as_str())
-        );
-        assert_eq!(payment.amount, Some(RadrootsCoreDecimal::from(12u32)));
-        assert_eq!(payment.currency, Some(RadrootsCoreCurrency::USD));
-        assert_eq!(
-            payment.method,
-            Some(RadrootsTradePaymentMethod::ManualTransfer)
-        );
-        assert!(payment.issues.is_empty());
+        assert_eq!(view.fetched_count, 3);
+        assert_eq!(view.decoded_count, 2);
+        assert_eq!(view.skipped_count, 1);
+        assert!(view.payment.is_none());
         assert!(view.reducer_issues.is_empty());
     }
 
@@ -13741,7 +13740,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
         );
         let payment_event_id = payment_event.id.to_string();
-        let status_view = order_status_from_receipt(
+        let status_view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -13830,7 +13829,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
         );
         let payment_event_id = payment_event.id.to_string();
-        let status_view = order_status_from_receipt(
+        let status_view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -13909,7 +13908,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
         );
         let payment_event_id = payment_event.id.to_string();
-        let status_view = order_status_from_receipt(
+        let status_view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -13970,7 +13969,7 @@ mod tests {
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
         );
-        let status_view = order_status_from_receipt(
+        let status_view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -14034,7 +14033,7 @@ mod tests {
             RadrootsTradeSettlementDecision::Accepted,
         );
         let payment_event_id = payment_event.id.to_string();
-        let status_view = order_status_from_receipt(
+        let status_view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -14072,7 +14071,7 @@ mod tests {
     }
 
     #[test]
-    fn order_status_from_receipt_reports_accepted_settlement_axis() {
+    fn order_status_from_receipt_ignores_accepted_settlement_axis() {
         let fixture = order_status_fixture();
         let decision_event = signed_order_decision_event(
             &fixture.seller,
@@ -14104,7 +14103,6 @@ mod tests {
             &payment_event,
             RadrootsTradeSettlementDecision::Accepted,
         );
-        let settlement_event_id = settlement_event.id.to_string();
         let view = order_status_from_receipt(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
@@ -14119,20 +14117,17 @@ mod tests {
                 ],
             },
         );
-        let payment = view.payment.as_ref().expect("payment view");
 
-        assert_eq!(payment.state, "settled");
-        assert_eq!(payment.settlement_state, "accepted");
-        assert_eq!(
-            payment.settlement_event_id.as_deref(),
-            Some(settlement_event_id.as_str())
-        );
-        assert_eq!(payment.reason, None);
+        assert_eq!(view.state, "accepted");
+        assert_eq!(view.fetched_count, 4);
+        assert_eq!(view.decoded_count, 2);
+        assert_eq!(view.skipped_count, 2);
+        assert!(view.payment.is_none());
         assert!(view.reducer_issues.is_empty());
     }
 
     #[test]
-    fn order_status_from_receipt_reports_rejected_settlement_axis() {
+    fn deferred_payment_status_helper_reports_rejected_settlement_axis() {
         let fixture = order_status_fixture();
         let decision_event = signed_order_decision_event(
             &fixture.seller,
@@ -14164,7 +14159,7 @@ mod tests {
             &payment_event,
             RadrootsTradeSettlementDecision::Rejected,
         );
-        let view = order_status_from_receipt(
+        let view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
