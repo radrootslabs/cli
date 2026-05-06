@@ -392,6 +392,70 @@ fn payment_commands_return_not_implemented_before_mutation_preflight() {
 }
 
 #[test]
+fn payment_commands_return_not_implemented_for_ndjson_output() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    for (operation_id, args) in [
+        (
+            "order.payment.record",
+            [
+                "--format",
+                "ndjson",
+                "order",
+                "payment",
+                "record",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.accept",
+            [
+                "--format",
+                "ndjson",
+                "order",
+                "settlement",
+                "accept",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+        (
+            "order.settlement.reject",
+            [
+                "--format",
+                "ndjson",
+                "order",
+                "settlement",
+                "reject",
+                "ord_pending",
+            ]
+            .as_slice(),
+        ),
+    ] {
+        let output = sandbox.command().args(args).output().expect("run command");
+        let frames = ndjson_from_stdout(&output);
+        let error_frame = frames.last().expect("error frame");
+        let message = error_frame["errors"][0]["message"]
+            .as_str()
+            .expect("message");
+
+        assert!(!output.status.success());
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(error_frame["operation_id"], operation_id);
+        assert_eq!(error_frame["frame_type"], "error");
+        assert_eq!(error_frame["errors"][0]["code"], "not_implemented");
+        assert_eq!(error_frame["errors"][0]["exit_code"], 3);
+        assert!(message.contains("not implemented"));
+        assert!(message.contains("future phase"));
+        assert!(!message.contains("ndjson"));
+        assert!(!message.contains("relay"));
+        assert!(!message.contains("approval"));
+        assert!(!message.contains("signer"));
+    }
+}
+
+#[test]
 fn target_outputs_do_not_suggest_removed_command_families() {
     let sandbox = RadrootsCliSandbox::new();
 

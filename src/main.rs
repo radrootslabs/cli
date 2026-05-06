@@ -353,6 +353,12 @@ fn validate_pre_runtime_request_contract(
     request: &TargetOperationRequest,
 ) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
+    if is_deferred_payment_operation(spec.operation_id) {
+        return Err(OperationAdapterError::not_implemented(
+            spec.operation_id,
+            deferred_payment_message(),
+        ));
+    }
     if matches!(
         request.context().output_format,
         OperationOutputFormat::Ndjson
@@ -368,12 +374,6 @@ fn validate_pre_runtime_request_contract(
             operation_id: spec.operation_id.to_owned(),
             message: format!("`{}` does not support --dry-run", spec.cli_path),
         });
-    }
-    if is_deferred_payment_operation(spec.operation_id) {
-        return Err(OperationAdapterError::not_implemented(
-            spec.operation_id,
-            deferred_payment_message(),
-        ));
     }
     Ok(())
 }
