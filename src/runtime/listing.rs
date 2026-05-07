@@ -20,7 +20,9 @@ use radroots_events::trade::RadrootsTradeListingValidationError;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_events_codec::wire::WireEventParts;
-use radroots_replica_db::ReplicaSql;
+use radroots_nostr::prelude::{RadrootsNostrEvent as SignedNostrEvent, radroots_event_from_nostr};
+use radroots_replica_db::{ReplicaSql, migrations};
+use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
 use radroots_sdk::{
     RadrootsSdkClient, RadrootsSdkConfig, RadrootsdAuth, SdkEnvironment, SdkPublishError,
     SdkPublishReceipt, SdkRadrootsdListingPublishOptions, SdkRadrootsdPublishReceipt,
@@ -34,9 +36,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
     FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
-    ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
-    ListingSummaryView, ListingValidateView, ListingValidationIssueView, RelayFailureView,
-    SyncFreshnessView,
+    ListingMutationEventView, ListingMutationJobView, ListingMutationLocalReplicaView,
+    ListingMutationView, ListingNewView, ListingSummaryView, ListingValidateView,
+    ListingValidationIssueView, RelayFailureView, SyncFreshnessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -941,6 +943,7 @@ fn mutate(
             idempotency_key: args.idempotency_key.clone(),
             signer_session_id: None,
             requested_signer_session_id,
+            local_replica: None,
             reason: Some(dry_run_reason(config)),
             job: None,
             event: args.print_event.then_some(event_draft.event),
@@ -1243,6 +1246,7 @@ fn radrootsd_mutation_view(
         idempotency_key: args.idempotency_key.clone(),
         signer_session_id: radrootsd.signer_session_id.clone(),
         requested_signer_session_id: Some(requested_session_id),
+        local_replica: None,
         reason: None,
         job: Some(job),
         event: args.print_event.then_some(event),
@@ -1808,6 +1812,7 @@ fn radrootsd_preflight_view(
         idempotency_key: args.idempotency_key.clone(),
         signer_session_id: None,
         requested_signer_session_id: args.signer_session_id.clone(),
+        local_replica: None,
         reason: Some(reason.into()),
         job: None,
         event: args.print_event.then_some(event_preview),
@@ -1852,6 +1857,7 @@ fn direct_relay_error_view(
         idempotency_key: args.idempotency_key.clone(),
         signer_session_id: None,
         requested_signer_session_id: args.signer_session_id.clone(),
+        local_replica: None,
         reason: Some(parts.reason),
         job: None,
         event: args.print_event.then_some(event_preview),
@@ -1992,6 +1998,7 @@ fn binding_error_view(
         event_addr: None,
         idempotency_key: args.idempotency_key.clone(),
         requested_signer_session_id: args.signer_session_id.clone(),
+        local_replica: None,
         reason: Some(reason),
         job: None,
         event: args.print_event.then_some(event_preview),
@@ -2020,6 +2027,8 @@ fn published_mutation_view(
     } = receipt;
     debug_assert_eq!(event_id, published_event.id.to_hex());
     debug_assert_eq!(signature, published_event.sig.to_string());
+    let local_replica =
+        listing_local_replica_ingest_view(config, &published_event, Some(listing_addr.clone()));
     event.event_id = Some(event_id.clone());
     event.created_at = Some(created_at);
     event.signature = Some(signature);
@@ -2050,10 +2059,103 @@ fn published_mutation_view(
         event_addr: Some(listing_addr),
         idempotency_key: args.idempotency_key.clone(),
         requested_signer_session_id: args.signer_session_id.clone(),
+        local_replica: Some(local_replica),
         reason: None,
         job: None,
         event: args.print_event.then_some(event),
         actions: Vec::new(),
+    }
+}
+
+fn listing_local_replica_ingest_view(
+    config: &RuntimeConfig,
+    event: &SignedNostrEvent,
+    event_addr: Option<String>,
+) -> ListingMutationLocalReplicaView {
+    ingest_listing_event_into_local_replica(
+        config.local.replica_db_path.as_path(),
+        event,
+        event_addr,
+    )
+}
+
+fn ingest_listing_event_into_local_replica(
+    replica_db_path: &Path,
+    event: &SignedNostrEvent,
+    event_addr: Option<String>,
+) -> ListingMutationLocalReplicaView {
+    let event_id = event.id.to_hex();
+    if !replica_db_path.exists() {
+        return ListingMutationLocalReplicaView {
+            state: "unconfigured".to_owned(),
+            store_state: "missing".to_owned(),
+            ingest_outcome: None,
+            event_id: Some(event_id),
+            event_addr,
+            reason: Some("local replica database is not initialized".to_owned()),
+            actions: vec!["radroots store init".to_owned()],
+        };
+    }
+
+    let executor = match SqliteExecutor::open(replica_db_path) {
+        Ok(executor) => executor,
+        Err(error) => {
+            return listing_local_replica_failed_view(
+                event_id,
+                event_addr,
+                format!("failed to open local replica database: {error}"),
+            );
+        }
+    };
+    if let Err(error) = migrations::run_all_up(&executor) {
+        return listing_local_replica_failed_view(
+            event_id,
+            event_addr,
+            format!("failed to migrate local replica database: {error}"),
+        );
+    }
+
+    let event = radroots_event_from_nostr(event);
+    match radroots_replica_ingest_event(&executor, &event) {
+        Ok(RadrootsReplicaIngestOutcome::Applied) => ListingMutationLocalReplicaView {
+            state: "applied".to_owned(),
+            store_state: "ready".to_owned(),
+            ingest_outcome: Some("applied".to_owned()),
+            event_id: Some(event_id),
+            event_addr,
+            reason: None,
+            actions: Vec::new(),
+        },
+        Ok(RadrootsReplicaIngestOutcome::Skipped) => ListingMutationLocalReplicaView {
+            state: "skipped".to_owned(),
+            store_state: "ready".to_owned(),
+            ingest_outcome: Some("skipped".to_owned()),
+            event_id: Some(event_id),
+            event_addr,
+            reason: Some("shared replica ingest skipped the event".to_owned()),
+            actions: Vec::new(),
+        },
+        Err(error) => listing_local_replica_failed_view(
+            event_id,
+            event_addr,
+            format!("failed to ingest listing event into local replica: {error}"),
+        ),
+    }
+}
+
+fn listing_local_replica_failed_view(
+    event_id: String,
+    event_addr: Option<String>,
+    reason: String,
+) -> ListingMutationLocalReplicaView {
+    ListingMutationLocalReplicaView {
+        state: "failed".to_owned(),
+        store_state: "unavailable".to_owned(),
+        ingest_outcome: None,
+        event_id: Some(event_id),
+        event_addr,
+        reason: Some(reason),
+        actions: vec!["radroots store status get".to_owned()],
     }
 }
 
@@ -2391,10 +2493,13 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 mod tests {
     use super::{
         DRAFT_KIND, ListingDraftDocument, direct_relay_error_view_parts, encode_base64url_no_pad,
-        generate_d_tag,
+        generate_d_tag, ingest_listing_event_into_local_replica,
     };
     use crate::runtime::direct_relay::{DirectRelayFailure, DirectRelayPublishError};
     use radroots_events_codec::d_tag::is_d_tag_base64url;
+    use radroots_events_codec::wire::WireEventParts;
+    use radroots_identity::RadrootsIdentity;
+    use radroots_nostr::prelude::radroots_nostr_build_event;
 
     #[test]
     fn generated_listing_d_tag_is_valid_base64url() {
@@ -2428,6 +2533,55 @@ mod tests {
         assert_eq!(parts.event_id, Some("e".repeat(64)));
         assert!(parts.reason.contains("direct relay publish failed"));
         assert_eq!(parts.failed_relays.len(), 1);
+    }
+
+    #[test]
+    fn local_replica_ingest_reports_missing_store() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let event = signed_test_listing_event(WireEventParts {
+            kind: super::KIND_LISTING,
+            content: "{}".to_owned(),
+            tags: vec![vec!["d".to_owned(), "listing-1".to_owned()]],
+        });
+
+        let view = ingest_listing_event_into_local_replica(
+            &temp.path().join("missing.sqlite"),
+            &event,
+            Some("30402:pubkey:listing-1".to_owned()),
+        );
+
+        assert_eq!(view.state, "unconfigured");
+        assert_eq!(view.store_state, "missing");
+        assert_eq!(view.event_id, Some(event.id.to_hex()));
+        assert_eq!(view.actions, vec!["radroots store init".to_owned()]);
+    }
+
+    #[test]
+    fn local_replica_ingest_preserves_shared_ingest_failure() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let replica = temp.path().join("replica.sqlite");
+        std::fs::File::create(&replica).expect("replica placeholder");
+        let event = signed_test_listing_event(WireEventParts {
+            kind: super::KIND_LISTING,
+            content: "{}".to_owned(),
+            tags: vec![vec!["d".to_owned(), "listing-1".to_owned()]],
+        });
+
+        let view = ingest_listing_event_into_local_replica(
+            &replica,
+            &event,
+            Some("30402:pubkey:listing-1".to_owned()),
+        );
+
+        assert_eq!(view.state, "failed");
+        assert_eq!(view.store_state, "unavailable");
+        assert_eq!(view.event_id, Some(event.id.to_hex()));
+        assert!(
+            view.reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("failed to ingest listing event into local replica")
+        );
     }
 
     #[test]
@@ -2557,5 +2711,15 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    fn signed_test_listing_event(
+        parts: WireEventParts,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
+        let identity = RadrootsIdentity::generate();
+        radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+            .expect("event builder")
+            .sign_with_keys(identity.keys())
+            .expect("signed event")
     }
 }

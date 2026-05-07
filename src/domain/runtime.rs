@@ -2601,6 +2601,8 @@ pub struct ListingMutationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_signer_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_replica: Option<ListingMutationLocalReplicaView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<ListingMutationJobView>,
@@ -2619,6 +2621,22 @@ impl ListingMutationView {
             _ => CommandDisposition::Success,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListingMutationLocalReplicaView {
+    pub state: String,
+    pub store_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingest_outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
