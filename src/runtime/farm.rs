@@ -19,7 +19,8 @@ use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{self, AccountRecordView};
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::direct_relay::{
-    DirectRelayFailure, DirectRelayPublishReceipt, publish_parts_with_identity,
+    DirectRelayFailure, DirectRelayPublishError, DirectRelayPublishReceipt,
+    publish_parts_with_identity,
 };
 use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
@@ -400,9 +401,26 @@ pub fn publish(
         previews.profile.parts.clone(),
     )
     .map_err(|error| RuntimeError::Network(error.to_string()))?;
-    let farm_receipt =
-        publish_parts_with_identity(&signing.identity, &config.relay.urls, previews.farm.parts)
-            .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let farm_receipt = match publish_parts_with_identity(
+        &signing.identity,
+        &config.relay.urls,
+        previews.farm.parts.clone(),
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            return Ok(partial_publish_view(
+                config,
+                args,
+                &resolved,
+                &account_pubkey,
+                previews,
+                profile_idempotency_key,
+                farm_idempotency_key,
+                profile_receipt,
+                error,
+            ));
+        }
+    };
 
     Ok(base_publish_view(
         "published",
@@ -678,6 +696,49 @@ fn binding_error_publish_view(
     )
 }
 
+fn partial_publish_view(
+    config: &RuntimeConfig,
+    args: &FarmPublishArgs,
+    resolved: &ResolvedFarmConfig,
+    account_pubkey: &str,
+    previews: FarmPublishPreviews,
+    profile_idempotency_key: Option<String>,
+    farm_idempotency_key: Option<String>,
+    profile_receipt: DirectRelayPublishReceipt,
+    farm_error: DirectRelayPublishError,
+) -> FarmPublishView {
+    let reason = format!("farm publish failed after profile publish: {farm_error}");
+    base_publish_view(
+        "partial",
+        config,
+        args,
+        resolved,
+        account_pubkey,
+        published_component(
+            "relay.profile.publish",
+            KIND_PROFILE,
+            profile_idempotency_key,
+            args,
+            previews.profile.event,
+            profile_receipt,
+        ),
+        failed_component(
+            "relay.farm.publish",
+            KIND_FARM,
+            farm_idempotency_key,
+            args,
+            previews.farm.event,
+            &config.relay.urls,
+            farm_error,
+        ),
+        Some(reason),
+        vec![format!(
+            "radroots farm publish --scope {}",
+            resolved.scope.as_str()
+        )],
+    )
+}
+
 fn published_component(
     rpc_method: &str,
     event_kind: u32,
@@ -706,6 +767,96 @@ fn published_component(
         reason: None,
         job: None,
         event: args.print_event.then_some(event),
+    }
+}
+
+fn failed_component(
+    rpc_method: &str,
+    event_kind: u32,
+    idempotency_key: Option<String>,
+    args: &FarmPublishArgs,
+    event: FarmPublishEventView,
+    relay_urls: &[String],
+    error: DirectRelayPublishError,
+) -> FarmPublishComponentView {
+    let reason = error.to_string();
+    let failure = publish_failure_details(error, relay_urls);
+    FarmPublishComponentView {
+        state: "failed".to_owned(),
+        rpc_method: rpc_method.to_owned(),
+        event_kind,
+        deduplicated: false,
+        target_relays: failure.target_relays,
+        connected_relays: failure.connected_relays,
+        acknowledged_relays: Vec::new(),
+        failed_relays: failure.failed_relays,
+        job_id: None,
+        job_status: None,
+        signer_mode: Some("local".to_owned()),
+        signer_session_id: None,
+        event_id: failure.event_id,
+        event_addr: event.event_addr.clone(),
+        idempotency_key,
+        reason: Some(reason),
+        job: None,
+        event: args.print_event.then_some(event),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FarmPublishFailureDetails {
+    event_id: Option<String>,
+    target_relays: Vec<String>,
+    connected_relays: Vec<String>,
+    failed_relays: Vec<RelayFailureView>,
+}
+
+fn publish_failure_details(
+    error: DirectRelayPublishError,
+    relay_urls: &[String],
+) -> FarmPublishFailureDetails {
+    match error {
+        DirectRelayPublishError::MissingRelays
+        | DirectRelayPublishError::Runtime(_)
+        | DirectRelayPublishError::Build(_)
+        | DirectRelayPublishError::Sign(_) => FarmPublishFailureDetails {
+            event_id: None,
+            target_relays: relay_urls.to_vec(),
+            connected_relays: Vec::new(),
+            failed_relays: Vec::new(),
+        },
+        DirectRelayPublishError::RelayConfig { relay, source } => FarmPublishFailureDetails {
+            event_id: None,
+            target_relays: relay_urls.to_vec(),
+            connected_relays: Vec::new(),
+            failed_relays: vec![RelayFailureView {
+                relay,
+                reason: source.to_string(),
+            }],
+        },
+        DirectRelayPublishError::Connect {
+            target_relays,
+            connected_relays,
+            failed_relays,
+            ..
+        } => FarmPublishFailureDetails {
+            event_id: None,
+            target_relays,
+            connected_relays,
+            failed_relays: relay_failures(failed_relays),
+        },
+        DirectRelayPublishError::Publish {
+            event_id,
+            target_relays,
+            connected_relays,
+            failed_relays,
+            ..
+        } => FarmPublishFailureDetails {
+            event_id: Some(event_id),
+            target_relays,
+            connected_relays,
+            failed_relays: relay_failures(failed_relays),
+        },
     }
 }
 

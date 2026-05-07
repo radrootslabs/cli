@@ -221,6 +221,15 @@ fn farm_publish_result(
 ) -> Result<OperationResult<FarmPublishResult>, OperationAdapterError> {
     match view.disposition() {
         CommandDisposition::Success => serialized_operation_result::<FarmPublishResult, _>(view),
+        CommandDisposition::ExternalUnavailable if farm_publish_relay_unavailable(view) => {
+            Err(OperationAdapterError::network_unavailable_with_detail(
+                operation_id,
+                view.reason.clone().unwrap_or_else(|| {
+                    format!("farm publish finished with state `{}`", view.state)
+                }),
+                serde_json::to_value(view).unwrap_or(Value::Null),
+            ))
+        }
         disposition => Err(OperationAdapterError::from_command_disposition(
             operation_id,
             disposition,
@@ -235,6 +244,13 @@ fn farm_publish_result(
             }),
         )),
     }
+}
+
+fn farm_publish_relay_unavailable(view: &FarmPublishView) -> bool {
+    view.source == "direct Nostr relay publish · local key"
+        && (!view.profile.failed_relays.is_empty()
+            || !view.farm.failed_relays.is_empty()
+            || view.state == "partial")
 }
 
 fn require_relay_target<P>(
