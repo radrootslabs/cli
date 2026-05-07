@@ -210,13 +210,51 @@ fn config_get_exposes_resolved_publish_state() {
         "user config · local first"
     );
     assert_eq!(value["result"]["publish"]["transport_family"], "radrootsd");
-    assert_eq!(value["result"]["publish"]["state"], "unavailable");
+    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
     assert_eq!(value["result"]["publish"]["executable"], false);
+    assert_contains(&value["result"]["publish"]["reason"], "bridge bearer token");
     assert_eq!(
         value["result"]["publish"]["provider"]["provider_runtime_id"],
         "radrootsd"
     );
     assert_eq!(value["result"]["write_plane"]["state"], "unavailable");
+}
+
+#[test]
+fn config_get_marks_radrootsd_listing_publish_ready_with_bridge_auth_and_session_binding() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.write_app_config(
+        r#"[publish]
+mode = "radrootsd"
+
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "explicit_endpoint"
+target = "http://myc.invalid"
+signer_session_ref = "session_ready"
+"#,
+    );
+
+    let mut command = sandbox.command();
+    command
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .args(["--format", "json", "config", "get"]);
+    let output = command.output().expect("run config get");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+
+    assert!(output.status.success());
+    assert_eq!(value["operation_id"], "config.get");
+    assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
+    assert_eq!(value["result"]["publish"]["relay"]["ready"], false);
+    assert_eq!(value["result"]["publish"]["state"], "ready");
+    assert_eq!(value["result"]["publish"]["executable"], true);
+    assert_contains(
+        &value["result"]["publish"]["reason"],
+        "live daemon readiness is verified when listing publish runs",
+    );
+    assert_eq!(value["result"]["publish"]["provider"]["state"], "ready");
+    assert_eq!(value["result"]["rpc"]["bridge_auth_configured"], true);
 }
 
 #[test]
@@ -348,8 +386,9 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
     assert_eq!(value["result"]["publish"]["executable"], false);
     assert_eq!(
         value["result"]["publish"]["provider"]["state"],
-        "unavailable"
+        "unconfigured"
     );
+    assert_contains(&value["result"]["publish"]["reason"], "bridge bearer token");
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
@@ -389,7 +428,10 @@ fn health_check_exposes_publish_readiness() {
     assert_eq!(value["operation_id"], "health.check.run");
     assert_eq!(value["result"]["state"], "needs_attention");
     assert_eq!(value["result"]["checks"]["publish"]["mode"], "radrootsd");
-    assert_eq!(value["result"]["checks"]["publish"]["state"], "unavailable");
+    assert_eq!(
+        value["result"]["checks"]["publish"]["state"],
+        "unconfigured"
+    );
     assert_eq!(value["result"]["checks"]["publish"]["executable"], false);
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }

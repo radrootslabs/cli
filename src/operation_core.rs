@@ -30,7 +30,9 @@ use crate::runtime::accounts::{
     resolve_account_selector, secret_backend_status, select_account, snapshot,
     unresolved_account_reason,
 };
-use crate::runtime::config::{PublishMode, RuntimeConfig, SignerBackend};
+use crate::runtime::config::{
+    PublishMode, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend,
+};
 use crate::runtime::logging::LoggingState;
 use crate::runtime_args::LocalExportFormatArg;
 
@@ -722,27 +724,25 @@ fn publish_runtime_view(
                 },
             }
         }
-        PublishMode::Radrootsd => PublishRuntimeView {
-            mode: config.publish.mode.as_str().to_owned(),
-            source,
-            transport_family: config.publish.mode.transport_family().to_owned(),
-            state: "unavailable".to_owned(),
-            executable: false,
-            reason: Some(
-                "radrootsd publish mode is configured but the radrootsd publish transport is not implemented"
-                    .to_owned(),
-            ),
-            signed_write_required,
-            relay,
-            provider: PublishProviderRuntimeView {
-                provider_runtime_id: "radrootsd".to_owned(),
-                state: "unavailable".to_owned(),
-                source: "publish mode · local first".to_owned(),
-                reason: Some(
-                    "radrootsd publish transport is reserved for a future implementation".to_owned(),
-                ),
-            },
-        },
+        PublishMode::Radrootsd => {
+            let (state, executable, reason) = radrootsd_publish_readiness(config);
+            PublishRuntimeView {
+                mode: config.publish.mode.as_str().to_owned(),
+                source,
+                transport_family: config.publish.mode.transport_family().to_owned(),
+                state: state.to_owned(),
+                executable,
+                reason: reason.clone(),
+                signed_write_required,
+                relay,
+                provider: PublishProviderRuntimeView {
+                    provider_runtime_id: "radrootsd".to_owned(),
+                    state: state.to_owned(),
+                    source: "publish mode · local first".to_owned(),
+                    reason,
+                },
+            }
+        }
     }
 }
 
@@ -800,6 +800,47 @@ fn nostr_relay_publish_readiness(
     }
 
     ("ready", true, None)
+}
+
+fn radrootsd_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
+    if config.rpc.bridge_bearer_token.is_none() {
+        return (
+            "unconfigured",
+            false,
+            Some(
+                "radrootsd listing publish requires bridge bearer token configuration from RADROOTS_RPC_BEARER_TOKEN"
+                    .to_owned(),
+            ),
+        );
+    }
+
+    if !radrootsd_signer_session_binding_configured(config) {
+        return (
+            "unconfigured",
+            false,
+            Some(
+                "radrootsd listing publish requires a signer.remote_nip46 capability binding with signer_session_ref for config and health readiness"
+                    .to_owned(),
+            ),
+        );
+    }
+
+    (
+        "ready",
+        true,
+        Some(
+            "radrootsd bridge endpoint, bridge auth, and signer-session binding are configured; live daemon readiness is verified when listing publish runs"
+                .to_owned(),
+        ),
+    )
+}
+
+fn radrootsd_signer_session_binding_configured(config: &RuntimeConfig) -> bool {
+    config
+        .capability_binding(SIGNER_REMOTE_NIP46_CAPABILITY)
+        .and_then(|binding| binding.signer_session_ref.as_deref())
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
 }
 
 fn health_status_state(store_state: &str, publish: &PublishRuntimeView) -> &'static str {
