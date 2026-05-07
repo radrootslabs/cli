@@ -249,8 +249,9 @@ mod tests {
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
         CapabilityBindingSource, CapabilityBindingTargetKind, HyfConfig, IdentityConfig,
         InteractionConfig, LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig,
-        OutputFormat, PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig,
-        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        OutputFormat, PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
+        SignerConfig, Verbosity,
     };
 
     fn sample_config(bindings: Vec<CapabilityBindingConfig>, hyf_enabled: bool) -> RuntimeConfig {
@@ -315,6 +316,10 @@ mod tests {
             },
             signer: SignerConfig {
                 backend: SignerBackend::Local,
+            },
+            publish: PublishConfig {
+                mode: PublishMode::NostrRelay,
+                source: PublishModeSource::Defaults,
             },
             relay: RelayConfig {
                 urls: Vec::new(),

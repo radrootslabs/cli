@@ -39,6 +39,7 @@ pub struct RuntimeInvocationArgs {
     pub account: Option<String>,
     pub identity_path: Option<PathBuf>,
     pub signer: Option<String>,
+    pub publish_mode: Option<String>,
     pub relay: Vec<String>,
     pub myc_executable: Option<PathBuf>,
     pub myc_status_timeout_ms: Option<u64>,

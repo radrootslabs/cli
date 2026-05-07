@@ -11,6 +11,22 @@ pub enum TargetOutputFormat {
     Ndjson,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TargetPublishMode {
+    #[value(name = "nostr_relay")]
+    NostrRelay,
+    Radrootsd,
+}
+
+impl TargetPublishMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NostrRelay => "nostr_relay",
+            Self::Radrootsd => "radrootsd",
+        }
+    }
+}
+
 #[derive(Debug, Parser, Clone)]
 #[command(name = "radroots", disable_help_subcommand = true)]
 pub struct TargetCliArgs {
@@ -20,6 +36,8 @@ pub struct TargetCliArgs {
     pub account_id: Option<String>,
     #[arg(long = "relay", global = true)]
     pub relay: Vec<String>,
+    #[arg(long = "publish-mode", global = true, value_enum)]
+    pub publish_mode: Option<TargetPublishMode>,
     #[arg(long = "offline", global = true, action = ArgAction::SetTrue, conflicts_with = "online")]
     pub offline: bool,
     #[arg(long = "online", global = true, action = ArgAction::SetTrue, conflicts_with = "offline")]

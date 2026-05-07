@@ -102,6 +102,7 @@ fn runtime_args_from_target(args: &TargetCliArgs) -> RuntimeInvocationArgs {
         account: args.account_id.clone(),
         identity_path: None,
         signer: None,
+        publish_mode: args.publish_mode.map(|mode| mode.as_str().to_owned()),
         relay: args.relay.clone(),
         myc_executable: None,
         myc_status_timeout_ms: None,

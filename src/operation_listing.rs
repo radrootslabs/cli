@@ -360,8 +360,8 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
-        SignerBackend, SignerConfig, Verbosity,
+        PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
+        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
 
     #[test]
@@ -498,6 +498,10 @@ mod tests {
             },
             signer: SignerConfig {
                 backend: SignerBackend::Local,
+            },
+            publish: PublishConfig {
+                mode: PublishMode::NostrRelay,
+                source: PublishModeSource::Defaults,
             },
             relay: RelayConfig {
                 urls: Vec::new(),
