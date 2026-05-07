@@ -175,6 +175,88 @@ fn radrootsd_publish_mode_fails_closed_for_direct_relay_publish_paths() {
 }
 
 #[test]
+fn radrootsd_publish_mode_fails_closed_for_listing_update() {
+    let sandbox = RadrootsCliSandbox::new();
+    let missing_listing = sandbox.root().join("missing-listing.toml");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--publish-mode",
+        "radrootsd",
+        "listing",
+        "update",
+        missing_listing.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "listing.update");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["publish"]["mode"], "radrootsd");
+    assert_eq!(
+        value["errors"][0]["detail"]["publish"]["provider"]["provider_runtime_id"],
+        "radrootsd"
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["publish"]["provider"]["state"],
+        "unavailable"
+    );
+}
+
+#[test]
+fn listing_update_unavailable_support_exits_nonzero() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Update Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let listing_file = create_listing_draft(&sandbox, "update-unavailable");
+    make_listing_publishable(
+        &listing_file,
+        farm["result"]["config"]["farm_d_tag"]
+            .as_str()
+            .expect("farm d tag"),
+    );
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "listing",
+        "update",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "listing.update");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert!(
+        value["errors"][0]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("direct Nostr relay publishing is not implemented for listing update")
+    );
+    assert_no_removed_command_reference(&value, &["listing", "update"]);
+    assert_no_daemon_runtime_reference(&value, &["listing", "update"]);
+}
+
+#[test]
 fn removed_order_submit_watch_flag_is_rejected_publicly() {
     let output = radroots()
         .args(["order", "submit", "--watch"])

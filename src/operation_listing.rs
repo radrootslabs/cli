@@ -119,7 +119,7 @@ impl OperationService<ListingUpdateRequest> for ListingOperationService<'_> {
             request.operation_id(),
             crate::runtime::listing::update(&config, &args),
         )?;
-        serialized_operation_result::<ListingUpdateResult, _>(&view)
+        mutation_result::<ListingUpdateResult>(request.operation_id(), &view)
     }
 }
 
