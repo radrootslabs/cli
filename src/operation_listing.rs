@@ -154,8 +154,9 @@ impl OperationService<ListingPublishRequest> for ListingOperationService<'_> {
         }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
-        let view = crate::runtime::listing::publish(&config, &args)
-            .map_err(|error| publish_runtime_error(request.operation_id(), error))?;
+        let view = crate::runtime::listing::publish(&config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
         mutation_result::<ListingPublishResult>(request.operation_id(), &view)
     }
 }
@@ -277,19 +278,6 @@ fn map_runtime<T>(
     result: Result<T, RuntimeError>,
 ) -> Result<T, OperationAdapterError> {
     result.map_err(|error| OperationAdapterError::runtime_failure(operation_id, error))
-}
-
-fn publish_runtime_error(operation_id: &str, error: RuntimeError) -> OperationAdapterError {
-    let message = error.to_string();
-    let lowered = message.to_ascii_lowercase();
-    if lowered.contains("no local account")
-        || lowered.contains("watch_only")
-        || lowered.contains("not secret-backed")
-        || lowered.contains("selected local account")
-    {
-        return OperationAdapterError::unconfigured(operation_id, message);
-    }
-    OperationAdapterError::runtime_failure(operation_id, error)
 }
 
 fn required_string<P>(

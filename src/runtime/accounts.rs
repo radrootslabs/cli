@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fmt, path::Path};
 
 use radroots_identity::{
     IdentityError, RadrootsIdentity, RadrootsIdentityPublic, load_identity_profile,
@@ -21,6 +21,41 @@ const HOST_VAULT_AVAILABILITY_OVERRIDE_ENV: &str = "RADROOTS_ACCOUNT_HOST_VAULT_
 const HOST_VAULT_SERVICE_NAME: &str = "org.radroots.cli.local-account";
 const HOST_VAULT_PROBE_SLOT: &str = "__radroots_cli_host_vault_probe__";
 pub const SHARED_ACCOUNT_STORE_SOURCE: &str = "shared account store · local first";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountRuntimeFailure {
+    Unresolved(String),
+    WatchOnly(String),
+    Mismatch(String),
+}
+
+impl AccountRuntimeFailure {
+    pub fn unresolved(message: impl Into<String>) -> Self {
+        Self::Unresolved(message.into())
+    }
+
+    pub fn watch_only(account_id: &radroots_identity::RadrootsIdentityId) -> Self {
+        Self::WatchOnly(format!(
+            "resolved account `{account_id}` is watch_only and cannot sign because it is not secret-backed"
+        ))
+    }
+
+    pub fn mismatch(message: impl Into<String>) -> Self {
+        Self::Mismatch(message.into())
+    }
+}
+
+impl fmt::Display for AccountRuntimeFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unresolved(message) | Self::WatchOnly(message) | Self::Mismatch(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for AccountRuntimeFailure {}
 
 #[derive(Debug, Clone)]
 pub struct AccountSnapshot {
@@ -362,15 +397,10 @@ pub fn resolve_local_signing_identity(
     let manager = account_manager(config)?;
     let resolution = resolve_account_resolution(config)?;
     let Some(account) = resolution.resolved_account else {
-        return Err(RuntimeError::Config(
-            "no local account is selected for signing".to_owned(),
-        ));
+        return Err(AccountRuntimeFailure::unresolved(unresolved_account_reason(config)?).into());
     };
     let Some(identity) = manager.get_signing_identity(&account.record.account_id)? else {
-        return Err(RuntimeError::Config(format!(
-            "watch_only account {} is present but not secret-backed",
-            account.record.account_id
-        )));
+        return Err(AccountRuntimeFailure::watch_only(&account.record.account_id).into());
     };
     Ok(AccountSigningIdentity { account, identity })
 }
@@ -502,12 +532,18 @@ fn selector_runtime_error(selector: &str, error: RadrootsNostrAccountsError) -> 
     let normalized = selector.trim();
     match error {
         RadrootsNostrAccountsError::InvalidAccountSelector(reason) => RuntimeError::Config(reason),
-        RadrootsNostrAccountsError::AccountNotFound(_) => RuntimeError::Config(format!(
-            "account selector `{normalized}` did not match any local account"
-        )),
-        RadrootsNostrAccountsError::AmbiguousAccountSelector(_) => RuntimeError::Config(format!(
-            "account selector `{normalized}` matched multiple local accounts; use account id or npub"
-        )),
+        RadrootsNostrAccountsError::AccountNotFound(_) => {
+            AccountRuntimeFailure::unresolved(format!(
+                "account selector `{normalized}` did not match any local account"
+            ))
+            .into()
+        }
+        RadrootsNostrAccountsError::AmbiguousAccountSelector(_) => {
+            AccountRuntimeFailure::unresolved(format!(
+                "account selector `{normalized}` matched multiple local accounts; use account id or npub"
+            ))
+            .into()
+        }
         other => RuntimeError::Accounts(other),
     }
 }
@@ -565,10 +601,11 @@ fn validate_identity_secret_matches_account(
         return Ok(());
     }
 
-    Err(RuntimeError::Config(format!(
-        "account mismatch: account `{}` public key `{}` does not match secret public key `{}`",
+    Err(AccountRuntimeFailure::mismatch(format!(
+        "account mismatch: resolved account `{}` public key `{}` does not match secret public key `{}`",
         record.account_id, record.public_identity.public_key_hex, secret_public_key_hex
-    )))
+    ))
+    .into())
 }
 
 fn account_manager(config: &RuntimeConfig) -> Result<RadrootsNostrAccountsManager, RuntimeError> {

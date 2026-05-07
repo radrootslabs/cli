@@ -666,6 +666,7 @@ pub fn submit(
         loaded.document.order.buyer_pubkey.as_str(),
     ) {
         Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => return Ok(order_binding_error_view(config, &loaded, args, error)),
     };
     let payload = canonical_order_request_payload_from_loaded(
@@ -896,6 +897,7 @@ pub fn decide(
             args.decision,
         ) {
             Ok(signing) => signing,
+            Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
             Err(error) => {
                 return Ok(order_decision_binding_error_view(
                     config, args, request, resolution, error,
@@ -1010,6 +1012,7 @@ pub fn revision_propose(
     })?;
     let signing = match resolve_local_order_fulfillment_signing_identity(config, seller_pubkey) {
         Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
             return Ok(order_revision_binding_error_view(
                 config,
@@ -1165,6 +1168,7 @@ pub fn revision_decide(
     let signing =
         match resolve_local_order_revision_decision_signing_identity(config, buyer_pubkey, args) {
             Ok(signing) => signing,
+            Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
             Err(error) => {
                 return Ok(order_revision_decision_binding_error_view(
                     config,
@@ -1300,6 +1304,7 @@ pub fn fulfillment_update(
     })?;
     let signing = match resolve_local_order_fulfillment_signing_identity(config, seller_pubkey) {
         Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
             return Ok(order_fulfillment_binding_error_view(
                 config,
@@ -1386,6 +1391,7 @@ pub fn cancel(
         .ok_or_else(|| RuntimeError::Config("order is missing buyer_pubkey".to_owned()))?;
     let signing = match resolve_local_order_cancellation_signing_identity(config, buyer_pubkey) {
         Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
             return Ok(order_cancellation_binding_error_view(
                 config,
@@ -1469,6 +1475,7 @@ pub fn receipt_record(
     })?;
     let signing = match resolve_local_order_receipt_signing_identity(config, buyer_pubkey) {
         Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
             return Ok(order_receipt_binding_error_view(
                 config,
@@ -1558,6 +1565,7 @@ pub fn payment_record(
         .ok_or_else(|| RuntimeError::Config("payable order is missing buyer_pubkey".to_owned()))?;
     let signing = match resolve_local_order_payment_signing_identity(config, buyer_pubkey) {
         Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
             return Ok(order_payment_binding_error_view(
                 config,
@@ -1648,6 +1656,7 @@ pub fn settlement_decision(
     })?;
     let signing = match resolve_local_order_settlement_signing_identity(config, seller_pubkey) {
         Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
             return Ok(order_settlement_binding_error_view(
                 config,
@@ -7700,19 +7709,23 @@ fn published_order_settlement_view(
     view
 }
 
+fn order_actor_write_binding_error_parts(
+    error: ActorWriteBindingError,
+) -> (String, String, Vec<String>) {
+    (
+        "unconfigured".to_owned(),
+        error.reason(),
+        vec!["run radroots signer status get".to_owned()],
+    )
+}
+
 fn order_fulfillment_binding_error_view(
     config: &RuntimeConfig,
     args: &OrderFulfillmentArgs,
     status: &OrderStatusView,
     error: ActorWriteBindingError,
 ) -> OrderFulfillmentView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let (state, reason, actions) = order_actor_write_binding_error_parts(error);
     let mut view = order_fulfillment_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_fulfillment_status(&mut view, status);
     view.reason = Some(reason);
@@ -7726,13 +7739,7 @@ fn order_revision_binding_error_view(
     status: &OrderStatusView,
     error: ActorWriteBindingError,
 ) -> OrderRevisionProposalView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let (state, reason, actions) = order_actor_write_binding_error_parts(error);
     let mut view = order_revision_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_revision_status(&mut view, status);
     view.reason = Some(reason);
@@ -7746,13 +7753,7 @@ fn order_revision_decision_binding_error_view(
     status: &OrderStatusView,
     error: ActorWriteBindingError,
 ) -> OrderRevisionDecisionView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let (state, reason, actions) = order_actor_write_binding_error_parts(error);
     let mut view =
         order_revision_decision_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_revision_decision_status(&mut view, status);
@@ -7767,13 +7768,7 @@ fn order_cancellation_binding_error_view(
     status: &OrderStatusView,
     error: ActorWriteBindingError,
 ) -> OrderCancellationView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let (state, reason, actions) = order_actor_write_binding_error_parts(error);
     let mut view =
         order_cancellation_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_cancellation_status(&mut view, status);
@@ -7788,13 +7783,7 @@ fn order_receipt_binding_error_view(
     status: &OrderStatusView,
     error: ActorWriteBindingError,
 ) -> OrderReceiptView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let (state, reason, actions) = order_actor_write_binding_error_parts(error);
     let mut view = order_receipt_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_receipt_status(&mut view, status);
     view.reason = Some(reason);
@@ -7808,13 +7797,7 @@ fn order_payment_binding_error_view(
     status: &OrderStatusView,
     error: ActorWriteBindingError,
 ) -> OrderPaymentView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let (state, reason, actions) = order_actor_write_binding_error_parts(error);
     let mut view = order_payment_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_payment_status(&mut view, status);
     view.reason = Some(reason);
@@ -7828,13 +7811,7 @@ fn order_settlement_binding_error_view(
     status: &OrderStatusView,
     error: ActorWriteBindingError,
 ) -> OrderSettlementView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let (state, reason, actions) = order_actor_write_binding_error_parts(error);
     let mut view = order_settlement_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_settlement_status(&mut view, status);
     view.reason = Some(reason);
@@ -8096,13 +8073,7 @@ fn order_decision_binding_error_view(
     resolution: SellerOrderRequestResolution,
     error: ActorWriteBindingError,
 ) -> OrderDecisionView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let (state, reason, actions) = order_actor_write_binding_error_parts(error);
     let mut view = order_decision_base_view(config, args, state.as_str(), config.output.dry_run);
     apply_order_decision_resolution(&mut view, &resolution);
     apply_order_decision_request(&mut view, &request);
@@ -9771,13 +9742,7 @@ fn order_binding_error_view(
     args: &OrderSubmitArgs,
     error: ActorWriteBindingError,
 ) -> OrderSubmitView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let (state, reason, actions) = order_actor_write_binding_error_parts(error);
 
     let mut actions = actions;
     actions.push(format!(
@@ -9824,7 +9789,7 @@ fn resolve_local_order_signing_identity(
         ));
     }
     let signing = accounts::resolve_local_signing_identity(config)
-        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+        .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
         .record
@@ -9832,9 +9797,11 @@ fn resolve_local_order_signing_identity(
         .public_key_hex
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
-        return Err(ActorWriteBindingError::Unconfigured(format!(
-            "selected local account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
-        )));
+        return Err(ActorWriteBindingError::Account(
+            accounts::AccountRuntimeFailure::mismatch(format!(
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
+            )),
+        ));
     }
     Ok(signing)
 }
@@ -9851,7 +9818,7 @@ fn resolve_local_order_decision_signing_identity(
         )));
     }
     let signing = accounts::resolve_local_signing_identity(config)
-        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+        .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
         .record
@@ -9859,9 +9826,11 @@ fn resolve_local_order_decision_signing_identity(
         .public_key_hex
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(seller_pubkey) {
-        return Err(ActorWriteBindingError::Unconfigured(format!(
-            "selected local account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
-        )));
+        return Err(ActorWriteBindingError::Account(
+            accounts::AccountRuntimeFailure::mismatch(format!(
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
+            )),
+        ));
     }
     Ok(signing)
 }
@@ -9876,7 +9845,7 @@ fn resolve_local_order_fulfillment_signing_identity(
         ));
     }
     let signing = accounts::resolve_local_signing_identity(config)
-        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+        .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
         .record
@@ -9884,9 +9853,11 @@ fn resolve_local_order_fulfillment_signing_identity(
         .public_key_hex
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(seller_pubkey) {
-        return Err(ActorWriteBindingError::Unconfigured(format!(
-            "selected local account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
-        )));
+        return Err(ActorWriteBindingError::Account(
+            accounts::AccountRuntimeFailure::mismatch(format!(
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
+            )),
+        ));
     }
     Ok(signing)
 }
@@ -9901,7 +9872,7 @@ fn resolve_local_order_cancellation_signing_identity(
         ));
     }
     let signing = accounts::resolve_local_signing_identity(config)
-        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+        .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
         .record
@@ -9909,9 +9880,11 @@ fn resolve_local_order_cancellation_signing_identity(
         .public_key_hex
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
-        return Err(ActorWriteBindingError::Unconfigured(format!(
-            "selected local account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
-        )));
+        return Err(ActorWriteBindingError::Account(
+            accounts::AccountRuntimeFailure::mismatch(format!(
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
+            )),
+        ));
     }
     Ok(signing)
 }
@@ -9926,7 +9899,7 @@ fn resolve_local_order_receipt_signing_identity(
         ));
     }
     let signing = accounts::resolve_local_signing_identity(config)
-        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+        .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
         .record
@@ -9934,9 +9907,11 @@ fn resolve_local_order_receipt_signing_identity(
         .public_key_hex
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
-        return Err(ActorWriteBindingError::Unconfigured(format!(
-            "selected local account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
-        )));
+        return Err(ActorWriteBindingError::Account(
+            accounts::AccountRuntimeFailure::mismatch(format!(
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
+            )),
+        ));
     }
     Ok(signing)
 }
@@ -9951,7 +9926,7 @@ fn resolve_local_order_payment_signing_identity(
         ));
     }
     let signing = accounts::resolve_local_signing_identity(config)
-        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+        .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
         .record
@@ -9959,9 +9934,11 @@ fn resolve_local_order_payment_signing_identity(
         .public_key_hex
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
-        return Err(ActorWriteBindingError::Unconfigured(format!(
-            "selected local account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
-        )));
+        return Err(ActorWriteBindingError::Account(
+            accounts::AccountRuntimeFailure::mismatch(format!(
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
+            )),
+        ));
     }
     Ok(signing)
 }
@@ -9976,7 +9953,7 @@ fn resolve_local_order_settlement_signing_identity(
         ));
     }
     let signing = accounts::resolve_local_signing_identity(config)
-        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+        .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
         .record
@@ -9984,9 +9961,11 @@ fn resolve_local_order_settlement_signing_identity(
         .public_key_hex
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(seller_pubkey) {
-        return Err(ActorWriteBindingError::Unconfigured(format!(
-            "selected local account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
-        )));
+        return Err(ActorWriteBindingError::Account(
+            accounts::AccountRuntimeFailure::mismatch(format!(
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
+            )),
+        ));
     }
     Ok(signing)
 }
@@ -10003,7 +9982,7 @@ fn resolve_local_order_revision_decision_signing_identity(
         )));
     }
     let signing = accounts::resolve_local_signing_identity(config)
-        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+        .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
         .record
@@ -10011,9 +9990,11 @@ fn resolve_local_order_revision_decision_signing_identity(
         .public_key_hex
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
-        return Err(ActorWriteBindingError::Unconfigured(format!(
-            "selected local account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
-        )));
+        return Err(ActorWriteBindingError::Account(
+            accounts::AccountRuntimeFailure::mismatch(format!(
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
+            )),
+        ));
     }
     Ok(signing)
 }
@@ -10375,7 +10356,6 @@ mod tests {
         SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
-    use crate::runtime::signer::ActorWriteBindingError;
     use crate::runtime_args::{
         OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftAdjustmentArgs,
         OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
@@ -14921,7 +14901,7 @@ mod tests {
         )
         .expect_err("non seller account rejected");
 
-        let ActorWriteBindingError::Unconfigured(reason) = error;
+        let reason = error.reason();
         assert!(reason.contains("cannot sign order seller_pubkey"));
     }
 

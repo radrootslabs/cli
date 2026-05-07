@@ -22,6 +22,8 @@ use std::process::ExitCode;
 pub enum RuntimeError {
     #[error("{0}")]
     Config(String),
+    #[error("{0}")]
+    Account(#[from] accounts::AccountRuntimeFailure),
     #[error("failed to initialize logging: {0}")]
     Logging(#[from] radroots_log::Error),
     #[error("accounts error: {0}")]
@@ -41,7 +43,7 @@ pub enum RuntimeError {
 impl RuntimeError {
     pub fn exit_code(&self) -> ExitCode {
         match self {
-            Self::Config(_) => ExitCode::from(2),
+            Self::Config(_) | Self::Account(_) => ExitCode::from(2),
             Self::Logging(_)
             | Self::Accounts(_)
             | Self::Sql(_)

@@ -2,6 +2,8 @@ use crate::domain::runtime::{
     IdentityPublicView, LocalSignerStatusView, SignerBindingStatusView, SignerStatusView,
     SignerWriteKindReadinessView,
 };
+use crate::runtime::RuntimeError;
+use crate::runtime::accounts::AccountRuntimeFailure;
 use crate::runtime::accounts::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolution_view};
 use crate::runtime::config::{RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend};
 use radroots_events::kinds::{
@@ -28,6 +30,23 @@ struct CliWriteKind {
 #[derive(Debug, Clone)]
 pub enum ActorWriteBindingError {
     Unconfigured(String),
+    Account(AccountRuntimeFailure),
+}
+
+impl ActorWriteBindingError {
+    pub fn from_runtime(error: RuntimeError) -> Self {
+        match error {
+            RuntimeError::Account(failure) => Self::Account(failure),
+            other => Self::Unconfigured(other.to_string()),
+        }
+    }
+
+    pub fn reason(self) -> String {
+        match self {
+            Self::Unconfigured(reason) => reason,
+            Self::Account(failure) => failure.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,35 +177,33 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 myc: None,
             }
         }
-        Ok(RadrootsNostrAccountStatus::PublicOnly { account }) => SignerStatusView {
-            mode: config.signer.backend.as_str().to_owned(),
-            state: "unconfigured".to_owned(),
-            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
-            signer_account_id: Some(account.account_id.to_string()),
-            account_resolution: account_resolution.clone(),
-            reason: Some(format!(
-                "local account {} is present but not secret-backed",
-                account.account_id
-            )),
-            binding: disabled_binding_status(),
-            write_kinds: local_write_kind_readiness(
-                false,
-                Some(format!(
-                    "local account {} is present but not secret-backed",
-                    account.account_id
-                )),
-            ),
-            local: Some(LocalSignerStatusView {
-                account_id: account.account_id.to_string(),
-                public_identity: IdentityPublicView::from_public_identity(&account.public_identity),
-                availability: local_availability(RadrootsNostrLocalSignerAvailability::PublicOnly)
+        Ok(RadrootsNostrAccountStatus::PublicOnly { account }) => {
+            let reason = AccountRuntimeFailure::watch_only(&account.account_id).to_string();
+            SignerStatusView {
+                mode: config.signer.backend.as_str().to_owned(),
+                state: "unconfigured".to_owned(),
+                source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
+                signer_account_id: Some(account.account_id.to_string()),
+                account_resolution: account_resolution.clone(),
+                reason: Some(reason.clone()),
+                binding: disabled_binding_status(),
+                write_kinds: local_write_kind_readiness(false, Some(reason)),
+                local: Some(LocalSignerStatusView {
+                    account_id: account.account_id.to_string(),
+                    public_identity: IdentityPublicView::from_public_identity(
+                        &account.public_identity,
+                    ),
+                    availability: local_availability(
+                        RadrootsNostrLocalSignerAvailability::PublicOnly,
+                    )
                     .to_owned(),
-                secret_backed: false,
-                backend: backend.clone(),
-                used_fallback,
-            }),
-            myc: None,
-        },
+                    secret_backed: false,
+                    backend: backend.clone(),
+                    used_fallback,
+                }),
+                myc: None,
+            }
+        }
         Ok(RadrootsNostrAccountStatus::NotConfigured) => SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "unconfigured".to_owned(),

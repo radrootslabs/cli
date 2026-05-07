@@ -1855,6 +1855,8 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         .expect("account id");
     assert_eq!(account["operation_id"], "account.create");
     assert_eq!(account["result"]["account"]["signer"], "local");
+    assert_eq!(account["result"]["account"]["custody"], "secret_backed");
+    assert_eq!(account["result"]["account"]["write_capable"], true);
     assert_no_removed_command_reference(&account, &["account", "create"]);
 
     let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
@@ -2429,6 +2431,8 @@ fn seller_target_flow_acceptance_uses_target_operations() {
         .expect("account id");
     assert_eq!(account["operation_id"], "account.create");
     assert_eq!(account["result"]["account"]["signer"], "local");
+    assert_eq!(account["result"]["account"]["custody"], "secret_backed");
+    assert_eq!(account["result"]["account"]["write_capable"], true);
     assert_no_removed_command_reference(&account, &["account", "create"]);
 
     let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);

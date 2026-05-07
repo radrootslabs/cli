@@ -351,6 +351,7 @@ pub fn publish(
 
     let signing = match resolve_farm_signing_identity(config, account_pubkey.as_str()) {
         Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
             return Ok(binding_error_publish_view(
                 config,
@@ -489,7 +490,7 @@ fn resolve_farm_signing_identity(
         });
     }
     let signing = accounts::resolve_local_signing_identity(config)
-        .map_err(|error| ActorWriteBindingError::Unconfigured(error.to_string()))?;
+        .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
         .record
@@ -497,9 +498,11 @@ fn resolve_farm_signing_identity(
         .public_key_hex
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(account_pubkey) {
-        return Err(ActorWriteBindingError::Unconfigured(format!(
-            "selected local account pubkey `{selected_pubkey}` cannot sign farm pubkey `{account_pubkey}`"
-        )));
+        return Err(ActorWriteBindingError::Account(
+            accounts::AccountRuntimeFailure::mismatch(format!(
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign farm pubkey `{account_pubkey}`"
+            )),
+        ));
     }
     Ok(signing)
 }
@@ -638,13 +641,9 @@ fn binding_error_publish_view(
     farm_idempotency_key: Option<String>,
     error: ActorWriteBindingError,
 ) -> FarmPublishView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let reason = error.reason();
+    let state = "unconfigured".to_owned();
+    let actions = vec!["run radroots signer status get".to_owned()];
     base_publish_view(
         state.as_str(),
         config,

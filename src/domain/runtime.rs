@@ -445,6 +445,8 @@ pub struct AccountSummaryView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     pub signer: String,
+    pub custody: String,
+    pub write_capable: bool,
     pub is_default: bool,
 }
 
@@ -454,10 +456,18 @@ impl AccountSummaryView {
         signer: &str,
         is_default: bool,
     ) -> Self {
+        let write_capable = signer == "local";
         Self {
             id: record.account_id.to_string(),
             display_name: record.label.clone(),
             signer: signer.to_owned(),
+            custody: if write_capable {
+                "secret_backed"
+            } else {
+                "watch_only"
+            }
+            .to_owned(),
+            write_capable,
             is_default,
         }
     }

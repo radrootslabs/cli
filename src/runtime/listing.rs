@@ -821,6 +821,17 @@ fn mutate(
     })?;
     let context = validation_context(config)?;
     let mut canonical = canonicalize_draft(&parsed, &contents, &context).map_err(|issue| {
+        if issue.field == "listing.seller_pubkey"
+            && issue
+                .message
+                .contains("no resolved account pubkey is available")
+        {
+            return accounts::AccountRuntimeFailure::unresolved(format!(
+                "{} ({})",
+                issue.message, issue.field
+            ))
+            .into();
+        }
         RuntimeError::Config(format!(
             "invalid listing draft {}: {} ({})",
             args.file.display(),
@@ -1006,7 +1017,7 @@ fn canonicalize_draft(
         return Err(issue_for_field(
             contents,
             "listing.seller_pubkey",
-            "missing seller_pubkey and no local account is selected",
+            "missing seller_pubkey and no resolved account pubkey is available",
         ));
     };
 
@@ -1433,10 +1444,11 @@ fn resolve_listing_signing_identity(
         .public_key_hex
         .as_str();
     if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
-        return Err(RuntimeError::Config(format!(
-            "selected local account pubkey `{account_pubkey}` cannot sign listing seller_pubkey `{}`",
+        return Err(accounts::AccountRuntimeFailure::mismatch(format!(
+            "account mismatch: resolved account pubkey `{account_pubkey}` cannot sign listing seller_pubkey `{}`",
             canonical.seller_pubkey
-        )));
+        ))
+        .into());
     }
     Ok(signing)
 }
@@ -1450,13 +1462,9 @@ fn binding_error_view(
     event_preview: ListingMutationEventView,
     error: ActorWriteBindingError,
 ) -> ListingMutationView {
-    let (state, reason, actions) = match error {
-        ActorWriteBindingError::Unconfigured(reason) => (
-            "unconfigured".to_owned(),
-            reason,
-            vec!["run radroots signer status get".to_owned()],
-        ),
-    };
+    let reason = error.reason();
+    let state = "unconfigured".to_owned();
+    let actions = vec!["run radroots signer status get".to_owned()];
 
     ListingMutationView {
         state: state.clone(),

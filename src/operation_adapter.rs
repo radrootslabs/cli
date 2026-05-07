@@ -13,6 +13,7 @@ use crate::output_contract::{
     OutputError, OutputWarning,
 };
 use crate::runtime::RuntimeError;
+use crate::runtime::accounts::AccountRuntimeFailure;
 use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,6 +515,7 @@ impl OperationAdapterError {
                 operation_id: operation_id.to_owned(),
                 message,
             },
+            RuntimeError::Account(failure) => account_runtime_failure(operation_id, failure),
             RuntimeError::Config(_)
                 if contains_any(
                     &lowered,
@@ -524,9 +526,6 @@ impl OperationAdapterError {
                         "account mismatch",
                         "did not match any local account",
                         "unresolved account",
-                        "watch_only",
-                        "not secret-backed",
-                        "selected local account",
                     ],
                 ) =>
             {
@@ -748,6 +747,27 @@ enum RuntimeFailureAvailability {
     Unavailable,
 }
 
+fn account_runtime_failure(
+    operation_id: &str,
+    failure: &AccountRuntimeFailure,
+) -> OperationAdapterError {
+    let message = failure.to_string();
+    match failure {
+        AccountRuntimeFailure::Unresolved(_) => OperationAdapterError::AccountUnresolved {
+            operation_id: operation_id.to_owned(),
+            message,
+        },
+        AccountRuntimeFailure::WatchOnly(_) => OperationAdapterError::AccountWatchOnly {
+            operation_id: operation_id.to_owned(),
+            message,
+        },
+        AccountRuntimeFailure::Mismatch(_) => OperationAdapterError::AccountMismatch {
+            operation_id: operation_id.to_owned(),
+            message,
+        },
+    }
+}
+
 fn classify_runtime_failure(
     operation_id: &str,
     message: String,
@@ -760,14 +780,7 @@ fn classify_runtime_failure(
             message,
         };
     }
-    if contains_any(
-        &lowered,
-        &[
-            "account mismatch",
-            "selected local account",
-            "cannot sign listing seller_pubkey",
-        ],
-    ) {
+    if contains_any(&lowered, &["account mismatch"]) {
         return OperationAdapterError::AccountMismatch {
             operation_id: operation_id.to_owned(),
             message,
@@ -1464,6 +1477,7 @@ mod tests {
     };
     use crate::operation_registry::OPERATION_REGISTRY;
     use crate::runtime::RuntimeError;
+    use crate::runtime::accounts::AccountRuntimeFailure;
     use crate::target_cli::TargetCliArgs;
 
     #[test]
@@ -2013,7 +2027,8 @@ mod tests {
             (
                 OperationAdapterError::unconfigured(
                     "listing.publish",
-                    "watch_only account cannot sign".to_owned(),
+                    "resolved account `a` is watch_only and cannot sign because it is not secret-backed"
+                        .to_owned(),
                 ),
                 "account_watch_only",
                 "account",
@@ -2022,7 +2037,7 @@ mod tests {
             (
                 OperationAdapterError::unconfigured(
                     "listing.publish",
-                    "selected local account pubkey `b` cannot sign listing seller_pubkey `a`"
+                    "account mismatch: resolved account pubkey `b` cannot sign listing seller_pubkey `a`"
                         .to_owned(),
                 ),
                 "account_mismatch",
@@ -2086,10 +2101,9 @@ mod tests {
             (
                 OperationAdapterError::runtime_failure(
                     "listing.archive",
-                    RuntimeError::Config(
-                        "selected local account pubkey `b` cannot sign listing seller_pubkey `a`"
-                            .to_owned(),
-                    ),
+                    RuntimeError::Account(AccountRuntimeFailure::mismatch(
+                        "account mismatch: resolved account pubkey `b` cannot sign listing seller_pubkey `a`",
+                    )),
                 ),
                 "account_mismatch",
                 "account",

@@ -41,6 +41,8 @@ fn local_signer_status_reports_ready_after_account_create() {
     assert_eq!(created["operation_id"], "account.create");
     assert_eq!(created["result"]["state"], "created");
     assert_eq!(created["result"]["account"]["signer"], "local");
+    assert_eq!(created["result"]["account"]["custody"], "secret_backed");
+    assert_eq!(created["result"]["account"]["write_capable"], true);
     assert_eq!(created["result"]["account"]["is_default"], true);
     let account_id = created["result"]["account"]["id"]
         .as_str()
@@ -170,6 +172,8 @@ fn account_import_dry_run_validates_profile_without_mutating_store() {
         public_identity.id.as_str()
     );
     assert_eq!(value["result"]["account"]["signer"], "watch_only");
+    assert_eq!(value["result"]["account"]["custody"], "watch_only");
+    assert_eq!(value["result"]["account"]["write_capable"], false);
     assert_eq!(value["result"]["account"]["is_default"], true);
 
     let list = sandbox.json_success(&["--format", "json", "account", "list"]);
@@ -222,6 +226,8 @@ fn account_attach_secret_dry_run_validates_without_mutating_store() {
         .as_str()
         .expect("watch account id");
     assert_eq!(imported["result"]["account"]["signer"], "watch_only");
+    assert_eq!(imported["result"]["account"]["custody"], "watch_only");
+    assert_eq!(imported["result"]["account"]["write_capable"], false);
     assert_eq!(imported["result"]["account"]["is_default"], false);
 
     let value = sandbox.json_success(&[
@@ -241,12 +247,22 @@ fn account_attach_secret_dry_run_validates_without_mutating_store() {
     assert_eq!(value["result"]["default"], true);
     assert_eq!(value["result"]["account"]["id"], watch_account_id);
     assert_eq!(value["result"]["account"]["signer"], "local");
+    assert_eq!(value["result"]["account"]["custody"], "secret_backed");
+    assert_eq!(value["result"]["account"]["write_capable"], true);
     assert_eq!(value["result"]["account"]["is_default"], true);
 
     let watch_get = sandbox.json_success(&["--format", "json", "account", "get", watch_account_id]);
     assert_eq!(
         watch_get["result"]["account_resolution"]["resolved_account"]["signer"],
         "watch_only"
+    );
+    assert_eq!(
+        watch_get["result"]["account_resolution"]["resolved_account"]["custody"],
+        "watch_only"
+    );
+    assert_eq!(
+        watch_get["result"]["account_resolution"]["resolved_account"]["write_capable"],
+        false
     );
     let selected = sandbox.json_success(&["--format", "json", "account", "selection", "get"]);
     assert_eq!(
@@ -293,6 +309,8 @@ fn account_attach_secret_attaches_matching_secret_and_can_make_default() {
     assert_eq!(attached["result"]["state"], "secret_attached");
     assert_eq!(attached["result"]["account"]["id"], watch_account_id);
     assert_eq!(attached["result"]["account"]["signer"], "local");
+    assert_eq!(attached["result"]["account"]["custody"], "secret_backed");
+    assert_eq!(attached["result"]["account"]["write_capable"], true);
     assert_eq!(attached["result"]["account"]["is_default"], true);
 
     let status = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
@@ -341,6 +359,14 @@ fn account_attach_secret_requires_approval_before_writing_secret() {
     assert_eq!(
         get["result"]["account_resolution"]["resolved_account"]["signer"],
         "watch_only"
+    );
+    assert_eq!(
+        get["result"]["account_resolution"]["resolved_account"]["custody"],
+        "watch_only"
+    );
+    assert_eq!(
+        get["result"]["account_resolution"]["resolved_account"]["write_capable"],
+        false
     );
 }
 
@@ -568,6 +594,8 @@ fn watch_only_import_reports_unconfigured_local_signer() {
         public_identity.id.as_str()
     );
     assert_eq!(imported["result"]["account"]["signer"], "watch_only");
+    assert_eq!(imported["result"]["account"]["custody"], "watch_only");
+    assert_eq!(imported["result"]["account"]["write_capable"], false);
     assert_eq!(imported["result"]["account"]["is_default"], true);
 
     let status = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
@@ -585,6 +613,14 @@ fn watch_only_import_reports_unconfigured_local_signer() {
     assert_eq!(
         status["result"]["account_resolution"]["resolved_account"]["signer"],
         "watch_only"
+    );
+    assert_eq!(
+        status["result"]["account_resolution"]["resolved_account"]["custody"],
+        "watch_only"
+    );
+    assert_eq!(
+        status["result"]["account_resolution"]["resolved_account"]["write_capable"],
+        false
     );
     assert_eq!(
         status["result"]["local"]["account_id"],
@@ -668,7 +704,7 @@ fn local_listing_publish_fails_without_local_account_authority() {
     assert_eq!(value["errors"][0]["detail"]["class"], "account");
     assert_contains(
         &value["errors"][0]["message"],
-        "no local account is selected",
+        "no resolved account pubkey is available",
     );
 }
 
@@ -1216,7 +1252,8 @@ fn watch_only_listing_publish_fails_as_account_watch_only() {
     assert_eq!(value["errors"][0]["code"], "account_watch_only");
     assert_eq!(value["errors"][0]["exit_code"], 7);
     assert_eq!(value["errors"][0]["detail"]["class"], "account");
-    assert_contains(&value["errors"][0]["message"], "watch_only account");
+    assert_contains(&value["errors"][0]["message"], "resolved account");
+    assert_contains(&value["errors"][0]["message"], "watch_only");
 }
 
 #[cfg(unix)]
