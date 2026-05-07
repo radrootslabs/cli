@@ -6,9 +6,10 @@ use std::path::Path;
 use serde_json::Value;
 
 use support::{
-    RadrootsCliSandbox, assert_no_daemon_runtime_reference, assert_no_removed_command_reference,
-    create_listing_draft, identity_public, make_listing_publishable, ndjson_from_stdout, radroots,
-    remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing, toml_string,
+    RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
+    assert_no_removed_command_reference, create_listing_draft, identity_public,
+    make_listing_publishable, ndjson_from_stdout, radroots, remove_orderable_listing,
+    replace_latest_listing_event_id, seed_orderable_listing, toml_string,
     write_public_identity_profile,
 };
 
@@ -105,6 +106,118 @@ fn config_get_exposes_resolved_publish_state() {
 }
 
 #[test]
+fn config_get_distinguishes_relay_ready_from_missing_signed_write_account() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:19001",
+        "config",
+        "get",
+    ]);
+
+    assert_eq!(value["operation_id"], "config.get");
+    assert_eq!(value["result"]["publish"]["mode"], "nostr_relay");
+    assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
+    assert_eq!(value["result"]["publish"]["signed_write_required"], true);
+    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
+    assert_eq!(value["result"]["publish"]["executable"], false);
+    assert_contains(
+        &value["result"]["publish"]["reason"],
+        "write-capable local account",
+    );
+    assert_eq!(
+        value["result"]["publish"]["provider"]["state"],
+        "unconfigured"
+    );
+}
+
+#[test]
+fn config_get_marks_relay_publish_ready_with_secret_backed_local_account() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:19002",
+        "config",
+        "get",
+    ]);
+
+    assert_eq!(value["result"]["publish"]["mode"], "nostr_relay");
+    assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
+    assert_eq!(value["result"]["publish"]["signed_write_required"], true);
+    assert_eq!(value["result"]["publish"]["state"], "ready");
+    assert_eq!(value["result"]["publish"]["executable"], true);
+    assert_eq!(value["result"]["publish"]["reason"], Value::Null);
+    assert_eq!(value["result"]["publish"]["provider"]["state"], "ready");
+}
+
+#[test]
+fn config_get_marks_relay_publish_unavailable_with_deferred_signer_mode() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.write_app_config("[signer]\nmode = \"myc\"\n");
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:19003",
+        "config",
+        "get",
+    ]);
+
+    assert_eq!(value["result"]["publish"]["mode"], "nostr_relay");
+    assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
+    assert_eq!(value["result"]["publish"]["signed_write_required"], true);
+    assert_eq!(value["result"]["publish"]["state"], "unavailable");
+    assert_eq!(value["result"]["publish"]["executable"], false);
+    assert_contains(&value["result"]["publish"]["reason"], "signer mode `local`");
+    assert_eq!(
+        value["result"]["publish"]["provider"]["state"],
+        "unavailable"
+    );
+}
+
+#[test]
+fn config_get_marks_relay_publish_unconfigured_with_watch_only_account() {
+    let sandbox = RadrootsCliSandbox::new();
+    let public_identity = identity_public(41);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "publish-readiness-watch-only", &public_identity);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:19004",
+        "config",
+        "get",
+    ]);
+
+    assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
+    assert_eq!(value["result"]["publish"]["signed_write_required"], true);
+    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
+    assert_eq!(value["result"]["publish"]["executable"], false);
+    assert_contains(&value["result"]["publish"]["reason"], "watch_only");
+}
+
+#[test]
 fn health_surfaces_publish_state_under_deferred_signer_mode() {
     let sandbox = RadrootsCliSandbox::new();
     let missing_myc = sandbox.root().join("bin/missing-myc");
@@ -126,6 +239,31 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
 }
 
 #[test]
+fn health_status_distinguishes_relay_ready_from_missing_signed_write_account() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:19005",
+        "health",
+        "status",
+        "get",
+    ]);
+
+    assert_eq!(value["operation_id"], "health.status.get");
+    assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
+    assert_eq!(value["result"]["publish"]["signed_write_required"], true);
+    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
+    assert_eq!(value["result"]["publish"]["executable"], false);
+    assert_contains(
+        &value["result"]["publish"]["reason"],
+        "write-capable local account",
+    );
+}
+
+#[test]
 fn health_check_exposes_publish_readiness() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
@@ -136,6 +274,28 @@ fn health_check_exposes_publish_readiness() {
     assert_eq!(value["result"]["checks"]["publish"]["mode"], "radrootsd");
     assert_eq!(value["result"]["checks"]["publish"]["state"], "unavailable");
     assert_eq!(value["result"]["checks"]["publish"]["executable"], false);
+    assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
+}
+
+#[test]
+fn health_check_marks_relay_publish_ready_with_secret_backed_local_account() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:19006",
+        "health",
+        "check",
+        "run",
+    ]);
+
+    assert_eq!(value["operation_id"], "health.check.run");
+    assert_eq!(value["result"]["checks"]["publish"]["mode"], "nostr_relay");
+    assert_eq!(value["result"]["checks"]["publish"]["state"], "ready");
+    assert_eq!(value["result"]["checks"]["publish"]["executable"], true);
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 

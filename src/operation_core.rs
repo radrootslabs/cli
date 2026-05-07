@@ -23,13 +23,14 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{
-    account_resolution_view, account_summary_view, attach_identity_secret, clear_default_account,
-    create_or_migrate_default_account, import_public_identity, preview_account_removal,
-    preview_identity_secret_attachment, preview_public_identity_import, remove_account,
-    resolve_account_resolution, resolve_account_selector, secret_backend_status, select_account,
-    snapshot, unresolved_account_reason,
+    AccountResolution, AccountRuntimeFailure, account_resolution_view, account_summary_view,
+    attach_identity_secret, clear_default_account, create_or_migrate_default_account,
+    import_public_identity, preview_account_removal, preview_identity_secret_attachment,
+    preview_public_identity_import, remove_account, resolve_account_resolution,
+    resolve_account_selector, secret_backend_status, select_account, snapshot,
+    unresolved_account_reason,
 };
-use crate::runtime::config::{PublishMode, RuntimeConfig};
+use crate::runtime::config::{PublishMode, RuntimeConfig, SignerBackend};
 use crate::runtime::logging::LoggingState;
 use crate::runtime_args::LocalExportFormatArg;
 
@@ -100,7 +101,7 @@ impl OperationService<HealthStatusGetRequest> for CoreOperationService<'_> {
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let store = map_runtime(crate::runtime::local::status(self.config))?;
         let account = map_runtime(resolve_account_resolution(self.config))?;
-        let publish = publish_runtime_view(self.config, false);
+        let publish = publish_runtime_view(self.config, true, &account);
         json_operation_result::<HealthStatusGetResult>(json!({
             "state": if store.state == "ready" { "ready" } else { "needs_attention" },
             "store": store,
@@ -128,7 +129,7 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
         } else {
             Some(map_runtime(unresolved_account_reason(self.config))?)
         };
-        let publish = publish_runtime_view(self.config, false);
+        let publish = publish_runtime_view(self.config, true, &account);
         json_operation_result::<HealthCheckRunResult>(json!({
             "state": if store.state == "ready" && account.resolved_account.is_some() { "ready" } else { "needs_attention" },
             "checks": {
@@ -163,6 +164,7 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
         _request: OperationRequest<ConfigGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let write_plane = crate::runtime::provider::resolve_write_plane_provider(self.config);
+        let account = map_runtime(resolve_account_resolution(self.config))?;
         json_operation_result::<ConfigGetResult>(json!({
             "output": {
                 "format": self.config.output.format.as_str(),
@@ -190,7 +192,7 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
             "signer": {
                 "mode": self.config.signer.backend.as_str(),
             },
-            "publish": publish_runtime_view(self.config, false),
+            "publish": publish_runtime_view(self.config, true, &account),
             "relay": {
                 "count": self.config.relay.urls.len(),
                 "urls": self.config.relay.urls,
@@ -684,7 +686,11 @@ fn selected_config(config: &RuntimeConfig, selector: String) -> RuntimeConfig {
     config
 }
 
-fn publish_runtime_view(config: &RuntimeConfig, signed_write_required: bool) -> PublishRuntimeView {
+fn publish_runtime_view(
+    config: &RuntimeConfig,
+    signed_write_required: bool,
+    account: &AccountResolution,
+) -> PublishRuntimeView {
     let relay_ready = !config.relay.urls.is_empty();
     let source = config.publish.source.as_str().to_owned();
     let relay = PublishRelayRuntimeView {
@@ -695,30 +701,20 @@ fn publish_runtime_view(config: &RuntimeConfig, signed_write_required: bool) -> 
 
     match config.publish.mode {
         PublishMode::NostrRelay => {
-            let reason = (!relay_ready).then(|| {
-                "nostr_relay publish mode requires at least one configured relay for writes"
-                    .to_owned()
-            });
+            let (state, executable, reason) =
+                nostr_relay_publish_readiness(config, relay_ready, signed_write_required, account);
             PublishRuntimeView {
                 mode: config.publish.mode.as_str().to_owned(),
                 source,
                 transport_family: config.publish.mode.transport_family().to_owned(),
-                state: if relay_ready {
-                    "ready".to_owned()
-                } else {
-                    "unconfigured".to_owned()
-                },
-                executable: relay_ready,
+                state: state.to_owned(),
+                executable,
                 reason: reason.clone(),
                 signed_write_required,
                 relay,
                 provider: PublishProviderRuntimeView {
                     provider_runtime_id: "nostr_relay".to_owned(),
-                    state: if relay_ready {
-                        "ready".to_owned()
-                    } else {
-                        "unconfigured".to_owned()
-                    },
+                    state: state.to_owned(),
                     source: config.relay.source.as_str().to_owned(),
                     reason,
                 },
@@ -746,6 +742,62 @@ fn publish_runtime_view(config: &RuntimeConfig, signed_write_required: bool) -> 
             },
         },
     }
+}
+
+fn nostr_relay_publish_readiness(
+    config: &RuntimeConfig,
+    relay_ready: bool,
+    signed_write_required: bool,
+    account: &AccountResolution,
+) -> (&'static str, bool, Option<String>) {
+    if !relay_ready {
+        return (
+            "unconfigured",
+            false,
+            Some(
+                "nostr_relay publish mode requires at least one configured relay for writes"
+                    .to_owned(),
+            ),
+        );
+    }
+
+    if !signed_write_required {
+        return ("ready", true, None);
+    }
+
+    if matches!(config.signer.backend, SignerBackend::Myc) {
+        return (
+            "unavailable",
+            false,
+            Some(
+                "nostr_relay publish mode requires signer mode `local` for signed writes; signer mode `myc` is deferred"
+                    .to_owned(),
+            ),
+        );
+    }
+
+    let Some(resolved_account) = account.resolved_account.as_ref() else {
+        return (
+            "unconfigured",
+            false,
+            Some(
+                "nostr_relay publish mode requires a selected or default write-capable local account for signed writes"
+                    .to_owned(),
+            ),
+        );
+    };
+
+    if !resolved_account.write_capable {
+        return (
+            "unconfigured",
+            false,
+            Some(
+                AccountRuntimeFailure::watch_only(&resolved_account.record.account_id).to_string(),
+            ),
+        );
+    }
+
+    ("ready", true, None)
 }
 
 fn required_string<P>(
