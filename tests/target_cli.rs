@@ -140,6 +140,41 @@ fn health_check_exposes_publish_readiness() {
 }
 
 #[test]
+fn radrootsd_publish_mode_fails_closed_for_direct_relay_publish_paths() {
+    let sandbox = RadrootsCliSandbox::new();
+    let missing_listing = sandbox.root().join("missing-listing.toml");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--publish-mode",
+        "radrootsd",
+        "--relay",
+        "wss://relay.example.test",
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        missing_listing.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["publish"]["mode"], "radrootsd");
+    assert_eq!(
+        value["errors"][0]["detail"]["publish"]["provider"]["provider_runtime_id"],
+        "radrootsd"
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["publish"]["provider"]["state"],
+        "unavailable"
+    );
+}
+
+#[test]
 fn removed_order_submit_watch_flag_is_rejected_publicly() {
     let output = radroots()
         .args(["order", "submit", "--watch"])

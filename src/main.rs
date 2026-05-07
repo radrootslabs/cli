@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
+use serde_json::json;
 
 use crate::deferred_payment::{deferred_payment_message, is_deferred_payment_operation};
 use crate::operation_adapter::{
@@ -37,10 +38,11 @@ use crate::operation_market::MarketOperationService;
 use crate::operation_order::OrderOperationService;
 use crate::operation_registry::{
     NetworkRequirement, network_requirement, requires_local_signer_mode,
+    requires_nostr_relay_publish_mode,
 };
 use crate::operation_runtime::RuntimeOperationService;
 use crate::output_contract::OutputEnvelope;
-use crate::runtime::config::{RuntimeConfig, SignerBackend};
+use crate::runtime::config::{PublishMode, RuntimeConfig, SignerBackend};
 use crate::runtime::logging::initialize_logging;
 use crate::runtime_args::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
 use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
@@ -352,6 +354,7 @@ fn validate_request_contract(
 ) -> Result<(), OperationAdapterError> {
     validate_pre_runtime_request_contract(request)?;
     validate_signer_mode_contract(request, config)?;
+    validate_publish_mode_contract(request, config)?;
     validate_network_contract(request, config)?;
     Ok(())
 }
@@ -446,6 +449,38 @@ fn validate_network_contract(
             Ok(())
         }
     }
+}
+
+fn validate_publish_mode_contract(
+    request: &TargetOperationRequest,
+    config: &RuntimeConfig,
+) -> Result<(), OperationAdapterError> {
+    let spec = request.spec();
+    if matches!(config.publish.mode, PublishMode::Radrootsd)
+        && requires_nostr_relay_publish_mode(spec.operation_id)
+    {
+        return Err(OperationAdapterError::operation_unavailable_with_detail(
+            spec.operation_id,
+            format!(
+                "`{}` cannot run with publish mode `radrootsd`; radrootsd publish transport is not implemented",
+                spec.cli_path
+            ),
+            json!({
+                "publish": {
+                    "mode": config.publish.mode.as_str(),
+                    "source": config.publish.source.as_str(),
+                    "transport_family": config.publish.mode.transport_family(),
+                    "state": "unavailable",
+                    "executable": false,
+                    "provider": {
+                        "provider_runtime_id": "radrootsd",
+                        "state": "unavailable",
+                    }
+                }
+            }),
+        ));
+    }
+    Ok(())
 }
 
 fn failure_envelope(
