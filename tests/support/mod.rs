@@ -381,6 +381,35 @@ pub fn make_listing_publishable(path: &Path, farm_d_tag: &str) {
     fs::write(path, format!("{patched}\n")).expect("write listing draft");
 }
 
+pub fn make_listing_publishable_with_seller(path: &Path, farm_d_tag: &str, seller_pubkey: &str) {
+    let raw = fs::read_to_string(path).expect("listing draft");
+    let mut seller_pubkey_field_present = false;
+    let patched = raw
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("seller_pubkey =") {
+                seller_pubkey_field_present = true;
+                format!("{}seller_pubkey = \"{}\"", line_indent(line), seller_pubkey)
+            } else if trimmed.starts_with("farm_d_tag =") {
+                format!("{}farm_d_tag = \"{}\"", line_indent(line), farm_d_tag)
+            } else if trimmed.starts_with("method =") {
+                format!("{}method = \"pickup\"", line_indent(line))
+            } else if trimmed.starts_with("primary =") {
+                format!("{}primary = \"farmstand\"", line_indent(line))
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        seller_pubkey_field_present,
+        "listing draft seller pubkey field"
+    );
+    fs::write(path, format!("{patched}\n")).expect("write listing draft");
+}
+
 pub fn shell_single_quoted(value: &str) -> String {
     value.replace('\'', "'\"'\"'")
 }

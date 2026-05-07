@@ -14,8 +14,8 @@ use serde_json::json;
 use support::{
     RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
     assert_no_removed_command_reference, create_listing_draft, identity_public,
-    make_listing_publishable, ndjson_from_stdout, radroots, remove_orderable_listing,
-    replace_latest_listing_event_id, seed_orderable_listing, toml_string,
+    make_listing_publishable, make_listing_publishable_with_seller, ndjson_from_stdout, radroots,
+    remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing, toml_string,
     write_public_identity_profile,
 };
 
@@ -554,6 +554,128 @@ signer_session_ref = "session_test"
             .to_ascii_lowercase()
             .contains("authorization: bearer bridge_test")
     );
+}
+
+#[test]
+fn radrootsd_listing_writes_dry_run_use_draft_identity_without_local_account() {
+    for operation in ["publish", "update", "archive"] {
+        let sandbox = RadrootsCliSandbox::new();
+        let seller = identity_public(42);
+        let listing_file = create_listing_draft(
+            &sandbox,
+            format!("radrootsd-no-account-dry-run-{operation}").as_str(),
+        );
+        make_listing_publishable_with_seller(
+            &listing_file,
+            "AAAAAAAAAAAAAAAAAAAAAw",
+            seller.public_key_hex.as_str(),
+        );
+        sandbox.write_app_config(
+            r#"[publish]
+mode = "radrootsd"
+
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "explicit_endpoint"
+target = "http://myc.invalid"
+signer_session_ref = "session_test"
+"#,
+        );
+
+        let mut command = sandbox.command();
+        command
+            .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+            .args([
+                "--format",
+                "json",
+                "--account-id",
+                "missing-local-account",
+                "--dry-run",
+                "listing",
+                operation,
+                listing_file.to_string_lossy().as_ref(),
+            ]);
+        let output = command
+            .output()
+            .expect("run radrootsd dry-run listing write");
+        let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+
+        assert!(output.status.success());
+        assert_eq!(value["operation_id"], format!("listing.{operation}"));
+        assert_eq!(value["result"]["state"], "dry_run");
+        assert_eq!(
+            value["result"]["source"],
+            "radrootsd publish transport · signer session"
+        );
+        assert_eq!(value["result"]["seller_pubkey"], seller.public_key_hex);
+        assert_eq!(
+            value["result"]["requested_signer_session_id"],
+            "session_test"
+        );
+        assert_eq!(value["result"]["signer_mode"], "nip46");
+        assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
+    }
+}
+
+#[test]
+fn radrootsd_listing_writes_use_draft_identity_without_local_account() {
+    for operation in ["publish", "update", "archive"] {
+        let sandbox = RadrootsCliSandbox::new();
+        let seller = identity_public(43);
+        let listing_file = create_listing_draft(
+            &sandbox,
+            format!("radrootsd-no-account-{operation}").as_str(),
+        );
+        make_listing_publishable_with_seller(
+            &listing_file,
+            "AAAAAAAAAAAAAAAAAAAAAw",
+            seller.public_key_hex.as_str(),
+        );
+        sandbox.write_app_config(
+            r#"[publish]
+mode = "radrootsd"
+
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "explicit_endpoint"
+target = "http://myc.invalid"
+signer_session_ref = "session_test"
+"#,
+        );
+        let server = OneShotJsonRpcServer::listing_publish();
+
+        let mut command = sandbox.command();
+        command
+            .env("RADROOTS_RPC_URL", &server.endpoint)
+            .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+            .args([
+                "--format",
+                "json",
+                "--account-id",
+                "missing-local-account",
+                "--approval-token",
+                "approve",
+                "listing",
+                operation,
+                listing_file.to_string_lossy().as_ref(),
+            ]);
+        let output = command.output().expect("run radrootsd listing write");
+        let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+        let request = server.take_request();
+
+        assert!(output.status.success());
+        assert_eq!(value["operation_id"], format!("listing.{operation}"));
+        assert_eq!(
+            value["result"]["source"],
+            "radrootsd publish transport · signer session"
+        );
+        assert_eq!(value["result"]["seller_pubkey"], seller.public_key_hex);
+        assert_eq!(request.body["method"], "bridge.listing.publish");
+        assert_eq!(request.body["params"]["signer_session_id"], "session_test");
+        assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
+    }
 }
 
 #[test]

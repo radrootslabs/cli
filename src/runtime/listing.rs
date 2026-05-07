@@ -849,7 +849,7 @@ fn mutate(
             args.file.display()
         ))
     })?;
-    let context = validation_context(config)?;
+    let context = mutation_validation_context(config)?;
     let mut canonical = canonicalize_draft(&parsed, &contents, &context).map_err(|error| {
         let issue = match error {
             ListingDraftValidationError::MissingSellerAccount(issue) => {
@@ -880,12 +880,7 @@ fn mutate(
     let (event_draft, listing_addr) = build_listing_event_draft(&canonical)?;
 
     if config.output.dry_run
-        && matches!(
-            operation,
-            ListingMutationOperation::Publish
-                | ListingMutationOperation::Update
-                | ListingMutationOperation::Archive
-        )
+        && matches!(config.publish.mode, PublishMode::NostrRelay)
         && matches!(config.signer.backend, SignerBackend::Local)
     {
         validate_local_listing_signer(config, &canonical)?;
@@ -895,6 +890,18 @@ fn mutate(
         let requested_signer_session_id = match config.publish.mode {
             PublishMode::NostrRelay => args.signer_session_id.clone(),
             PublishMode::Radrootsd => {
+                if config.rpc.bridge_bearer_token.is_none() {
+                    return Ok(radrootsd_preflight_view(
+                        config,
+                        args,
+                        operation,
+                        &canonical,
+                        listing_addr,
+                        event_draft.event,
+                        "unconfigured",
+                        "radrootsd bridge bearer token is required for listing publish dry-run; set RADROOTS_RPC_BEARER_TOKEN",
+                    ));
+                }
                 let Some(signer_session_id) = resolve_radrootsd_signer_session_id(config, args)
                 else {
                     return Ok(radrootsd_preflight_view(
@@ -1294,6 +1301,26 @@ fn validation_context(config: &RuntimeConfig) -> Result<ListingValidationContext
         selected_account_id: defaults.selected_account_id,
         selected_account_pubkey: defaults.selected_account_pubkey,
         selected_farm_d_tag,
+        farm_setup_action: farm_setup_action(config)?,
+    })
+}
+
+fn mutation_validation_context(
+    config: &RuntimeConfig,
+) -> Result<ListingValidationContext, RuntimeError> {
+    match config.publish.mode {
+        PublishMode::NostrRelay => validation_context(config),
+        PublishMode::Radrootsd => radrootsd_mutation_validation_context(config),
+    }
+}
+
+fn radrootsd_mutation_validation_context(
+    config: &RuntimeConfig,
+) -> Result<ListingValidationContext, RuntimeError> {
+    Ok(ListingValidationContext {
+        selected_account_id: None,
+        selected_account_pubkey: None,
+        selected_farm_d_tag: None,
         farm_setup_action: farm_setup_action(config)?,
     })
 }
