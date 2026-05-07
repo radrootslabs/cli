@@ -2009,6 +2009,7 @@ fn published_mutation_view(
     receipt: DirectRelayPublishReceipt,
 ) -> ListingMutationView {
     let DirectRelayPublishReceipt {
+        event: published_event,
         event_id,
         created_at,
         signature,
@@ -2017,6 +2018,8 @@ fn published_mutation_view(
         acknowledged_relays,
         failed_relays,
     } = receipt;
+    debug_assert_eq!(event_id, published_event.id.to_hex());
+    debug_assert_eq!(signature, published_event.sig.to_string());
     event.event_id = Some(event_id.clone());
     event.created_at = Some(created_at);
     event.signature = Some(signature);

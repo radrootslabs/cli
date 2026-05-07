@@ -18,6 +18,7 @@ pub struct DirectRelayFailure {
 
 #[derive(Debug, Clone)]
 pub struct DirectRelayPublishReceipt {
+    pub event: RadrootsNostrEvent,
     pub event_id: String,
     pub created_at: u32,
     pub signature: String,
@@ -187,11 +188,7 @@ async fn publish_parts_with_identity_async(
     relay_urls: &[String],
     parts: WireEventParts,
 ) -> Result<DirectRelayPublishReceipt, DirectRelayPublishError> {
-    let builder = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
-        .map_err(DirectRelayPublishError::Build)?;
-    let event = builder
-        .sign_with_keys(identity.keys())
-        .map_err(|error| DirectRelayPublishError::Sign(error.into()))?;
+    let event = sign_parts_with_identity(identity, parts)?;
     let event_id = event.id.to_hex();
     let created_at = event_created_at_u32(&event);
     let signature = event.sig.to_string();
@@ -245,6 +242,7 @@ async fn publish_parts_with_identity_async(
     }
 
     Ok(DirectRelayPublishReceipt {
+        event,
         event_id,
         created_at,
         signature,
@@ -257,6 +255,17 @@ async fn publish_parts_with_identity_async(
             .collect(),
         failed_relays,
     })
+}
+
+fn sign_parts_with_identity(
+    identity: &RadrootsIdentity,
+    parts: WireEventParts,
+) -> Result<RadrootsNostrEvent, DirectRelayPublishError> {
+    let builder = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+        .map_err(DirectRelayPublishError::Build)?;
+    builder
+        .sign_with_keys(identity.keys())
+        .map_err(|error| DirectRelayPublishError::Sign(error.into()))
 }
 
 fn relay_failures_from_output<T: std::fmt::Debug>(
@@ -297,8 +306,9 @@ mod tests {
     use radroots_nostr::prelude::RadrootsNostrFilter;
 
     use super::{
-        DirectRelayFetchError, DirectRelayPublishError, fetch_events_from_relays_async,
-        fetch_events_from_relays_with_timeout, publish_parts_with_identity,
+        DirectRelayFetchError, DirectRelayPublishError, event_created_at_u32,
+        fetch_events_from_relays_async, fetch_events_from_relays_with_timeout,
+        publish_parts_with_identity, sign_parts_with_identity,
     };
 
     #[test]
@@ -316,6 +326,43 @@ mod tests {
         .expect_err("missing relay error");
 
         assert!(matches!(err, DirectRelayPublishError::MissingRelays));
+    }
+
+    #[test]
+    fn direct_relay_signed_event_preserves_publish_receipt_parity() {
+        let identity = RadrootsIdentity::generate();
+        let parts = WireEventParts {
+            kind: 30402,
+            content: "listing".to_owned(),
+            tags: vec![
+                vec!["d".to_owned(), "listing-1".to_owned()],
+                vec!["title".to_owned(), "eggs".to_owned()],
+            ],
+        };
+        let event = sign_parts_with_identity(&identity, parts.clone()).expect("signed event");
+        let receipt = super::DirectRelayPublishReceipt {
+            event: event.clone(),
+            event_id: event.id.to_hex(),
+            created_at: event_created_at_u32(&event),
+            signature: event.sig.to_string(),
+            target_relays: vec!["ws://127.0.0.1:1234".to_owned()],
+            connected_relays: vec!["ws://127.0.0.1:1234".to_owned()],
+            acknowledged_relays: vec!["ws://127.0.0.1:1234".to_owned()],
+            failed_relays: Vec::new(),
+        };
+        let tags = receipt
+            .event
+            .tags
+            .iter()
+            .map(|tag| tag.as_slice().to_vec())
+            .collect::<Vec<_>>();
+
+        assert_eq!(receipt.event_id, receipt.event.id.to_hex());
+        assert_eq!(receipt.signature, receipt.event.sig.to_string());
+        assert_eq!(receipt.created_at, event_created_at_u32(&receipt.event));
+        assert_eq!(receipt.event.kind.as_u16() as u32, parts.kind);
+        assert_eq!(receipt.event.content, parts.content);
+        assert_eq!(tags, parts.tags);
     }
 
     #[test]

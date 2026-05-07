@@ -7422,6 +7422,7 @@ fn published_order_revision_view(
     receipt: DirectRelayPublishReceipt,
 ) -> OrderRevisionProposalView {
     let DirectRelayPublishReceipt {
+        event: _,
         event_id,
         created_at: _,
         signature: _,
@@ -7452,6 +7453,7 @@ fn published_order_revision_decision_view(
     receipt: DirectRelayPublishReceipt,
 ) -> OrderRevisionDecisionView {
     let DirectRelayPublishReceipt {
+        event: _,
         event_id,
         created_at: _,
         signature: _,
@@ -7578,6 +7580,7 @@ fn published_order_fulfillment_view(
     receipt: DirectRelayPublishReceipt,
 ) -> OrderFulfillmentView {
     let DirectRelayPublishReceipt {
+        event: _,
         event_id,
         created_at: _,
         signature: _,
@@ -7606,6 +7609,7 @@ fn published_order_cancellation_view(
     receipt: DirectRelayPublishReceipt,
 ) -> OrderCancellationView {
     let DirectRelayPublishReceipt {
+        event: _,
         event_id,
         created_at: _,
         signature: _,
@@ -7633,6 +7637,7 @@ fn published_order_receipt_view(
     receipt: DirectRelayPublishReceipt,
 ) -> OrderReceiptView {
     let DirectRelayPublishReceipt {
+        event: _,
         event_id,
         created_at: _,
         signature: _,
@@ -7668,6 +7673,7 @@ fn published_order_payment_view(
     receipt: DirectRelayPublishReceipt,
 ) -> OrderPaymentView {
     let DirectRelayPublishReceipt {
+        event: _,
         event_id,
         created_at: _,
         signature: _,
@@ -7696,6 +7702,7 @@ fn published_order_settlement_view(
     receipt: DirectRelayPublishReceipt,
 ) -> OrderSettlementView {
     let DirectRelayPublishReceipt {
+        event: _,
         event_id,
         created_at: _,
         signature: _,
@@ -8055,6 +8062,7 @@ fn published_order_decision_view(
     inventory: Option<OrderInventoryView>,
 ) -> OrderDecisionView {
     let DirectRelayPublishReceipt {
+        event: _,
         event_id,
         created_at: _,
         signature: _,
@@ -9716,6 +9724,7 @@ fn published_order_submit_view(
     receipt: DirectRelayPublishReceipt,
 ) -> OrderSubmitView {
     let DirectRelayPublishReceipt {
+        event: _,
         event_id,
         created_at: _,
         signature: _,
