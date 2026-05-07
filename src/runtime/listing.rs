@@ -21,6 +21,12 @@ use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_events_codec::wire::WireEventParts;
 use radroots_replica_db::ReplicaSql;
+use radroots_sdk::{
+    RadrootsSdkClient, RadrootsSdkConfig, RadrootsdAuth, SdkEnvironment, SdkPublishError,
+    SdkPublishReceipt, SdkRadrootsdListingPublishOptions, SdkRadrootsdPublishReceipt,
+    SdkRadrootsdSignerSessionRef, SdkTransportMode, SdkTransportReceipt,
+    SignerConfig as SdkSignerConfig,
+};
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::listing::publish::validate_listing_for_seller;
 use radroots_trade::listing::validation::validate_listing_event;
@@ -28,12 +34,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
     FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
-    ListingMutationEventView, ListingMutationView, ListingNewView, ListingSummaryView,
-    ListingValidateView, ListingValidationIssueView, RelayFailureView, SyncFreshnessView,
+    ListingMutationEventView, ListingMutationJobView, ListingMutationView, ListingNewView,
+    ListingSummaryView, ListingValidateView, ListingValidationIssueView, RelayFailureView,
+    SyncFreshnessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
-use crate::runtime::config::{PublishMode, RuntimeConfig, SignerBackend};
+use crate::runtime::config::{
+    PublishMode, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend,
+};
 use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayPublishError, DirectRelayPublishReceipt,
     publish_parts_with_identity,
@@ -52,8 +61,7 @@ const RELAY_LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · local ke
 const RADROOTSD_LISTING_WRITE_SOURCE: &str = "radrootsd publish transport · signer session";
 const DIRECT_RELAY_UNAVAILABLE_REASON: &str =
     "direct Nostr relay publishing is not implemented for listing update";
-const RADROOTSD_LISTING_UNAVAILABLE_REASON: &str =
-    "radrootsd listing publish transport is not implemented";
+const RADROOTSD_BRIDGE_LISTING_PUBLISH_METHOD: &str = "bridge.listing.publish";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -927,14 +935,14 @@ fn mutate(
             listing_addr,
             event_draft,
         ),
-        PublishMode::Radrootsd => Ok(radrootsd_unavailable_view(
+        PublishMode::Radrootsd => mutate_via_radrootsd(
             config,
             args,
             operation,
             &canonical,
             listing_addr,
-            event_draft.event,
-        )),
+            event_draft,
+        ),
     }
 }
 
@@ -1020,6 +1028,216 @@ fn mutate_via_direct_relay(
         event_draft.event,
         receipt,
     ))
+}
+
+fn mutate_via_radrootsd(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+    canonical: &CanonicalListingDraft,
+    listing_addr: String,
+    event_draft: ListingMutationEventDraft,
+) -> Result<ListingMutationView, RuntimeError> {
+    let Some(signer_session_id) = resolve_radrootsd_signer_session_id(config, args) else {
+        return Ok(radrootsd_preflight_view(
+            config,
+            args,
+            operation,
+            canonical,
+            listing_addr,
+            event_draft.event,
+            "unconfigured",
+            "radrootsd listing publish requires `signer_session_id` input or a signer.remote_nip46 capability binding with signer_session_ref",
+        ));
+    };
+    if config.rpc.bridge_bearer_token.is_none() {
+        return Ok(radrootsd_preflight_view(
+            config,
+            args,
+            operation,
+            canonical,
+            listing_addr,
+            event_draft.event,
+            "unconfigured",
+            "radrootsd bridge bearer token is required for listing publish; set RADROOTS_RPC_BEARER_TOKEN",
+        ));
+    }
+
+    let receipt = publish_listing_via_radrootsd(
+        config,
+        &canonical.listing,
+        signer_session_id.as_str(),
+        args.idempotency_key.as_deref(),
+    )?;
+
+    radrootsd_mutation_view(
+        config,
+        args,
+        operation,
+        canonical,
+        listing_addr,
+        event_draft.event,
+        signer_session_id,
+        receipt,
+    )
+}
+
+fn publish_listing_via_radrootsd(
+    config: &RuntimeConfig,
+    listing: &RadrootsListing,
+    signer_session_id: &str,
+    idempotency_key: Option<&str>,
+) -> Result<SdkPublishReceipt, RuntimeError> {
+    let mut sdk_config = RadrootsSdkConfig::for_environment(SdkEnvironment::Custom);
+    sdk_config.transport = SdkTransportMode::Radrootsd;
+    sdk_config.signer = SdkSignerConfig::Nip46;
+    sdk_config.radrootsd.endpoint = Some(config.rpc.url.clone());
+    sdk_config.radrootsd.auth = config
+        .rpc
+        .bridge_bearer_token
+        .clone()
+        .map(RadrootsdAuth::BearerToken)
+        .unwrap_or(RadrootsdAuth::None);
+
+    let client = RadrootsSdkClient::from_config(sdk_config).map_err(|error| {
+        RuntimeError::Config(format!("configure radrootsd listing publish: {error}"))
+    })?;
+    let signer_session = SdkRadrootsdSignerSessionRef::from_session_id(signer_session_id);
+    let mut options = SdkRadrootsdListingPublishOptions::from_signer_session_ref(&signer_session);
+    if let Some(idempotency_key) = idempotency_key.filter(|value| !value.trim().is_empty()) {
+        options = options.with_idempotency_key(idempotency_key.to_owned());
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            RuntimeError::Network(format!("build radrootsd listing publish runtime: {error}"))
+        })?;
+
+    runtime
+        .block_on(
+            client
+                .listing()
+                .publish_listing_via_radrootsd_with_options(listing, &options),
+        )
+        .map_err(map_sdk_listing_publish_error)
+}
+
+fn map_sdk_listing_publish_error(error: SdkPublishError) -> RuntimeError {
+    let message = format!("radrootsd listing publish failed: {error}");
+    match error {
+        SdkPublishError::Config(_)
+        | SdkPublishError::Encode(_)
+        | SdkPublishError::UnsupportedTransport { .. }
+        | SdkPublishError::UnsupportedSignerMode { .. } => RuntimeError::Config(message),
+        SdkPublishError::Relay(_)
+        | SdkPublishError::RelayNotAcknowledged { .. }
+        | SdkPublishError::Radrootsd(_) => RuntimeError::Network(message),
+    }
+}
+
+fn resolve_radrootsd_signer_session_id(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+) -> Option<String> {
+    args.signer_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            config
+                .capability_binding(SIGNER_REMOTE_NIP46_CAPABILITY)
+                .and_then(|binding| binding.signer_session_ref.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+}
+
+fn radrootsd_mutation_view(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+    canonical: &CanonicalListingDraft,
+    listing_addr: String,
+    mut event: ListingMutationEventView,
+    requested_session_id: String,
+    receipt: SdkPublishReceipt,
+) -> Result<ListingMutationView, RuntimeError> {
+    let SdkPublishReceipt {
+        event_kind,
+        event_id,
+        transport_receipt,
+        ..
+    } = receipt;
+    let SdkTransportReceipt::Radrootsd(radrootsd) = transport_receipt else {
+        return Err(RuntimeError::Config(
+            "radrootsd listing publish returned a non-radrootsd transport receipt".to_owned(),
+        ));
+    };
+    if let Some(event_id) = event_id.as_ref() {
+        event.event_id = Some(event_id.clone());
+    }
+    let event_addr = radrootsd
+        .event_addr
+        .clone()
+        .unwrap_or_else(|| listing_addr.clone());
+    let job_status = radrootsd.status.clone();
+    let state = match operation {
+        ListingMutationOperation::Archive => "archived",
+        ListingMutationOperation::Publish | ListingMutationOperation::Update => "published",
+    }
+    .to_owned();
+    let job = radrootsd_job_view(args, &requested_session_id, &radrootsd, job_status.clone());
+
+    Ok(ListingMutationView {
+        state,
+        operation: operation.as_str().to_owned(),
+        source: listing_write_source(config).to_owned(),
+        file: args.file.display().to_string(),
+        listing_id: canonical.listing_id.clone(),
+        listing_addr: listing_addr.clone(),
+        seller_pubkey: canonical.seller_pubkey.clone(),
+        event_kind: event_kind.unwrap_or(KIND_LISTING),
+        dry_run: false,
+        deduplicated: radrootsd.deduplicated,
+        target_relays: Vec::new(),
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        job_id: radrootsd.job_id.clone(),
+        job_status,
+        signer_mode: radrootsd.signer_mode.clone(),
+        event_id,
+        event_addr: Some(event_addr),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_session_id: radrootsd.signer_session_id.clone(),
+        requested_signer_session_id: Some(requested_session_id),
+        reason: None,
+        job: Some(job),
+        event: args.print_event.then_some(event),
+        actions: Vec::new(),
+    })
+}
+
+fn radrootsd_job_view(
+    args: &ListingMutationArgs,
+    requested_session_id: &str,
+    receipt: &SdkRadrootsdPublishReceipt,
+    state: Option<String>,
+) -> ListingMutationJobView {
+    ListingMutationJobView {
+        rpc_method: RADROOTSD_BRIDGE_LISTING_PUBLISH_METHOD.to_owned(),
+        state: state.unwrap_or_else(|| "accepted".to_owned()),
+        job_id: receipt.job_id.clone(),
+        idempotency_key: args.idempotency_key.clone(),
+        requested_signer_session_id: Some(requested_session_id.to_owned()),
+        signer_mode: receipt.signer_mode.clone(),
+        signer_session_id: receipt.signer_session_id.clone(),
+        relay_count: receipt.relay_count,
+        acknowledged_relay_count: receipt.acknowledged_relay_count,
+    }
 }
 
 fn listing_write_source(config: &RuntimeConfig) -> &'static str {
@@ -1518,16 +1736,18 @@ fn direct_relay_unavailable_view(
     }
 }
 
-fn radrootsd_unavailable_view(
+fn radrootsd_preflight_view(
     config: &RuntimeConfig,
     args: &ListingMutationArgs,
     operation: ListingMutationOperation,
     canonical: &CanonicalListingDraft,
     listing_addr: String,
     event_preview: ListingMutationEventView,
+    state: &str,
+    reason: impl Into<String>,
 ) -> ListingMutationView {
     ListingMutationView {
-        state: "unavailable".to_owned(),
+        state: state.to_owned(),
         operation: operation.as_str().to_owned(),
         source: listing_write_source(config).to_owned(),
         file: args.file.display().to_string(),
@@ -1543,13 +1763,13 @@ fn radrootsd_unavailable_view(
         failed_relays: Vec::new(),
         job_id: None,
         job_status: None,
-        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        signer_mode: Some("nip46".to_owned()),
         event_id: None,
         event_addr: Some(listing_addr),
         idempotency_key: args.idempotency_key.clone(),
         signer_session_id: None,
         requested_signer_session_id: args.signer_session_id.clone(),
-        reason: Some(RADROOTSD_LISTING_UNAVAILABLE_REASON.to_owned()),
+        reason: Some(reason.into()),
         job: None,
         event: args.print_event.then_some(event_preview),
         actions: Vec::new(),

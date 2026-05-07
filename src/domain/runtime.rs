@@ -2635,6 +2635,10 @@ pub struct ListingMutationJobView {
     pub signer_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acknowledged_relay_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]

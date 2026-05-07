@@ -1,9 +1,15 @@
 mod support;
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use serde_json::Value;
+use serde_json::json;
 
 use support::{
     RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
@@ -15,6 +21,114 @@ use support::{
 
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
+
+struct JsonRpcRequest {
+    headers: String,
+    body: Value,
+}
+
+struct OneShotJsonRpcServer {
+    endpoint: String,
+    requests: Receiver<JsonRpcRequest>,
+    handle: JoinHandle<()>,
+}
+
+impl OneShotJsonRpcServer {
+    fn listing_publish() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake radrootsd");
+        let endpoint = format!(
+            "http://{}/jsonrpc",
+            listener.local_addr().expect("fake radrootsd addr")
+        );
+        let (tx, requests) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept fake radrootsd request");
+            let request = read_jsonrpc_request(&mut stream);
+            tx.send(request).expect("send fake radrootsd request");
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": "radroots-sdk-listing-publish",
+                "result": {
+                    "deduplicated": false,
+                    "job": {
+                        "job_id": "job_listing_publish_test",
+                        "command": "bridge.listing.publish",
+                        "status": "published",
+                        "terminal": true,
+                        "recovered_after_restart": false,
+                        "signer_mode": "nip46",
+                        "signer_session_id": "session_test",
+                        "event_kind": 30402,
+                        "event_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                        "event_addr": "30402:daemon_test:radrootsd-router",
+                        "relay_count": 2,
+                        "acknowledged_relay_count": 1
+                    }
+                }
+            })
+            .to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            )
+            .expect("write fake radrootsd response");
+        });
+        Self {
+            endpoint,
+            requests,
+            handle,
+        }
+    }
+
+    fn take_request(self) -> JsonRpcRequest {
+        let request = self
+            .requests
+            .recv_timeout(Duration::from_secs(5))
+            .expect("fake radrootsd request");
+        self.handle.join().expect("fake radrootsd join");
+        request
+    }
+}
+
+fn read_jsonrpc_request(stream: &mut TcpStream) -> JsonRpcRequest {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let count = stream.read(&mut buffer).expect("read fake radrootsd");
+        assert!(count > 0, "fake radrootsd request ended before headers");
+        bytes.extend_from_slice(&buffer[..count]);
+        if let Some(header_end) = find_header_end(&bytes) {
+            let headers = String::from_utf8_lossy(&bytes[..header_end]).to_string();
+            let content_length = content_length(&headers);
+            let body_start = header_end + 4;
+            while bytes.len() < body_start + content_length {
+                let count = stream.read(&mut buffer).expect("read fake radrootsd body");
+                assert!(count > 0, "fake radrootsd request ended before body");
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            let body = serde_json::from_slice(&bytes[body_start..body_start + content_length])
+                .expect("fake radrootsd json body");
+            return JsonRpcRequest { headers, body };
+        }
+    }
+}
+
+fn find_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn content_length(headers: &str) -> usize {
+    headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().expect("content length"))
+        })
+        .expect("content-length header")
+}
 
 #[test]
 fn root_help_exposes_only_target_namespaces() {
@@ -329,31 +443,74 @@ fn radrootsd_listing_publish_reaches_listing_router_without_relay_config() {
             .as_str()
             .expect("farm d tag"),
     );
+    sandbox.write_app_config(
+        r#"[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "explicit_endpoint"
+target = "http://myc.invalid"
+signer_session_ref = "session_test"
+"#,
+    );
+    let server = OneShotJsonRpcServer::listing_publish();
 
-    let (output, value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "--publish-mode",
-        "radrootsd",
-        "--approval-token",
-        "approve",
-        "listing",
-        "publish",
-        listing_file.to_string_lossy().as_ref(),
-    ]);
+    let output = sandbox
+        .command()
+        .env("RADROOTS_RPC_URL", &server.endpoint)
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .args([
+            "--format",
+            "json",
+            "--publish-mode",
+            "radrootsd",
+            "--approval-token",
+            "approve",
+            "--idempotency-key",
+            "idem_listing",
+            "listing",
+            "publish",
+            listing_file.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .expect("run radrootsd listing publish");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+    let request = server.take_request();
 
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
+    assert!(output.status.success());
     assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "provider_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "provider");
-    assert_contains(&value["errors"][0]["message"], "radrootsd listing publish");
+    assert_eq!(
+        value["result"]["source"],
+        "radrootsd publish transport · signer session"
+    );
+    assert_eq!(value["result"]["job_id"], "job_listing_publish_test");
+    assert_eq!(value["result"]["job_status"], "published");
+    assert_eq!(value["result"]["event_id"], "e".repeat(64));
+    assert_eq!(
+        value["result"]["event_addr"],
+        "30402:daemon_test:radrootsd-router"
+    );
+    assert_eq!(value["result"]["signer_mode"], "nip46");
+    assert_eq!(value["result"]["signer_session_id"], "session_test");
+    assert_eq!(
+        value["result"]["requested_signer_session_id"],
+        "session_test"
+    );
+    assert_eq!(value["result"]["idempotency_key"], "idem_listing");
+    assert_eq!(
+        value["result"]["job"]["rpc_method"],
+        "bridge.listing.publish"
+    );
+    assert_eq!(value["result"]["job"]["relay_count"], 2);
+    assert_eq!(value["result"]["job"]["acknowledged_relay_count"], 1);
+    assert_eq!(request.body["method"], "bridge.listing.publish");
+    assert_eq!(request.body["params"]["kind"], 30402);
+    assert_eq!(request.body["params"]["signer_session_id"], "session_test");
+    assert_eq!(request.body["params"]["idempotency_key"], "idem_listing");
     assert!(
-        !value["errors"][0]["message"]
-            .as_str()
-            .expect("error message")
-            .contains("configured relay")
+        request
+            .headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer bridge_test")
     );
 }
 
@@ -395,11 +552,11 @@ fn radrootsd_listing_publish_bypasses_relay_signer_preflight() {
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.status.code(), Some(7));
     assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["errors"][0]["code"], "provider_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "provider");
-    assert_contains(&value["errors"][0]["message"], "radrootsd listing publish");
+    assert_eq!(value["errors"][0]["code"], "signer_unconfigured");
+    assert_eq!(value["errors"][0]["detail"]["class"], "signer");
+    assert_contains(&value["errors"][0]["message"], "signer_session_id");
     assert!(
         !value["errors"][0]["message"]
             .as_str()
@@ -445,12 +602,12 @@ fn radrootsd_publish_mode_routes_listing_update() {
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.status.code(), Some(7));
     assert_eq!(value["operation_id"], "listing.update");
     assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "provider_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "provider");
-    assert_contains(&value["errors"][0]["message"], "radrootsd listing publish");
+    assert_eq!(value["errors"][0]["code"], "signer_unconfigured");
+    assert_eq!(value["errors"][0]["detail"]["class"], "signer");
+    assert_contains(&value["errors"][0]["message"], "signer_session_id");
 }
 
 #[test]
