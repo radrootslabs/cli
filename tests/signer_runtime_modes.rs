@@ -1003,6 +1003,24 @@ fn local_seller_publish_commands_attempt_configured_direct_relay() {
         "listing.publish",
         &["listing", "publish"],
     );
+    assert_eq!(
+        publish_value["errors"][0]["detail"]["target_relays"][0],
+        relay
+    );
+    assert_eq!(
+        publish_value["errors"][0]["detail"]["connected_relays"]
+            .as_array()
+            .expect("connected relays")
+            .len(),
+        0
+    );
+    assert_eq!(
+        publish_value["errors"][0]["detail"]["failed_relays"]
+            .as_array()
+            .expect("failed relays")
+            .len(),
+        1
+    );
 
     let (archive_output, archive_value) = sandbox.json_output(&[
         "--format",
@@ -1020,6 +1038,24 @@ fn local_seller_publish_commands_attempt_configured_direct_relay() {
         &archive_value,
         "listing.archive",
         &["listing", "archive"],
+    );
+    assert_eq!(
+        archive_value["errors"][0]["detail"]["target_relays"][0],
+        relay
+    );
+    assert_eq!(
+        archive_value["errors"][0]["detail"]["connected_relays"]
+            .as_array()
+            .expect("connected relays")
+            .len(),
+        0
+    );
+    assert_eq!(
+        archive_value["errors"][0]["detail"]["failed_relays"]
+            .as_array()
+            .expect("failed relays")
+            .len(),
+        1
     );
 
     seed_orderable_listing(&sandbox, LISTING_ADDR);

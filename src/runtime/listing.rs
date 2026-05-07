@@ -35,7 +35,8 @@ use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::{PublishMode, RuntimeConfig, SignerBackend};
 use crate::runtime::direct_relay::{
-    DirectRelayFailure, DirectRelayPublishReceipt, publish_parts_with_identity,
+    DirectRelayFailure, DirectRelayPublishError, DirectRelayPublishReceipt,
+    publish_parts_with_identity,
 };
 use crate::runtime::farm_config;
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
@@ -895,6 +896,7 @@ fn mutate(
             dry_run: true,
             deduplicated: false,
             target_relays: Vec::new(),
+            connected_relays: Vec::new(),
             acknowledged_relays: Vec::new(),
             failed_relays: Vec::new(),
             job_id: None,
@@ -987,8 +989,27 @@ fn mutate_via_direct_relay(
     };
 
     let receipt =
-        publish_parts_with_identity(&signing.identity, &config.relay.urls, event_draft.parts)
-            .map_err(|error| RuntimeError::Network(error.to_string()))?;
+        match publish_parts_with_identity(&signing.identity, &config.relay.urls, event_draft.parts)
+        {
+            Ok(receipt) => receipt,
+            Err(
+                error @ (DirectRelayPublishError::MissingRelays
+                | DirectRelayPublishError::RelayConfig { .. }
+                | DirectRelayPublishError::Connect { .. }
+                | DirectRelayPublishError::Publish { .. }),
+            ) => {
+                return Ok(direct_relay_error_view(
+                    config,
+                    args,
+                    operation,
+                    canonical,
+                    listing_addr,
+                    event_draft.event,
+                    error,
+                ));
+            }
+            Err(error) => return Err(RuntimeError::Network(error.to_string())),
+        };
 
     Ok(published_mutation_view(
         config,
@@ -1479,6 +1500,7 @@ fn direct_relay_unavailable_view(
         dry_run: false,
         deduplicated: false,
         target_relays: Vec::new(),
+        connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
         job_id: None,
@@ -1516,6 +1538,7 @@ fn radrootsd_unavailable_view(
         dry_run: false,
         deduplicated: false,
         target_relays: Vec::new(),
+        connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
         job_id: None,
@@ -1527,6 +1550,89 @@ fn radrootsd_unavailable_view(
         signer_session_id: None,
         requested_signer_session_id: args.signer_session_id.clone(),
         reason: Some(RADROOTSD_LISTING_UNAVAILABLE_REASON.to_owned()),
+        job: None,
+        event: args.print_event.then_some(event_preview),
+        actions: Vec::new(),
+    }
+}
+
+fn direct_relay_error_view(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+    canonical: &CanonicalListingDraft,
+    listing_addr: String,
+    event_preview: ListingMutationEventView,
+    error: DirectRelayPublishError,
+) -> ListingMutationView {
+    let (reason, target_relays, connected_relays, failed_relays) = match error {
+        DirectRelayPublishError::MissingRelays => (
+            "direct relay publish requires at least one configured relay".to_owned(),
+            config.relay.urls.clone(),
+            Vec::new(),
+            Vec::new(),
+        ),
+        DirectRelayPublishError::RelayConfig { relay, source } => (
+            format!("failed to configure relay `{relay}` for direct relay publish: {source}"),
+            config.relay.urls.clone(),
+            Vec::new(),
+            vec![RelayFailureView {
+                relay,
+                reason: source.to_string(),
+            }],
+        ),
+        DirectRelayPublishError::Connect {
+            reason,
+            target_relays,
+            connected_relays,
+            failed_relays,
+        } => (
+            format!("direct relay connection failed: {reason}"),
+            target_relays,
+            connected_relays,
+            relay_failures(failed_relays),
+        ),
+        DirectRelayPublishError::Publish {
+            event_id,
+            reason,
+            target_relays,
+            connected_relays,
+            failed_relays,
+        } => (
+            format!("direct relay publish failed for event `{event_id}`: {reason}"),
+            target_relays,
+            connected_relays,
+            relay_failures(failed_relays),
+        ),
+        DirectRelayPublishError::Runtime(_)
+        | DirectRelayPublishError::Build(_)
+        | DirectRelayPublishError::Sign(_) => unreachable!(),
+    };
+
+    ListingMutationView {
+        state: "unavailable".to_owned(),
+        operation: operation.as_str().to_owned(),
+        source: listing_write_source(config).to_owned(),
+        file: args.file.display().to_string(),
+        listing_id: canonical.listing_id.clone(),
+        listing_addr: listing_addr.clone(),
+        seller_pubkey: canonical.seller_pubkey.clone(),
+        event_kind: KIND_LISTING,
+        dry_run: false,
+        deduplicated: false,
+        target_relays,
+        connected_relays,
+        acknowledged_relays: Vec::new(),
+        failed_relays,
+        job_id: None,
+        job_status: None,
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        event_id: None,
+        event_addr: Some(listing_addr),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_session_id: None,
+        requested_signer_session_id: args.signer_session_id.clone(),
+        reason: Some(reason),
         job: None,
         event: args.print_event.then_some(event_preview),
         actions: Vec::new(),
@@ -1586,6 +1692,7 @@ fn binding_error_view(
         dry_run: false,
         deduplicated: false,
         target_relays: Vec::new(),
+        connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
         job_id: None,
@@ -1617,6 +1724,7 @@ fn published_mutation_view(
         created_at,
         signature,
         target_relays,
+        connected_relays,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -1639,6 +1747,7 @@ fn published_mutation_view(
         dry_run: false,
         deduplicated: false,
         target_relays,
+        connected_relays,
         acknowledged_relays,
         failed_relays: relay_failures(failed_relays),
         job_id: None,

@@ -569,6 +569,7 @@ pub fn submit(
             dry_run: config.output.dry_run,
             deduplicated: false,
             target_relays: Vec::new(),
+            connected_relays: Vec::new(),
             acknowledged_relays: Vec::new(),
             failed_relays: Vec::new(),
             idempotency_key: args.idempotency_key.clone(),
@@ -604,6 +605,7 @@ pub fn submit(
                 dry_run: config.output.dry_run,
                 deduplicated: false,
                 target_relays: Vec::new(),
+                connected_relays: Vec::new(),
                 acknowledged_relays: Vec::new(),
                 failed_relays: Vec::new(),
                 idempotency_key: args.idempotency_key.clone(),
@@ -641,6 +643,7 @@ pub fn submit(
             dry_run: config.output.dry_run,
             deduplicated: false,
             target_relays: Vec::new(),
+            connected_relays: Vec::new(),
             acknowledged_relays: Vec::new(),
             failed_relays: Vec::new(),
             idempotency_key: args.idempotency_key.clone(),
@@ -7423,6 +7426,7 @@ fn published_order_revision_view(
         created_at: _,
         signature: _,
         target_relays,
+        connected_relays,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -7432,6 +7436,7 @@ fn published_order_revision_view(
     view.event_id = Some(event_id);
     view.event_kind = Some(event_kind);
     view.target_relays = target_relays;
+    view.connected_relays = connected_relays;
     view.acknowledged_relays = acknowledged_relays;
     view.failed_relays = relay_failures(failed_relays);
     view
@@ -7451,6 +7456,7 @@ fn published_order_revision_decision_view(
         created_at: _,
         signature: _,
         target_relays,
+        connected_relays: _,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -7576,6 +7582,7 @@ fn published_order_fulfillment_view(
         created_at: _,
         signature: _,
         target_relays,
+        connected_relays: _,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -7603,6 +7610,7 @@ fn published_order_cancellation_view(
         created_at: _,
         signature: _,
         target_relays,
+        connected_relays: _,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -7629,6 +7637,7 @@ fn published_order_receipt_view(
         created_at: _,
         signature: _,
         target_relays,
+        connected_relays: _,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -7663,6 +7672,7 @@ fn published_order_payment_view(
         created_at: _,
         signature: _,
         target_relays,
+        connected_relays: _,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -7690,6 +7700,7 @@ fn published_order_settlement_view(
         created_at: _,
         signature: _,
         target_relays,
+        connected_relays: _,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -8048,6 +8059,7 @@ fn published_order_decision_view(
         created_at: _,
         signature: _,
         target_relays,
+        connected_relays: _,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -9273,6 +9285,7 @@ fn order_submit_unconfigured_view(
         dry_run: config.output.dry_run,
         deduplicated: false,
         target_relays: Vec::new(),
+        connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
         idempotency_key: args.idempotency_key.clone(),
@@ -9309,6 +9322,7 @@ fn order_submit_invalid_quantity_view(
         dry_run: config.output.dry_run,
         deduplicated: false,
         target_relays: Vec::new(),
+        connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
         idempotency_key: args.idempotency_key.clone(),
@@ -9544,6 +9558,7 @@ fn order_submit_deduplicated_view(
         dry_run: config.output.dry_run,
         deduplicated: true,
         target_relays,
+        connected_relays: connected_relays.clone(),
         acknowledged_relays: connected_relays,
         failed_relays: relay_failures(failed_relays),
         idempotency_key: args.idempotency_key.clone(),
@@ -9581,6 +9596,7 @@ fn order_submit_dry_run_view(
         dry_run: true,
         deduplicated: false,
         target_relays: config.relay.urls.clone(),
+        connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
         idempotency_key: args.idempotency_key.clone(),
@@ -9624,6 +9640,7 @@ fn order_submit_invalid_existing_request_view(
         dry_run: config.output.dry_run,
         deduplicated: false,
         target_relays,
+        connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: relay_failures(failed_relays),
         idempotency_key: args.idempotency_key.clone(),
@@ -9703,6 +9720,7 @@ fn published_order_submit_view(
         created_at: _,
         signature: _,
         target_relays,
+        connected_relays,
         acknowledged_relays,
         failed_relays,
     } = receipt;
@@ -9723,6 +9741,7 @@ fn published_order_submit_view(
         dry_run: false,
         deduplicated: false,
         target_relays,
+        connected_relays,
         acknowledged_relays,
         failed_relays: relay_failures(failed_relays),
         idempotency_key: args.idempotency_key.clone(),
@@ -9766,6 +9785,7 @@ fn order_binding_error_view(
         dry_run: config.output.dry_run,
         deduplicated: false,
         target_relays: Vec::new(),
+        connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
         idempotency_key: args.idempotency_key.clone(),

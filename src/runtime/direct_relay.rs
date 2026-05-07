@@ -22,6 +22,7 @@ pub struct DirectRelayPublishReceipt {
     pub created_at: u32,
     pub signature: String,
     pub target_relays: Vec<String>,
+    pub connected_relays: Vec<String>,
     pub acknowledged_relays: Vec<String>,
     pub failed_relays: Vec<DirectRelayFailure>,
 }
@@ -50,10 +51,21 @@ pub enum DirectRelayPublishError {
         #[source]
         source: RadrootsNostrError,
     },
-    #[error("direct relay connection failed: {0}")]
-    Connect(String),
+    #[error("direct relay connection failed: {reason}")]
+    Connect {
+        reason: String,
+        target_relays: Vec<String>,
+        connected_relays: Vec<String>,
+        failed_relays: Vec<DirectRelayFailure>,
+    },
     #[error("direct relay publish failed for event `{event_id}`: {reason}")]
-    Publish { event_id: String, reason: String },
+    Publish {
+        event_id: String,
+        reason: String,
+        target_relays: Vec<String>,
+        connected_relays: Vec<String>,
+        failed_relays: Vec<DirectRelayFailure>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -195,10 +207,19 @@ async fn publish_parts_with_identity_async(
     }
 
     let connection_output = client.try_connect(RELAY_CONNECT_TIMEOUT).await;
+    let connected_relays = connection_output
+        .success
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let connection_failed_relays = relay_failures_from_output(&connection_output);
     if connection_output.success.is_empty() {
-        return Err(DirectRelayPublishError::Connect(summarize_failures(
-            &relay_failures_from_output(&connection_output),
-        )));
+        return Err(DirectRelayPublishError::Connect {
+            reason: summarize_failures(&connection_failed_relays),
+            target_relays: relay_urls.to_vec(),
+            connected_relays,
+            failed_relays: connection_failed_relays,
+        });
     }
 
     let publish_output =
@@ -208,12 +229,18 @@ async fn publish_parts_with_identity_async(
             .map_err(|source| DirectRelayPublishError::Publish {
                 event_id: event_id.clone(),
                 reason: source.to_string(),
+                target_relays: relay_urls.to_vec(),
+                connected_relays: connected_relays.clone(),
+                failed_relays: Vec::new(),
             })?;
     let failed_relays = relay_failures_from_output(&publish_output);
     if publish_output.success.is_empty() {
         return Err(DirectRelayPublishError::Publish {
             event_id: event_id.clone(),
             reason: summarize_failures(&failed_relays),
+            target_relays: relay_urls.to_vec(),
+            connected_relays,
+            failed_relays,
         });
     }
 
@@ -222,6 +249,7 @@ async fn publish_parts_with_identity_async(
         created_at,
         signature,
         target_relays: relay_urls.to_vec(),
+        connected_relays,
         acknowledged_relays: publish_output
             .success
             .iter()

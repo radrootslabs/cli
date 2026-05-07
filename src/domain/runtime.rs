@@ -835,11 +835,13 @@ pub struct FarmPublishComponentView {
     pub rpc_method: String,
     pub event_kind: u32,
     pub deduplicated: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub target_relays: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    pub connected_relays: Vec<String>,
+    #[serde(default)]
     pub acknowledged_relays: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub failed_relays: Vec<RelayFailureView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
@@ -1216,6 +1218,8 @@ pub struct OrderSubmitView {
     pub deduplicated: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connected_relays: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub acknowledged_relays: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2572,11 +2576,13 @@ pub struct ListingMutationView {
     pub dry_run: bool,
     #[serde(default)]
     pub deduplicated: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub target_relays: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    pub connected_relays: Vec<String>,
+    #[serde(default)]
     pub acknowledged_relays: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub failed_relays: Vec<RelayFailureView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,

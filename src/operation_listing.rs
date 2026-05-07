@@ -238,6 +238,18 @@ where
 {
     match view.disposition() {
         CommandDisposition::Success => serialized_operation_result::<R, _>(view),
+        CommandDisposition::ExternalUnavailable if listing_relay_unavailable(view) => {
+            Err(OperationAdapterError::network_unavailable_with_detail(
+                operation_id,
+                view.reason.clone().unwrap_or_else(|| {
+                    format!(
+                        "listing {} finished with state `{}`",
+                        view.operation, view.state
+                    )
+                }),
+                serde_json::to_value(view).unwrap_or(Value::Null),
+            ))
+        }
         disposition => Err(OperationAdapterError::from_command_disposition(
             operation_id,
             disposition,
@@ -249,6 +261,15 @@ where
             }),
         )),
     }
+}
+
+fn listing_relay_unavailable(view: &ListingMutationView) -> bool {
+    view.source == "direct Nostr relay publish · local key"
+        && (view.reason.as_deref().is_some_and(|reason| {
+            reason.contains("configured relay") || reason.contains("direct relay connection failed")
+        }) || !view.target_relays.is_empty()
+            || !view.connected_relays.is_empty()
+            || !view.failed_relays.is_empty())
 }
 
 fn map_runtime<T>(
