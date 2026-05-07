@@ -48,6 +48,7 @@ pub struct ConfigShowView {
     pub logging: LoggingRuntimeView,
     pub account: AccountRuntimeView,
     pub signer: SignerRuntimeView,
+    pub publish: PublishRuntimeView,
     pub relay: RelayRuntimeView,
     pub local: LocalRuntimeView,
     pub myc: MycRuntimeView,
@@ -295,6 +296,36 @@ pub struct RelayRuntimeView {
     pub urls: Vec<String>,
     pub publish_policy: String,
     pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublishRuntimeView {
+    pub mode: String,
+    pub source: String,
+    pub transport_family: String,
+    pub state: String,
+    pub executable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub signed_write_required: bool,
+    pub relay: PublishRelayRuntimeView,
+    pub provider: PublishProviderRuntimeView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublishRelayRuntimeView {
+    pub ready: bool,
+    pub count: usize,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublishProviderRuntimeView {
+    pub provider_runtime_id: String,
+    pub state: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -195,6 +195,13 @@ impl PublishMode {
             Self::Radrootsd => "radrootsd",
         }
     }
+
+    pub fn transport_family(self) -> &'static str {
+        match self {
+            Self::NostrRelay => "nostr_relay",
+            Self::Radrootsd => "radrootsd",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,6 +211,18 @@ pub enum PublishModeSource {
     UserConfig,
     WorkspaceConfig,
     Defaults,
+}
+
+impl PublishModeSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Flags => "cli flags · local first",
+            Self::Environment => "environment · local first",
+            Self::UserConfig => "user config · local first",
+            Self::WorkspaceConfig => "workspace config · local first",
+            Self::Defaults => "defaults · local first",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

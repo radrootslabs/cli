@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::domain::runtime::{CommandDisposition, LocalBackupView};
+use crate::domain::runtime::{
+    CommandDisposition, LocalBackupView, PublishProviderRuntimeView, PublishRelayRuntimeView,
+    PublishRuntimeView,
+};
 use crate::operation_adapter::{
     AccountAttachSecretRequest, AccountAttachSecretResult, AccountCreateRequest,
     AccountCreateResult, AccountGetRequest, AccountGetResult, AccountImportRequest,
@@ -26,7 +29,7 @@ use crate::runtime::accounts::{
     resolve_account_resolution, resolve_account_selector, secret_backend_status, select_account,
     snapshot, unresolved_account_reason,
 };
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{PublishMode, RuntimeConfig};
 use crate::runtime::logging::LoggingState;
 use crate::runtime_args::LocalExportFormatArg;
 
@@ -97,10 +100,12 @@ impl OperationService<HealthStatusGetRequest> for CoreOperationService<'_> {
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let store = map_runtime(crate::runtime::local::status(self.config))?;
         let account = map_runtime(resolve_account_resolution(self.config))?;
+        let publish = publish_runtime_view(self.config, false);
         json_operation_result::<HealthStatusGetResult>(json!({
             "state": if store.state == "ready" { "ready" } else { "needs_attention" },
             "store": store,
             "account_resolution": account_resolution_view(&account),
+            "publish": publish,
             "logging": {
                 "initialized": self.logging.initialized,
                 "current_file": self.logging.current_file.as_ref().map(|path| path.display().to_string()),
@@ -123,6 +128,7 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
         } else {
             Some(map_runtime(unresolved_account_reason(self.config))?)
         };
+        let publish = publish_runtime_view(self.config, false);
         json_operation_result::<HealthCheckRunResult>(json!({
             "state": if store.state == "ready" && account.resolved_account.is_some() { "ready" } else { "needs_attention" },
             "checks": {
@@ -138,6 +144,12 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
                     "state": if account.resolved_account.is_some() { "ready" } else { "unconfigured" },
                     "reason": account_reason,
                 },
+                "publish": {
+                    "state": publish.state,
+                    "mode": publish.mode,
+                    "executable": publish.executable,
+                    "reason": publish.reason,
+                },
             },
         }))
     }
@@ -150,6 +162,7 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
         &self,
         _request: OperationRequest<ConfigGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let write_plane = crate::runtime::provider::resolve_write_plane_provider(self.config);
         json_operation_result::<ConfigGetResult>(json!({
             "output": {
                 "format": self.config.output.format.as_str(),
@@ -174,10 +187,37 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
                 "store_path": self.config.account.store_path.display().to_string(),
                 "secrets_dir": self.config.account.secrets_dir.display().to_string(),
             },
+            "signer": {
+                "mode": self.config.signer.backend.as_str(),
+            },
+            "publish": publish_runtime_view(self.config, false),
             "relay": {
                 "count": self.config.relay.urls.len(),
                 "urls": self.config.relay.urls,
                 "source": self.config.relay.source.as_str(),
+            },
+            "myc": {
+                "executable": self.config.myc.executable.display().to_string(),
+                "status_timeout_ms": self.config.myc.status_timeout_ms,
+            },
+            "hyf": {
+                "enabled": self.config.hyf.enabled,
+                "executable": self.config.hyf.executable.display().to_string(),
+            },
+            "rpc": {
+                "url": self.config.rpc.url,
+                "bridge_auth_configured": self.config.rpc.bridge_bearer_token.is_some(),
+            },
+            "write_plane": {
+                "provider_runtime_id": write_plane.provider_runtime_id,
+                "binding_model": write_plane.binding_model,
+                "state": write_plane.state,
+                "provenance": write_plane.provenance,
+                "source": write_plane.source,
+                "target_kind": write_plane.target_kind,
+                "target": write_plane.target,
+                "detail": write_plane.detail,
+                "bridge_auth_configured": self.config.rpc.bridge_bearer_token.is_some(),
             },
             "local": {
                 "root": self.config.local.root.display().to_string(),
@@ -642,6 +682,70 @@ fn selected_config(config: &RuntimeConfig, selector: String) -> RuntimeConfig {
     let mut config = config.clone();
     config.account.selector = Some(selector);
     config
+}
+
+fn publish_runtime_view(config: &RuntimeConfig, signed_write_required: bool) -> PublishRuntimeView {
+    let relay_ready = !config.relay.urls.is_empty();
+    let source = config.publish.source.as_str().to_owned();
+    let relay = PublishRelayRuntimeView {
+        ready: relay_ready,
+        count: config.relay.urls.len(),
+        source: config.relay.source.as_str().to_owned(),
+    };
+
+    match config.publish.mode {
+        PublishMode::NostrRelay => {
+            let reason = (!relay_ready).then(|| {
+                "nostr_relay publish mode requires at least one configured relay for writes"
+                    .to_owned()
+            });
+            PublishRuntimeView {
+                mode: config.publish.mode.as_str().to_owned(),
+                source,
+                transport_family: config.publish.mode.transport_family().to_owned(),
+                state: if relay_ready {
+                    "ready".to_owned()
+                } else {
+                    "unconfigured".to_owned()
+                },
+                executable: relay_ready,
+                reason: reason.clone(),
+                signed_write_required,
+                relay,
+                provider: PublishProviderRuntimeView {
+                    provider_runtime_id: "nostr_relay".to_owned(),
+                    state: if relay_ready {
+                        "ready".to_owned()
+                    } else {
+                        "unconfigured".to_owned()
+                    },
+                    source: config.relay.source.as_str().to_owned(),
+                    reason,
+                },
+            }
+        }
+        PublishMode::Radrootsd => PublishRuntimeView {
+            mode: config.publish.mode.as_str().to_owned(),
+            source,
+            transport_family: config.publish.mode.transport_family().to_owned(),
+            state: "unavailable".to_owned(),
+            executable: false,
+            reason: Some(
+                "radrootsd publish mode is configured but the radrootsd publish transport is not implemented"
+                    .to_owned(),
+            ),
+            signed_write_required,
+            relay,
+            provider: PublishProviderRuntimeView {
+                provider_runtime_id: "radrootsd".to_owned(),
+                state: "unavailable".to_owned(),
+                source: "publish mode · local first".to_owned(),
+                reason: Some(
+                    "radrootsd publish transport is reserved for a future implementation".to_owned(),
+                ),
+            },
+        },
+    }
 }
 
 fn required_string<P>(

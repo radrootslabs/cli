@@ -10,10 +10,11 @@ use crate::runtime::hyf;
 
 const WRITE_PLANE_UNAVAILABLE_DETAIL: &str = "legacy write-plane provider is unavailable; use seller publish commands with configured direct relays";
 
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderProvenance {
+    #[cfg(test)]
     ExplicitBinding,
+    #[cfg(test)]
     ManagedDefault,
     #[cfg(test)]
     DirectConfig,
@@ -22,11 +23,12 @@ pub enum ProviderProvenance {
     Unavailable,
 }
 
-#[cfg(test)]
 impl ProviderProvenance {
     pub fn as_str(self) -> &'static str {
         match self {
+            #[cfg(test)]
             Self::ExplicitBinding => "explicit_binding",
+            #[cfg(test)]
             Self::ManagedDefault => "managed_default",
             #[cfg(test)]
             Self::DirectConfig => "direct_config",
@@ -50,7 +52,6 @@ pub struct ResolvedProviderView {
     pub target: Option<String>,
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritePlaneProviderView {
     pub provider_runtime_id: String,
@@ -64,6 +65,7 @@ pub struct WritePlaneProviderView {
     pub bridge_auth_configured: bool,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedWritePlaneTarget {
     pub url: String,
@@ -86,12 +88,12 @@ pub struct HyfProviderView {
     pub deterministic_available: Option<bool>,
 }
 
-#[cfg(test)]
 pub fn resolve_write_plane_provider(config: &RuntimeConfig) -> WritePlaneProviderView {
     let _ = config;
     unavailable_write_plane_view()
 }
 
+#[cfg(test)]
 pub fn resolve_actor_write_plane_target(
     config: &RuntimeConfig,
 ) -> Result<ResolvedWritePlaneTarget, String> {
@@ -153,7 +155,6 @@ pub fn resolve_capability_providers(config: &RuntimeConfig) -> Vec<ResolvedProvi
     }]
 }
 
-#[cfg(test)]
 fn unavailable_write_plane_view() -> WritePlaneProviderView {
     WritePlaneProviderView {
         provider_runtime_id: "nostr_relay".to_owned(),

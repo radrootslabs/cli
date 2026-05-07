@@ -8,7 +8,7 @@ use serde_json::Value;
 use support::{
     RadrootsCliSandbox, assert_no_daemon_runtime_reference, assert_no_removed_command_reference,
     create_listing_draft, identity_public, make_listing_publishable, ndjson_from_stdout, radroots,
-    remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing,
+    remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing, toml_string,
     write_public_identity_profile,
 };
 
@@ -79,6 +79,64 @@ fn removed_global_flags_are_rejected_publicly() {
         let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
         assert!(stderr.contains("unexpected argument") || stderr.contains("unrecognized"));
     }
+}
+
+#[test]
+fn config_get_exposes_resolved_publish_state() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
+
+    let value = sandbox.json_success(&["--format", "json", "config", "get"]);
+
+    assert_eq!(value["operation_id"], "config.get");
+    assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
+    assert_eq!(
+        value["result"]["publish"]["source"],
+        "user config · local first"
+    );
+    assert_eq!(value["result"]["publish"]["transport_family"], "radrootsd");
+    assert_eq!(value["result"]["publish"]["state"], "unavailable");
+    assert_eq!(value["result"]["publish"]["executable"], false);
+    assert_eq!(
+        value["result"]["publish"]["provider"]["provider_runtime_id"],
+        "radrootsd"
+    );
+    assert_eq!(value["result"]["write_plane"]["state"], "unavailable");
+}
+
+#[test]
+fn health_surfaces_publish_state_under_deferred_signer_mode() {
+    let sandbox = RadrootsCliSandbox::new();
+    let missing_myc = sandbox.root().join("bin/missing-myc");
+    sandbox.write_app_config(&format!(
+        "[publish]\nmode = \"radrootsd\"\n\n[signer]\nmode = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
+        toml_string(missing_myc.display().to_string().as_str())
+    ));
+
+    let value = sandbox.json_success(&["--format", "json", "health", "status", "get"]);
+
+    assert_eq!(value["operation_id"], "health.status.get");
+    assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
+    assert_eq!(value["result"]["publish"]["executable"], false);
+    assert_eq!(
+        value["result"]["publish"]["provider"]["state"],
+        "unavailable"
+    );
+    assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
+}
+
+#[test]
+fn health_check_exposes_publish_readiness() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
+
+    let value = sandbox.json_success(&["--format", "json", "health", "check", "run"]);
+
+    assert_eq!(value["operation_id"], "health.check.run");
+    assert_eq!(value["result"]["checks"]["publish"]["mode"], "radrootsd");
+    assert_eq!(value["result"]["checks"]["publish"]["state"], "unavailable");
+    assert_eq!(value["result"]["checks"]["publish"]["executable"], false);
+    assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
 #[test]
