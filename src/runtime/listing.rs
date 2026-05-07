@@ -1194,10 +1194,24 @@ fn radrootsd_mutation_view(
     if let Some(event_id) = event_id.as_ref() {
         event.event_id = Some(event_id.clone());
     }
+    let daemon_identity = radrootsd
+        .event_addr
+        .as_deref()
+        .and_then(daemon_listing_identity);
     let event_addr = radrootsd
         .event_addr
         .clone()
         .unwrap_or_else(|| listing_addr.clone());
+    event.event_addr = event_addr.clone();
+    let listing_id = daemon_identity
+        .as_ref()
+        .map(|identity| identity.listing_id.clone())
+        .unwrap_or_else(|| canonical.listing_id.clone());
+    let seller_pubkey = daemon_identity
+        .as_ref()
+        .map(|identity| identity.seller_pubkey.clone())
+        .unwrap_or_else(|| canonical.seller_pubkey.clone());
+    event.author = seller_pubkey.clone();
     let job_status = radrootsd.status.clone();
     let state = match operation {
         ListingMutationOperation::Archive => "archived",
@@ -1211,9 +1225,9 @@ fn radrootsd_mutation_view(
         operation: operation.as_str().to_owned(),
         source: listing_write_source(config).to_owned(),
         file: args.file.display().to_string(),
-        listing_id: canonical.listing_id.clone(),
-        listing_addr: listing_addr.clone(),
-        seller_pubkey: canonical.seller_pubkey.clone(),
+        listing_id,
+        listing_addr: event_addr.clone(),
+        seller_pubkey,
         event_kind: event_kind.unwrap_or(KIND_LISTING),
         dry_run: false,
         deduplicated: radrootsd.deduplicated,
@@ -1233,6 +1247,27 @@ fn radrootsd_mutation_view(
         job: Some(job),
         event: args.print_event.then_some(event),
         actions: Vec::new(),
+    })
+}
+
+#[derive(Debug, Clone)]
+struct DaemonListingIdentity {
+    seller_pubkey: String,
+    listing_id: String,
+}
+
+fn daemon_listing_identity(event_addr: &str) -> Option<DaemonListingIdentity> {
+    let (kind, rest) = event_addr.split_once(':')?;
+    if kind.parse::<u32>().ok()? != KIND_LISTING {
+        return None;
+    }
+    let (seller_pubkey, listing_id) = rest.split_once(':')?;
+    if seller_pubkey.trim().is_empty() || listing_id.trim().is_empty() || listing_id.contains(':') {
+        return None;
+    }
+    Some(DaemonListingIdentity {
+        seller_pubkey: seller_pubkey.to_owned(),
+        listing_id: listing_id.to_owned(),
     })
 }
 

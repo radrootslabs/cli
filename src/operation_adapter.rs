@@ -541,6 +541,27 @@ impl OperationAdapterError {
                     message,
                 }
             }
+            RuntimeError::Network(_) if looks_like_auth_failure(&lowered) => {
+                auth_runtime_failure(operation_id, message, &lowered)
+            }
+            RuntimeError::Network(_) if looks_like_signer_failure(&lowered) => {
+                Self::SignerUnavailable {
+                    operation_id: operation_id.to_owned(),
+                    message,
+                }
+            }
+            RuntimeError::Network(_) if looks_like_provider_failure(&lowered) => {
+                Self::ProviderUnavailable {
+                    operation_id: operation_id.to_owned(),
+                    message,
+                }
+            }
+            RuntimeError::Network(_) if looks_like_operation_failure(&lowered) => {
+                Self::OperationUnavailable {
+                    operation_id: operation_id.to_owned(),
+                    message,
+                }
+            }
             RuntimeError::Network(_) => Self::NetworkUnavailable {
                 operation_id: operation_id.to_owned(),
                 message,
@@ -768,6 +789,39 @@ fn account_runtime_failure(
     }
 }
 
+fn auth_runtime_failure(
+    operation_id: &str,
+    message: String,
+    lowered: &str,
+) -> OperationAdapterError {
+    let unauthorized = contains_any(
+        lowered,
+        &[
+            "unauthorized",
+            "forbidden",
+            "permission denied",
+            "invalid token",
+            "bearer token rejected",
+            "http 401",
+            "http 403",
+            "status 401",
+            "status 403",
+        ],
+    );
+    OperationAdapterError::DetailedFailure {
+        operation_id: operation_id.to_owned(),
+        code: if unauthorized {
+            "auth_unauthorized".to_owned()
+        } else {
+            "auth_unavailable".to_owned()
+        },
+        class: "auth".to_owned(),
+        message,
+        exit_code: CliExitCode::AuthorizationFailed,
+        detail_json: Value::Null.to_string(),
+    }
+}
+
 fn classify_runtime_failure(
     operation_id: &str,
     message: String,
@@ -858,6 +912,75 @@ fn classify_runtime_failure(
 
 fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
+}
+
+fn looks_like_auth_failure(value: &str) -> bool {
+    contains_any(
+        value,
+        &[
+            "authentication",
+            "bridge auth",
+            "authorization",
+            "authorize",
+            "unauthorized",
+            "forbidden",
+            "bearer token",
+            "invalid token",
+            "permission denied",
+            "status 401",
+            "status 403",
+            "http 401",
+            "http 403",
+        ],
+    )
+}
+
+fn looks_like_signer_failure(value: &str) -> bool {
+    contains_any(
+        value,
+        &[
+            "signer",
+            "sign_event",
+            "sign event",
+            "signer_session_id",
+            "signer session",
+            "nip46",
+            "nip-46",
+            "remote_nip46",
+        ],
+    )
+}
+
+fn looks_like_provider_failure(value: &str) -> bool {
+    contains_any(
+        value,
+        &[
+            "provider unavailable",
+            "provider unconfigured",
+            "provider runtime",
+            "provider failed",
+            "radrootsd unavailable",
+            "daemon unavailable",
+            "bridge provider",
+        ],
+    )
+}
+
+fn looks_like_operation_failure(value: &str) -> bool {
+    contains_any(
+        value,
+        &[
+            "method not found",
+            "unknown method",
+            "unsupported method",
+            "unsupported operation",
+            "operation unavailable",
+            "operation disabled",
+            "bridge disabled",
+            "bridge is disabled",
+            "bridge.listing.publish is disabled",
+        ],
+    )
 }
 
 fn looks_like_not_found(value: &str) -> bool {
