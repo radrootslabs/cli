@@ -454,7 +454,7 @@ fn validate_network_contract(
 
 fn requires_local_signer_mode_for_publish_mode(operation_id: &str, config: &RuntimeConfig) -> bool {
     if matches!(config.publish.mode, PublishMode::Radrootsd)
-        && is_listing_publish_mode_routed_operation(operation_id)
+        && is_publish_mode_routed_operation(operation_id)
     {
         return false;
     }
@@ -462,7 +462,7 @@ fn requires_local_signer_mode_for_publish_mode(operation_id: &str, config: &Runt
 }
 
 fn requires_pre_runtime_relay_target(operation_id: &str) -> bool {
-    !is_listing_publish_mode_routed_operation(operation_id)
+    !is_publish_mode_routed_operation(operation_id)
 }
 
 fn validate_publish_mode_contract(
@@ -476,7 +476,7 @@ fn validate_publish_mode_contract(
         return Err(OperationAdapterError::operation_unavailable_with_detail(
             spec.operation_id,
             format!(
-                "`{}` cannot run with publish mode `radrootsd`; radrootsd publish transport is not implemented",
+                "`{}` cannot run with publish mode `radrootsd`; radrootsd publish transport is only implemented for farm and listing publish operations",
                 spec.cli_path
             ),
             json!({
@@ -497,10 +497,10 @@ fn validate_publish_mode_contract(
     Ok(())
 }
 
-fn is_listing_publish_mode_routed_operation(operation_id: &str) -> bool {
+fn is_publish_mode_routed_operation(operation_id: &str) -> bool {
     matches!(
         operation_id,
-        "listing.publish" | "listing.update" | "listing.archive"
+        "farm.publish" | "listing.publish" | "listing.update" | "listing.archive"
     )
 }
 

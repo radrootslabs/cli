@@ -8,6 +8,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
 use serde_json::Value;
 use serde_json::json;
 
@@ -58,6 +59,53 @@ impl OneShotJsonRpcServer {
         }))
     }
 
+    fn farm_publish() -> Self {
+        Self::jsonrpc_sequence(vec![
+            json!({
+                "jsonrpc": "2.0",
+                "id": "radroots-sdk-profile-publish",
+                "result": {
+                    "deduplicated": false,
+                    "job": {
+                        "job_id": "job_profile_publish_test",
+                        "command": "bridge.profile.publish",
+                        "status": "published",
+                        "terminal": true,
+                        "recovered_after_restart": false,
+                        "signer_mode": "nip46",
+                        "signer_session_id": "session_test",
+                        "event_kind": 0,
+                        "event_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "event_addr": null,
+                        "relay_count": 2,
+                        "acknowledged_relay_count": 2
+                    }
+                }
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": "radroots-sdk-farm-publish",
+                "result": {
+                    "deduplicated": false,
+                    "job": {
+                        "job_id": "job_farm_publish_test",
+                        "command": "bridge.farm.publish",
+                        "status": "published",
+                        "terminal": true,
+                        "recovered_after_restart": false,
+                        "signer_mode": "nip46",
+                        "signer_session_id": "session_test",
+                        "event_kind": KIND_FARM,
+                        "event_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "event_addr": format!("{KIND_FARM}:daemon_test:radrootsd-farm"),
+                        "relay_count": 2,
+                        "acknowledged_relay_count": 1
+                    }
+                }
+            }),
+        ])
+    }
+
     fn listing_publish_error(message: &str) -> Self {
         Self::listing_publish_response(json!({
             "jsonrpc": "2.0",
@@ -70,6 +118,10 @@ impl OneShotJsonRpcServer {
     }
 
     fn listing_publish_response(response: Value) -> Self {
+        Self::jsonrpc_sequence(vec![response])
+    }
+
+    fn jsonrpc_sequence(responses: Vec<Value>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake radrootsd");
         let endpoint = format!(
             "http://{}/jsonrpc",
@@ -77,17 +129,19 @@ impl OneShotJsonRpcServer {
         );
         let (tx, requests) = mpsc::channel();
         let handle = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept fake radrootsd request");
-            let request = read_jsonrpc_request(&mut stream);
-            tx.send(request).expect("send fake radrootsd request");
-            let response = response.to_string();
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                response.len(),
-                response
-            )
-            .expect("write fake radrootsd response");
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept fake radrootsd request");
+                let request = read_jsonrpc_request(&mut stream);
+                tx.send(request).expect("send fake radrootsd request");
+                let response = response.to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                )
+                .expect("write fake radrootsd response");
+            }
         });
         Self {
             endpoint,
@@ -97,10 +151,20 @@ impl OneShotJsonRpcServer {
     }
 
     fn take_request(self) -> JsonRpcRequest {
-        let request = self
-            .requests
-            .recv_timeout(Duration::from_secs(5))
-            .expect("fake radrootsd request");
+        self.take_requests(1)
+            .into_iter()
+            .next()
+            .expect("one fake radrootsd request")
+    }
+
+    fn take_requests(self, count: usize) -> Vec<JsonRpcRequest> {
+        let request = (0..count)
+            .map(|_| {
+                self.requests
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("fake radrootsd request")
+            })
+            .collect::<Vec<_>>();
         self.handle.join().expect("fake radrootsd join");
         request
     }
@@ -265,7 +329,7 @@ signer_session_ref = "session_ready"
     assert_eq!(value["result"]["publish"]["executable"], true);
     assert_contains(
         &value["result"]["publish"]["reason"],
-        "live daemon readiness is verified when listing publish runs",
+        "live bridge readiness is verified when publish runs",
     );
     assert_eq!(value["result"]["publish"]["provider"]["state"], "ready");
     assert_eq!(value["result"]["rpc"]["bridge_auth_configured"], true);
@@ -475,6 +539,72 @@ fn health_check_marks_relay_publish_ready_with_secret_backed_local_account() {
 }
 
 #[test]
+fn farm_readiness_check_reports_mode_specific_publish_gates() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Ready Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+
+    let (_, relay_value) = sandbox.json_output(&["--format", "json", "farm", "readiness", "check"]);
+    let relay_detail = if relay_value["result"].is_null() {
+        &relay_value["errors"][0]["detail"]
+    } else {
+        &relay_value["result"]
+    };
+    assert_eq!(relay_detail["publish_mode"], "nostr_relay");
+    assert_eq!(relay_detail["publish_state"], "unconfigured");
+    assert_eq!(relay_detail["publish_executable"], false);
+    assert_eq!(relay_detail["missing"][0], "Configured relay");
+
+    sandbox.write_app_config(
+        r#"[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "explicit_endpoint"
+target = "http://myc.invalid"
+signer_session_ref = "session_test"
+"#,
+    );
+    let output = sandbox
+        .command()
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .args([
+            "--format",
+            "json",
+            "--publish-mode",
+            "radrootsd",
+            "farm",
+            "readiness",
+            "check",
+        ])
+        .output()
+        .expect("run radrootsd farm readiness");
+    let radrootsd_value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+
+    assert!(output.status.success());
+    assert_eq!(radrootsd_value["operation_id"], "farm.readiness.check");
+    assert_eq!(radrootsd_value["result"]["publish_mode"], "radrootsd");
+    assert_eq!(radrootsd_value["result"]["publish_state"], "ready");
+    assert_eq!(radrootsd_value["result"]["publish_executable"], true);
+    assert_eq!(
+        radrootsd_value["result"]["actions"][0],
+        "radroots farm publish"
+    );
+}
+
+#[test]
 fn radrootsd_listing_publish_reaches_listing_router_without_relay_config() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -573,6 +703,134 @@ signer_session_ref = "session_test"
             .headers
             .to_ascii_lowercase()
             .contains("authorization: bearer bridge_test")
+    );
+}
+
+#[test]
+fn radrootsd_farm_publish_submits_profile_and_farm_without_relay_config() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Router Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_d_tag = farm["result"]["config"]["farm_d_tag"]
+        .as_str()
+        .expect("farm d tag")
+        .to_owned();
+    sandbox.write_app_config(
+        r#"[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "explicit_endpoint"
+target = "http://myc.invalid"
+signer_session_ref = "session_test"
+"#,
+    );
+    let server = OneShotJsonRpcServer::farm_publish();
+
+    let output = sandbox
+        .command()
+        .env("RADROOTS_RPC_URL", &server.endpoint)
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .args([
+            "--format",
+            "json",
+            "--publish-mode",
+            "radrootsd",
+            "--approval-token",
+            "approve",
+            "--idempotency-key",
+            "idem_farm",
+            "farm",
+            "publish",
+        ])
+        .output()
+        .expect("run radrootsd farm publish");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+    let requests = server.take_requests(2);
+    let profile_request = &requests[0];
+    let farm_request = &requests[1];
+
+    assert!(output.status.success());
+    assert_eq!(value["operation_id"], "farm.publish");
+    assert_eq!(value["result"]["state"], "published");
+    assert_eq!(
+        value["result"]["source"],
+        "radrootsd publish transport · signer session"
+    );
+    assert_eq!(
+        value["result"]["requested_signer_session_id"],
+        "session_test"
+    );
+    assert_eq!(
+        value["result"]["profile"]["job_id"],
+        "job_profile_publish_test"
+    );
+    assert_eq!(value["result"]["farm"]["job_id"], "job_farm_publish_test");
+    assert_eq!(value["result"]["profile"]["event_kind"], KIND_PROFILE);
+    assert_eq!(value["result"]["farm"]["event_kind"], KIND_FARM);
+    assert_eq!(value["result"]["profile"]["event_id"], "a".repeat(64));
+    assert_eq!(value["result"]["farm"]["event_id"], "b".repeat(64));
+    assert_eq!(
+        value["result"]["profile"]["rpc_method"],
+        "bridge.profile.publish"
+    );
+    assert_eq!(value["result"]["farm"]["rpc_method"], "bridge.farm.publish");
+    assert_eq!(profile_request.body["method"], "bridge.profile.publish");
+    assert_eq!(farm_request.body["method"], "bridge.farm.publish");
+    assert_eq!(profile_request.body["params"]["profile_type"], "farm");
+    assert_eq!(
+        profile_request.body["params"]["signer_session_id"],
+        "session_test"
+    );
+    assert_eq!(
+        farm_request.body["params"]["signer_session_id"],
+        "session_test"
+    );
+    assert_eq!(
+        profile_request.body["params"]["idempotency_key"],
+        "idem_farm:profile"
+    );
+    assert_eq!(
+        farm_request.body["params"]["idempotency_key"],
+        "idem_farm:farm"
+    );
+    assert_eq!(farm_request.body["params"]["kind"], KIND_FARM);
+    assert_eq!(farm_request.body["params"]["farm"]["d_tag"], farm_d_tag);
+    assert!(
+        profile_request
+            .headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer bridge_test")
+    );
+
+    let persisted = sandbox.json_success(&["--format", "json", "farm", "get"]);
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["profile_state"],
+        "published"
+    );
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["farm_state"],
+        "published"
+    );
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["profile_event_id"],
+        "a".repeat(64)
+    );
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["farm_event_id"],
+        "b".repeat(64)
     );
 }
 

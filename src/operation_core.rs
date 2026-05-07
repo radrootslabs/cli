@@ -808,7 +808,7 @@ fn radrootsd_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, O
             "unconfigured",
             false,
             Some(
-                "radrootsd listing publish requires bridge bearer token configuration from RADROOTS_RPC_BEARER_TOKEN"
+                "radrootsd publish requires bridge bearer token configuration from RADROOTS_RPC_BEARER_TOKEN"
                     .to_owned(),
             ),
         );
@@ -819,7 +819,7 @@ fn radrootsd_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, O
             "unconfigured",
             false,
             Some(
-                "radrootsd listing publish requires a signer.remote_nip46 capability binding with signer_session_ref for config and health readiness"
+                "radrootsd publish requires a signer.remote_nip46 capability binding with signer_session_ref for config and health readiness"
                     .to_owned(),
             ),
         );
@@ -829,7 +829,7 @@ fn radrootsd_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, O
         "ready",
         true,
         Some(
-            "radrootsd bridge endpoint, bridge auth, and signer-session binding are configured; live daemon readiness is verified when listing publish runs"
+            "radrootsd bridge endpoint, bridge auth, and signer-session binding are configured; live bridge readiness is verified when publish runs"
                 .to_owned(),
         ),
     )

@@ -9,15 +9,24 @@ use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::farm::encode::to_wire_parts_with_kind;
 use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
 use radroots_events_codec::wire::WireEventParts;
+use radroots_sdk::{
+    RadrootsSdkClient, RadrootsSdkConfig, RadrootsdAuth, SdkEnvironment, SdkPublishError,
+    SdkPublishReceipt, SdkRadrootsdFarmPublishOptions, SdkRadrootsdProfilePublishOptions,
+    SdkRadrootsdPublishReceipt, SdkRadrootsdSignerSessionRef, SdkTransportMode,
+    SdkTransportReceipt, SignerConfig as SdkSignerConfig,
+};
 
 use crate::domain::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
-    FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishView,
-    FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView, RelayFailureView,
+    FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishJobView,
+    FarmPublishView, FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
+    RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{self, AccountRecordView};
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{
+    PublishMode, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend,
+};
 use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayPublishError, DirectRelayPublishReceipt,
     publish_parts_with_identity,
@@ -32,7 +41,10 @@ use crate::runtime_args::{
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
-const FARM_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
+const RELAY_FARM_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
+const RADROOTSD_FARM_WRITE_SOURCE: &str = "radrootsd publish transport · signer session";
+const RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD: &str = "bridge.profile.publish";
+const RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD: &str = "bridge.farm.publish";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -50,7 +62,7 @@ pub fn init(config: &RuntimeConfig, args: &FarmCreateArgs) -> Result<FarmSetupVi
         &selected_account,
         &document,
         Some("The farm draft is local until you publish it.".to_owned()),
-        farm_setup_actions(&document),
+        farm_setup_actions(config, &document),
         config,
     )
 }
@@ -83,7 +95,7 @@ pub fn init_preflight(
             ),
         )),
         reason: Some("dry run requested; farm draft was not written".to_owned()),
-        actions: farm_setup_actions(&document),
+        actions: farm_setup_actions(config, &document),
     })
 }
 
@@ -124,7 +136,7 @@ pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView,
             account_pubkey,
         )),
         reason: None,
-        actions: vec!["radroots farm readiness check".to_owned()],
+        actions: farm_update_actions(config, &resolved.document),
     })
 }
 
@@ -167,7 +179,7 @@ pub fn set_preflight(
             account_pubkey,
         )),
         reason: Some("dry run requested; farm draft was not written".to_owned()),
-        actions: vec!["radroots farm readiness check".to_owned()],
+        actions: farm_update_actions(config, &resolved.document),
     })
 }
 
@@ -188,6 +200,10 @@ pub fn status(
             config_valid: false,
             account_state: "not_checked".to_owned(),
             listing_defaults_state: "missing".to_owned(),
+            publish_mode: config.publish.mode.as_str().to_owned(),
+            publish_state: "not_checked".to_owned(),
+            publish_executable: false,
+            publish_reason: None,
             config: None,
             missing: vec!["Farm draft".to_owned()],
             reason: Some(format!("no farm config found at {}", path.display())),
@@ -207,7 +223,12 @@ pub fn status(
     } else {
         "ready"
     };
-    let state = if account.is_some() && draft_missing.is_empty() {
+    let publish = account
+        .as_ref()
+        .filter(|_| draft_missing.is_empty())
+        .map(|account| farm_publish_readiness(config, account))
+        .unwrap_or_else(FarmPublishReadiness::not_checked);
+    let state = if account.is_some() && draft_missing.is_empty() && publish.executable {
         "ready"
     } else {
         "unconfigured"
@@ -220,13 +241,13 @@ pub fn status(
     } else if !draft_missing.is_empty() {
         Some("farm draft is missing required fields".to_owned())
     } else {
-        None
+        publish.reason.clone()
     };
     let mut actions = Vec::new();
     if account.is_none() {
         actions.push("radroots account create".to_owned());
     } else if draft_missing.is_empty() {
-        actions.push("radroots farm publish".to_owned());
+        actions.extend(publish.actions.clone());
     } else {
         actions.extend(missing_field_actions(draft_missing.as_slice()));
     }
@@ -243,6 +264,10 @@ pub fn status(
         config_valid: true,
         account_state: account_state.to_owned(),
         listing_defaults_state: listing_defaults_state.to_owned(),
+        publish_mode: config.publish.mode.as_str().to_owned(),
+        publish_state: publish.state.to_owned(),
+        publish_executable: publish.executable,
+        publish_reason: publish.reason,
         config: Some(summary_view(
             resolved.scope,
             resolved.path.display().to_string(),
@@ -252,7 +277,9 @@ pub fn status(
         missing: if account.is_none() {
             vec!["Selected account".to_owned()]
         } else {
-            missing_field_labels(draft_missing.as_slice())
+            let mut missing = missing_field_labels(draft_missing.as_slice());
+            missing.extend(publish.missing);
+            missing
         },
         reason,
         actions,
@@ -288,6 +315,126 @@ pub fn get(config: &RuntimeConfig, args: &FarmScopedArgs) -> Result<FarmGetView,
     })
 }
 
+#[derive(Debug, Clone)]
+struct FarmPublishReadiness {
+    state: &'static str,
+    executable: bool,
+    reason: Option<String>,
+    missing: Vec<String>,
+    actions: Vec<String>,
+}
+
+impl FarmPublishReadiness {
+    fn not_checked() -> Self {
+        Self {
+            state: "not_checked",
+            executable: false,
+            reason: None,
+            missing: Vec::new(),
+            actions: Vec::new(),
+        }
+    }
+}
+
+fn farm_publish_readiness(
+    config: &RuntimeConfig,
+    account: &AccountRecordView,
+) -> FarmPublishReadiness {
+    match config.publish.mode {
+        PublishMode::NostrRelay => relay_farm_publish_readiness(config, account),
+        PublishMode::Radrootsd => radrootsd_farm_publish_readiness(config),
+    }
+}
+
+fn relay_farm_publish_readiness(
+    config: &RuntimeConfig,
+    account: &AccountRecordView,
+) -> FarmPublishReadiness {
+    if config.relay.urls.is_empty() {
+        return FarmPublishReadiness {
+            state: "unconfigured",
+            executable: false,
+            reason: Some(
+                "nostr_relay farm publish requires at least one configured relay".to_owned(),
+            ),
+            missing: vec!["Configured relay".to_owned()],
+            actions: vec!["radroots --relay wss://relay.example.com farm publish".to_owned()],
+        };
+    }
+
+    if matches!(config.signer.backend, SignerBackend::Myc) {
+        return FarmPublishReadiness {
+            state: "unavailable",
+            executable: false,
+            reason: Some(
+                "nostr_relay farm publish requires signer mode `local`; signer mode `myc` is deferred"
+                    .to_owned(),
+            ),
+            missing: vec!["Local signer mode".to_owned()],
+            actions: vec!["radroots signer status get".to_owned()],
+        };
+    }
+
+    if !account.write_capable {
+        return FarmPublishReadiness {
+            state: "unconfigured",
+            executable: false,
+            reason: Some(
+                accounts::AccountRuntimeFailure::watch_only(&account.record.account_id).to_string(),
+            ),
+            missing: vec!["Write-capable account".to_owned()],
+            actions: vec!["radroots account attach-secret".to_owned()],
+        };
+    }
+
+    FarmPublishReadiness {
+        state: "ready",
+        executable: true,
+        reason: None,
+        missing: Vec::new(),
+        actions: vec!["radroots farm publish".to_owned()],
+    }
+}
+
+fn radrootsd_farm_publish_readiness(config: &RuntimeConfig) -> FarmPublishReadiness {
+    if config.rpc.bridge_bearer_token.is_none() {
+        return FarmPublishReadiness {
+            state: "unconfigured",
+            executable: false,
+            reason: Some(
+                "radrootsd farm publish requires bridge bearer token configuration from RADROOTS_RPC_BEARER_TOKEN"
+                    .to_owned(),
+            ),
+            missing: vec!["Radrootsd bridge bearer token".to_owned()],
+            actions: vec!["configure RADROOTS_RPC_BEARER_TOKEN".to_owned()],
+        };
+    }
+
+    if resolve_radrootsd_signer_session_id(config, &FarmPublishArgs::default()).is_none() {
+        return FarmPublishReadiness {
+            state: "unconfigured",
+            executable: false,
+            reason: Some(
+                "radrootsd farm publish requires a signer.remote_nip46 capability binding with signer_session_ref"
+                    .to_owned(),
+            ),
+            missing: vec!["Signer session binding".to_owned()],
+            actions: vec!["configure signer.remote_nip46 signer_session_ref".to_owned()],
+        };
+    }
+
+    FarmPublishReadiness {
+        state: "ready",
+        executable: true,
+        reason: Some(
+            "radrootsd bridge endpoint, bridge auth, and signer-session binding are configured; live bridge readiness is verified when farm publish runs"
+                .to_owned(),
+        ),
+        missing: Vec::new(),
+        actions: vec!["radroots farm publish".to_owned()],
+    }
+}
+
 pub fn publish(
     config: &RuntimeConfig,
     args: &FarmPublishArgs,
@@ -297,6 +444,7 @@ pub fn publish(
     let path = farm_config::config_path(&config.paths, resolved_scope)?;
     let Some(resolved) = farm_config::load(config, Some(resolved_scope))? else {
         return Ok(missing_publish_view(
+            config,
             resolved_scope,
             path.display().to_string(),
             args,
@@ -313,6 +461,7 @@ pub fn publish(
 
     let Some(account) = configured_account(config, &resolved.document.selection.account)? else {
         return Ok(missing_publish_view(
+            config,
             resolved.scope,
             resolved.path.display().to_string(),
             args,
@@ -332,6 +481,7 @@ pub fn publish(
     let draft_missing = farm_config::missing_fields(&resolved.document);
     if !draft_missing.is_empty() {
         return Ok(missing_publish_view(
+            config,
             resolved.scope,
             resolved.path.display().to_string(),
             args,
@@ -350,6 +500,156 @@ pub fn publish(
     let profile_idempotency_key = component_idempotency_key(args, "profile")?;
     let farm_idempotency_key = component_idempotency_key(args, "farm")?;
 
+    if config.output.dry_run {
+        return dry_run_publish_view(
+            config,
+            args,
+            &resolved,
+            &account_pubkey,
+            previews,
+            profile_idempotency_key,
+            farm_idempotency_key,
+        );
+    }
+
+    match config.publish.mode {
+        PublishMode::NostrRelay => publish_via_direct_relay(
+            config,
+            args,
+            resolved,
+            account_pubkey,
+            previews,
+            profile_idempotency_key,
+            farm_idempotency_key,
+        ),
+        PublishMode::Radrootsd => publish_via_radrootsd(
+            config,
+            args,
+            resolved,
+            account_pubkey,
+            previews,
+            profile_idempotency_key,
+            farm_idempotency_key,
+        ),
+    }
+}
+
+fn dry_run_publish_view(
+    config: &RuntimeConfig,
+    args: &FarmPublishArgs,
+    resolved: &ResolvedFarmConfig,
+    account_pubkey: &str,
+    previews: FarmPublishPreviews,
+    profile_idempotency_key: Option<String>,
+    farm_idempotency_key: Option<String>,
+) -> Result<FarmPublishView, RuntimeError> {
+    match config.publish.mode {
+        PublishMode::NostrRelay => {
+            if let Err(error) = resolve_farm_signing_identity(config, account_pubkey) {
+                return match error {
+                    ActorWriteBindingError::Account(failure) => Err(failure.into()),
+                    error => Ok(binding_error_publish_view(
+                        config,
+                        args,
+                        resolved,
+                        account_pubkey,
+                        previews,
+                        profile_idempotency_key,
+                        farm_idempotency_key,
+                        error,
+                    )),
+                };
+            }
+
+            Ok(base_publish_view(
+                "dry_run",
+                config,
+                args,
+                resolved,
+                account_pubkey,
+                preview_component(
+                    "relay.profile.publish",
+                    KIND_PROFILE,
+                    profile_idempotency_key,
+                    args,
+                    Some(previews.profile.event),
+                ),
+                preview_component(
+                    "relay.farm.publish",
+                    KIND_FARM,
+                    farm_idempotency_key,
+                    args,
+                    Some(previews.farm.event),
+                ),
+                Some("dry run requested; relay publish skipped".to_owned()),
+                vec!["radroots farm publish".to_owned()],
+            ))
+        }
+        PublishMode::Radrootsd => {
+            let Some(signer_session_id) = resolve_radrootsd_signer_session_id(config, args) else {
+                return Ok(radrootsd_preflight_publish_view(
+                    config,
+                    args,
+                    resolved,
+                    account_pubkey,
+                    previews,
+                    profile_idempotency_key,
+                    farm_idempotency_key,
+                    "unconfigured",
+                    "radrootsd farm publish dry-run requires `signer_session_id` input or a signer.remote_nip46 capability binding with signer_session_ref",
+                ));
+            };
+            if config.rpc.bridge_bearer_token.is_none() {
+                return Ok(radrootsd_preflight_publish_view(
+                    config,
+                    args,
+                    resolved,
+                    account_pubkey,
+                    previews,
+                    profile_idempotency_key,
+                    farm_idempotency_key,
+                    "unconfigured",
+                    "radrootsd bridge bearer token is required for farm publish dry-run; set RADROOTS_RPC_BEARER_TOKEN",
+                ));
+            }
+
+            Ok(base_publish_view(
+                "dry_run",
+                config,
+                args,
+                resolved,
+                account_pubkey,
+                radrootsd_preview_component(
+                    RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD,
+                    KIND_PROFILE,
+                    profile_idempotency_key,
+                    args,
+                    Some(previews.profile.event),
+                ),
+                radrootsd_preview_component(
+                    RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
+                    KIND_FARM,
+                    farm_idempotency_key,
+                    args,
+                    Some(previews.farm.event),
+                ),
+                Some("dry run requested; radrootsd submission skipped".to_owned()),
+                vec!["radroots farm publish".to_owned()],
+            )
+            .with_requested_signer_session_id(Some(signer_session_id)))
+        }
+    }
+}
+
+fn publish_via_direct_relay(
+    config: &RuntimeConfig,
+    args: &FarmPublishArgs,
+    mut resolved: ResolvedFarmConfig,
+    account_pubkey: String,
+    previews: FarmPublishPreviews,
+    profile_idempotency_key: Option<String>,
+    farm_idempotency_key: Option<String>,
+) -> Result<FarmPublishView, RuntimeError> {
     let signing = match resolve_farm_signing_identity(config, account_pubkey.as_str()) {
         Ok(signing) => signing,
         Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
@@ -367,40 +667,14 @@ pub fn publish(
         }
     };
 
-    if config.output.dry_run {
-        return Ok(base_publish_view(
-            "dry_run",
-            config,
-            args,
-            &resolved,
-            &account_pubkey,
-            preview_component(
-                "relay.profile.publish",
-                KIND_PROFILE,
-                profile_idempotency_key,
-                args,
-                Some(previews.profile.event),
-            ),
-            preview_component(
-                "relay.farm.publish",
-                KIND_FARM,
-                farm_idempotency_key,
-                args,
-                Some(previews.farm.event),
-            ),
-            Some("dry run requested; relay publish skipped".to_owned()),
-            vec![format!(
-                "radroots farm publish --scope {}",
-                resolved.scope.as_str()
-            )],
-        ));
-    }
     let profile_receipt = publish_parts_with_identity(
         &signing.identity,
         &config.relay.urls,
         previews.profile.parts.clone(),
     )
     .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    persist_profile_publication(config, &mut resolved, profile_receipt.event_id.clone())?;
+
     let farm_receipt = match publish_parts_with_identity(
         &signing.identity,
         &config.relay.urls,
@@ -421,6 +695,7 @@ pub fn publish(
             ));
         }
     };
+    persist_farm_publication(config, &mut resolved, farm_receipt.event_id.clone())?;
 
     Ok(base_publish_view(
         "published",
@@ -449,6 +724,136 @@ pub fn publish(
     ))
 }
 
+fn publish_via_radrootsd(
+    config: &RuntimeConfig,
+    args: &FarmPublishArgs,
+    mut resolved: ResolvedFarmConfig,
+    account_pubkey: String,
+    previews: FarmPublishPreviews,
+    profile_idempotency_key: Option<String>,
+    farm_idempotency_key: Option<String>,
+) -> Result<FarmPublishView, RuntimeError> {
+    let Some(signer_session_id) = resolve_radrootsd_signer_session_id(config, args) else {
+        return Ok(radrootsd_preflight_publish_view(
+            config,
+            args,
+            &resolved,
+            &account_pubkey,
+            previews,
+            profile_idempotency_key,
+            farm_idempotency_key,
+            "unconfigured",
+            "radrootsd farm publish requires `signer_session_id` input or a signer.remote_nip46 capability binding with signer_session_ref",
+        ));
+    };
+    if config.rpc.bridge_bearer_token.is_none() {
+        return Ok(radrootsd_preflight_publish_view(
+            config,
+            args,
+            &resolved,
+            &account_pubkey,
+            previews,
+            profile_idempotency_key,
+            farm_idempotency_key,
+            "unconfigured",
+            "radrootsd bridge bearer token is required for farm publish; set RADROOTS_RPC_BEARER_TOKEN",
+        ));
+    }
+
+    let client = radrootsd_publish_client(config)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            RuntimeError::Network(format!("build radrootsd farm publish runtime: {error}"))
+        })?;
+    let signer_session = SdkRadrootsdSignerSessionRef::from_session_id(signer_session_id.clone());
+    let mut profile_options =
+        SdkRadrootsdProfilePublishOptions::from_signer_session_ref(&signer_session);
+    if let Some(idempotency_key) = profile_idempotency_key.as_deref() {
+        profile_options = profile_options.with_idempotency_key(idempotency_key.to_owned());
+    }
+    let mut farm_options = SdkRadrootsdFarmPublishOptions::from_signer_session_ref(&signer_session);
+    if let Some(idempotency_key) = farm_idempotency_key.as_deref() {
+        farm_options = farm_options.with_idempotency_key(idempotency_key.to_owned());
+    }
+
+    let profile_receipt = runtime
+        .block_on(client.profile().publish_profile_via_radrootsd_with_options(
+            &resolved.document.profile,
+            Some(RadrootsProfileType::Farm),
+            &profile_options,
+        ))
+        .map_err(map_sdk_farm_publish_error)?;
+    let profile_component = radrootsd_published_component(
+        RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD,
+        KIND_PROFILE,
+        profile_idempotency_key.clone(),
+        args,
+        previews.profile.event.clone(),
+        signer_session_id.as_str(),
+        profile_receipt,
+    )?;
+    if let Some(event_id) = profile_component.event_id.clone() {
+        persist_profile_publication(config, &mut resolved, event_id)?;
+    }
+
+    let farm_receipt = match runtime.block_on(
+        client
+            .farm()
+            .publish_farm_via_radrootsd_with_options(&resolved.document.farm, &farm_options),
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            return Ok(base_publish_view(
+                "partial",
+                config,
+                args,
+                &resolved,
+                &account_pubkey,
+                profile_component,
+                radrootsd_failed_component(
+                    RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
+                    KIND_FARM,
+                    farm_idempotency_key,
+                    args,
+                    previews.farm.event,
+                    signer_session_id.as_str(),
+                    error,
+                ),
+                Some("farm publish failed after profile publish through radrootsd".to_owned()),
+                vec!["radroots farm publish".to_owned()],
+            )
+            .with_requested_signer_session_id(Some(signer_session_id)));
+        }
+    };
+    let farm_component = radrootsd_published_component(
+        RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
+        KIND_FARM,
+        farm_idempotency_key,
+        args,
+        previews.farm.event,
+        signer_session_id.as_str(),
+        farm_receipt,
+    )?;
+    if let Some(event_id) = farm_component.event_id.clone() {
+        persist_farm_publication(config, &mut resolved, event_id)?;
+    }
+
+    Ok(base_publish_view(
+        "published",
+        config,
+        args,
+        &resolved,
+        &account_pubkey,
+        profile_component,
+        farm_component,
+        None,
+        Vec::new(),
+    )
+    .with_requested_signer_session_id(Some(signer_session_id)))
+}
+
 #[derive(Debug, Clone)]
 struct FarmPublishPreviews {
     profile: FarmPublishEventDraft,
@@ -461,7 +866,15 @@ struct FarmPublishEventDraft {
     parts: WireEventParts,
 }
 
+impl FarmPublishView {
+    fn with_requested_signer_session_id(mut self, signer_session_id: Option<String>) -> Self {
+        self.requested_signer_session_id = signer_session_id;
+        self
+    }
+}
+
 fn missing_publish_view(
+    config: &RuntimeConfig,
     scope: FarmConfigScope,
     path: String,
     args: &FarmPublishArgs,
@@ -476,7 +889,7 @@ fn missing_publish_view(
 ) -> FarmPublishView {
     FarmPublishView {
         state: "unconfigured".to_owned(),
-        source: FARM_WRITE_SOURCE.to_owned(),
+        source: farm_write_source(config).to_owned(),
         scope: scope.as_str().to_owned(),
         path,
         config_present,
@@ -485,8 +898,14 @@ fn missing_publish_view(
         selected_account_pubkey,
         farm_d_tag,
         requested_signer_session_id: args.signer_session_id.clone(),
-        profile: not_submitted_component("relay.profile.publish", KIND_PROFILE, args, None, None),
-        farm: not_submitted_component("relay.farm.publish", KIND_FARM, args, None, None),
+        profile: not_submitted_component(
+            profile_publish_rpc_method(config),
+            KIND_PROFILE,
+            args,
+            None,
+            None,
+        ),
+        farm: not_submitted_component(farm_publish_rpc_method(config), KIND_FARM, args, None, None),
         missing,
         reason: Some(reason),
         actions,
@@ -538,7 +957,7 @@ fn base_publish_view(
 ) -> FarmPublishView {
     FarmPublishView {
         state: state.to_owned(),
-        source: FARM_WRITE_SOURCE.to_owned(),
+        source: farm_write_source(config).to_owned(),
         scope: resolved.scope.as_str().to_owned(),
         path: resolved.path.display().to_string(),
         config_present: true,
@@ -732,10 +1151,7 @@ fn partial_publish_view(
             farm_error,
         ),
         Some(reason),
-        vec![format!(
-            "radroots farm publish --scope {}",
-            resolved.scope.as_str()
-        )],
+        vec!["radroots farm publish".to_owned()],
     )
 }
 
@@ -800,6 +1216,302 @@ fn failed_component(
         reason: Some(reason),
         job: None,
         event: args.print_event.then_some(event),
+    }
+}
+
+fn radrootsd_preflight_publish_view(
+    config: &RuntimeConfig,
+    args: &FarmPublishArgs,
+    resolved: &ResolvedFarmConfig,
+    account_pubkey: &str,
+    previews: FarmPublishPreviews,
+    profile_idempotency_key: Option<String>,
+    farm_idempotency_key: Option<String>,
+    state: &str,
+    reason: &str,
+) -> FarmPublishView {
+    let signer_session_id = resolve_radrootsd_signer_session_id(config, args);
+    let actions = if signer_session_id.is_none() {
+        vec!["configure signer.remote_nip46 signer_session_ref".to_owned()]
+    } else if config.rpc.bridge_bearer_token.is_none() {
+        vec!["configure RADROOTS_RPC_BEARER_TOKEN".to_owned()]
+    } else {
+        vec!["radroots farm publish".to_owned()]
+    };
+    base_publish_view(
+        state,
+        config,
+        args,
+        resolved,
+        account_pubkey,
+        FarmPublishComponentView {
+            state: state.to_owned(),
+            signer_mode: Some("nip46".to_owned()),
+            signer_session_id: signer_session_id.clone(),
+            reason: Some(reason.to_owned()),
+            ..radrootsd_preview_component(
+                RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD,
+                KIND_PROFILE,
+                profile_idempotency_key,
+                args,
+                Some(previews.profile.event),
+            )
+        },
+        FarmPublishComponentView {
+            state: state.to_owned(),
+            signer_mode: Some("nip46".to_owned()),
+            signer_session_id: signer_session_id.clone(),
+            reason: Some(reason.to_owned()),
+            ..radrootsd_preview_component(
+                RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
+                KIND_FARM,
+                farm_idempotency_key,
+                args,
+                Some(previews.farm.event),
+            )
+        },
+        Some(reason.to_owned()),
+        actions,
+    )
+    .with_requested_signer_session_id(signer_session_id)
+}
+
+fn radrootsd_preview_component(
+    rpc_method: &str,
+    event_kind: u32,
+    idempotency_key: Option<String>,
+    args: &FarmPublishArgs,
+    event: Option<FarmPublishEventView>,
+) -> FarmPublishComponentView {
+    FarmPublishComponentView {
+        signer_mode: Some("nip46".to_owned()),
+        ..preview_component(rpc_method, event_kind, idempotency_key, args, event)
+    }
+}
+
+fn radrootsd_published_component(
+    rpc_method: &str,
+    fallback_event_kind: u32,
+    idempotency_key: Option<String>,
+    args: &FarmPublishArgs,
+    mut event: FarmPublishEventView,
+    requested_signer_session_id: &str,
+    receipt: SdkPublishReceipt,
+) -> Result<FarmPublishComponentView, RuntimeError> {
+    let SdkPublishReceipt {
+        event_kind,
+        event_id,
+        transport_receipt,
+        ..
+    } = receipt;
+    let SdkTransportReceipt::Radrootsd(radrootsd) = transport_receipt else {
+        return Err(RuntimeError::Config(
+            "radrootsd farm publish returned a non-radrootsd transport receipt".to_owned(),
+        ));
+    };
+    if let Some(event_id) = event_id.as_ref() {
+        event.event_id = Some(event_id.clone());
+    }
+    if radrootsd.event_addr.is_some() {
+        event.event_addr = radrootsd.event_addr.clone();
+    }
+    let job_status = radrootsd.status.clone();
+    let state = job_status.clone().unwrap_or_else(|| {
+        if radrootsd.accepted {
+            "accepted"
+        } else {
+            "submitted"
+        }
+        .to_owned()
+    });
+    let job = radrootsd_farm_job_view(
+        rpc_method,
+        idempotency_key.clone(),
+        requested_signer_session_id,
+        &radrootsd,
+        job_status.clone(),
+    );
+
+    Ok(FarmPublishComponentView {
+        state,
+        rpc_method: rpc_method.to_owned(),
+        event_kind: event_kind.unwrap_or(fallback_event_kind),
+        deduplicated: radrootsd.deduplicated,
+        target_relays: Vec::new(),
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        job_id: radrootsd.job_id.clone(),
+        job_status,
+        signer_mode: radrootsd.signer_mode.clone(),
+        signer_session_id: radrootsd.signer_session_id.clone(),
+        event_id,
+        event_addr: event.event_addr.clone(),
+        idempotency_key,
+        reason: None,
+        job: Some(job),
+        event: args.print_event.then_some(event),
+    })
+}
+
+fn radrootsd_failed_component(
+    rpc_method: &str,
+    event_kind: u32,
+    idempotency_key: Option<String>,
+    args: &FarmPublishArgs,
+    event: FarmPublishEventView,
+    signer_session_id: &str,
+    error: SdkPublishError,
+) -> FarmPublishComponentView {
+    let reason = error.to_string();
+    FarmPublishComponentView {
+        state: "failed".to_owned(),
+        rpc_method: rpc_method.to_owned(),
+        event_kind,
+        deduplicated: false,
+        target_relays: Vec::new(),
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        job_id: None,
+        job_status: Some("failed".to_owned()),
+        signer_mode: Some("nip46".to_owned()),
+        signer_session_id: Some(signer_session_id.to_owned()),
+        event_id: None,
+        event_addr: event.event_addr.clone(),
+        idempotency_key: idempotency_key.clone(),
+        reason: Some(reason.clone()),
+        job: Some(FarmPublishJobView {
+            rpc_method: rpc_method.to_owned(),
+            state: "failed".to_owned(),
+            job_id: None,
+            idempotency_key,
+            requested_signer_session_id: Some(signer_session_id.to_owned()),
+            signer_mode: Some("nip46".to_owned()),
+            signer_session_id: Some(signer_session_id.to_owned()),
+        }),
+        event: args.print_event.then_some(event),
+    }
+}
+
+fn radrootsd_farm_job_view(
+    rpc_method: &str,
+    idempotency_key: Option<String>,
+    requested_signer_session_id: &str,
+    receipt: &SdkRadrootsdPublishReceipt,
+    state: Option<String>,
+) -> FarmPublishJobView {
+    FarmPublishJobView {
+        rpc_method: rpc_method.to_owned(),
+        state: state.unwrap_or_else(|| "accepted".to_owned()),
+        job_id: receipt.job_id.clone(),
+        idempotency_key,
+        requested_signer_session_id: Some(requested_signer_session_id.to_owned()),
+        signer_mode: receipt.signer_mode.clone(),
+        signer_session_id: receipt.signer_session_id.clone(),
+    }
+}
+
+fn radrootsd_publish_client(config: &RuntimeConfig) -> Result<RadrootsSdkClient, RuntimeError> {
+    let mut sdk_config = RadrootsSdkConfig::for_environment(SdkEnvironment::Custom);
+    sdk_config.transport = SdkTransportMode::Radrootsd;
+    sdk_config.signer = SdkSignerConfig::Nip46;
+    sdk_config.radrootsd.endpoint = Some(config.rpc.url.clone());
+    sdk_config.radrootsd.auth = config
+        .rpc
+        .bridge_bearer_token
+        .clone()
+        .map(RadrootsdAuth::BearerToken)
+        .unwrap_or(RadrootsdAuth::None);
+    RadrootsSdkClient::from_config(sdk_config)
+        .map_err(|error| RuntimeError::Config(format!("configure radrootsd farm publish: {error}")))
+}
+
+fn map_sdk_farm_publish_error(error: SdkPublishError) -> RuntimeError {
+    let message = format!("radrootsd farm publish failed: {error}");
+    match error {
+        SdkPublishError::Config(_)
+        | SdkPublishError::Encode(_)
+        | SdkPublishError::UnsupportedTransport { .. }
+        | SdkPublishError::UnsupportedSignerMode { .. } => RuntimeError::Config(message),
+        SdkPublishError::Relay(_)
+        | SdkPublishError::RelayNotAcknowledged { .. }
+        | SdkPublishError::Radrootsd(_) => RuntimeError::Network(message),
+    }
+}
+
+fn resolve_radrootsd_signer_session_id(
+    config: &RuntimeConfig,
+    args: &FarmPublishArgs,
+) -> Option<String> {
+    args.signer_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            config
+                .capability_binding(SIGNER_REMOTE_NIP46_CAPABILITY)
+                .and_then(|binding| binding.signer_session_ref.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+}
+
+fn persist_profile_publication(
+    config: &RuntimeConfig,
+    resolved: &mut ResolvedFarmConfig,
+    event_id: String,
+) -> Result<(), RuntimeError> {
+    persist_publication(config, resolved, Some(event_id), None)
+}
+
+fn persist_farm_publication(
+    config: &RuntimeConfig,
+    resolved: &mut ResolvedFarmConfig,
+    event_id: String,
+) -> Result<(), RuntimeError> {
+    persist_publication(config, resolved, None, Some(event_id))
+}
+
+fn persist_publication(
+    config: &RuntimeConfig,
+    resolved: &mut ResolvedFarmConfig,
+    profile_event_id: Option<String>,
+    farm_event_id: Option<String>,
+) -> Result<(), RuntimeError> {
+    let published_at = now_unix();
+    if let Some(event_id) = profile_event_id.and_then(|value| non_empty(value.as_str())) {
+        resolved.document.publication.profile_event_id = Some(event_id);
+        resolved.document.publication.profile_published_at = Some(published_at);
+    }
+    if let Some(event_id) = farm_event_id.and_then(|value| non_empty(value.as_str())) {
+        resolved.document.publication.farm_event_id = Some(event_id);
+        resolved.document.publication.farm_published_at = Some(published_at);
+    }
+    farm_config::write(&config.paths, resolved.scope, &resolved.document)?;
+    Ok(())
+}
+
+fn farm_write_source(config: &RuntimeConfig) -> &'static str {
+    match config.publish.mode {
+        PublishMode::NostrRelay => RELAY_FARM_WRITE_SOURCE,
+        PublishMode::Radrootsd => RADROOTSD_FARM_WRITE_SOURCE,
+    }
+}
+
+fn profile_publish_rpc_method(config: &RuntimeConfig) -> &'static str {
+    match config.publish.mode {
+        PublishMode::NostrRelay => "relay.profile.publish",
+        PublishMode::Radrootsd => RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD,
+    }
+}
+
+fn farm_publish_rpc_method(config: &RuntimeConfig) -> &'static str {
+    match config.publish.mode {
+        PublishMode::NostrRelay => "relay.farm.publish",
+        PublishMode::Radrootsd => RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
     }
 }
 
@@ -1015,12 +1727,29 @@ fn save_draft_view(
     })
 }
 
-fn farm_setup_actions(document: &FarmConfigDocument) -> Vec<String> {
+fn farm_update_actions(config: &RuntimeConfig, document: &FarmConfigDocument) -> Vec<String> {
+    farm_setup_actions(config, document)
+}
+
+fn farm_setup_actions(config: &RuntimeConfig, document: &FarmConfigDocument) -> Vec<String> {
     let mut actions = vec!["radroots farm readiness check".to_owned()];
-    if farm_config::missing_fields(document).is_empty() {
+    if farm_config::missing_fields(document).is_empty() && farm_publish_action_available(config) {
         actions.push("radroots farm publish".to_owned());
     }
     actions
+}
+
+fn farm_publish_action_available(config: &RuntimeConfig) -> bool {
+    match config.publish.mode {
+        PublishMode::NostrRelay => {
+            !config.relay.urls.is_empty() && matches!(config.signer.backend, SignerBackend::Local)
+        }
+        PublishMode::Radrootsd => {
+            config.rpc.bridge_bearer_token.is_some()
+                && resolve_radrootsd_signer_session_id(config, &FarmPublishArgs::default())
+                    .is_some()
+        }
+    }
 }
 
 fn missing_blocks_listing_defaults(missing: &[FarmMissingField]) -> bool {
@@ -1399,6 +2128,13 @@ fn non_empty(value: &str) -> Option<String> {
     } else {
         Some(trimmed.to_owned())
     }
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 fn generate_d_tag() -> String {

@@ -11,7 +11,7 @@ use crate::operation_adapter::{
     OperationService,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{PublishMode, RuntimeConfig};
 use crate::runtime_args::{
     FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmScopeArg, FarmScopedArgs, FarmUpdateArgs,
 };
@@ -143,7 +143,9 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
                 request.operation_id(),
             ));
         }
-        require_relay_target(&request, self.config)?;
+        if matches!(self.config.publish.mode, PublishMode::NostrRelay) {
+            require_relay_target(&request, self.config)?;
+        }
 
         let view = crate::runtime::farm::publish(self.config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
@@ -247,10 +249,9 @@ fn farm_publish_result(
 }
 
 fn farm_publish_relay_unavailable(view: &FarmPublishView) -> bool {
-    view.source == "direct Nostr relay publish · local key"
-        && (!view.profile.failed_relays.is_empty()
-            || !view.farm.failed_relays.is_empty()
-            || view.state == "partial")
+    view.state == "partial"
+        || !view.profile.failed_relays.is_empty()
+        || !view.farm.failed_relays.is_empty()
 }
 
 fn require_relay_target<P>(

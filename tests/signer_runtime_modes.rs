@@ -27,11 +27,19 @@ struct FarmPartialRelayServer {
 
 impl FarmPartialRelayServer {
     fn profile_accept_farm_reject() -> Self {
+        Self::with_publish_outcomes([(true, ""), (false, "farm rejected by test relay")])
+    }
+
+    fn profile_and_farm_accept() -> Self {
+        Self::with_publish_outcomes([(true, ""), (true, "")])
+    }
+
+    fn with_publish_outcomes(outcomes: [(bool, &'static str); 2]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind relay");
         let endpoint = format!("ws://{}", listener.local_addr().expect("relay addr"));
         let (tx, requests) = mpsc::channel();
         let handle = thread::spawn(move || {
-            for (accepted, reason) in [(true, ""), (false, "farm rejected by test relay")] {
+            for (accepted, reason) in outcomes {
                 let (stream, _) = listener.accept().expect("accept relay connection");
                 handle_publish_connection(stream, accepted, reason, &tx);
             }
@@ -1135,6 +1143,7 @@ fn local_farm_publish_reports_partial_when_farm_event_fails_after_profile_publis
     assert_eq!(detail["farm"]["event_id"], requests[1]["id"]);
     assert_eq!(detail["profile"]["idempotency_key"], "farm_partial:profile");
     assert_eq!(detail["farm"]["idempotency_key"], "farm_partial:farm");
+    assert_eq!(detail["actions"][0], "radroots farm publish");
     assert_eq!(detail["profile"]["target_relays"][0], relay_url.as_str());
     assert_eq!(detail["farm"]["target_relays"][0], relay_url.as_str());
     assert_relay_url(
@@ -1154,6 +1163,93 @@ fn local_farm_publish_reports_partial_when_farm_event_fails_after_profile_publis
     assert_eq!(requests[1]["kind"], KIND_FARM);
     assert_no_removed_command_reference(&value, &["farm", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish"]);
+
+    let persisted = sandbox.json_success(&["--format", "json", "farm", "get"]);
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["profile_state"],
+        "published"
+    );
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["farm_state"],
+        "not_published"
+    );
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["profile_event_id"],
+        requests[0]["id"]
+    );
+}
+
+#[test]
+fn local_farm_publish_persists_publication_after_profile_and_farm_publish() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let relay = FarmPartialRelayServer::profile_and_farm_accept();
+    let relay_url = relay.endpoint().to_owned();
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        relay_url.as_str(),
+        "--approval-token",
+        "approve",
+        "--idempotency-key",
+        "farm_success",
+        "farm",
+        "publish",
+    ]);
+    let requests = relay.take_requests();
+
+    assert_eq!(value["operation_id"], "farm.publish");
+    assert_eq!(value["result"]["state"], "published");
+    assert_eq!(value["result"]["profile"]["state"], "published");
+    assert_eq!(value["result"]["farm"]["state"], "published");
+    assert_eq!(value["result"]["profile"]["event_id"], requests[0]["id"]);
+    assert_eq!(value["result"]["farm"]["event_id"], requests[1]["id"]);
+    assert_eq!(
+        value["result"]["profile"]["idempotency_key"],
+        "farm_success:profile"
+    );
+    assert_eq!(
+        value["result"]["farm"]["idempotency_key"],
+        "farm_success:farm"
+    );
+    assert_eq!(requests[0]["kind"], KIND_PROFILE);
+    assert_eq!(requests[1]["kind"], KIND_FARM);
+    assert_no_removed_command_reference(&value, &["farm", "publish"]);
+    assert_no_daemon_runtime_reference(&value, &["farm", "publish"]);
+
+    let persisted = sandbox.json_success(&["--format", "json", "farm", "get"]);
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["profile_state"],
+        "published"
+    );
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["farm_state"],
+        "published"
+    );
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["profile_event_id"],
+        requests[0]["id"]
+    );
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["farm_event_id"],
+        requests[1]["id"]
+    );
 }
 
 #[test]

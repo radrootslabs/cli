@@ -1153,8 +1153,7 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
 pub fn requires_nostr_relay_publish_mode(operation_id: &str) -> bool {
     matches!(
         operation_id,
-        "farm.publish"
-            | "order.submit"
+        "order.submit"
             | "order.accept"
             | "order.decline"
             | "order.cancel"
@@ -1509,7 +1508,6 @@ mod tests {
             .map(|operation| operation.operation_id)
             .collect::<BTreeSet<_>>();
         let expected = [
-            "farm.publish",
             "order.submit",
             "order.accept",
             "order.decline",

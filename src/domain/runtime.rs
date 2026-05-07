@@ -752,6 +752,11 @@ pub struct FarmStatusView {
     pub config_valid: bool,
     pub account_state: String,
     pub listing_defaults_state: String,
+    pub publish_mode: String,
+    pub publish_state: String,
+    pub publish_executable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publish_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<FarmConfigSummaryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
