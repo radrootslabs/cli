@@ -1821,52 +1821,13 @@ fn direct_relay_error_view(
     operation: ListingMutationOperation,
     canonical: &CanonicalListingDraft,
     listing_addr: String,
-    event_preview: ListingMutationEventView,
+    mut event_preview: ListingMutationEventView,
     error: DirectRelayPublishError,
 ) -> ListingMutationView {
-    let (reason, target_relays, connected_relays, failed_relays) = match error {
-        DirectRelayPublishError::MissingRelays => (
-            "direct relay publish requires at least one configured relay".to_owned(),
-            config.relay.urls.clone(),
-            Vec::new(),
-            Vec::new(),
-        ),
-        DirectRelayPublishError::RelayConfig { relay, source } => (
-            format!("failed to configure relay `{relay}` for direct relay publish: {source}"),
-            config.relay.urls.clone(),
-            Vec::new(),
-            vec![RelayFailureView {
-                relay,
-                reason: source.to_string(),
-            }],
-        ),
-        DirectRelayPublishError::Connect {
-            reason,
-            target_relays,
-            connected_relays,
-            failed_relays,
-        } => (
-            format!("direct relay connection failed: {reason}"),
-            target_relays,
-            connected_relays,
-            relay_failures(failed_relays),
-        ),
-        DirectRelayPublishError::Publish {
-            event_id,
-            reason,
-            target_relays,
-            connected_relays,
-            failed_relays,
-        } => (
-            format!("direct relay publish failed for event `{event_id}`: {reason}"),
-            target_relays,
-            connected_relays,
-            relay_failures(failed_relays),
-        ),
-        DirectRelayPublishError::Runtime(_)
-        | DirectRelayPublishError::Build(_)
-        | DirectRelayPublishError::Sign(_) => unreachable!(),
-    };
+    let parts = direct_relay_error_view_parts(config.relay.urls.as_slice(), error);
+    if let Some(event_id) = parts.event_id.as_ref() {
+        event_preview.event_id = Some(event_id.clone());
+    }
 
     ListingMutationView {
         state: "unavailable".to_owned(),
@@ -1879,22 +1840,91 @@ fn direct_relay_error_view(
         event_kind: KIND_LISTING,
         dry_run: false,
         deduplicated: false,
-        target_relays,
-        connected_relays,
+        target_relays: parts.target_relays,
+        connected_relays: parts.connected_relays,
         acknowledged_relays: Vec::new(),
-        failed_relays,
+        failed_relays: parts.failed_relays,
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        event_id: None,
+        event_id: parts.event_id,
         event_addr: Some(listing_addr),
         idempotency_key: args.idempotency_key.clone(),
         signer_session_id: None,
         requested_signer_session_id: args.signer_session_id.clone(),
-        reason: Some(reason),
+        reason: Some(parts.reason),
         job: None,
         event: args.print_event.then_some(event_preview),
         actions: Vec::new(),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DirectRelayErrorViewParts {
+    reason: String,
+    target_relays: Vec<String>,
+    connected_relays: Vec<String>,
+    failed_relays: Vec<RelayFailureView>,
+    event_id: Option<String>,
+}
+
+fn direct_relay_error_view_parts(
+    configured_relays: &[String],
+    error: DirectRelayPublishError,
+) -> DirectRelayErrorViewParts {
+    let (reason, target_relays, connected_relays, failed_relays, event_id) = match error {
+        DirectRelayPublishError::MissingRelays => (
+            "direct relay publish requires at least one configured relay".to_owned(),
+            configured_relays.to_vec(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        ),
+        DirectRelayPublishError::RelayConfig { relay, source } => (
+            format!("failed to configure relay `{relay}` for direct relay publish: {source}"),
+            configured_relays.to_vec(),
+            Vec::new(),
+            vec![RelayFailureView {
+                relay,
+                reason: source.to_string(),
+            }],
+            None,
+        ),
+        DirectRelayPublishError::Connect {
+            reason,
+            target_relays,
+            connected_relays,
+            failed_relays,
+        } => (
+            format!("direct relay connection failed: {reason}"),
+            target_relays,
+            connected_relays,
+            relay_failures(failed_relays),
+            None,
+        ),
+        DirectRelayPublishError::Publish {
+            event_id,
+            reason,
+            target_relays,
+            connected_relays,
+            failed_relays,
+        } => (
+            format!("direct relay publish failed for event `{event_id}`: {reason}"),
+            target_relays,
+            connected_relays,
+            relay_failures(failed_relays),
+            Some(event_id),
+        ),
+        DirectRelayPublishError::Runtime(_)
+        | DirectRelayPublishError::Build(_)
+        | DirectRelayPublishError::Sign(_) => unreachable!(),
+    };
+    DirectRelayErrorViewParts {
+        reason,
+        target_relays,
+        connected_relays,
+        failed_relays,
+        event_id,
     }
 }
 
@@ -2356,7 +2386,11 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DRAFT_KIND, ListingDraftDocument, encode_base64url_no_pad, generate_d_tag};
+    use super::{
+        DRAFT_KIND, ListingDraftDocument, direct_relay_error_view_parts, encode_base64url_no_pad,
+        generate_d_tag,
+    };
+    use crate::runtime::direct_relay::{DirectRelayFailure, DirectRelayPublishError};
     use radroots_events_codec::d_tag::is_d_tag_base64url;
 
     #[test]
@@ -2370,6 +2404,27 @@ mod tests {
         let encoded = encode_base64url_no_pad([0u8; 16]);
         assert_eq!(encoded.len(), 22);
         assert!(is_d_tag_base64url(&encoded));
+    }
+
+    #[test]
+    fn direct_relay_publish_error_parts_preserve_event_id() {
+        let parts = direct_relay_error_view_parts(
+            &["ws://127.0.0.1:19000".to_owned()],
+            DirectRelayPublishError::Publish {
+                event_id: "e".repeat(64),
+                reason: "relay rejected event".to_owned(),
+                target_relays: vec!["ws://127.0.0.1:19000".to_owned()],
+                connected_relays: vec!["ws://127.0.0.1:19000".to_owned()],
+                failed_relays: vec![DirectRelayFailure {
+                    relay: "ws://127.0.0.1:19000".to_owned(),
+                    reason: "relay rejected event".to_owned(),
+                }],
+            },
+        );
+
+        assert_eq!(parts.event_id, Some("e".repeat(64)));
+        assert!(parts.reason.contains("direct relay publish failed"));
+        assert_eq!(parts.failed_relays.len(), 1);
     }
 
     #[test]
