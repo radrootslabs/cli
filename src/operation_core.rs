@@ -102,8 +102,9 @@ impl OperationService<HealthStatusGetRequest> for CoreOperationService<'_> {
         let store = map_runtime(crate::runtime::local::status(self.config))?;
         let account = map_runtime(resolve_account_resolution(self.config))?;
         let publish = publish_runtime_view(self.config, true, &account);
+        let state = health_status_state(&store.state, &publish);
         json_operation_result::<HealthStatusGetResult>(json!({
-            "state": if store.state == "ready" { "ready" } else { "needs_attention" },
+            "state": state,
             "store": store,
             "account_resolution": account_resolution_view(&account),
             "publish": publish,
@@ -130,8 +131,9 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
             Some(map_runtime(unresolved_account_reason(self.config))?)
         };
         let publish = publish_runtime_view(self.config, true, &account);
+        let state = health_check_state(&store.state, account.resolved_account.is_some(), &publish);
         json_operation_result::<HealthCheckRunResult>(json!({
-            "state": if store.state == "ready" && account.resolved_account.is_some() { "ready" } else { "needs_attention" },
+            "state": state,
             "checks": {
                 "workspace": {
                     "state": "ready",
@@ -798,6 +800,30 @@ fn nostr_relay_publish_readiness(
     }
 
     ("ready", true, None)
+}
+
+fn health_status_state(store_state: &str, publish: &PublishRuntimeView) -> &'static str {
+    if store_state == "ready" && publish_runtime_ready(publish) {
+        "ready"
+    } else {
+        "needs_attention"
+    }
+}
+
+fn health_check_state(
+    store_state: &str,
+    account_ready: bool,
+    publish: &PublishRuntimeView,
+) -> &'static str {
+    if store_state == "ready" && account_ready && publish_runtime_ready(publish) {
+        "ready"
+    } else {
+        "needs_attention"
+    }
+}
+
+fn publish_runtime_ready(publish: &PublishRuntimeView) -> bool {
+    !publish.signed_write_required || publish.executable
 }
 
 fn required_string<P>(

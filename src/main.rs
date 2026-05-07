@@ -353,8 +353,8 @@ fn validate_request_contract(
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
     validate_pre_runtime_request_contract(request)?;
-    validate_signer_mode_contract(request, config)?;
     validate_publish_mode_contract(request, config)?;
+    validate_signer_mode_contract(request, config)?;
     validate_network_contract(request, config)?;
     Ok(())
 }

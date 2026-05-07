@@ -229,6 +229,7 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
     let value = sandbox.json_success(&["--format", "json", "health", "status", "get"]);
 
     assert_eq!(value["operation_id"], "health.status.get");
+    assert_eq!(value["result"]["state"], "needs_attention");
     assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
     assert_eq!(value["result"]["publish"]["executable"], false);
     assert_eq!(
@@ -253,6 +254,7 @@ fn health_status_distinguishes_relay_ready_from_missing_signed_write_account() {
     ]);
 
     assert_eq!(value["operation_id"], "health.status.get");
+    assert_eq!(value["result"]["state"], "needs_attention");
     assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
     assert_eq!(value["result"]["publish"]["signed_write_required"], true);
     assert_eq!(value["result"]["publish"]["state"], "unconfigured");
@@ -271,6 +273,7 @@ fn health_check_exposes_publish_readiness() {
     let value = sandbox.json_success(&["--format", "json", "health", "check", "run"]);
 
     assert_eq!(value["operation_id"], "health.check.run");
+    assert_eq!(value["result"]["state"], "needs_attention");
     assert_eq!(value["result"]["checks"]["publish"]["mode"], "radrootsd");
     assert_eq!(value["result"]["checks"]["publish"]["state"], "unavailable");
     assert_eq!(value["result"]["checks"]["publish"]["executable"], false);
@@ -280,6 +283,7 @@ fn health_check_exposes_publish_readiness() {
 #[test]
 fn health_check_marks_relay_publish_ready_with_secret_backed_local_account() {
     let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "workspace", "init"]);
     sandbox.json_success(&["--format", "json", "account", "create"]);
 
     let value = sandbox.json_success(&[
@@ -293,6 +297,7 @@ fn health_check_marks_relay_publish_ready_with_secret_backed_local_account() {
     ]);
 
     assert_eq!(value["operation_id"], "health.check.run");
+    assert_eq!(value["result"]["state"], "ready");
     assert_eq!(value["result"]["checks"]["publish"]["mode"], "nostr_relay");
     assert_eq!(value["result"]["checks"]["publish"]["state"], "ready");
     assert_eq!(value["result"]["checks"]["publish"]["executable"], true);
@@ -328,6 +333,34 @@ fn radrootsd_publish_mode_fails_closed_for_direct_relay_publish_paths() {
         value["errors"][0]["detail"]["publish"]["provider"]["provider_runtime_id"],
         "radrootsd"
     );
+    assert_eq!(
+        value["errors"][0]["detail"]["publish"]["provider"]["state"],
+        "unavailable"
+    );
+}
+
+#[test]
+fn radrootsd_publish_mode_takes_precedence_over_deferred_signer_mode() {
+    let sandbox = RadrootsCliSandbox::new();
+    let missing_listing = sandbox.root().join("missing-listing.toml");
+    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n\n[signer]\nmode = \"myc\"\n");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        missing_listing.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+    assert_eq!(value["errors"][0]["detail"]["publish"]["mode"], "radrootsd");
     assert_eq!(
         value["errors"][0]["detail"]["publish"]["provider"]["state"],
         "unavailable"
