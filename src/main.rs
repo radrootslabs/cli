@@ -394,7 +394,7 @@ fn validate_signer_mode_contract(
 ) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
     if matches!(config.signer.backend, SignerBackend::Myc)
-        && requires_local_signer_mode(spec.operation_id)
+        && requires_local_signer_mode_for_publish_mode(spec.operation_id, config)
     {
         return Err(OperationAdapterError::SignerModeDeferred {
             operation_id: spec.operation_id.to_owned(),
@@ -436,6 +436,7 @@ fn validate_network_contract(
                 dry_run_requires_network,
             } = requirement
                 && (!request.context().dry_run || dry_run_requires_network)
+                && requires_pre_runtime_relay_target(spec.operation_id)
                 && config.relay.urls.is_empty()
             {
                 return Err(OperationAdapterError::NetworkUnavailable {
@@ -449,6 +450,19 @@ fn validate_network_contract(
             Ok(())
         }
     }
+}
+
+fn requires_local_signer_mode_for_publish_mode(operation_id: &str, config: &RuntimeConfig) -> bool {
+    if matches!(config.publish.mode, PublishMode::Radrootsd)
+        && is_listing_publish_mode_routed_operation(operation_id)
+    {
+        return false;
+    }
+    requires_local_signer_mode(operation_id)
+}
+
+fn requires_pre_runtime_relay_target(operation_id: &str) -> bool {
+    !is_listing_publish_mode_routed_operation(operation_id)
 }
 
 fn validate_publish_mode_contract(
@@ -481,6 +495,13 @@ fn validate_publish_mode_contract(
         ));
     }
     Ok(())
+}
+
+fn is_listing_publish_mode_routed_operation(operation_id: &str) -> bool {
+    matches!(
+        operation_id,
+        "listing.publish" | "listing.update" | "listing.archive"
+    )
 }
 
 fn failure_envelope(

@@ -305,44 +305,83 @@ fn health_check_marks_relay_publish_ready_with_secret_backed_local_account() {
 }
 
 #[test]
-fn radrootsd_publish_mode_fails_closed_for_direct_relay_publish_paths() {
+fn radrootsd_listing_publish_reaches_listing_router_without_relay_config() {
     let sandbox = RadrootsCliSandbox::new();
-    let missing_listing = sandbox.root().join("missing-listing.toml");
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Router Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let listing_file = create_listing_draft(&sandbox, "radrootsd-router");
+    make_listing_publishable(
+        &listing_file,
+        farm["result"]["config"]["farm_d_tag"]
+            .as_str()
+            .expect("farm d tag"),
+    );
 
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
         "--publish-mode",
         "radrootsd",
-        "--relay",
-        "wss://relay.example.test",
         "--approval-token",
         "approve",
         "listing",
         "publish",
-        missing_listing.to_string_lossy().as_ref(),
+        listing_file.to_string_lossy().as_ref(),
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(3));
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["publish"]["mode"], "radrootsd");
-    assert_eq!(
-        value["errors"][0]["detail"]["publish"]["provider"]["provider_runtime_id"],
-        "radrootsd"
-    );
-    assert_eq!(
-        value["errors"][0]["detail"]["publish"]["provider"]["state"],
-        "unavailable"
+    assert_eq!(value["errors"][0]["code"], "provider_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "provider");
+    assert_contains(&value["errors"][0]["message"], "radrootsd listing publish");
+    assert!(
+        !value["errors"][0]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("configured relay")
     );
 }
 
 #[test]
-fn radrootsd_publish_mode_takes_precedence_over_deferred_signer_mode() {
+fn radrootsd_listing_publish_bypasses_relay_signer_preflight() {
     let sandbox = RadrootsCliSandbox::new();
-    let missing_listing = sandbox.root().join("missing-listing.toml");
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Deferred Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let listing_file = create_listing_draft(&sandbox, "radrootsd-myc-router");
+    make_listing_publishable(
+        &listing_file,
+        farm["result"]["config"]["farm_d_tag"]
+            .as_str()
+            .expect("farm d tag"),
+    );
     sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n\n[signer]\nmode = \"myc\"\n");
 
     let (output, value) = sandbox.json_output(&[
@@ -352,25 +391,48 @@ fn radrootsd_publish_mode_takes_precedence_over_deferred_signer_mode() {
         "approve",
         "listing",
         "publish",
-        missing_listing.to_string_lossy().as_ref(),
+        listing_file.to_string_lossy().as_ref(),
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(3));
     assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
-    assert_eq!(value["errors"][0]["detail"]["publish"]["mode"], "radrootsd");
-    assert_eq!(
-        value["errors"][0]["detail"]["publish"]["provider"]["state"],
-        "unavailable"
+    assert_eq!(value["errors"][0]["code"], "provider_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "provider");
+    assert_contains(&value["errors"][0]["message"], "radrootsd listing publish");
+    assert!(
+        !value["errors"][0]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("signer mode `myc`")
     );
 }
 
 #[test]
-fn radrootsd_publish_mode_fails_closed_for_listing_update() {
+fn radrootsd_publish_mode_routes_listing_update() {
     let sandbox = RadrootsCliSandbox::new();
-    let missing_listing = sandbox.root().join("missing-listing.toml");
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Update Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let listing_file = create_listing_draft(&sandbox, "radrootsd-update-router");
+    make_listing_publishable(
+        &listing_file,
+        farm["result"]["config"]["farm_d_tag"]
+            .as_str()
+            .expect("farm d tag"),
+    );
 
     let (output, value) = sandbox.json_output(&[
         "--format",
@@ -379,23 +441,16 @@ fn radrootsd_publish_mode_fails_closed_for_listing_update() {
         "radrootsd",
         "listing",
         "update",
-        missing_listing.to_string_lossy().as_ref(),
+        listing_file.to_string_lossy().as_ref(),
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(3));
     assert_eq!(value["operation_id"], "listing.update");
     assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["publish"]["mode"], "radrootsd");
-    assert_eq!(
-        value["errors"][0]["detail"]["publish"]["provider"]["provider_runtime_id"],
-        "radrootsd"
-    );
-    assert_eq!(
-        value["errors"][0]["detail"]["publish"]["provider"]["state"],
-        "unavailable"
-    );
+    assert_eq!(value["errors"][0]["code"], "provider_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "provider");
+    assert_contains(&value["errors"][0]["message"], "radrootsd listing publish");
 }
 
 #[test]

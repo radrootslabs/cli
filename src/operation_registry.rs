@@ -1154,9 +1154,6 @@ pub fn requires_nostr_relay_publish_mode(operation_id: &str) -> bool {
     matches!(
         operation_id,
         "farm.publish"
-            | "listing.publish"
-            | "listing.update"
-            | "listing.archive"
             | "order.submit"
             | "order.accept"
             | "order.decline"
@@ -1513,9 +1510,6 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected = [
             "farm.publish",
-            "listing.publish",
-            "listing.update",
-            "listing.archive",
             "order.submit",
             "order.accept",
             "order.decline",

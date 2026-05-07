@@ -150,7 +150,6 @@ impl OperationService<ListingPublishRequest> for ListingOperationService<'_> {
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if !request.context.dry_run {
             require_approval(&request)?;
-            require_relay_target(&request, self.config)?;
         }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
@@ -170,7 +169,6 @@ impl OperationService<ListingArchiveRequest> for ListingOperationService<'_> {
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if !request.context.dry_run {
             require_approval(&request)?;
-            require_relay_target(&request, self.config)?;
         }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
@@ -221,26 +219,6 @@ where
         ));
     }
     Ok(())
-}
-
-fn require_relay_target<P>(
-    request: &OperationRequest<P>,
-    config: &RuntimeConfig,
-) -> Result<(), OperationAdapterError>
-where
-    P: OperationRequestPayload,
-{
-    if !config.relay.urls.is_empty() {
-        return Ok(());
-    }
-
-    Err(OperationAdapterError::NetworkUnavailable {
-        operation_id: request.operation_id().to_owned(),
-        message: format!(
-            "`{}` requires at least one configured relay for direct relay publication",
-            request.spec.cli_path
-        ),
-    })
 }
 
 fn serialized_operation_result<R, T>(value: &T) -> Result<OperationResult<R>, OperationAdapterError>

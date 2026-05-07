@@ -33,7 +33,7 @@ use crate::domain::runtime::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
-use crate::runtime::config::{RuntimeConfig, SignerBackend};
+use crate::runtime::config::{PublishMode, RuntimeConfig, SignerBackend};
 use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayPublishReceipt, publish_parts_with_identity,
 };
@@ -47,9 +47,12 @@ use crate::runtime_args::{
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
-const LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
+const RELAY_LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
+const RADROOTSD_LISTING_WRITE_SOURCE: &str = "radrootsd publish transport · signer session";
 const DIRECT_RELAY_UNAVAILABLE_REASON: &str =
     "direct Nostr relay publishing is not implemented for listing update";
+const RADROOTSD_LISTING_UNAVAILABLE_REASON: &str =
+    "radrootsd listing publish transport is not implemented";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -883,7 +886,7 @@ fn mutate(
         return Ok(ListingMutationView {
             state: "dry_run".to_owned(),
             operation: operation.as_str().to_owned(),
-            source: LISTING_WRITE_SOURCE.to_owned(),
+            source: listing_write_source(config).to_owned(),
             file: args.file.display().to_string(),
             listing_id: canonical.listing_id.clone(),
             listing_addr: listing_addr.clone(),
@@ -902,7 +905,7 @@ fn mutate(
             idempotency_key: args.idempotency_key.clone(),
             signer_session_id: None,
             requested_signer_session_id: args.signer_session_id.clone(),
-            reason: Some("dry run requested; relay publish skipped".to_owned()),
+            reason: Some(dry_run_reason(config)),
             job: None,
             event: args.print_event.then_some(event_draft.event),
             actions: vec![format!(
@@ -913,19 +916,47 @@ fn mutate(
         });
     }
 
-    if matches!(operation, ListingMutationOperation::Update) {
-        return Ok(direct_relay_unavailable_view(
+    match config.publish.mode {
+        PublishMode::NostrRelay => mutate_via_direct_relay(
+            config,
+            args,
+            operation,
+            &canonical,
+            listing_addr,
+            event_draft,
+        ),
+        PublishMode::Radrootsd => Ok(radrootsd_unavailable_view(
             config,
             args,
             operation,
             &canonical,
             listing_addr,
             event_draft.event,
+        )),
+    }
+}
+
+fn mutate_via_direct_relay(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+    canonical: &CanonicalListingDraft,
+    listing_addr: String,
+    event_draft: ListingMutationEventDraft,
+) -> Result<ListingMutationView, RuntimeError> {
+    if matches!(operation, ListingMutationOperation::Update) {
+        return Ok(direct_relay_unavailable_view(
+            config,
+            args,
+            operation,
+            canonical,
+            listing_addr,
+            event_draft.event,
         ));
     }
 
     let signing = if matches!(config.signer.backend, SignerBackend::Local) {
-        resolve_listing_signing_identity(config, &canonical)?
+        resolve_listing_signing_identity(config, canonical)?
     } else {
         match resolve_actor_write_authority(config, "seller", canonical.seller_pubkey.as_str()) {
             Ok(_) => {
@@ -933,7 +964,7 @@ fn mutate(
                     config,
                     args,
                     operation,
-                    &canonical,
+                    canonical,
                     listing_addr,
                     event_draft.event,
                     ActorWriteBindingError::Unconfigured(
@@ -946,7 +977,7 @@ fn mutate(
                     config,
                     args,
                     operation,
-                    &canonical,
+                    canonical,
                     listing_addr,
                     event_draft.event,
                     error,
@@ -963,11 +994,25 @@ fn mutate(
         config,
         args,
         operation,
-        &canonical,
+        canonical,
         listing_addr,
         event_draft.event,
         receipt,
     ))
+}
+
+fn listing_write_source(config: &RuntimeConfig) -> &'static str {
+    match config.publish.mode {
+        PublishMode::NostrRelay => RELAY_LISTING_WRITE_SOURCE,
+        PublishMode::Radrootsd => RADROOTSD_LISTING_WRITE_SOURCE,
+    }
+}
+
+fn dry_run_reason(config: &RuntimeConfig) -> String {
+    match config.publish.mode {
+        PublishMode::NostrRelay => "dry run requested; relay publish skipped".to_owned(),
+        PublishMode::Radrootsd => "dry run requested; radrootsd submission skipped".to_owned(),
+    }
 }
 
 fn scaffold_contents(draft: &ListingDraftDocument) -> Result<String, RuntimeError> {
@@ -1425,7 +1470,7 @@ fn direct_relay_unavailable_view(
     ListingMutationView {
         state: "unavailable".to_owned(),
         operation: operation.as_str().to_owned(),
-        source: LISTING_WRITE_SOURCE.to_owned(),
+        source: listing_write_source(config).to_owned(),
         file: args.file.display().to_string(),
         listing_id: canonical.listing_id.clone(),
         listing_addr: listing_addr.clone(),
@@ -1445,6 +1490,43 @@ fn direct_relay_unavailable_view(
         signer_session_id: None,
         requested_signer_session_id: args.signer_session_id.clone(),
         reason: Some(DIRECT_RELAY_UNAVAILABLE_REASON.to_owned()),
+        job: None,
+        event: args.print_event.then_some(event_preview),
+        actions: Vec::new(),
+    }
+}
+
+fn radrootsd_unavailable_view(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    operation: ListingMutationOperation,
+    canonical: &CanonicalListingDraft,
+    listing_addr: String,
+    event_preview: ListingMutationEventView,
+) -> ListingMutationView {
+    ListingMutationView {
+        state: "unavailable".to_owned(),
+        operation: operation.as_str().to_owned(),
+        source: listing_write_source(config).to_owned(),
+        file: args.file.display().to_string(),
+        listing_id: canonical.listing_id.clone(),
+        listing_addr: listing_addr.clone(),
+        seller_pubkey: canonical.seller_pubkey.clone(),
+        event_kind: KIND_LISTING,
+        dry_run: false,
+        deduplicated: false,
+        target_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        job_id: None,
+        job_status: None,
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        event_id: None,
+        event_addr: Some(listing_addr),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_session_id: None,
+        requested_signer_session_id: args.signer_session_id.clone(),
+        reason: Some(RADROOTSD_LISTING_UNAVAILABLE_REASON.to_owned()),
         job: None,
         event: args.print_event.then_some(event_preview),
         actions: Vec::new(),
@@ -1495,7 +1577,7 @@ fn binding_error_view(
     ListingMutationView {
         state: state.clone(),
         operation: operation.as_str().to_owned(),
-        source: LISTING_WRITE_SOURCE.to_owned(),
+        source: listing_write_source(config).to_owned(),
         file: args.file.display().to_string(),
         listing_id: canonical.listing_id.clone(),
         listing_addr,
@@ -1548,7 +1630,7 @@ fn published_mutation_view(
         }
         .to_owned(),
         operation: operation.as_str().to_owned(),
-        source: LISTING_WRITE_SOURCE.to_owned(),
+        source: listing_write_source(config).to_owned(),
         file: args.file.display().to_string(),
         listing_id: canonical.listing_id.clone(),
         listing_addr: listing_addr.clone(),
