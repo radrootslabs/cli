@@ -680,6 +680,28 @@ fn myc_signer_status_does_not_invoke_configured_executable() {
 }
 
 #[test]
+fn myc_mode_allows_read_inspection_commands() {
+    let sandbox = RadrootsCliSandbox::new();
+    let missing_myc = sandbox.root().join("bin/missing-myc");
+    configure_myc_mode(&sandbox, &missing_myc);
+
+    for args in [
+        &["--format", "json", "workspace", "get"][..],
+        &["--format", "json", "config", "get"][..],
+        &["--format", "json", "account", "list"][..],
+        &["--format", "json", "relay", "list"][..],
+    ] {
+        let (output, value) = sandbox.json_output(args);
+
+        assert!(
+            output.status.success(),
+            "`{args:?}` should remain observable under MYC mode: {value:?}"
+        );
+        assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
+    }
+}
+
+#[test]
 fn local_listing_publish_fails_without_local_account_authority() {
     let sandbox = RadrootsCliSandbox::new();
     let listing_file = create_listing_draft(&sandbox, "local-no-account");

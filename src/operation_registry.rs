@@ -39,6 +39,12 @@ pub enum OperationRole {
     Seller,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkRequirement {
+    Local,
+    External { dry_run_requires_network: bool },
+}
+
 macro_rules! operation {
     (
         $operation_id:literal,
@@ -1104,6 +1110,46 @@ pub fn get_operation(operation_id: &str) -> Option<&'static OperationSpec> {
         .find(|operation| operation.operation_id == operation_id)
 }
 
+pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
+    match operation_id {
+        "sync.pull" | "sync.push" | "sync.watch" | "market.refresh" | "farm.publish"
+        | "listing.publish" | "listing.archive" | "order.submit" | "order.status.get"
+        | "order.event.list" | "order.event.watch" => NetworkRequirement::External {
+            dry_run_requires_network: false,
+        },
+        "order.accept"
+        | "order.decline"
+        | "order.cancel"
+        | "order.revision.propose"
+        | "order.revision.accept"
+        | "order.revision.decline"
+        | "order.fulfillment.update"
+        | "order.receipt.record" => NetworkRequirement::External {
+            dry_run_requires_network: true,
+        },
+        _ => NetworkRequirement::Local,
+    }
+}
+
+pub fn requires_local_signer_mode(operation_id: &str) -> bool {
+    matches!(
+        operation_id,
+        "signer.status.get"
+            | "farm.publish"
+            | "listing.publish"
+            | "listing.archive"
+            | "order.submit"
+            | "order.accept"
+            | "order.decline"
+            | "order.cancel"
+            | "order.revision.propose"
+            | "order.revision.accept"
+            | "order.revision.decline"
+            | "order.fulfillment.update"
+            | "order.receipt.record"
+    )
+}
+
 pub fn registry_linkage_is_valid() -> bool {
     OPERATION_REGISTRY.iter().all(|operation| {
         get_operation(operation.operation_id).is_some()
@@ -1117,7 +1163,10 @@ pub fn registry_linkage_is_valid() -> bool {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{ApprovalPolicy, OPERATION_REGISTRY, OperationRole, RiskLevel, get_operation};
+    use super::{
+        ApprovalPolicy, NetworkRequirement, OPERATION_REGISTRY, OperationRole, RiskLevel,
+        get_operation, network_requirement, requires_local_signer_mode,
+    };
 
     const EXPECTED_OPERATION_IDS: &[&str] = &[
         "workspace.init",
@@ -1366,6 +1415,73 @@ mod tests {
         .collect::<BTreeSet<_>>();
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn registry_network_requirements_are_explicit() {
+        let external = OPERATION_REGISTRY
+            .iter()
+            .filter(|operation| {
+                matches!(
+                    network_requirement(operation.operation_id),
+                    NetworkRequirement::External { .. }
+                )
+            })
+            .map(|operation| operation.operation_id)
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "sync.pull",
+            "sync.push",
+            "sync.watch",
+            "market.refresh",
+            "farm.publish",
+            "listing.publish",
+            "listing.archive",
+            "order.submit",
+            "order.accept",
+            "order.decline",
+            "order.cancel",
+            "order.revision.propose",
+            "order.revision.accept",
+            "order.revision.decline",
+            "order.fulfillment.update",
+            "order.receipt.record",
+            "order.status.get",
+            "order.event.list",
+            "order.event.watch",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+        assert_eq!(external, expected);
+    }
+
+    #[test]
+    fn registry_local_signer_requirements_are_explicit() {
+        let signed = OPERATION_REGISTRY
+            .iter()
+            .filter(|operation| requires_local_signer_mode(operation.operation_id))
+            .map(|operation| operation.operation_id)
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "signer.status.get",
+            "farm.publish",
+            "listing.publish",
+            "listing.archive",
+            "order.submit",
+            "order.accept",
+            "order.decline",
+            "order.cancel",
+            "order.revision.propose",
+            "order.revision.accept",
+            "order.revision.decline",
+            "order.fulfillment.update",
+            "order.receipt.record",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+        assert_eq!(signed, expected);
     }
 
     #[test]

@@ -35,6 +35,9 @@ use crate::operation_farm::FarmOperationService;
 use crate::operation_listing::ListingOperationService;
 use crate::operation_market::MarketOperationService;
 use crate::operation_order::OrderOperationService;
+use crate::operation_registry::{
+    NetworkRequirement, network_requirement, requires_local_signer_mode,
+};
 use crate::operation_runtime::RuntimeOperationService;
 use crate::output_contract::OutputEnvelope;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
@@ -385,8 +388,10 @@ fn validate_signer_mode_contract(
     request: &TargetOperationRequest,
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
-    if matches!(config.signer.backend, SignerBackend::Myc) {
-        let spec = request.spec();
+    let spec = request.spec();
+    if matches!(config.signer.backend, SignerBackend::Myc)
+        && requires_local_signer_mode(spec.operation_id)
+    {
         return Err(OperationAdapterError::SignerModeDeferred {
             operation_id: spec.operation_id.to_owned(),
             message: format!(
@@ -403,12 +408,14 @@ fn validate_network_contract(
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
-    let external = external_network_operation(spec.operation_id);
+    let requirement = network_requirement(spec.operation_id);
     match request.context().network_mode {
         OperationNetworkMode::Default => Ok(()),
         OperationNetworkMode::Offline => {
-            if external
-                && (!request.context().dry_run || dry_run_requires_network(spec.operation_id))
+            if let NetworkRequirement::External {
+                dry_run_requires_network,
+            } = requirement
+                && (!request.context().dry_run || dry_run_requires_network)
             {
                 return Err(OperationAdapterError::OfflineForbidden {
                     operation_id: spec.operation_id.to_owned(),
@@ -421,8 +428,10 @@ fn validate_network_contract(
             Ok(())
         }
         OperationNetworkMode::Online => {
-            if external
-                && (!request.context().dry_run || dry_run_requires_network(request.operation_id()))
+            if let NetworkRequirement::External {
+                dry_run_requires_network,
+            } = requirement
+                && (!request.context().dry_run || dry_run_requires_network)
                 && config.relay.urls.is_empty()
             {
                 return Err(OperationAdapterError::NetworkUnavailable {
@@ -436,45 +445,6 @@ fn validate_network_contract(
             Ok(())
         }
     }
-}
-
-fn dry_run_requires_network(operation_id: &str) -> bool {
-    matches!(
-        operation_id,
-        "order.accept"
-            | "order.decline"
-            | "order.cancel"
-            | "order.revision.propose"
-            | "order.revision.accept"
-            | "order.revision.decline"
-            | "order.fulfillment.update"
-            | "order.receipt.record"
-    )
-}
-
-fn external_network_operation(operation_id: &str) -> bool {
-    matches!(
-        operation_id,
-        "sync.pull"
-            | "sync.push"
-            | "sync.watch"
-            | "market.refresh"
-            | "farm.publish"
-            | "listing.publish"
-            | "listing.archive"
-            | "order.submit"
-            | "order.accept"
-            | "order.decline"
-            | "order.cancel"
-            | "order.revision.propose"
-            | "order.revision.accept"
-            | "order.revision.decline"
-            | "order.fulfillment.update"
-            | "order.receipt.record"
-            | "order.status.get"
-            | "order.event.list"
-            | "order.event.watch"
-    )
 }
 
 fn failure_envelope(
