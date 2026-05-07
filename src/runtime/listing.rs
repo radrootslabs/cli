@@ -2585,6 +2585,70 @@ mod tests {
     }
 
     #[test]
+    fn local_replica_ingest_makes_listing_writes_visible_to_local_reads() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let replica = temp.path().join("replica.sqlite");
+        std::fs::File::create(&replica).expect("replica placeholder");
+        let identity = RadrootsIdentity::generate();
+        let seller_pubkey = identity.public_key_hex();
+        let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+        let listing_addr = format!(
+            "{}:{}:{}",
+            super::KIND_LISTING,
+            seller_pubkey,
+            listing_d_tag
+        );
+
+        let active = signed_test_listing_event_with_identity(
+            &identity,
+            test_listing_wire_parts(&seller_pubkey, listing_d_tag, "active", "Pasture Eggs"),
+        );
+        let active_view =
+            ingest_listing_event_into_local_replica(&replica, &active, Some(listing_addr.clone()));
+        assert_eq!(active_view.state, "applied");
+        assert_eq!(active_view.store_state, "ready");
+        assert_eq!(active_view.ingest_outcome.as_deref(), Some("applied"));
+
+        let db = super::ReplicaSql::new(super::SqliteExecutor::open(&replica).expect("open db"));
+        let active_rows = db
+            .trade_product_search(&["eggs".to_owned()])
+            .expect("search active");
+        assert_eq!(active_rows.len(), 1);
+        assert_eq!(active_rows[0].title, "Pasture Eggs");
+        assert_eq!(
+            active_rows[0].listing_addr.as_deref(),
+            Some(listing_addr.as_str())
+        );
+
+        let updated = signed_test_listing_event_with_identity(
+            &identity,
+            test_listing_wire_parts(&seller_pubkey, listing_d_tag, "active", "Market Eggs"),
+        );
+        let updated_view =
+            ingest_listing_event_into_local_replica(&replica, &updated, Some(listing_addr.clone()));
+        assert_eq!(updated_view.state, "applied");
+        let db = super::ReplicaSql::new(super::SqliteExecutor::open(&replica).expect("open db"));
+        let updated_rows = db
+            .trade_product_search(&["eggs".to_owned()])
+            .expect("search updated");
+        assert_eq!(updated_rows.len(), 1);
+        assert_eq!(updated_rows[0].title, "Market Eggs");
+
+        let archived = signed_test_listing_event_with_identity(
+            &identity,
+            test_listing_wire_parts(&seller_pubkey, listing_d_tag, "archived", "Market Eggs"),
+        );
+        let archived_view =
+            ingest_listing_event_into_local_replica(&replica, &archived, Some(listing_addr));
+        assert_eq!(archived_view.state, "applied");
+        let db = super::ReplicaSql::new(super::SqliteExecutor::open(&replica).expect("open db"));
+        let archived_rows = db
+            .trade_product_search(&["eggs".to_owned()])
+            .expect("search archived");
+        assert!(archived_rows.is_empty());
+    }
+
+    #[test]
     fn listing_draft_kind_constant_is_stable() {
         let document = ListingDraftDocument {
             version: 1,
@@ -2717,9 +2781,68 @@ mod tests {
         parts: WireEventParts,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let identity = RadrootsIdentity::generate();
+        signed_test_listing_event_with_identity(&identity, parts)
+    }
+
+    fn signed_test_listing_event_with_identity(
+        identity: &RadrootsIdentity,
+        parts: WireEventParts,
+    ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
             .expect("event builder")
             .sign_with_keys(identity.keys())
             .expect("signed event")
+    }
+
+    fn test_listing_wire_parts(
+        seller_pubkey: &str,
+        listing_d_tag: &str,
+        status: &str,
+        title: &str,
+    ) -> WireEventParts {
+        let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAA";
+        WireEventParts {
+            kind: super::KIND_LISTING,
+            content: format!("# {title}"),
+            tags: vec![
+                vec!["d".to_owned(), listing_d_tag.to_owned()],
+                vec![
+                    "a".to_owned(),
+                    format!(
+                        "{}:{}:{}",
+                        radroots_events::kinds::KIND_FARM,
+                        seller_pubkey,
+                        farm_d_tag
+                    ),
+                ],
+                vec!["p".to_owned(), seller_pubkey.to_owned()],
+                vec!["key".to_owned(), "pasture-eggs".to_owned()],
+                vec!["title".to_owned(), title.to_owned()],
+                vec!["category".to_owned(), "eggs".to_owned()],
+                vec!["summary".to_owned(), "Pasture-raised eggs".to_owned()],
+                vec!["radroots:primary_bin".to_owned(), "bin-a".to_owned()],
+                vec![
+                    "radroots:bin".to_owned(),
+                    "bin-a".to_owned(),
+                    "12".to_owned(),
+                    "each".to_owned(),
+                    "12".to_owned(),
+                    "each".to_owned(),
+                    "dozen".to_owned(),
+                ],
+                vec![
+                    "radroots:price".to_owned(),
+                    "bin-a".to_owned(),
+                    "6".to_owned(),
+                    "USD".to_owned(),
+                    "1".to_owned(),
+                    "each".to_owned(),
+                    "6".to_owned(),
+                    "each".to_owned(),
+                ],
+                vec!["inventory".to_owned(), "5".to_owned()],
+                vec!["status".to_owned(), status.to_owned()],
+            ],
+        }
     }
 }
