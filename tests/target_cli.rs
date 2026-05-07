@@ -596,6 +596,8 @@ fn radrootsd_publish_mode_routes_listing_update() {
         "json",
         "--publish-mode",
         "radrootsd",
+        "--approval-token",
+        "approve",
         "listing",
         "update",
         listing_file.to_string_lossy().as_ref(),
@@ -611,7 +613,7 @@ fn radrootsd_publish_mode_routes_listing_update() {
 }
 
 #[test]
-fn listing_update_unavailable_support_exits_nonzero() {
+fn listing_update_publish_attempts_direct_relay_with_approval() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let farm = sandbox.json_success(&[
@@ -641,21 +643,27 @@ fn listing_update_unavailable_support_exits_nonzero() {
         "json",
         "--relay",
         "ws://127.0.0.1:9",
+        "--approval-token",
+        "approve",
         "listing",
         "update",
         listing_file.to_string_lossy().as_ref(),
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
     assert_eq!(value["operation_id"], "listing.update");
     assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "network");
+    assert_contains(
+        &value["errors"][0]["message"],
+        "direct relay connection failed",
+    );
     assert!(
-        value["errors"][0]["message"]
+        !value["errors"][0]["message"]
             .as_str()
             .expect("error message")
-            .contains("direct Nostr relay publishing is not implemented for listing update")
+            .contains("not implemented")
     );
     assert_no_removed_command_reference(&value, &["listing", "update"]);
     assert_no_daemon_runtime_reference(&value, &["listing", "update"]);
@@ -2238,6 +2246,11 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
         &sandbox,
         "listing.publish",
         &["listing", "publish", "missing-listing.toml"],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "listing.update",
+        &["listing", "update", "missing-listing.toml"],
     );
     assert_required_approval_token_rejected(
         &sandbox,

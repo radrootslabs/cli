@@ -753,6 +753,60 @@ fn local_listing_publish_dry_run_validates_local_account_authority() {
 }
 
 #[test]
+fn local_listing_update_dry_run_validates_local_account_authority() {
+    let sandbox = RadrootsCliSandbox::new();
+    let listing_file = create_listing_draft(&sandbox, "local-update-dry-run-no-account");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "update",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.update");
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "account_unresolved");
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
+    assert_no_removed_command_reference(&value, &["listing", "update", "--dry-run"]);
+}
+
+#[test]
+fn local_listing_update_dry_run_rejects_mismatched_local_account() {
+    let sandbox = RadrootsCliSandbox::new();
+    let first = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let listing_file = create_listing_draft(&sandbox, "local-update-dry-run-mismatch");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--account-id",
+        second_account_id,
+        "--dry-run",
+        "listing",
+        "update",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert_ne!(
+        first["result"]["account"]["id"],
+        second["result"]["account"]["id"]
+    );
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.update");
+    assert_eq!(value["errors"][0]["code"], "account_mismatch");
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
+}
+
+#[test]
 fn local_listing_publish_fails_without_configured_relay() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -1311,6 +1365,43 @@ fn watch_only_listing_publish_fails_as_account_watch_only() {
     assert_eq!(value["errors"][0]["exit_code"], 7);
     assert_eq!(value["errors"][0]["detail"]["class"], "account");
     assert_contains(&value["errors"][0]["message"], "resolved account");
+    assert_contains(&value["errors"][0]["message"], "watch_only");
+}
+
+#[test]
+fn watch_only_listing_update_dry_run_fails_as_account_watch_only() {
+    let sandbox = RadrootsCliSandbox::new();
+    let public_identity = identity_public(13);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "watch-only-update", &public_identity);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let listing_file = create_listing_draft(&sandbox, "watch-only-update");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "update",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "listing.update");
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "account_watch_only");
+    assert_eq!(value["errors"][0]["exit_code"], 7);
+    assert_eq!(value["errors"][0]["detail"]["class"], "account");
     assert_contains(&value["errors"][0]["message"], "watch_only");
 }
 

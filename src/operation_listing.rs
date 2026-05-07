@@ -113,6 +113,9 @@ impl OperationService<ListingUpdateRequest> for ListingOperationService<'_> {
         &self,
         request: OperationRequest<ListingUpdateRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        if !request.context.dry_run {
+            require_approval(&request)?;
+        }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
         let view = map_runtime(

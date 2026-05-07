@@ -59,8 +59,6 @@ const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
 const RELAY_LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
 const RADROOTSD_LISTING_WRITE_SOURCE: &str = "radrootsd publish transport · signer session";
-const DIRECT_RELAY_UNAVAILABLE_REASON: &str =
-    "direct Nostr relay publishing is not implemented for listing update";
 const RADROOTSD_BRIDGE_LISTING_PUBLISH_METHOD: &str = "bridge.listing.publish";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 
@@ -884,7 +882,9 @@ fn mutate(
     if config.output.dry_run
         && matches!(
             operation,
-            ListingMutationOperation::Publish | ListingMutationOperation::Archive
+            ListingMutationOperation::Publish
+                | ListingMutationOperation::Update
+                | ListingMutationOperation::Archive
         )
         && matches!(config.signer.backend, SignerBackend::Local)
     {
@@ -892,6 +892,25 @@ fn mutate(
     }
 
     if config.output.dry_run {
+        let requested_signer_session_id = match config.publish.mode {
+            PublishMode::NostrRelay => args.signer_session_id.clone(),
+            PublishMode::Radrootsd => {
+                let Some(signer_session_id) = resolve_radrootsd_signer_session_id(config, args)
+                else {
+                    return Ok(radrootsd_preflight_view(
+                        config,
+                        args,
+                        operation,
+                        &canonical,
+                        listing_addr,
+                        event_draft.event,
+                        "unconfigured",
+                        "radrootsd listing publish dry-run requires `signer_session_id` input or a signer.remote_nip46 capability binding with signer_session_ref",
+                    ));
+                };
+                Some(signer_session_id)
+            }
+        };
         return Ok(ListingMutationView {
             state: "dry_run".to_owned(),
             operation: operation.as_str().to_owned(),
@@ -909,12 +928,12 @@ fn mutate(
             failed_relays: Vec::new(),
             job_id: None,
             job_status: None,
-            signer_mode: None,
+            signer_mode: dry_run_signer_mode(config),
             event_id: None,
             event_addr: Some(listing_addr.clone()),
             idempotency_key: args.idempotency_key.clone(),
             signer_session_id: None,
-            requested_signer_session_id: args.signer_session_id.clone(),
+            requested_signer_session_id,
             reason: Some(dry_run_reason(config)),
             job: None,
             event: args.print_event.then_some(event_draft.event),
@@ -954,17 +973,6 @@ fn mutate_via_direct_relay(
     listing_addr: String,
     event_draft: ListingMutationEventDraft,
 ) -> Result<ListingMutationView, RuntimeError> {
-    if matches!(operation, ListingMutationOperation::Update) {
-        return Ok(direct_relay_unavailable_view(
-            config,
-            args,
-            operation,
-            canonical,
-            listing_addr,
-            event_draft.event,
-        ));
-    }
-
     let signing = if matches!(config.signer.backend, SignerBackend::Local) {
         resolve_listing_signing_identity(config, canonical)?
     } else {
@@ -1251,6 +1259,13 @@ fn dry_run_reason(config: &RuntimeConfig) -> String {
     match config.publish.mode {
         PublishMode::NostrRelay => "dry run requested; relay publish skipped".to_owned(),
         PublishMode::Radrootsd => "dry run requested; radrootsd submission skipped".to_owned(),
+    }
+}
+
+fn dry_run_signer_mode(config: &RuntimeConfig) -> Option<String> {
+    match config.publish.mode {
+        PublishMode::NostrRelay => None,
+        PublishMode::Radrootsd => Some("nip46".to_owned()),
     }
 }
 
@@ -1696,44 +1711,6 @@ fn build_listing_event_draft(
         },
         validated.listing_addr,
     ))
-}
-
-fn direct_relay_unavailable_view(
-    config: &RuntimeConfig,
-    args: &ListingMutationArgs,
-    operation: ListingMutationOperation,
-    canonical: &CanonicalListingDraft,
-    listing_addr: String,
-    event_preview: ListingMutationEventView,
-) -> ListingMutationView {
-    ListingMutationView {
-        state: "unavailable".to_owned(),
-        operation: operation.as_str().to_owned(),
-        source: listing_write_source(config).to_owned(),
-        file: args.file.display().to_string(),
-        listing_id: canonical.listing_id.clone(),
-        listing_addr: listing_addr.clone(),
-        seller_pubkey: canonical.seller_pubkey.clone(),
-        event_kind: KIND_LISTING,
-        dry_run: false,
-        deduplicated: false,
-        target_relays: Vec::new(),
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
-        job_id: None,
-        job_status: None,
-        signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        event_id: None,
-        event_addr: Some(listing_addr),
-        idempotency_key: args.idempotency_key.clone(),
-        signer_session_id: None,
-        requested_signer_session_id: args.signer_session_id.clone(),
-        reason: Some(DIRECT_RELAY_UNAVAILABLE_REASON.to_owned()),
-        job: None,
-        event: args.print_event.then_some(event_preview),
-        actions: Vec::new(),
-    }
 }
 
 fn radrootsd_preflight_view(
