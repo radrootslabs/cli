@@ -5,25 +5,26 @@ use serde_json::{Value, json};
 
 use crate::domain::runtime::{CommandDisposition, LocalBackupView};
 use crate::operation_adapter::{
-    AccountCreateRequest, AccountCreateResult, AccountGetRequest, AccountGetResult,
-    AccountImportRequest, AccountImportResult, AccountListRequest, AccountListResult,
-    AccountRemoveRequest, AccountRemoveResult, AccountSelectionClearRequest,
-    AccountSelectionClearResult, AccountSelectionGetRequest, AccountSelectionGetResult,
-    AccountSelectionUpdateRequest, AccountSelectionUpdateResult, ConfigGetRequest, ConfigGetResult,
-    HealthCheckRunRequest, HealthCheckRunResult, HealthStatusGetRequest, HealthStatusGetResult,
-    OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
-    OperationResult, OperationResultData, OperationService, StoreBackupCreateRequest,
-    StoreBackupCreateResult, StoreExportRequest, StoreExportResult, StoreInitRequest,
-    StoreInitResult, StoreStatusGetRequest, StoreStatusGetResult, WorkspaceGetRequest,
-    WorkspaceGetResult, WorkspaceInitRequest, WorkspaceInitResult,
+    AccountAttachSecretRequest, AccountAttachSecretResult, AccountCreateRequest,
+    AccountCreateResult, AccountGetRequest, AccountGetResult, AccountImportRequest,
+    AccountImportResult, AccountListRequest, AccountListResult, AccountRemoveRequest,
+    AccountRemoveResult, AccountSelectionClearRequest, AccountSelectionClearResult,
+    AccountSelectionGetRequest, AccountSelectionGetResult, AccountSelectionUpdateRequest,
+    AccountSelectionUpdateResult, ConfigGetRequest, ConfigGetResult, HealthCheckRunRequest,
+    HealthCheckRunResult, HealthStatusGetRequest, HealthStatusGetResult, OperationAdapterError,
+    OperationRequest, OperationRequestData, OperationRequestPayload, OperationResult,
+    OperationResultData, OperationService, StoreBackupCreateRequest, StoreBackupCreateResult,
+    StoreExportRequest, StoreExportResult, StoreInitRequest, StoreInitResult,
+    StoreStatusGetRequest, StoreStatusGetResult, WorkspaceGetRequest, WorkspaceGetResult,
+    WorkspaceInitRequest, WorkspaceInitResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{
-    account_resolution_view, account_summary_view, clear_default_account,
+    account_resolution_view, account_summary_view, attach_identity_secret, clear_default_account,
     create_or_migrate_default_account, import_public_identity, preview_account_removal,
-    preview_public_identity_import, remove_account, resolve_account_resolution,
-    resolve_account_selector, secret_backend_status, select_account, snapshot,
-    unresolved_account_reason,
+    preview_identity_secret_attachment, preview_public_identity_import, remove_account,
+    resolve_account_resolution, resolve_account_selector, secret_backend_status, select_account,
+    snapshot, unresolved_account_reason,
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::logging::LoggingState;
@@ -261,6 +262,63 @@ impl OperationService<AccountImportRequest> for CoreOperationService<'_> {
         )?;
         json_operation_result::<AccountImportResult>(json!({
             "state": "imported",
+            "account": account_summary_view(&account),
+        }))
+    }
+}
+
+impl OperationService<AccountAttachSecretRequest> for CoreOperationService<'_> {
+    type Result = AccountAttachSecretResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<AccountAttachSecretRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let selector = required_string(&request, "selector")?;
+        let path = required_path(&request, "path")?;
+        let make_default = bool_input(&request, "default").unwrap_or(false);
+        if request.context.dry_run {
+            let secret_backend = account_secret_backend_ready(request.operation_id(), self.config)?;
+            let account = map_expected_runtime(
+                request.operation_id(),
+                preview_identity_secret_attachment(
+                    self.config,
+                    selector.as_str(),
+                    path.as_path(),
+                    make_default,
+                ),
+            )?;
+            return json_operation_result::<AccountAttachSecretResult>(json!({
+                "state": "dry_run",
+                "path": path.display().to_string(),
+                "default": make_default,
+                "secret_backend": {
+                    "state": secret_backend.state,
+                    "active_backend": secret_backend.active_backend,
+                    "used_fallback": secret_backend.used_fallback,
+                },
+                "account": account_summary_view(&account),
+            }));
+        }
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
+
+        let secret_backend = account_secret_backend_ready(request.operation_id(), self.config)?;
+        let account = map_expected_runtime(
+            request.operation_id(),
+            attach_identity_secret(self.config, selector.as_str(), path.as_path(), make_default),
+        )?;
+        json_operation_result::<AccountAttachSecretResult>(json!({
+            "state": "secret_attached",
+            "default": make_default,
+            "secret_backend": {
+                "state": secret_backend.state,
+                "active_backend": secret_backend.active_backend,
+                "used_fallback": secret_backend.used_fallback,
+            },
             "account": account_summary_view(&account),
         }))
     }
@@ -532,6 +590,23 @@ fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapter
     result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
 }
 
+fn account_secret_backend_ready(
+    operation_id: &str,
+    config: &RuntimeConfig,
+) -> Result<crate::runtime::accounts::AccountSecretBackendStatus, OperationAdapterError> {
+    let secret_backend = secret_backend_status(config);
+    if secret_backend.state == "ready" {
+        return Ok(secret_backend);
+    }
+
+    Err(OperationAdapterError::OperationUnavailable {
+        operation_id: operation_id.to_owned(),
+        message: secret_backend
+            .reason
+            .unwrap_or_else(|| "account secret backend is not available".to_owned()),
+    })
+}
+
 fn map_expected_runtime<T>(
     operation_id: &str,
     result: Result<T, RuntimeError>,
@@ -643,9 +718,9 @@ mod tests {
 
     use super::CoreOperationService;
     use crate::operation_adapter::{
-        AccountCreateRequest, AccountImportRequest, AccountListRequest, AccountRemoveRequest,
-        OperationAdapter, OperationContext, OperationData, OperationRequest, StoreStatusGetRequest,
-        WorkspaceGetRequest,
+        AccountAttachSecretRequest, AccountCreateRequest, AccountImportRequest, AccountListRequest,
+        AccountRemoveRequest, OperationAdapter, OperationContext, OperationData, OperationRequest,
+        StoreStatusGetRequest, WorkspaceGetRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -757,6 +832,23 @@ mod tests {
         let import_error = service.execute(import).expect_err("approval required");
         assert_eq!(import_error.to_output_error().code, "approval_required");
         assert_eq!(import_error.to_output_error().exit_code, 6);
+
+        let attach_secret = OperationRequest::new(
+            OperationContext::default(),
+            AccountAttachSecretRequest::from_data(data(&[
+                ("selector", "acct_test"),
+                ("path", "account.json"),
+            ])),
+        )
+        .expect("account attach-secret request");
+        let attach_secret_error = service
+            .execute(attach_secret)
+            .expect_err("approval required");
+        assert_eq!(
+            attach_secret_error.to_output_error().code,
+            "approval_required"
+        );
+        assert_eq!(attach_secret_error.to_output_error().exit_code, 6);
 
         let remove = OperationRequest::new(
             OperationContext::default(),

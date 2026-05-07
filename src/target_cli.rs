@@ -84,6 +84,7 @@ impl TargetCommand {
             Self::Account(args) => match &args.command {
                 AccountCommand::Create => "account.create",
                 AccountCommand::Import(_) => "account.import",
+                AccountCommand::AttachSecret(_) => "account.attach_secret",
                 AccountCommand::Get(_) => "account.get",
                 AccountCommand::List => "account.list",
                 AccountCommand::Remove(_) => "account.remove",
@@ -276,6 +277,7 @@ pub struct AccountArgs {
 pub enum AccountCommand {
     Create,
     Import(AccountImportArgs),
+    AttachSecret(AccountAttachSecretArgs),
     Get(AccountGetArgs),
     List,
     Remove(AccountSelectorArgs),
@@ -284,6 +286,14 @@ pub enum AccountCommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct AccountImportArgs {
+    pub path: Option<PathBuf>,
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub default: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AccountAttachSecretArgs {
+    pub selector: Option<String>,
     pub path: Option<PathBuf>,
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub default: bool,
@@ -989,9 +999,9 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{
-        OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg, OrderPaymentCommand,
-        OrderReceiptCommand, OrderRevisionCommand, OrderSettlementCommand, TargetCliArgs,
-        TargetOutputFormat,
+        AccountCommand, OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg,
+        OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand, OrderSettlementCommand,
+        TargetCliArgs, TargetOutputFormat,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
 
@@ -1077,6 +1087,33 @@ mod tests {
         assert!(parsed.quiet);
         assert!(parsed.no_color);
         assert_eq!(parsed.command.operation_id(), "workspace.get");
+    }
+
+    #[test]
+    fn target_parser_accepts_account_attach_secret_inputs() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "account",
+            "attach-secret",
+            "acct_test",
+            "identity.json",
+            "--default",
+        ])
+        .expect("target args parse");
+
+        assert_eq!(parsed.command.operation_id(), "account.attach_secret");
+        let crate::target_cli::TargetCommand::Account(account) = parsed.command else {
+            panic!("expected account command")
+        };
+        let AccountCommand::AttachSecret(args) = account.command else {
+            panic!("expected account attach-secret command")
+        };
+        assert_eq!(args.selector.as_deref(), Some("acct_test"));
+        assert_eq!(
+            args.path.as_ref().map(|path| path.as_os_str()),
+            Some(std::ffi::OsStr::new("identity.json"))
+        );
+        assert!(args.default);
     }
 
     #[test]

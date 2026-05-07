@@ -519,6 +519,11 @@ impl OperationAdapterError {
                     &lowered,
                     &[
                         "no local account",
+                        "account selector",
+                        "account selection",
+                        "account mismatch",
+                        "did not match any local account",
+                        "unresolved account",
                         "watch_only",
                         "not secret-backed",
                         "selected local account",
@@ -1090,6 +1095,13 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                     input.insert("default".to_owned(), Value::Bool(true));
                 }
             }
+            AccountCommand::AttachSecret(args) => {
+                insert_string(&mut input, "selector", &args.selector);
+                insert_path(&mut input, "path", &args.path);
+                if args.default {
+                    input.insert("default".to_owned(), Value::Bool(true));
+                }
+            }
             AccountCommand::Get(args) => insert_string(&mut input, "selector", &args.selector),
             AccountCommand::Remove(args) => insert_string(&mut input, "selector", &args.selector),
             AccountCommand::Selection(args) => match &args.command {
@@ -1365,6 +1377,7 @@ target_operation_contracts! {
     ConfigGet => (ConfigGetRequest, ConfigGetResult, "config.get"),
     AccountCreate => (AccountCreateRequest, AccountCreateResult, "account.create"),
     AccountImport => (AccountImportRequest, AccountImportResult, "account.import"),
+    AccountAttachSecret => (AccountAttachSecretRequest, AccountAttachSecretResult, "account.attach_secret"),
     AccountGet => (AccountGetRequest, AccountGetResult, "account.get"),
     AccountList => (AccountListRequest, AccountListResult, "account.list"),
     AccountRemove => (AccountRemoveRequest, AccountRemoveResult, "account.remove"),
@@ -1525,6 +1538,47 @@ mod tests {
         let actor = envelope_context.actor.expect("account actor");
         assert_eq!(actor.account_id, "acct_test");
         assert_eq!(actor.role, "account");
+    }
+
+    #[test]
+    fn adapter_maps_account_attach_secret_input() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "account",
+            "attach-secret",
+            "acct_test",
+            "identity.json",
+            "--default",
+        ])
+        .expect("target args parse");
+
+        let request = TargetOperationRequest::from_target_args(&parsed)
+            .expect("operation request from target args");
+        let TargetOperationRequest::AccountAttachSecret(request) = request else {
+            panic!("expected account attach-secret request")
+        };
+
+        assert_eq!(request.operation_id(), "account.attach_secret");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("selector")
+                .and_then(Value::as_str),
+            Some("acct_test")
+        );
+        assert_eq!(
+            request.payload.input.get("path").and_then(Value::as_str),
+            Some("identity.json")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("default")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]

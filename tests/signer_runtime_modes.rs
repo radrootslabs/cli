@@ -1,12 +1,13 @@
 mod support;
 
+use std::fs;
 use std::path::Path;
 
 use support::{
     RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
-    assert_no_removed_command_reference, create_listing_draft, identity_public,
-    make_listing_publishable, seed_orderable_listing, shell_single_quoted, toml_string,
-    write_public_identity_profile,
+    assert_no_removed_command_reference, create_listing_draft, identity_public, identity_secret,
+    json_from_stdout, make_listing_publishable, seed_orderable_listing, shell_single_quoted,
+    toml_string, write_public_identity_profile, write_secret_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -193,6 +194,249 @@ fn account_import_dry_run_validates_missing_profile_file() {
     assert_eq!(value["operation_id"], "account.import");
     assert_eq!(value["errors"][0]["code"], "not_found");
     assert_eq!(value["errors"][0]["exit_code"], 4);
+}
+
+#[test]
+fn account_attach_secret_dry_run_validates_without_mutating_store() {
+    let sandbox = RadrootsCliSandbox::new();
+    let default_account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let default_account_id = default_account["result"]["account"]["id"]
+        .as_str()
+        .expect("default account id");
+    let identity = identity_secret(31);
+    let public_identity = identity.to_public();
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "attach-dry-public", &public_identity);
+    let secret_identity_file =
+        write_secret_identity_profile(&sandbox, "attach-dry-secret", &identity);
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let watch_account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("watch account id");
+    assert_eq!(imported["result"]["account"]["signer"], "watch_only");
+    assert_eq!(imported["result"]["account"]["is_default"], false);
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "attach-secret",
+        watch_account_id,
+        secret_identity_file.to_string_lossy().as_ref(),
+        "--default",
+    ]);
+
+    assert_eq!(value["operation_id"], "account.attach_secret");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(value["result"]["default"], true);
+    assert_eq!(value["result"]["account"]["id"], watch_account_id);
+    assert_eq!(value["result"]["account"]["signer"], "local");
+    assert_eq!(value["result"]["account"]["is_default"], true);
+
+    let watch_get = sandbox.json_success(&["--format", "json", "account", "get", watch_account_id]);
+    assert_eq!(
+        watch_get["result"]["account_resolution"]["resolved_account"]["signer"],
+        "watch_only"
+    );
+    let selected = sandbox.json_success(&["--format", "json", "account", "selection", "get"]);
+    assert_eq!(
+        selected["result"]["account_resolution"]["resolved_account"]["id"],
+        default_account_id
+    );
+}
+
+#[test]
+fn account_attach_secret_attaches_matching_secret_and_can_make_default() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let identity = identity_secret(32);
+    let public_identity = identity.to_public();
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "attach-public", &public_identity);
+    let secret_identity_file = write_secret_identity_profile(&sandbox, "attach-secret", &identity);
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let watch_account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("watch account id");
+
+    let attached = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "attach-secret",
+        watch_account_id,
+        secret_identity_file.to_string_lossy().as_ref(),
+        "--default",
+    ]);
+
+    assert_eq!(attached["operation_id"], "account.attach_secret");
+    assert_eq!(attached["result"]["state"], "secret_attached");
+    assert_eq!(attached["result"]["account"]["id"], watch_account_id);
+    assert_eq!(attached["result"]["account"]["signer"], "local");
+    assert_eq!(attached["result"]["account"]["is_default"], true);
+
+    let status = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    assert_eq!(status["result"]["state"], "ready");
+    assert_eq!(status["result"]["signer_account_id"], watch_account_id);
+    assert_eq!(status["result"]["local"]["availability"], "secret_backed");
+}
+
+#[test]
+fn account_attach_secret_requires_approval_before_writing_secret() {
+    let sandbox = RadrootsCliSandbox::new();
+    let identity = identity_secret(33);
+    let public_identity = identity.to_public();
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "attach-approval-public", &public_identity);
+    let secret_identity_file =
+        write_secret_identity_profile(&sandbox, "attach-approval-secret", &identity);
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "account",
+        "attach-secret",
+        account_id,
+        secret_identity_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "account.attach_secret");
+    assert_eq!(value["errors"][0]["code"], "approval_required");
+    assert_eq!(value["errors"][0]["exit_code"], 6);
+    let get = sandbox.json_success(&["--format", "json", "account", "get", account_id]);
+    assert_eq!(
+        get["result"]["account_resolution"]["resolved_account"]["signer"],
+        "watch_only"
+    );
+}
+
+#[test]
+fn account_attach_secret_reports_structured_validation_failures() {
+    let sandbox = RadrootsCliSandbox::new();
+    let matching_identity = identity_secret(34);
+    let public_identity = matching_identity.to_public();
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "attach-fail-public", &public_identity);
+    let secret_identity_file =
+        write_secret_identity_profile(&sandbox, "attach-fail-secret", &matching_identity);
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+
+    let (missing_input_output, missing_input) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "account", "attach-secret"]);
+    assert!(!missing_input_output.status.success());
+    assert_eq!(missing_input["operation_id"], "account.attach_secret");
+    assert_eq!(missing_input["errors"][0]["code"], "invalid_input");
+
+    let (missing_account_output, missing_account) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "attach-secret",
+        "missing-account",
+        secret_identity_file.to_string_lossy().as_ref(),
+    ]);
+    assert!(!missing_account_output.status.success());
+    assert_eq!(missing_account["errors"][0]["code"], "account_unresolved");
+    assert_eq!(missing_account["errors"][0]["exit_code"], 5);
+
+    let mismatched_identity = identity_secret(35);
+    let mismatched_identity_file =
+        write_secret_identity_profile(&sandbox, "attach-mismatch-secret", &mismatched_identity);
+    let (mismatch_output, mismatch) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "attach-secret",
+        account_id,
+        mismatched_identity_file.to_string_lossy().as_ref(),
+    ]);
+    assert!(!mismatch_output.status.success());
+    assert_eq!(mismatch["errors"][0]["code"], "account_mismatch");
+    assert_eq!(mismatch["errors"][0]["exit_code"], 5);
+
+    let invalid_identity_file = sandbox.root().join("attach-invalid-secret.json");
+    fs::write(&invalid_identity_file, "{ invalid json").expect("write invalid identity");
+    let (invalid_output, invalid) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "account",
+        "attach-secret",
+        account_id,
+        invalid_identity_file.to_string_lossy().as_ref(),
+    ]);
+    assert!(!invalid_output.status.success());
+    assert_eq!(invalid["errors"][0]["code"], "validation_failed");
+    assert_eq!(invalid["errors"][0]["exit_code"], 10);
+
+    let mut unavailable_command = sandbox.command();
+    unavailable_command
+        .env("RADROOTS_ACCOUNT_SECRET_BACKEND", "host_vault")
+        .env("RADROOTS_ACCOUNT_SECRET_FALLBACK", "none")
+        .env("RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE", "false")
+        .args([
+            "--format",
+            "json",
+            "--dry-run",
+            "account",
+            "attach-secret",
+            account_id,
+            secret_identity_file.to_string_lossy().as_ref(),
+        ]);
+    let unavailable_output = unavailable_command
+        .output()
+        .expect("run unavailable backend");
+    let unavailable = json_from_stdout(&unavailable_output);
+    assert!(!unavailable_output.status.success());
+    assert_eq!(unavailable["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(unavailable["errors"][0]["exit_code"], 3);
 }
 
 #[test]

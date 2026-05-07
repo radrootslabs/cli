@@ -135,6 +135,9 @@ fn execute_request(
         TargetOperationRequest::AccountImport(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
+        TargetOperationRequest::AccountAttachSecret(request) => {
+            execute_with(CoreOperationService::new(config, logging), request)
+        }
         TargetOperationRequest::AccountGet(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }

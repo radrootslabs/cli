@@ -347,10 +347,12 @@ pub fn create_listing_draft(sandbox: &RadrootsCliSandbox, key: &str) -> PathBuf 
 }
 
 pub fn identity_public(seed: u8) -> RadrootsIdentityPublic {
+    identity_secret(seed).to_public()
+}
+
+pub fn identity_secret(seed: u8) -> RadrootsIdentity {
     let secret = [seed; 32];
-    RadrootsIdentity::from_secret_key_bytes(&secret)
-        .expect("fixture identity")
-        .to_public()
+    RadrootsIdentity::from_secret_key_bytes(&secret).expect("fixture identity")
 }
 
 pub fn make_listing_publishable(path: &Path, farm_d_tag: &str) {
@@ -398,6 +400,16 @@ pub fn write_public_identity_profile(
         serde_json::to_string_pretty(identity).expect("public identity json"),
     )
     .expect("write public identity");
+    path
+}
+
+pub fn write_secret_identity_profile(
+    sandbox: &RadrootsCliSandbox,
+    name: &str,
+    identity: &RadrootsIdentity,
+) -> PathBuf {
+    let path = sandbox.root().join(format!("{name}.json"));
+    identity.save_json(&path).expect("write secret identity");
     path
 }
 

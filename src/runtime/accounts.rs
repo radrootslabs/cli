@@ -176,6 +176,45 @@ pub fn preview_public_identity_import(
     })
 }
 
+pub fn preview_identity_secret_attachment(
+    config: &RuntimeConfig,
+    selector: &str,
+    path: &Path,
+    make_default: bool,
+) -> Result<AccountRecordView, RuntimeError> {
+    let manager = account_manager(config)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    let mut account = resolve_selector_account(&manager, &snapshot, selector)?;
+    let identity = load_secret_identity_for_attachment(path)?;
+    validate_identity_secret_matches_account(&account.record, &identity)?;
+    if make_default {
+        account.is_default = true;
+    }
+    account.signer = "local";
+    Ok(account)
+}
+
+pub fn attach_identity_secret(
+    config: &RuntimeConfig,
+    selector: &str,
+    path: &Path,
+    make_default: bool,
+) -> Result<AccountRecordView, RuntimeError> {
+    let manager = account_manager(config)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    let account = resolve_selector_account(&manager, &snapshot, selector)?;
+    let identity = load_secret_identity_for_attachment(path)?;
+    validate_identity_secret_matches_account(&account.record, &identity)?;
+    let attached =
+        manager.attach_identity_secret(&account.record.account_id, &identity, make_default)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    snapshot_account(
+        &snapshot,
+        &attached.account_id,
+        "attached account missing after account attach-secret",
+    )
+}
+
 pub fn snapshot(config: &RuntimeConfig) -> Result<AccountSnapshot, RuntimeError> {
     let manager = account_manager(config)?;
     snapshot_from_manager(&manager)
@@ -501,6 +540,35 @@ fn load_public_identity_for_import(path: &Path) -> Result<RadrootsIdentityPublic
             format_identity_error(error)
         ))
     })
+}
+
+fn load_secret_identity_for_attachment(path: &Path) -> Result<RadrootsIdentity, RuntimeError> {
+    RadrootsIdentity::load_from_path_auto(path).map_err(|error| {
+        RuntimeError::Config(format!(
+            "failed to import account secret from {}: {}",
+            path.display(),
+            format_identity_error(error)
+        ))
+    })
+}
+
+fn validate_identity_secret_matches_account(
+    record: &RadrootsNostrAccountRecord,
+    identity: &RadrootsIdentity,
+) -> Result<(), RuntimeError> {
+    let secret_public_key_hex = identity.public_key_hex();
+    if record
+        .public_identity
+        .public_key_hex
+        .eq_ignore_ascii_case(secret_public_key_hex.as_str())
+    {
+        return Ok(());
+    }
+
+    Err(RuntimeError::Config(format!(
+        "account mismatch: account `{}` public key `{}` does not match secret public key `{}`",
+        record.account_id, record.public_identity.public_key_hex, secret_public_key_hex
+    )))
 }
 
 fn account_manager(config: &RuntimeConfig) -> Result<RadrootsNostrAccountsManager, RuntimeError> {

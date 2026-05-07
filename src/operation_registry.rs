@@ -182,6 +182,21 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         true
     ),
     operation!(
+        "account.attach_secret",
+        "radroots account attach-secret",
+        "account",
+        "account_attach_secret",
+        "AccountAttachSecretRequest",
+        "AccountAttachSecretResult",
+        "Attach local secret custody to an existing account.",
+        Any,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
         "account.get",
         "radroots account get",
         "account",
@@ -1112,6 +1127,7 @@ mod tests {
         "config.get",
         "account.create",
         "account.import",
+        "account.attach_secret",
         "account.get",
         "account.list",
         "account.remove",
@@ -1178,6 +1194,7 @@ mod tests {
         "workspace.init",
         "account.create",
         "account.import",
+        "account.attach_secret",
         "account.remove",
         "account.selection.update",
         "account.selection.clear",
@@ -1223,7 +1240,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 67);
+        assert_eq!(OPERATION_REGISTRY.len(), 68);
     }
 
     #[test]
@@ -1265,6 +1282,7 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected_required = [
             "account.import",
+            "account.attach_secret",
             "account.remove",
             "farm.publish",
             "listing.publish",
