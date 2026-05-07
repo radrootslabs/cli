@@ -451,22 +451,18 @@ pub struct AccountSummaryView {
 }
 
 impl AccountSummaryView {
-    pub fn from_account_record(
+    pub fn from_account_runtime(
         record: &RadrootsNostrAccountRecord,
         signer: &str,
+        custody: &str,
+        write_capable: bool,
         is_default: bool,
     ) -> Self {
-        let write_capable = signer == "local";
         Self {
             id: record.account_id.to_string(),
             display_name: record.label.clone(),
             signer: signer.to_owned(),
-            custody: if write_capable {
-                "secret_backed"
-            } else {
-                "watch_only"
-            }
-            .to_owned(),
+            custody: custody.to_owned(),
             write_capable,
             is_default,
         }

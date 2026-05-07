@@ -66,7 +66,36 @@ pub struct AccountSnapshot {
 pub struct AccountRecordView {
     pub record: RadrootsNostrAccountRecord,
     pub is_default: bool,
-    pub signer: &'static str,
+    pub custody: AccountCustody,
+    pub write_capable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountCustody {
+    SecretBacked,
+    WatchOnly,
+}
+
+impl AccountCustody {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SecretBacked => "secret_backed",
+            Self::WatchOnly => "watch_only",
+        }
+    }
+
+    pub fn signer_label(self) -> &'static str {
+        match self {
+            Self::SecretBacked => "local",
+            Self::WatchOnly => "watch_only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AccountRuntimeFacts {
+    custody: AccountCustody,
+    write_capable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -207,7 +236,8 @@ pub fn preview_public_identity_import(
     Ok(AccountRecordView {
         record: RadrootsNostrAccountRecord::new(public_identity, None, 0),
         is_default: make_default,
-        signer: "watch_only",
+        custody: AccountCustody::WatchOnly,
+        write_capable: false,
     })
 }
 
@@ -225,7 +255,8 @@ pub fn preview_identity_secret_attachment(
     if make_default {
         account.is_default = true;
     }
-    account.signer = "local";
+    account.custody = AccountCustody::SecretBacked;
+    account.write_capable = true;
     Ok(account)
 }
 
@@ -406,7 +437,13 @@ pub fn resolve_local_signing_identity(
 }
 
 pub fn account_summary_view(account: &AccountRecordView) -> AccountSummaryView {
-    AccountSummaryView::from_account_record(&account.record, account.signer, account.is_default)
+    AccountSummaryView::from_account_runtime(
+        &account.record,
+        account.custody.signer_label(),
+        account.custody.as_str(),
+        account.write_capable,
+        account.is_default,
+    )
 }
 
 pub fn account_resolution_view(resolution: &AccountResolution) -> AccountResolutionView {
@@ -478,11 +515,12 @@ fn snapshot_from_manager(
         let is_default = default_account_id
             .as_deref()
             .is_some_and(|default| default == record.account_id.as_str());
-        let signer = account_signer(manager, &record)?;
+        let runtime = account_runtime_facts(manager, &record)?;
         accounts.push(AccountRecordView {
             record,
             is_default,
-            signer,
+            custody: runtime.custody,
+            write_capable: runtime.write_capable,
         });
     }
 
@@ -548,15 +586,21 @@ fn selector_runtime_error(selector: &str, error: RadrootsNostrAccountsError) -> 
     }
 }
 
-fn account_signer(
+fn account_runtime_facts(
     manager: &RadrootsNostrAccountsManager,
     record: &RadrootsNostrAccountRecord,
-) -> Result<&'static str, RuntimeError> {
+) -> Result<AccountRuntimeFacts, RuntimeError> {
     Ok(
         if manager.get_signing_identity(&record.account_id)?.is_some() {
-            "local"
+            AccountRuntimeFacts {
+                custody: AccountCustody::SecretBacked,
+                write_capable: true,
+            }
         } else {
-            "watch_only"
+            AccountRuntimeFacts {
+                custody: AccountCustody::WatchOnly,
+                write_capable: false,
+            }
         },
     )
 }

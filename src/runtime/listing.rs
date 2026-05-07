@@ -201,6 +201,26 @@ struct LoadedListingDraft {
     document: ListingDraftDocument,
 }
 
+#[derive(Debug, Clone)]
+enum ListingDraftValidationError {
+    Issue(ListingValidationIssueView),
+    MissingSellerAccount(ListingValidationIssueView),
+}
+
+impl ListingDraftValidationError {
+    fn into_issue(self) -> ListingValidationIssueView {
+        match self {
+            Self::Issue(issue) | Self::MissingSellerAccount(issue) => issue,
+        }
+    }
+}
+
+impl From<ListingValidationIssueView> for ListingDraftValidationError {
+    fn from(issue: ListingValidationIssueView) -> Self {
+        Self::Issue(issue)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum ListingMutationOperation {
     Publish,
@@ -508,11 +528,11 @@ pub fn validate(
                 )),
             }
         }
-        Err(issue) => Ok(invalid_validation_view(
+        Err(error) => Ok(invalid_validation_view(
             args.file.as_path(),
             parsed.listing.d_tag.as_str(),
             &context,
-            issue,
+            error.into_issue(),
         )),
     }
 }
@@ -617,7 +637,7 @@ fn summary_from_loaded(
                         state = "ready";
                     }
                 }
-                Err(issue) => issues.push(issue),
+                Err(error) => issues.push(error.into_issue()),
             }
         }
         Err(reason) => issues.push(ListingValidationIssueView {
@@ -820,18 +840,17 @@ fn mutate(
         ))
     })?;
     let context = validation_context(config)?;
-    let mut canonical = canonicalize_draft(&parsed, &contents, &context).map_err(|issue| {
-        if issue.field == "listing.seller_pubkey"
-            && issue
-                .message
-                .contains("no resolved account pubkey is available")
-        {
-            return accounts::AccountRuntimeFailure::unresolved(format!(
-                "{} ({})",
-                issue.message, issue.field
-            ))
-            .into();
-        }
+    let mut canonical = canonicalize_draft(&parsed, &contents, &context).map_err(|error| {
+        let issue = match error {
+            ListingDraftValidationError::MissingSellerAccount(issue) => {
+                return accounts::AccountRuntimeFailure::unresolved(format!(
+                    "{} ({})",
+                    issue.message, issue.field
+                ))
+                .into();
+            }
+            ListingDraftValidationError::Issue(issue) => issue,
+        };
         RuntimeError::Config(format!(
             "invalid listing draft {}: {} ({})",
             args.file.display(),
@@ -984,20 +1003,22 @@ fn canonicalize_draft(
     draft: &ListingDraftDocument,
     contents: &str,
     context: &ListingValidationContext,
-) -> Result<CanonicalListingDraft, ListingValidationIssueView> {
+) -> Result<CanonicalListingDraft, ListingDraftValidationError> {
     if draft.version != 1 {
         return Err(issue_for_field(
             contents,
             "version",
             format!("unsupported listing draft version `{}`", draft.version),
-        ));
+        )
+        .into());
     }
     if draft.kind.trim() != DRAFT_KIND {
         return Err(issue_for_field(
             contents,
             "kind",
             format!("unsupported listing draft kind `{}`", draft.kind),
-        ));
+        )
+        .into());
     }
 
     let listing_id = draft.listing.d_tag.trim().to_owned();
@@ -1006,7 +1027,8 @@ fn canonicalize_draft(
             contents,
             "listing.d_tag",
             "listing d_tag must be a 22-character base64url identifier",
-        ));
+        )
+        .into());
     }
 
     let seller_pubkey = if let Some(pubkey) = non_empty(draft.listing.seller_pubkey.clone()) {
@@ -1014,10 +1036,12 @@ fn canonicalize_draft(
     } else if let Some(pubkey) = context.selected_account_pubkey.clone() {
         pubkey
     } else {
-        return Err(issue_for_field(
-            contents,
-            "listing.seller_pubkey",
-            "missing seller_pubkey and no resolved account pubkey is available",
+        return Err(ListingDraftValidationError::MissingSellerAccount(
+            issue_for_field(
+                contents,
+                "listing.seller_pubkey",
+                "missing seller_pubkey and no resolved account pubkey is available",
+            ),
         ));
     };
 
@@ -1030,14 +1054,16 @@ fn canonicalize_draft(
             contents,
             "listing.farm_d_tag",
             "missing farm_d_tag and no selected farm config is available",
-        ));
+        )
+        .into());
     };
     if !is_d_tag_base64url(&farm_d_tag) {
         return Err(issue_for_field(
             contents,
             "listing.farm_d_tag",
             "farm_d_tag must be a 22-character base64url identifier",
-        ));
+        )
+        .into());
     }
 
     let quantity_amount = parse_decimal_field(
