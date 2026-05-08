@@ -3357,12 +3357,25 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(order_after_submit["result"]["workflow"], Value::Null);
     assert_no_daemon_runtime_reference(&order_after_submit, &["order", "get"]);
 
-    let watch = sandbox.json_success(&["--format", "json", "order", "event", "watch", order_id]);
+    let (watch_output, watch) =
+        sandbox.json_output(&["--format", "json", "order", "event", "watch", order_id]);
+    assert!(!watch_output.status.success());
+    assert_eq!(watch_output.status.code(), Some(3));
     assert_eq!(watch["operation_id"], "order.event.watch");
-    assert_eq!(watch["result"]["state"], "unavailable");
-    assert_eq!(watch["result"]["job_id"], Value::Null);
-    assert_eq!(watch["result"]["workflow"], Value::Null);
+    assert_eq!(watch["result"], Value::Null);
+    assert_eq!(watch["errors"][0]["code"], "not_implemented");
+    assert_eq!(watch["errors"][0]["detail"]["state"], "not_implemented");
+    assert_eq!(watch["errors"][0]["detail"]["order_id"], order_id);
+    assert_eq!(
+        watch["next_actions"][0]["command"],
+        format!("radroots order status get {order_id}")
+    );
     assert_no_daemon_runtime_reference(&watch, &["order", "event", "watch"]);
+    assert!(
+        !serde_json::to_string(&watch)
+            .expect("watch json")
+            .contains("local order drafts")
+    );
 }
 
 #[test]
