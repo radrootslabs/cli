@@ -1,14 +1,15 @@
-#[cfg(not(test))]
-use crate::runtime::config::RuntimeConfig;
+use crate::domain::runtime::PublishRuntimeView;
 #[cfg(test)]
 use crate::runtime::config::{
     CapabilityBindingInspection, CapabilityBindingInspectionState, INFERENCE_HYF_STDIO_CAPABILITY,
-    RuntimeConfig,
 };
+use crate::runtime::config::{PublishMode, RuntimeConfig};
 #[cfg(test)]
 use crate::runtime::hyf;
 
-const WRITE_PLANE_UNAVAILABLE_DETAIL: &str = "legacy write-plane provider is unavailable; use seller publish commands with configured direct relays";
+#[cfg(test)]
+const WRITE_PLANE_TARGET_DETAIL: &str =
+    "write-plane targets are resolved by mode-specific publish commands";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderProvenance {
@@ -20,6 +21,8 @@ pub enum ProviderProvenance {
     DirectConfig,
     #[cfg(test)]
     Disabled,
+    PublishMode,
+    #[cfg(test)]
     Unavailable,
 }
 
@@ -34,6 +37,8 @@ impl ProviderProvenance {
             Self::DirectConfig => "direct_config",
             #[cfg(test)]
             Self::Disabled => "disabled",
+            Self::PublishMode => "publish_mode",
+            #[cfg(test)]
             Self::Unavailable => "unavailable",
         }
     }
@@ -88,9 +93,36 @@ pub struct HyfProviderView {
     pub deterministic_available: Option<bool>,
 }
 
-pub fn resolve_write_plane_provider(config: &RuntimeConfig) -> WritePlaneProviderView {
-    let _ = config;
-    unavailable_write_plane_view()
+pub fn resolve_write_plane_provider(
+    config: &RuntimeConfig,
+    publish: &PublishRuntimeView,
+) -> WritePlaneProviderView {
+    let (provider_runtime_id, binding_model, detail, bridge_auth_configured) =
+        match config.publish.mode {
+            PublishMode::NostrRelay => (
+                "nostr_relay",
+                "direct_relay_publish",
+                "direct relay publish is selected; readiness is reported under publish",
+                false,
+            ),
+            PublishMode::Radrootsd => (
+                "radrootsd",
+                "radrootsd_bridge_publish",
+                "radrootsd bridge publish is selected; readiness is reported under publish",
+                config.rpc.bridge_bearer_token.is_some(),
+            ),
+        };
+    WritePlaneProviderView {
+        provider_runtime_id: provider_runtime_id.to_owned(),
+        binding_model: binding_model.to_owned(),
+        state: publish.state.clone(),
+        provenance: ProviderProvenance::PublishMode.as_str().to_owned(),
+        source: publish.source.clone(),
+        target_kind: None,
+        target: None,
+        detail: publish.reason.clone().unwrap_or_else(|| detail.to_owned()),
+        bridge_auth_configured,
+    }
 }
 
 #[cfg(test)]
@@ -98,7 +130,7 @@ pub fn resolve_actor_write_plane_target(
     config: &RuntimeConfig,
 ) -> Result<ResolvedWritePlaneTarget, String> {
     let _ = config;
-    Err(WRITE_PLANE_UNAVAILABLE_DETAIL.to_owned())
+    Err(WRITE_PLANE_TARGET_DETAIL.to_owned())
 }
 
 #[cfg(test)]
@@ -153,20 +185,6 @@ pub fn resolve_capability_providers(config: &RuntimeConfig) -> Vec<ResolvedProvi
         target_kind: hyf.target_kind,
         target: hyf.target,
     }]
-}
-
-fn unavailable_write_plane_view() -> WritePlaneProviderView {
-    WritePlaneProviderView {
-        provider_runtime_id: "nostr_relay".to_owned(),
-        binding_model: "direct_relay_publish".to_owned(),
-        state: "unavailable".to_owned(),
-        provenance: ProviderProvenance::Unavailable.as_str().to_owned(),
-        source: "legacy write-plane provider is not active".to_owned(),
-        target_kind: None,
-        target: None,
-        detail: WRITE_PLANE_UNAVAILABLE_DETAIL.to_owned(),
-        bridge_auth_configured: false,
-    }
 }
 
 #[cfg(test)]
@@ -245,6 +263,9 @@ mod tests {
     use super::{
         ProviderProvenance, resolve_actor_write_plane_target, resolve_capability_providers,
         resolve_hyf_provider, resolve_write_plane_provider,
+    };
+    use crate::domain::runtime::{
+        PublishProviderRuntimeView, PublishRelayRuntimeView, PublishRuntimeView,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
@@ -349,15 +370,49 @@ mod tests {
         }
     }
 
+    fn publish_view(
+        config: &RuntimeConfig,
+        state: &str,
+        reason: Option<&str>,
+    ) -> PublishRuntimeView {
+        PublishRuntimeView {
+            mode: config.publish.mode.as_str().to_owned(),
+            source: config.publish.source.as_str().to_owned(),
+            transport_family: config.publish.mode.transport_family().to_owned(),
+            state: state.to_owned(),
+            executable: state == "ready",
+            reason: reason.map(str::to_owned),
+            signed_write_required: true,
+            relay: PublishRelayRuntimeView {
+                ready: !config.relay.urls.is_empty(),
+                count: config.relay.urls.len(),
+                source: config.relay.source.as_str().to_owned(),
+            },
+            provider: PublishProviderRuntimeView {
+                provider_runtime_id: config.publish.mode.as_str().to_owned(),
+                state: state.to_owned(),
+                source: config.publish.source.as_str().to_owned(),
+                reason: reason.map(str::to_owned),
+            },
+        }
+    }
+
     #[test]
-    fn write_plane_provider_is_not_active_for_direct_relay_publish() {
-        let view = resolve_write_plane_provider(&sample_config(Vec::new(), false));
+    fn write_plane_provider_tracks_direct_relay_publish() {
+        let config = sample_config(Vec::new(), false);
+        let publish = publish_view(
+            &config,
+            "unconfigured",
+            Some("nostr_relay publish mode requires a configured relay"),
+        );
+        let view = resolve_write_plane_provider(&config, &publish);
         assert_eq!(view.provider_runtime_id, "nostr_relay");
         assert_eq!(view.binding_model, "direct_relay_publish");
-        assert_eq!(view.state, "unavailable");
-        assert_eq!(view.provenance, ProviderProvenance::Unavailable.as_str());
+        assert_eq!(view.state, "unconfigured");
+        assert_eq!(view.provenance, ProviderProvenance::PublishMode.as_str());
         assert!(view.target.is_none());
-        assert!(view.detail.contains("seller publish commands"));
+        assert!(view.detail.contains("configured relay"));
+        assert!(!view.bridge_auth_configured);
     }
 
     #[test]
@@ -366,7 +421,7 @@ mod tests {
             .expect_err("write plane target");
         assert_eq!(
             error,
-            "legacy write-plane provider is unavailable; use seller publish commands with configured direct relays"
+            "write-plane targets are resolved by mode-specific publish commands"
         );
     }
 

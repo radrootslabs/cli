@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::deferred_payment::{deferred_payment_message, is_deferred_payment_operation};
 use crate::operation_adapter::{
@@ -572,7 +572,77 @@ fn render_human_envelope(
         writeln!(handle, "error: {}", error.code)?;
         writeln!(handle, "message: {}", error.message)?;
     }
+    if let Some(mode) = human_publish_mode(&envelope.result) {
+        writeln!(handle, "publish_mode: {mode}")?;
+    }
+    if let Some(state) = human_publish_state(&envelope.result) {
+        writeln!(handle, "publish_state: {state}")?;
+    }
+    if let Some(reason) = human_reason(&envelope.result) {
+        writeln!(handle, "reason: {reason}")?;
+    }
+    let actions = human_actions(envelope);
+    if !actions.is_empty() {
+        writeln!(handle, "next:")?;
+        for action in actions {
+            writeln!(handle, "- {action}")?;
+        }
+    }
     Ok(())
+}
+
+fn human_publish_mode(result: &Value) -> Option<&str> {
+    human_string_path(result, &["publish", "mode"])
+        .or_else(|| human_string_path(result, &["checks", "publish", "mode"]))
+        .or_else(|| human_string_path(result, &["publish_mode"]))
+}
+
+fn human_publish_state(result: &Value) -> Option<&str> {
+    human_string_path(result, &["publish", "state"])
+        .or_else(|| human_string_path(result, &["checks", "publish", "state"]))
+        .or_else(|| human_string_path(result, &["publish_state"]))
+}
+
+fn human_reason(result: &Value) -> Option<&str> {
+    human_string_path(result, &["reason"])
+        .or_else(|| human_string_path(result, &["publish", "reason"]))
+        .or_else(|| human_string_path(result, &["checks", "publish", "reason"]))
+        .or_else(|| human_string_path(result, &["store", "reason"]))
+        .or_else(|| human_string_path(result, &["checks", "store", "reason"]))
+        .or_else(|| human_string_path(result, &["checks", "account", "reason"]))
+}
+
+fn human_actions(envelope: &OutputEnvelope) -> Vec<String> {
+    let mut actions = envelope
+        .result
+        .get("actions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if actions.is_empty() {
+        actions = envelope
+            .next_actions
+            .iter()
+            .map(|action| action.command.clone())
+            .collect();
+    }
+    actions.into_iter().fold(Vec::new(), |mut unique, action| {
+        if !unique.contains(&action) {
+            unique.push(action);
+        }
+        unique
+    })
+}
+
+fn human_string_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    current.as_str().filter(|value| !value.trim().is_empty())
 }
 
 fn human_envelope_status(envelope: &OutputEnvelope) -> &str {

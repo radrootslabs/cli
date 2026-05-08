@@ -237,6 +237,11 @@ impl<P: OperationResultPayload> OperationResult<P> {
     ) -> Result<OutputEnvelope, OperationAdapterError> {
         let result = serde_json::to_value(&self.payload)
             .map_err(|error| OperationAdapterError::Serialization(error.to_string()))?;
+        let next_actions = if self.next_actions.is_empty() {
+            next_actions_from_result(&result)
+        } else {
+            self.next_actions.clone()
+        };
         Ok(OutputEnvelope {
             schema_version: OUTPUT_SCHEMA_VERSION,
             operation_id: self.operation_id().to_owned(),
@@ -249,8 +254,71 @@ impl<P: OperationResultPayload> OperationResult<P> {
             result,
             warnings: self.warnings.clone(),
             errors: Vec::new(),
-            next_actions: self.next_actions.clone(),
+            next_actions,
         })
+    }
+}
+
+fn next_actions_from_result(result: &Value) -> Vec<NextAction> {
+    result
+        .get("actions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(next_action_from_action_string)
+        .fold(Vec::<NextAction>::new(), |mut actions, action| {
+            if !actions
+                .iter()
+                .any(|existing| existing.command == action.command)
+            {
+                actions.push(action);
+            }
+            actions
+        })
+}
+
+fn next_action_from_action_string(action: &str) -> Option<NextAction> {
+    let command = action.trim().strip_prefix("run ").unwrap_or(action).trim();
+    if !command.starts_with("radroots ") {
+        return None;
+    }
+    Some(NextAction {
+        label: next_action_label(command),
+        command: command.to_owned(),
+    })
+}
+
+fn next_action_label(command: &str) -> String {
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    let mut index = usize::from(parts.first().is_some_and(|part| *part == "radroots"));
+    let mut labels = Vec::new();
+    while index < parts.len() {
+        let part = parts[index];
+        if part.starts_with("--") {
+            index += 1;
+            if matches!(
+                part,
+                "--format"
+                    | "--account-id"
+                    | "--relay"
+                    | "--publish-mode"
+                    | "--idempotency-key"
+                    | "--correlation-id"
+                    | "--approval-token"
+            ) && index < parts.len()
+            {
+                index += 1;
+            }
+            continue;
+        }
+        labels.push(part);
+        index += 1;
+    }
+    if labels.is_empty() {
+        "radroots".to_owned()
+    } else {
+        labels.join(" ")
     }
 }
 

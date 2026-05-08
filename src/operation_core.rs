@@ -105,6 +105,7 @@ impl OperationService<HealthStatusGetRequest> for CoreOperationService<'_> {
         let account = map_runtime(resolve_account_resolution(self.config))?;
         let publish = publish_runtime_view(self.config, true, &account);
         let state = health_status_state(&store.state, &publish);
+        let actions = health_actions(self.config, store.state.as_str(), &account, &publish);
         json_operation_result::<HealthStatusGetResult>(json!({
             "state": state,
             "store": store,
@@ -114,6 +115,7 @@ impl OperationService<HealthStatusGetRequest> for CoreOperationService<'_> {
                 "initialized": self.logging.initialized,
                 "current_file": self.logging.current_file.as_ref().map(|path| path.display().to_string()),
             },
+            "actions": actions,
         }))
     }
 }
@@ -134,6 +136,7 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
         };
         let publish = publish_runtime_view(self.config, true, &account);
         let state = health_check_state(&store.state, account.resolved_account.is_some(), &publish);
+        let actions = health_actions(self.config, store.state.as_str(), &account, &publish);
         json_operation_result::<HealthCheckRunResult>(json!({
             "state": state,
             "checks": {
@@ -156,6 +159,7 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
                     "reason": publish.reason,
                 },
             },
+            "actions": actions,
         }))
     }
 }
@@ -167,9 +171,13 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
         &self,
         _request: OperationRequest<ConfigGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let write_plane = crate::runtime::provider::resolve_write_plane_provider(self.config);
         let account = map_runtime(resolve_account_resolution(self.config))?;
-        json_operation_result::<ConfigGetResult>(json!({
+        let publish = publish_runtime_view(self.config, true, &account);
+        let write_plane =
+            crate::runtime::provider::resolve_write_plane_provider(self.config, &publish);
+        let bridge_auth_configured = write_plane.bridge_auth_configured;
+        let actions = config_actions(self.config, &account, &publish);
+        let mut result = json!({
             "output": {
                 "format": self.config.output.format.as_str(),
                 "verbosity": self.config.output.verbosity.as_str(),
@@ -196,7 +204,7 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
             "signer": {
                 "mode": self.config.signer.backend.as_str(),
             },
-            "publish": publish_runtime_view(self.config, true, &account),
+            "publish": publish,
             "relay": {
                 "count": self.config.relay.urls.len(),
                 "urls": self.config.relay.urls,
@@ -210,10 +218,6 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
                 "enabled": self.config.hyf.enabled,
                 "executable": self.config.hyf.executable.display().to_string(),
             },
-            "rpc": {
-                "url": self.config.rpc.url,
-                "bridge_auth_configured": self.config.rpc.bridge_bearer_token.is_some(),
-            },
             "write_plane": {
                 "provider_runtime_id": write_plane.provider_runtime_id,
                 "binding_model": write_plane.binding_model,
@@ -223,7 +227,6 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
                 "target_kind": write_plane.target_kind,
                 "target": write_plane.target,
                 "detail": write_plane.detail,
-                "bridge_auth_configured": self.config.rpc.bridge_bearer_token.is_some(),
             },
             "local": {
                 "root": self.config.local.root.display().to_string(),
@@ -231,7 +234,16 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
                 "backups_dir": self.config.local.backups_dir.display().to_string(),
                 "exports_dir": self.config.local.exports_dir.display().to_string(),
             },
-        }))
+            "actions": actions,
+        });
+        if matches!(self.config.publish.mode, PublishMode::Radrootsd) {
+            result["rpc"] = json!({
+                "url": self.config.rpc.url,
+                "bridge_auth_configured": self.config.rpc.bridge_bearer_token.is_some(),
+            });
+            result["write_plane"]["bridge_auth_configured"] = json!(bridge_auth_configured);
+        }
+        json_operation_result::<ConfigGetResult>(result)
     }
 }
 
@@ -865,6 +877,89 @@ fn health_check_state(
 
 fn publish_runtime_ready(publish: &PublishRuntimeView) -> bool {
     !publish.signed_write_required || publish.executable
+}
+
+fn health_actions(
+    config: &RuntimeConfig,
+    store_state: &str,
+    account: &AccountResolution,
+    publish: &PublishRuntimeView,
+) -> Vec<String> {
+    let mut actions = Vec::new();
+    if store_state != "ready" {
+        push_unique(&mut actions, "radroots store init");
+    }
+    if let Some(resolved) = account.resolved_account.as_ref() {
+        if !resolved.write_capable {
+            push_unique(&mut actions, "radroots account attach-secret");
+        }
+    } else {
+        push_unique(&mut actions, "radroots account create");
+    }
+    for action in publish_recovery_actions(config, account, publish) {
+        push_unique(&mut actions, action);
+    }
+    actions
+}
+
+fn config_actions(
+    config: &RuntimeConfig,
+    account: &AccountResolution,
+    publish: &PublishRuntimeView,
+) -> Vec<String> {
+    publish_recovery_actions(config, account, publish)
+}
+
+fn publish_recovery_actions(
+    config: &RuntimeConfig,
+    account: &AccountResolution,
+    publish: &PublishRuntimeView,
+) -> Vec<String> {
+    if publish.state == "ready" {
+        return Vec::new();
+    }
+
+    let mut actions = Vec::new();
+    match config.publish.mode {
+        PublishMode::NostrRelay => {
+            if config.relay.urls.is_empty() {
+                push_unique(
+                    &mut actions,
+                    "radroots --relay wss://relay.example.com sync pull",
+                );
+            }
+            if publish.signed_write_required {
+                if matches!(config.signer.backend, SignerBackend::Myc) {
+                    push_unique(&mut actions, "radroots signer status get");
+                } else if let Some(resolved) = account.resolved_account.as_ref() {
+                    if !resolved.write_capable {
+                        push_unique(&mut actions, "radroots account attach-secret");
+                    }
+                } else {
+                    push_unique(&mut actions, "radroots account create");
+                }
+            }
+        }
+        PublishMode::Radrootsd => {
+            if config.rpc.bridge_bearer_token.is_none() {
+                push_unique(&mut actions, "configure RADROOTS_RPC_BEARER_TOKEN");
+            }
+            if !radrootsd_signer_session_binding_configured(config) {
+                push_unique(
+                    &mut actions,
+                    "configure signer.remote_nip46 signer_session_ref",
+                );
+            }
+        }
+    }
+    actions
+}
+
+fn push_unique(actions: &mut Vec<String>, action: impl Into<String>) {
+    let action = action.into();
+    if !actions.contains(&action) {
+        actions.push(action);
+    }
 }
 
 fn required_string<P>(

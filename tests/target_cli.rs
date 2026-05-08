@@ -246,6 +246,23 @@ fn root_help_exposes_only_target_namespaces() {
     }
 }
 
+#[test]
+fn root_help_explains_publish_modes() {
+    let output = radroots().arg("--help").output().expect("run root help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+
+    assert!(stdout.contains("nostr_relay uses direct relay publish"));
+    assert!(stdout.contains("radrootsd uses daemon-backed publish"));
+    assert!(stdout.contains("Relay mode never silently falls back"));
+    assert!(stdout.contains("Inspect local readiness and mode-specific recovery steps"));
+    assert!(
+        stdout
+            .contains("Select nostr_relay direct relay publish or radrootsd daemon-backed publish")
+    );
+}
+
 fn help_lists(stdout: &str, command: &str) -> bool {
     stdout.lines().any(|line| {
         let line = line.trim_start();
@@ -307,7 +324,24 @@ fn config_get_exposes_resolved_publish_state() {
         value["result"]["publish"]["provider"]["provider_runtime_id"],
         "radrootsd"
     );
-    assert_eq!(value["result"]["write_plane"]["state"], "unavailable");
+    assert_eq!(
+        value["result"]["write_plane"]["provider_runtime_id"],
+        "radrootsd"
+    );
+    assert_eq!(
+        value["result"]["write_plane"]["binding_model"],
+        "radrootsd_bridge_publish"
+    );
+    assert_eq!(value["result"]["write_plane"]["state"], "unconfigured");
+    assert_eq!(
+        value["result"]["write_plane"]["bridge_auth_configured"],
+        false
+    );
+    assert_eq!(value["result"]["rpc"]["bridge_auth_configured"], false);
+    assert_eq!(
+        value["result"]["actions"][0],
+        "configure RADROOTS_RPC_BEARER_TOKEN"
+    );
 }
 
 #[test]
@@ -373,6 +407,36 @@ fn config_get_distinguishes_relay_ready_from_missing_signed_write_account() {
     assert_eq!(
         value["result"]["publish"]["provider"]["state"],
         "unconfigured"
+    );
+    assert_eq!(
+        value["result"]["write_plane"]["provider_runtime_id"],
+        "nostr_relay"
+    );
+    assert_eq!(
+        value["result"]["write_plane"]["binding_model"],
+        "direct_relay_publish"
+    );
+    assert_eq!(value["result"]["write_plane"]["state"], "unconfigured");
+    assert_eq!(value["result"]["rpc"], Value::Null);
+    assert_contains(
+        &value["result"]["write_plane"]["detail"],
+        "write-capable local account",
+    );
+    assert_eq!(value["result"]["actions"][0], "radroots account create");
+    assert_eq!(
+        value["next_actions"][0]["command"],
+        "radroots account create"
+    );
+    assert_no_daemon_runtime_reference(
+        &value,
+        &[
+            "--format",
+            "json",
+            "--relay",
+            "ws://127.0.0.1:19001",
+            "config",
+            "get",
+        ],
     );
 }
 
@@ -479,6 +543,12 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
         "unconfigured"
     );
     assert_contains(&value["result"]["publish"]["reason"], "bridge bearer token");
+    assert_eq!(value["result"]["actions"][0], "radroots store init");
+    assert_eq!(value["result"]["actions"][1], "radroots account create");
+    assert_eq!(
+        value["result"]["actions"][2],
+        "configure RADROOTS_RPC_BEARER_TOKEN"
+    );
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
@@ -506,6 +576,13 @@ fn health_status_distinguishes_relay_ready_from_missing_signed_write_account() {
         &value["result"]["publish"]["reason"],
         "write-capable local account",
     );
+    assert_eq!(value["result"]["actions"][0], "radroots store init");
+    assert_eq!(value["result"]["actions"][1], "radroots account create");
+    assert_eq!(value["next_actions"][0]["command"], "radroots store init");
+    assert_eq!(
+        value["next_actions"][1]["command"],
+        "radroots account create"
+    );
 }
 
 #[test]
@@ -523,6 +600,12 @@ fn health_check_exposes_publish_readiness() {
         "unconfigured"
     );
     assert_eq!(value["result"]["checks"]["publish"]["executable"], false);
+    assert_eq!(value["result"]["actions"][0], "radroots store init");
+    assert_eq!(value["result"]["actions"][1], "radroots account create");
+    assert_eq!(
+        value["result"]["actions"][2],
+        "configure RADROOTS_RPC_BEARER_TOKEN"
+    );
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
@@ -547,6 +630,13 @@ fn health_check_marks_relay_publish_ready_with_secret_backed_local_account() {
     assert_eq!(value["result"]["checks"]["publish"]["mode"], "nostr_relay");
     assert_eq!(value["result"]["checks"]["publish"]["state"], "ready");
     assert_eq!(value["result"]["checks"]["publish"]["executable"], true);
+    assert_eq!(
+        value["result"]["actions"]
+            .as_array()
+            .expect("actions")
+            .len(),
+        0
+    );
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
@@ -1784,6 +1874,31 @@ fn target_command_outputs_standard_json_envelope() {
 }
 
 #[test]
+fn next_actions_mirror_result_actions_for_json_and_ndjson() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let value = sandbox.json_success(&["--format", "json", "market", "refresh"]);
+
+    assert_eq!(value["result"]["actions"][0], "radroots store init");
+    assert_eq!(value["next_actions"][0]["label"], "store init");
+    assert_eq!(value["next_actions"][0]["command"], "radroots store init");
+
+    let output = sandbox
+        .command()
+        .args(["--format", "ndjson", "market", "refresh"])
+        .output()
+        .expect("run market refresh ndjson");
+    let frames = ndjson_from_stdout(&output);
+    let terminal = frames.last().expect("terminal ndjson frame");
+
+    assert!(output.status.success());
+    assert_eq!(
+        terminal["payload"]["next_actions"][0]["command"],
+        "radroots store init"
+    );
+}
+
+#[test]
 fn default_human_output_is_concise_and_not_json() {
     let output = radroots()
         .args(["workspace", "get"])
@@ -1795,6 +1910,47 @@ fn default_human_output_is_concise_and_not_json() {
 
     assert!(stdout.starts_with("workspace.get: ok\n"));
     assert!(stdout.contains("request_id: req_workspace_get_"));
+    assert!(serde_json::from_str::<Value>(&stdout).is_err());
+}
+
+#[test]
+fn human_health_status_surfaces_publish_reason_and_actions() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let output = sandbox
+        .command()
+        .args(["--relay", "ws://127.0.0.1:19007", "health", "status", "get"])
+        .output()
+        .expect("run human health status");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+
+    assert!(stdout.starts_with("health.status.get: needs_attention\n"));
+    assert!(stdout.contains("publish_mode: nostr_relay"));
+    assert!(stdout.contains("publish_state: unconfigured"));
+    assert!(stdout.contains("reason: nostr_relay publish mode requires a selected or default write-capable local account"));
+    assert!(stdout.contains("- radroots store init"));
+    assert!(stdout.contains("- radroots account create"));
+    assert!(serde_json::from_str::<Value>(&stdout).is_err());
+}
+
+#[test]
+fn human_market_refresh_missing_store_shows_action() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let output = sandbox
+        .command()
+        .args(["market", "refresh"])
+        .output()
+        .expect("run human market refresh");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+
+    assert!(stdout.starts_with("market.refresh: unconfigured\n"));
+    assert!(stdout.contains("reason: local replica database is not initialized"));
+    assert!(stdout.contains("- radroots store init"));
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }
 

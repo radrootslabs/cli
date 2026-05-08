@@ -28,7 +28,12 @@ impl TargetPublishMode {
 }
 
 #[derive(Debug, Parser, Clone)]
-#[command(name = "radroots", disable_help_subcommand = true)]
+#[command(
+    name = "radroots",
+    about = "Operate Radroots local-first trade workflows.",
+    long_about = "Operate Radroots local-first trade workflows.\n\nPublish modes:\n  nostr_relay uses direct relay publish with local signer custody.\n  radrootsd uses daemon-backed publish for supported farm and listing publish flows.\n\nRelay mode never silently falls back to radrootsd.",
+    disable_help_subcommand = true
+)]
 pub struct TargetCliArgs {
     #[arg(long = "format", global = true, value_enum, default_value = "human")]
     pub format: TargetOutputFormat,
@@ -36,7 +41,12 @@ pub struct TargetCliArgs {
     pub account_id: Option<String>,
     #[arg(long = "relay", global = true)]
     pub relay: Vec<String>,
-    #[arg(long = "publish-mode", global = true, value_enum)]
+    #[arg(
+        long = "publish-mode",
+        global = true,
+        value_enum,
+        help = "Select nostr_relay direct relay publish or radrootsd daemon-backed publish"
+    )]
     pub publish_mode: Option<TargetPublishMode>,
     #[arg(long = "offline", global = true, action = ArgAction::SetTrue, conflicts_with = "online")]
     pub offline: bool,
@@ -66,18 +76,31 @@ pub struct TargetCliArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TargetCommand {
+    #[command(about = "Inspect and initialize workspace state.")]
     Workspace(WorkspaceArgs),
+    #[command(about = "Inspect local readiness and mode-specific recovery steps.")]
     Health(HealthArgs),
+    #[command(about = "Show effective configuration and publish-plane readiness.")]
     Config(ConfigArgs),
+    #[command(about = "Manage local signer accounts and custody.")]
     Account(AccountArgs),
+    #[command(about = "Inspect signer readiness for local relay writes.")]
     Signer(SignerArgs),
+    #[command(about = "List configured relay targets for direct relay mode.")]
     Relay(RelayArgs),
+    #[command(about = "Initialize and inspect the local replica store.")]
     Store(StoreArgs),
+    #[command(about = "Read from relay events into the local replica.")]
     Sync(SyncArgs),
+    #[command(about = "Create, inspect, and publish farm profile data.")]
     Farm(FarmArgs),
+    #[command(about = "Create, inspect, and publish listing data.")]
     Listing(ListingArgs),
+    #[command(about = "Refresh and query market data from the local replica.")]
     Market(MarketArgs),
+    #[command(about = "Prepare baskets and quotes before order coordination.")]
     Basket(BasketArgs),
+    #[command(about = "Coordinate order lifecycle events without payments.")]
     Order(OrderArgs),
 }
 
