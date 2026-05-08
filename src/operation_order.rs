@@ -1241,8 +1241,6 @@ fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
         "failed_relays": &view.failed_relays,
         "idempotency_key": &view.idempotency_key,
         "signer_mode": &view.signer_mode,
-        "signer_session_id": &view.signer_session_id,
-        "requested_signer_session_id": &view.requested_signer_session_id,
         "issues": &view.issues,
         "actions": &view.actions,
     })
