@@ -1037,12 +1037,56 @@ fn local_farm_publish_dry_run_validates_secret_backed_account() {
         "pickup",
     ]);
 
-    let value = sandbox.json_success(&["--format", "json", "--dry-run", "farm", "publish"]);
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--dry-run",
+        "farm",
+        "publish",
+    ]);
 
     assert_eq!(value["operation_id"], "farm.publish");
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["result"]["state"], "dry_run");
     assert_eq!(value["result"]["dry_run"], true);
+    assert_no_daemon_runtime_reference(&value, &["farm", "publish", "--dry-run"]);
+}
+
+#[test]
+fn local_farm_publish_dry_run_fails_without_configured_relay() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+
+    let (output, value) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "farm", "publish"]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "farm.publish");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "network");
+    assert_contains(
+        &value["errors"][0]["message"],
+        "requires at least one configured relay",
+    );
+    assert_no_removed_command_reference(&value, &["farm", "publish", "--dry-run"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish", "--dry-run"]);
 }
 
@@ -1570,8 +1614,15 @@ fn watch_only_farm_publish_dry_run_fails_as_account_watch_only() {
         "pickup",
     ]);
 
-    let (output, value) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "farm", "publish"]);
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--dry-run",
+        "farm",
+        "publish",
+    ]);
 
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "farm.publish");

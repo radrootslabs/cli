@@ -261,7 +261,7 @@ fn require_relay_target<P>(
 where
     P: OperationRequestPayload,
 {
-    if request.context.dry_run || !config.relay.urls.is_empty() {
+    if !config.relay.urls.is_empty() {
         return Ok(());
     }
 
