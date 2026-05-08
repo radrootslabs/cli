@@ -1149,6 +1149,7 @@ fn map_sdk_listing_publish_error(error: SdkPublishError) -> RuntimeError {
         | SdkPublishError::UnsupportedTransport { .. }
         | SdkPublishError::UnsupportedSignerMode { .. } => RuntimeError::Config(message),
         SdkPublishError::Relay(_)
+        | SdkPublishError::RelaySetup { .. }
         | SdkPublishError::RelayNotAcknowledged { .. }
         | SdkPublishError::Radrootsd(_) => RuntimeError::Network(message),
     }
