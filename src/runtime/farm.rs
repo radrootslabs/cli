@@ -62,7 +62,7 @@ pub fn init(config: &RuntimeConfig, args: &FarmCreateArgs) -> Result<FarmSetupVi
         &selected_account,
         &document,
         Some("The farm draft is local until you publish it.".to_owned()),
-        farm_setup_actions(config, &document),
+        farm_setup_actions(config, &document, Some(&selected_account)),
         config,
     )
 }
@@ -95,7 +95,7 @@ pub fn init_preflight(
             ),
         )),
         reason: Some("dry run requested; farm draft was not written".to_owned()),
-        actions: farm_setup_actions(config, &document),
+        actions: farm_setup_actions(config, &document, Some(&selected_account)),
     })
 }
 
@@ -136,7 +136,7 @@ pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView,
             account_pubkey,
         )),
         reason: None,
-        actions: farm_update_actions(config, &resolved.document),
+        actions: farm_update_actions(config, &resolved.document, configured_account.as_ref()),
     })
 }
 
@@ -179,7 +179,7 @@ pub fn set_preflight(
             account_pubkey,
         )),
         reason: Some("dry run requested; farm draft was not written".to_owned()),
-        actions: farm_update_actions(config, &resolved.document),
+        actions: farm_update_actions(config, &resolved.document, configured_account.as_ref()),
     })
 }
 
@@ -1727,29 +1727,28 @@ fn save_draft_view(
     })
 }
 
-fn farm_update_actions(config: &RuntimeConfig, document: &FarmConfigDocument) -> Vec<String> {
-    farm_setup_actions(config, document)
+fn farm_update_actions(
+    config: &RuntimeConfig,
+    document: &FarmConfigDocument,
+    account: Option<&AccountRecordView>,
+) -> Vec<String> {
+    farm_setup_actions(config, document, account)
 }
 
-fn farm_setup_actions(config: &RuntimeConfig, document: &FarmConfigDocument) -> Vec<String> {
+fn farm_setup_actions(
+    config: &RuntimeConfig,
+    document: &FarmConfigDocument,
+    account: Option<&AccountRecordView>,
+) -> Vec<String> {
     let mut actions = vec!["radroots farm readiness check".to_owned()];
-    if farm_config::missing_fields(document).is_empty() && farm_publish_action_available(config) {
+    if farm_config::missing_fields(document).is_empty()
+        && account
+            .map(|account| farm_publish_readiness(config, account).executable)
+            .unwrap_or(false)
+    {
         actions.push("radroots farm publish".to_owned());
     }
     actions
-}
-
-fn farm_publish_action_available(config: &RuntimeConfig) -> bool {
-    match config.publish.mode {
-        PublishMode::NostrRelay => {
-            !config.relay.urls.is_empty() && matches!(config.signer.backend, SignerBackend::Local)
-        }
-        PublishMode::Radrootsd => {
-            config.rpc.bridge_bearer_token.is_some()
-                && resolve_radrootsd_signer_session_id(config, &FarmPublishArgs::default())
-                    .is_some()
-        }
-    }
 }
 
 fn missing_blocks_listing_defaults(missing: &[FarmMissingField]) -> bool {

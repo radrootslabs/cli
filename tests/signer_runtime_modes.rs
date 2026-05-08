@@ -1132,6 +1132,102 @@ fn local_farm_publish_fails_without_configured_relay() {
 }
 
 #[test]
+fn farm_setup_actions_offer_publish_only_when_relay_publish_executable() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+
+    let unconfigured = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+
+    assert_action_present(&unconfigured, "radroots farm readiness check");
+    assert_action_absent(&unconfigured, "radroots farm publish");
+
+    let configured = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "farm",
+        "profile",
+        "update",
+        "--field",
+        "name",
+        "--value",
+        "Green Farm Updated",
+    ]);
+
+    assert_action_present(&configured, "radroots farm readiness check");
+    assert_action_present(&configured, "radroots farm publish");
+}
+
+#[test]
+fn farm_setup_actions_withhold_publish_for_watch_only_account() {
+    let sandbox = RadrootsCliSandbox::new();
+    let public_identity = identity_public(51);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "farm-watch-only", &public_identity);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+
+    let created = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "farm",
+        "create",
+        "--name",
+        "Watch Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+
+    assert_action_present(&created, "radroots farm readiness check");
+    assert_action_absent(&created, "radroots farm publish");
+
+    let updated = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "farm",
+        "profile",
+        "update",
+        "--field",
+        "name",
+        "--value",
+        "Watch Farm Updated",
+    ]);
+
+    assert_action_present(&updated, "radroots farm readiness check");
+    assert_action_absent(&updated, "radroots farm publish");
+}
+
+#[test]
 fn local_farm_publish_reports_partial_when_farm_event_fails_after_profile_publish() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -1777,4 +1873,29 @@ fn assert_relay_url(value: &Value, relay_url: &str) {
         actual == relay_url || actual == format!("{relay_url}/"),
         "expected relay url `{actual}` to match `{relay_url}`"
     );
+}
+
+fn assert_action_present(value: &Value, action: &str) {
+    assert!(
+        action_list(value).iter().any(|entry| *entry == action),
+        "expected action `{action}` in `{}`",
+        value["result"]["actions"]
+    );
+}
+
+fn assert_action_absent(value: &Value, action: &str) {
+    assert!(
+        action_list(value).iter().all(|entry| *entry != action),
+        "did not expect action `{action}` in `{}`",
+        value["result"]["actions"]
+    );
+}
+
+fn action_list(value: &Value) -> Vec<&str> {
+    value["result"]["actions"]
+        .as_array()
+        .expect("actions")
+        .iter()
+        .map(|entry| entry.as_str().expect("action"))
+        .collect()
 }
