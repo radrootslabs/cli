@@ -118,6 +118,8 @@ const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected sell
 const ORDER_STATUS_SOURCE: &str = "direct Nostr relay status fetch · active order reducer";
 const ORDER_EVENT_WATCH_UNAVAILABLE_REASON: &str =
     "relay-backed order event watch is not implemented";
+const ORDER_EVENT_LIST_RELAY_ACTION: &str =
+    "radroots --relay wss://relay.example.com order event list";
 const ORDERS_DIR: &str = "orders/drafts";
 
 static ORDER_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -772,6 +774,7 @@ pub fn history(
             None,
             "order event list requires at least one configured relay".to_owned(),
             Vec::new(),
+            vec![ORDER_EVENT_LIST_RELAY_ACTION.to_owned()],
         ));
     }
 
@@ -782,6 +785,7 @@ pub fn history(
                 None,
                 "order event list requires a selected seller account".to_owned(),
                 config.relay.urls.clone(),
+                vec!["radroots account create".to_owned()],
             ));
         }
     };
@@ -1713,7 +1717,10 @@ pub fn status(
             decoded_count: 0,
             skipped_count: 0,
             reason: Some("order status get requires at least one configured relay".to_owned()),
-            actions: Vec::new(),
+            actions: vec![format!(
+                "radroots --relay wss://relay.example.com order status get {}",
+                args.key
+            )],
         });
     }
 
@@ -4098,6 +4105,7 @@ fn order_history_unconfigured(
     seller_pubkey: Option<String>,
     reason: String,
     target_relays: Vec<String>,
+    actions: Vec<String>,
 ) -> OrderHistoryView {
     OrderHistoryView {
         state: "unconfigured".to_owned(),
@@ -4112,7 +4120,7 @@ fn order_history_unconfigured(
         count: 0,
         reason: Some(reason),
         orders: Vec::new(),
-        actions: vec!["radroots account create".to_owned()],
+        actions,
     }
 }
 

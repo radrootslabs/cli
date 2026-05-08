@@ -1833,6 +1833,15 @@ mod tests {
         assert_eq!(detail["fetched_count"], 0);
         assert_eq!(detail["decoded_count"], 0);
         assert_eq!(detail["skipped_count"], 0);
+        let envelope = crate::output_contract::OutputEnvelope::failure(
+            "order.status.get",
+            output_error,
+            OperationContext::default().envelope_context("req_order_status"),
+        );
+        assert_eq!(
+            envelope.next_actions[0].command,
+            "radroots --relay wss://relay.example.com order status get ord_pending"
+        );
     }
 
     #[test]
@@ -1840,19 +1849,62 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(OrderOperationService::new(&config));
-        let request = OperationRequest::new(
-            OperationContext::default(),
-            OrderEventListRequest::default(),
-        )
-        .expect("order event list request");
-        let envelope = service
+        let context = OperationContext::default();
+        let request = OperationRequest::new(context.clone(), OrderEventListRequest::default())
+            .expect("order event list request");
+        let output_error = service
             .execute(request)
             .expect_err("order event list unconfigured")
             .to_output_error();
+        let envelope = crate::output_contract::OutputEnvelope::failure(
+            "order.event.list",
+            output_error,
+            context.envelope_context("req_order_event_list"),
+        );
 
-        assert_eq!(envelope.code, "operation_unavailable");
-        assert_eq!(envelope.exit_code, 3);
-        assert!(envelope.message.contains("configured relay"));
+        assert_eq!(envelope.errors[0].code, "operation_unavailable");
+        assert_eq!(envelope.errors[0].exit_code, 3);
+        assert!(envelope.errors[0].message.contains("configured relay"));
+        assert_eq!(
+            envelope.errors[0].detail.as_ref().unwrap()["actions"][0],
+            "radroots --relay wss://relay.example.com order event list"
+        );
+        assert_eq!(
+            envelope.next_actions[0].command,
+            "radroots --relay wss://relay.example.com order event list"
+        );
+    }
+
+    #[test]
+    fn order_event_list_requires_seller_account_with_account_action() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://127.0.0.1:9".to_owned()];
+        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let context = OperationContext::default();
+        let request = OperationRequest::new(context.clone(), OrderEventListRequest::default())
+            .expect("order event list request");
+        let output_error = service
+            .execute(request)
+            .expect_err("order event list missing account")
+            .to_output_error();
+        let envelope = crate::output_contract::OutputEnvelope::failure(
+            "order.event.list",
+            output_error,
+            context.envelope_context("req_order_event_list"),
+        );
+
+        assert_eq!(envelope.errors[0].code, "operation_unavailable");
+        assert!(
+            envelope.errors[0]
+                .message
+                .contains("selected seller account")
+        );
+        assert_eq!(
+            envelope.errors[0].detail.as_ref().unwrap()["actions"][0],
+            "radroots account create"
+        );
+        assert_eq!(envelope.next_actions[0].command, "radroots account create");
     }
 
     #[test]
