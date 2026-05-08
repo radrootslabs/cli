@@ -36,11 +36,38 @@ pub struct HyfStatusView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HyfClient {
     executable: PathBuf,
+    timeouts: HyfClientTimeouts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HyfClientTimeouts {
+    control: Duration,
+    business: Duration,
+}
+
+impl Default for HyfClientTimeouts {
+    fn default() -> Self {
+        Self {
+            control: HYF_CONTROL_TIMEOUT,
+            business: HYF_BUSINESS_TIMEOUT,
+        }
+    }
 }
 
 impl HyfClient {
     pub fn new(executable: PathBuf) -> Self {
-        Self { executable }
+        Self {
+            executable,
+            timeouts: HyfClientTimeouts::default(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_timeouts(executable: PathBuf, control: Duration, business: Duration) -> Self {
+        Self {
+            executable,
+            timeouts: HyfClientTimeouts { control, business },
+        }
     }
 
     pub fn executable(&self) -> &Path {
@@ -54,7 +81,7 @@ impl HyfClient {
             "sys.status",
             None,
             &HyfEmptyInput::default(),
-            HYF_CONTROL_TIMEOUT,
+            self.timeouts.control,
         )
     }
 
@@ -65,7 +92,7 @@ impl HyfClient {
             "sys.capabilities",
             None,
             &HyfEmptyInput::default(),
-            HYF_CONTROL_TIMEOUT,
+            self.timeouts.control,
         )
     }
 
@@ -82,7 +109,7 @@ impl HyfClient {
             "query_rewrite",
             Some(context),
             request,
-            HYF_BUSINESS_TIMEOUT,
+            self.timeouts.business,
         )
     }
 
@@ -99,7 +126,7 @@ impl HyfClient {
             "semantic_rank",
             Some(context),
             request,
-            HYF_BUSINESS_TIMEOUT,
+            self.timeouts.business,
         )
     }
 
@@ -116,7 +143,7 @@ impl HyfClient {
             "explain_result",
             Some(context),
             request,
-            HYF_BUSINESS_TIMEOUT,
+            self.timeouts.business,
         )
     }
 
@@ -795,7 +822,8 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::time::Duration;
     use tempfile::tempdir;
 
     fn hyf_test_lock() -> &'static Mutex<()> {
@@ -803,9 +831,15 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    fn lock_hyf_tests() -> MutexGuard<'static, ()> {
+        hyf_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn disabled_hyf_reports_disabled_state_without_spawning() {
-        let _guard = hyf_test_lock().lock().expect("hyf test lock");
+        let _guard = lock_hyf_tests();
         let view = resolve_status(&HyfConfig {
             enabled: false,
             executable: "hyfd".into(),
@@ -816,7 +850,7 @@ mod tests {
 
     #[test]
     fn healthy_hyf_status_reports_ready() {
-        let _guard = hyf_test_lock().lock().expect("hyf test lock");
+        let _guard = lock_hyf_tests();
         let dir = tempdir().expect("tempdir");
         let executable = write_response_script(
             dir.path(),
@@ -837,7 +871,7 @@ mod tests {
 
     #[test]
     fn incompatible_hyf_status_reports_unavailable() {
-        let _guard = hyf_test_lock().lock().expect("hyf test lock");
+        let _guard = lock_hyf_tests();
         let dir = tempdir().expect("tempdir");
         let executable = write_response_script(
             dir.path(),
@@ -858,7 +892,7 @@ mod tests {
 
     #[test]
     fn capabilities_request_uses_typed_client() {
-        let _guard = hyf_test_lock().lock().expect("hyf test lock");
+        let _guard = lock_hyf_tests();
         let dir = tempdir().expect("tempdir");
         let executable = write_response_script(
             dir.path(),
@@ -888,7 +922,7 @@ mod tests {
 
     #[test]
     fn query_rewrite_request_round_trips_typed_output() {
-        let _guard = hyf_test_lock().lock().expect("hyf test lock");
+        let _guard = lock_hyf_tests();
         let dir = tempdir().expect("tempdir");
         let executable = write_response_script(
             dir.path(),
@@ -932,16 +966,21 @@ mod tests {
 
     #[test]
     fn business_requests_use_a_longer_timeout_than_control_requests() {
-        let _guard = hyf_test_lock().lock().expect("hyf test lock");
+        let _guard = lock_hyf_tests();
         let dir = tempdir().expect("tempdir");
         let executable = write_script(
             dir.path(),
-            "#!/bin/sh\nread -r request || exit 64\ncase \"$request\" in\n  *'\"capability\":\"sys.status\"'*)\n    sleep 3\n    cat <<'JSON'\n{\"version\":1,\"request_id\":\"cli-doctor-hyf-status\",\"trace_id\":\"cli-doctor-hyf-status\",\"ok\":true,\"output\":{\"build_identity\":{\"protocol_version\":1},\"enabled_execution_modes\":{\"deterministic\":true}}}\nJSON\n    ;;\n  *'\"capability\":\"query_rewrite\"'*)\n    sleep 3\n    cat <<'JSON'\n{\"version\":1,\"request_id\":\"rewrite-timeout-test\",\"trace_id\":\"rewrite-timeout-test\",\"ok\":true,\"output\":{\"original_text\":\"henhouse\",\"normalized_text\":\"henhouse\",\"rewritten_text\":\"eggs\",\"query_terms\":[\"eggs\"],\"normalization_signals\":[\"query_rewrite\"],\"ranking_hints\":[\"local_first\"],\"extracted_filters\":{\"local_intent\":false,\"fulfillment\":\"any\",\"time_window\":\"any\"}}}\nJSON\n    ;;\n  *)\n    exit 65\n    ;;\nesac\n",
+            "#!/bin/sh\nread -r request || exit 64\ncase \"$request\" in\n  *'\"capability\":\"sys.status\"'*)\n    sleep 1\n    cat <<'JSON'\n{\"version\":1,\"request_id\":\"cli-doctor-hyf-status\",\"trace_id\":\"cli-doctor-hyf-status\",\"ok\":true,\"output\":{\"build_identity\":{\"protocol_version\":1},\"enabled_execution_modes\":{\"deterministic\":true}}}\nJSON\n    ;;\n  *'\"capability\":\"query_rewrite\"'*)\n    sleep 1\n    cat <<'JSON'\n{\"version\":1,\"request_id\":\"rewrite-timeout-test\",\"trace_id\":\"rewrite-timeout-test\",\"ok\":true,\"output\":{\"original_text\":\"henhouse\",\"normalized_text\":\"henhouse\",\"rewritten_text\":\"eggs\",\"query_terms\":[\"eggs\"],\"normalization_signals\":[\"query_rewrite\"],\"ranking_hints\":[\"local_first\"],\"extracted_filters\":{\"local_intent\":false,\"fulfillment\":\"any\",\"time_window\":\"any\"}}}\nJSON\n    ;;\n  *)\n    exit 65\n    ;;\nesac\n",
         );
-        let client = HyfClient::new(executable);
+        let client = HyfClient::with_timeouts(
+            executable,
+            Duration::from_millis(100),
+            Duration::from_secs(5),
+        );
+        assert!(client.timeouts.business > client.timeouts.control);
 
         let status = client.status().expect_err("status should time out");
-        assert!(matches!(status, HyfClientError::Timeout(2000)));
+        assert!(matches!(status, HyfClientError::Timeout(100)));
 
         let rewrite = client
             .query_rewrite(
@@ -956,7 +995,7 @@ mod tests {
 
     #[test]
     fn semantic_rank_request_round_trips_typed_output() {
-        let _guard = hyf_test_lock().lock().expect("hyf test lock");
+        let _guard = lock_hyf_tests();
         let dir = tempdir().expect("tempdir");
         let executable = write_response_script(
             dir.path(),
@@ -999,7 +1038,7 @@ mod tests {
 
     #[test]
     fn explain_result_request_round_trips_typed_output() {
-        let _guard = hyf_test_lock().lock().expect("hyf test lock");
+        let _guard = lock_hyf_tests();
         let dir = tempdir().expect("tempdir");
         let executable = write_response_script(
             dir.path(),
