@@ -570,6 +570,18 @@ where
                         detail,
                     ))
                 }
+            } else if disposition == CommandDisposition::Unconfigured {
+                Err(OperationAdapterError::operation_unavailable_with_detail(
+                    operation_id,
+                    message,
+                    order_decision_error_detail(view),
+                ))
+            } else if disposition == CommandDisposition::NotFound {
+                Err(OperationAdapterError::not_found_with_detail(
+                    operation_id,
+                    message,
+                    order_decision_error_detail(view),
+                ))
             } else {
                 Err(OperationAdapterError::from_command_disposition(
                     operation_id,
@@ -1079,13 +1091,64 @@ where
                 .reason
                 .clone()
                 .unwrap_or_else(|| format!("order status finished with state `{}`", view.state));
-            Err(OperationAdapterError::from_command_disposition(
-                operation_id,
-                disposition,
-                message,
-            ))
+            if disposition == CommandDisposition::ExternalUnavailable {
+                let detail = order_status_error_detail(view);
+                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                    Err(OperationAdapterError::network_unavailable_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                } else {
+                    Err(OperationAdapterError::operation_unavailable_with_detail(
+                        operation_id,
+                        message,
+                        detail,
+                    ))
+                }
+            } else if disposition == CommandDisposition::Unconfigured {
+                Err(OperationAdapterError::operation_unavailable_with_detail(
+                    operation_id,
+                    message,
+                    order_status_error_detail(view),
+                ))
+            } else {
+                Err(OperationAdapterError::from_command_disposition(
+                    operation_id,
+                    disposition,
+                    message,
+                ))
+            }
         }
     }
+}
+
+fn order_status_error_detail(view: &OrderStatusView) -> Value {
+    json!({
+        "state": &view.state,
+        "order_id": &view.order_id,
+        "request_event_id": &view.request_event_id,
+        "decision_event_id": &view.decision_event_id,
+        "agreement_event_id": &view.agreement_event_id,
+        "listing_event_id": &view.listing_event_id,
+        "listing_addr": &view.listing_addr,
+        "buyer_pubkey": &view.buyer_pubkey,
+        "seller_pubkey": &view.seller_pubkey,
+        "last_event_id": &view.last_event_id,
+        "revision": &view.revision,
+        "inventory": &view.inventory,
+        "fulfillment": &view.fulfillment,
+        "lifecycle": &view.lifecycle,
+        "payment": &view.payment,
+        "reducer_issues": &view.reducer_issues,
+        "target_relays": &view.target_relays,
+        "connected_relays": &view.connected_relays,
+        "failed_relays": &view.failed_relays,
+        "fetched_count": view.fetched_count,
+        "decoded_count": view.decoded_count,
+        "skipped_count": view.skipped_count,
+        "actions": &view.actions,
+    })
 }
 
 fn serialized_target_result<R, T>(value: &T) -> Result<OperationResult<R>, OperationAdapterError>
@@ -1110,43 +1173,79 @@ where
                 .reason
                 .clone()
                 .unwrap_or_else(|| format!("order submit finished with state `{}`", view.state));
-            if !view.issues.is_empty()
-                && matches!(
-                    disposition,
-                    CommandDisposition::Unconfigured | CommandDisposition::ValidationFailed
-                )
-            {
-                let detail = json!({
-                    "state": &view.state,
-                    "order_id": &view.order_id,
-                    "file": &view.file,
-                    "listing_addr": &view.listing_addr,
-                    "listing_event_id": &view.listing_event_id,
-                    "issues": &view.issues,
-                    "actions": &view.actions,
-                });
-                if disposition == CommandDisposition::ValidationFailed {
+            let detail = order_submit_error_detail(view);
+            match disposition {
+                CommandDisposition::NotFound => Err(OperationAdapterError::not_found_with_detail(
+                    operation_id,
+                    message,
+                    detail,
+                )),
+                CommandDisposition::ValidationFailed => {
                     Err(OperationAdapterError::validation_failed_with_detail(
                         operation_id,
                         message,
                         detail,
                     ))
-                } else {
+                }
+                CommandDisposition::Unconfigured => {
                     Err(OperationAdapterError::operation_unavailable_with_detail(
                         operation_id,
                         message,
                         detail,
                     ))
                 }
-            } else {
-                Err(OperationAdapterError::from_command_disposition(
+                CommandDisposition::ExternalUnavailable => {
+                    if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                        Err(OperationAdapterError::network_unavailable_with_detail(
+                            operation_id,
+                            message,
+                            detail,
+                        ))
+                    } else {
+                        Err(OperationAdapterError::operation_unavailable_with_detail(
+                            operation_id,
+                            message,
+                            detail,
+                        ))
+                    }
+                }
+                _ => Err(OperationAdapterError::from_command_disposition(
                     operation_id,
                     disposition,
                     message,
-                ))
+                )),
             }
         }
     }
+}
+
+fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
+    json!({
+        "state": &view.state,
+        "source": &view.source,
+        "order_id": &view.order_id,
+        "file": &view.file,
+        "listing_lookup": &view.listing_lookup,
+        "listing_addr": &view.listing_addr,
+        "listing_event_id": &view.listing_event_id,
+        "buyer_account_id": &view.buyer_account_id,
+        "buyer_pubkey": &view.buyer_pubkey,
+        "seller_pubkey": &view.seller_pubkey,
+        "event_id": &view.event_id,
+        "event_kind": view.event_kind,
+        "dry_run": view.dry_run,
+        "deduplicated": view.deduplicated,
+        "target_relays": &view.target_relays,
+        "connected_relays": &view.connected_relays,
+        "acknowledged_relays": &view.acknowledged_relays,
+        "failed_relays": &view.failed_relays,
+        "idempotency_key": &view.idempotency_key,
+        "signer_mode": &view.signer_mode,
+        "signer_session_id": &view.signer_session_id,
+        "requested_signer_session_id": &view.requested_signer_session_id,
+        "issues": &view.issues,
+        "actions": &view.actions,
+    })
 }
 
 fn history_result<R>(
@@ -1163,19 +1262,17 @@ where
                 format!("order event list finished with state `{}`", view.state)
             });
             if disposition == CommandDisposition::ExternalUnavailable {
+                let detail = order_history_error_detail(view);
                 Err(OperationAdapterError::network_unavailable_with_detail(
                     operation_id,
                     message,
-                    json!({
-                        "state": &view.state,
-                        "seller_pubkey": &view.seller_pubkey,
-                        "target_relays": &view.target_relays,
-                        "connected_relays": &view.connected_relays,
-                        "failed_relays": &view.failed_relays,
-                        "fetched_count": view.fetched_count,
-                        "decoded_count": view.decoded_count,
-                        "skipped_count": view.skipped_count,
-                    }),
+                    detail,
+                ))
+            } else if disposition == CommandDisposition::Unconfigured {
+                Err(OperationAdapterError::operation_unavailable_with_detail(
+                    operation_id,
+                    message,
+                    order_history_error_detail(view),
                 ))
             } else {
                 Err(OperationAdapterError::from_command_disposition(
@@ -1186,6 +1283,21 @@ where
             }
         }
     }
+}
+
+fn order_history_error_detail(view: &crate::domain::runtime::OrderHistoryView) -> Value {
+    json!({
+        "state": &view.state,
+        "seller_pubkey": &view.seller_pubkey,
+        "target_relays": &view.target_relays,
+        "connected_relays": &view.connected_relays,
+        "failed_relays": &view.failed_relays,
+        "fetched_count": view.fetched_count,
+        "decoded_count": view.decoded_count,
+        "skipped_count": view.skipped_count,
+        "count": view.count,
+        "actions": &view.actions,
+    })
 }
 
 fn required_order_key<P>(request: &OperationRequest<P>) -> Result<String, OperationAdapterError>
@@ -1360,6 +1472,18 @@ mod tests {
         assert_eq!(output_error.code, "not_found");
         assert_eq!(output_error.exit_code, 4);
         assert!(output_error.message.contains("ord_missing"));
+        let envelope = crate::output_contract::OutputEnvelope::failure(
+            "order.submit",
+            output_error,
+            context.envelope_context("req_order_submit"),
+        );
+        let detail = envelope.errors[0].detail.as_ref().expect("submit detail");
+        assert_eq!(detail["state"], "missing");
+        assert_eq!(detail["order_id"], "ord_missing");
+        assert_eq!(detail["actions"][0], "radroots order list");
+        assert_eq!(detail["actions"][1], "radroots basket create");
+        assert_eq!(envelope.next_actions[0].command, "radroots order list");
+        assert_eq!(envelope.next_actions[1].command, "radroots basket create");
     }
 
     #[test]
@@ -1375,6 +1499,31 @@ mod tests {
         let error = service.execute(accept).expect_err("approval required");
 
         assert_eq!(error.to_output_error().code, "approval_required");
+    }
+
+    #[test]
+    fn order_accept_unconfigured_preserves_decision_detail() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let mut context = OperationContext::default();
+        context.dry_run = true;
+        let accept = OperationRequest::new(
+            context,
+            OrderAcceptRequest::from_data(data(&[("order_id", "ord_pending")])),
+        )
+        .expect("order accept request");
+        let error = service
+            .execute(accept)
+            .expect_err("order accept unconfigured");
+        let output_error = error.to_output_error();
+        let detail = output_error.detail.as_ref().expect("decision detail");
+
+        assert_eq!(output_error.code, "operation_unavailable");
+        assert_eq!(detail["state"], "unconfigured");
+        assert_eq!(detail["order_id"], "ord_pending");
+        assert_eq!(detail["decision"], "accepted");
+        assert!(detail["target_relays"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -1678,6 +1827,12 @@ mod tests {
 
         assert_eq!(output_error.code, "operation_unavailable");
         assert!(output_error.message.contains("configured relay"));
+        let detail = output_error.detail.as_ref().expect("status detail");
+        assert_eq!(detail["state"], "unconfigured");
+        assert_eq!(detail["order_id"], "ord_pending");
+        assert_eq!(detail["fetched_count"], 0);
+        assert_eq!(detail["decoded_count"], 0);
+        assert_eq!(detail["skipped_count"], 0);
     }
 
     #[test]

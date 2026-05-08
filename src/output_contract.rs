@@ -381,6 +381,32 @@ mod tests {
     }
 
     #[test]
+    fn failure_envelope_derives_next_actions_from_error_detail() {
+        let mut error = OutputError::new(
+            "not_found",
+            "order draft was not found",
+            CliExitCode::NotFound,
+        );
+        error.detail = Some(json!({
+            "actions": [
+                "radroots order list",
+                "run radroots basket create"
+            ]
+        }));
+        let envelope = OutputEnvelope::failure(
+            "order.submit",
+            error,
+            EnvelopeContext::new("req_order", true),
+        );
+
+        assert_eq!(envelope.next_actions.len(), 2);
+        assert_eq!(envelope.next_actions[0].label, "order list");
+        assert_eq!(envelope.next_actions[0].command, "radroots order list");
+        assert_eq!(envelope.next_actions[1].label, "basket create");
+        assert_eq!(envelope.next_actions[1].command, "radroots basket create");
+    }
+
+    #[test]
     fn ndjson_frames_serialize_one_json_object_per_line() {
         let frames = [
             NdjsonFrame::new(

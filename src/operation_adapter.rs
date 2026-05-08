@@ -465,6 +465,17 @@ impl OperationAdapterError {
         }
     }
 
+    pub fn not_found_with_detail(operation_id: &str, message: String, detail: Value) -> Self {
+        Self::DetailedFailure {
+            operation_id: operation_id.to_owned(),
+            code: "not_found".to_owned(),
+            class: "resource".to_owned(),
+            message,
+            exit_code: CliExitCode::NotFound,
+            detail_json: detail.to_string(),
+        }
+    }
+
     pub fn not_implemented(operation_id: &str, message: String) -> Self {
         Self::NotImplemented {
             operation_id: operation_id.to_owned(),
