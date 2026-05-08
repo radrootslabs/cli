@@ -596,7 +596,7 @@ fn dry_run_publish_view(
                     profile_idempotency_key,
                     farm_idempotency_key,
                     "unconfigured",
-                    "radrootsd farm publish dry-run requires `signer_session_id` input or a signer.remote_nip46 capability binding with signer_session_ref",
+                    "radrootsd farm publish dry-run requires a signer.remote_nip46 capability binding with signer_session_ref",
                 ));
             };
             if config.rpc.bridge_bearer_token.is_none() {
@@ -743,7 +743,7 @@ fn publish_via_radrootsd(
             profile_idempotency_key,
             farm_idempotency_key,
             "unconfigured",
-            "radrootsd farm publish requires `signer_session_id` input or a signer.remote_nip46 capability binding with signer_session_ref",
+            "radrootsd farm publish requires a signer.remote_nip46 capability binding with signer_session_ref",
         ));
     };
     if config.rpc.bridge_bearer_token.is_none() {

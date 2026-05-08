@@ -914,7 +914,7 @@ fn mutate(
                         listing_addr,
                         event_draft.event,
                         "unconfigured",
-                        "radrootsd listing publish dry-run requires `signer_session_id` input or a signer.remote_nip46 capability binding with signer_session_ref",
+                        "radrootsd listing publish dry-run requires a signer.remote_nip46 capability binding with signer_session_ref",
                     ));
                 };
                 Some(signer_session_id)
@@ -1065,7 +1065,7 @@ fn mutate_via_radrootsd(
             listing_addr,
             event_draft.event,
             "unconfigured",
-            "radrootsd listing publish requires `signer_session_id` input or a signer.remote_nip46 capability binding with signer_session_ref",
+            "radrootsd listing publish requires a signer.remote_nip46 capability binding with signer_session_ref",
         ));
     };
     if config.rpc.bridge_bearer_token.is_none() {

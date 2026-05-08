@@ -253,6 +253,18 @@ fn help_lists(stdout: &str, command: &str) -> bool {
     })
 }
 
+fn assert_public_signer_session_binding_message(value: &Value) {
+    let message = value["errors"][0]["message"]
+        .as_str()
+        .expect("error message");
+    assert!(message.contains("signer.remote_nip46"));
+    assert!(message.contains("signer_session_ref"));
+    assert!(
+        !message.contains("signer_session_id"),
+        "public CLI message should not reference unavailable explicit session input: {message}"
+    );
+}
+
 #[test]
 fn removed_global_flags_are_rejected_publicly() {
     for args in [
@@ -835,6 +847,60 @@ signer_session_ref = "session_test"
 }
 
 #[test]
+fn radrootsd_farm_publish_missing_signer_binding_points_to_capability_binding() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Binding Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
+
+    let dry_run_output = sandbox
+        .command()
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .args(["--format", "json", "--dry-run", "farm", "publish"])
+        .output()
+        .expect("run radrootsd farm publish dry-run");
+    let dry_run: Value = serde_json::from_slice(&dry_run_output.stdout).expect("json output");
+
+    assert!(!dry_run_output.status.success());
+    assert_eq!(dry_run["operation_id"], "farm.publish");
+    assert_eq!(dry_run["errors"][0]["code"], "signer_unconfigured");
+    assert_public_signer_session_binding_message(&dry_run);
+
+    let live_output = sandbox
+        .command()
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .args([
+            "--format",
+            "json",
+            "--approval-token",
+            "approve",
+            "farm",
+            "publish",
+        ])
+        .output()
+        .expect("run radrootsd farm publish");
+    let live: Value = serde_json::from_slice(&live_output.stdout).expect("json output");
+
+    assert!(!live_output.status.success());
+    assert_eq!(live["operation_id"], "farm.publish");
+    assert_eq!(live["errors"][0]["code"], "signer_unconfigured");
+    assert_public_signer_session_binding_message(&live);
+}
+
+#[test]
 fn radrootsd_listing_writes_dry_run_use_draft_identity_without_local_account() {
     for operation in ["publish", "update", "archive"] {
         let sandbox = RadrootsCliSandbox::new();
@@ -1073,7 +1139,7 @@ fn radrootsd_listing_publish_bypasses_relay_signer_preflight() {
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["errors"][0]["code"], "signer_unconfigured");
     assert_eq!(value["errors"][0]["detail"]["class"], "signer");
-    assert_contains(&value["errors"][0]["message"], "signer_session_id");
+    assert_public_signer_session_binding_message(&value);
     assert!(
         !value["errors"][0]["message"]
             .as_str()
@@ -1126,7 +1192,7 @@ fn radrootsd_publish_mode_routes_listing_update() {
     assert_eq!(value["result"], Value::Null);
     assert_eq!(value["errors"][0]["code"], "signer_unconfigured");
     assert_eq!(value["errors"][0]["detail"]["class"], "signer");
-    assert_contains(&value["errors"][0]["message"], "signer_session_id");
+    assert_public_signer_session_binding_message(&value);
 }
 
 #[test]
