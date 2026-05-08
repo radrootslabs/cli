@@ -84,7 +84,7 @@ fn market_refresh_view(mut view: SyncActionView) -> SyncActionView {
                 actions.push("radroots store init".to_owned());
             }
             if view.relay_count == 0 {
-                actions.push("radroots relay list".to_owned());
+                actions.push("radroots --relay wss://relay.example.com market refresh".to_owned());
             }
             if actions.is_empty() {
                 actions.extend(std::mem::take(&mut view.actions));
@@ -351,6 +351,28 @@ mod tests {
                 .as_str()
                 .expect("reason")
                 .contains("dry run")
+        );
+    }
+
+    #[test]
+    fn market_refresh_no_relay_action_is_actionable() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        crate::runtime::local::init(&config).expect("store init");
+        let service = OperationAdapter::new(MarketOperationService::new(&config));
+        let request =
+            OperationRequest::new(OperationContext::default(), MarketRefreshRequest::default())
+                .expect("market refresh request");
+        let envelope = service
+            .execute(request)
+            .expect("market refresh result")
+            .to_envelope(OperationContext::default().envelope_context("req_market_refresh"))
+            .expect("market refresh envelope");
+
+        assert_eq!(envelope.result["state"], "unconfigured");
+        assert_eq!(
+            envelope.result["actions"][0],
+            "radroots --relay wss://relay.example.com market refresh"
         );
     }
 

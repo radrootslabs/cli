@@ -2970,6 +2970,8 @@ pub struct SyncActionView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unsupported_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
