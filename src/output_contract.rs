@@ -77,6 +77,7 @@ impl OutputEnvelope {
         context: EnvelopeContext,
     ) -> Self {
         let operation_id = operation_id.into();
+        let next_actions = next_actions_from_error_detail(&error);
         Self {
             schema_version: OUTPUT_SCHEMA_VERSION,
             kind: operation_id.clone(),
@@ -89,7 +90,7 @@ impl OutputEnvelope {
             result: Value::Null,
             warnings: Vec::new(),
             errors: vec![error],
-            next_actions: Vec::new(),
+            next_actions,
         }
     }
 
@@ -128,6 +129,81 @@ impl OutputEnvelope {
         terminal.warnings = self.warnings.clone();
         terminal.errors = self.errors.clone();
         vec![started, terminal]
+    }
+}
+
+pub fn next_actions_from_result_value(result: &Value) -> Vec<NextAction> {
+    next_actions_from_actions_value(result.get("actions"))
+}
+
+fn next_actions_from_error_detail(error: &OutputError) -> Vec<NextAction> {
+    next_actions_from_actions_value(
+        error
+            .detail
+            .as_ref()
+            .and_then(|detail| detail.get("actions")),
+    )
+}
+
+fn next_actions_from_actions_value(actions_value: Option<&Value>) -> Vec<NextAction> {
+    actions_value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(next_action_from_action_string)
+        .fold(Vec::<NextAction>::new(), |mut actions, action| {
+            if !actions
+                .iter()
+                .any(|existing| existing.command == action.command)
+            {
+                actions.push(action);
+            }
+            actions
+        })
+}
+
+fn next_action_from_action_string(action: &str) -> Option<NextAction> {
+    let command = action.trim().strip_prefix("run ").unwrap_or(action).trim();
+    if !command.starts_with("radroots ") {
+        return None;
+    }
+    Some(NextAction {
+        label: next_action_label(command),
+        command: command.to_owned(),
+    })
+}
+
+fn next_action_label(command: &str) -> String {
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    let mut index = usize::from(parts.first().is_some_and(|part| *part == "radroots"));
+    let mut labels = Vec::new();
+    while index < parts.len() {
+        let part = parts[index];
+        if part.starts_with("--") {
+            index += 1;
+            if matches!(
+                part,
+                "--format"
+                    | "--account-id"
+                    | "--relay"
+                    | "--publish-mode"
+                    | "--idempotency-key"
+                    | "--correlation-id"
+                    | "--approval-token"
+            ) && index < parts.len()
+            {
+                index += 1;
+            }
+            continue;
+        }
+        labels.push(part);
+        index += 1;
+    }
+    if labels.is_empty() {
+        "radroots".to_owned()
+    } else {
+        labels.join(" ")
     }
 }
 

@@ -10,7 +10,7 @@ use crate::domain::runtime::CommandDisposition;
 use crate::operation_registry::{OPERATION_REGISTRY, OperationSpec, get_operation};
 use crate::output_contract::{
     CliExitCode, EnvelopeActor, EnvelopeContext, NextAction, OUTPUT_SCHEMA_VERSION, OutputEnvelope,
-    OutputError, OutputWarning,
+    OutputError, OutputWarning, next_actions_from_result_value,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::AccountRuntimeFailure;
@@ -260,66 +260,7 @@ impl<P: OperationResultPayload> OperationResult<P> {
 }
 
 fn next_actions_from_result(result: &Value) -> Vec<NextAction> {
-    result
-        .get("actions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .filter_map(next_action_from_action_string)
-        .fold(Vec::<NextAction>::new(), |mut actions, action| {
-            if !actions
-                .iter()
-                .any(|existing| existing.command == action.command)
-            {
-                actions.push(action);
-            }
-            actions
-        })
-}
-
-fn next_action_from_action_string(action: &str) -> Option<NextAction> {
-    let command = action.trim().strip_prefix("run ").unwrap_or(action).trim();
-    if !command.starts_with("radroots ") {
-        return None;
-    }
-    Some(NextAction {
-        label: next_action_label(command),
-        command: command.to_owned(),
-    })
-}
-
-fn next_action_label(command: &str) -> String {
-    let parts = command.split_whitespace().collect::<Vec<_>>();
-    let mut index = usize::from(parts.first().is_some_and(|part| *part == "radroots"));
-    let mut labels = Vec::new();
-    while index < parts.len() {
-        let part = parts[index];
-        if part.starts_with("--") {
-            index += 1;
-            if matches!(
-                part,
-                "--format"
-                    | "--account-id"
-                    | "--relay"
-                    | "--publish-mode"
-                    | "--idempotency-key"
-                    | "--correlation-id"
-                    | "--approval-token"
-            ) && index < parts.len()
-            {
-                index += 1;
-            }
-            continue;
-        }
-        labels.push(part);
-        index += 1;
-    }
-    if labels.is_empty() {
-        "radroots".to_owned()
-    } else {
-        labels.join(" ")
-    }
+    next_actions_from_result_value(result)
 }
 
 pub trait OperationService<P: OperationRequestPayload> {
@@ -528,6 +469,17 @@ impl OperationAdapterError {
         Self::NotImplemented {
             operation_id: operation_id.to_owned(),
             message,
+        }
+    }
+
+    pub fn not_implemented_with_detail(operation_id: &str, message: String, detail: Value) -> Self {
+        Self::DetailedFailure {
+            operation_id: operation_id.to_owned(),
+            code: "not_implemented".to_owned(),
+            class: "operation".to_owned(),
+            message,
+            exit_code: CliExitCode::RuntimeUnavailable,
+            detail_json: detail.to_string(),
         }
     }
 

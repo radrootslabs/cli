@@ -25,8 +25,10 @@ use crate::runtime::config::RuntimeConfig;
 use crate::runtime_args::{
     OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderReceiptArgs,
     OrderRevisionDecisionArg, OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderStatusArgs,
-    OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
+    OrderSubmitArgs, RecordLookupArgs,
 };
+
+const ORDER_EVENT_WATCH_DEFERRED_REASON: &str = "relay-backed order event watch is not implemented";
 
 pub struct OrderOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -511,13 +513,18 @@ impl OperationService<OrderEventWatchRequest> for OrderOperationService<'_> {
         &self,
         request: OperationRequest<OrderEventWatchRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = OrderWatchArgs {
-            key: required_order_key(&request)?,
-            frames: usize_input(&request, "frames").or(Some(1)),
-            interval_ms: u64_input(&request, "interval_ms").unwrap_or(1_000),
-        };
-        let view = map_runtime(crate::runtime::order::watch(self.config, &args))?;
-        serialized_target_result::<OrderEventWatchResult, _>(&view)
+        let order_id = required_order_key(&request)?;
+        let action = format!("radroots order status get {order_id}");
+        Err(OperationAdapterError::not_implemented_with_detail(
+            request.operation_id(),
+            ORDER_EVENT_WATCH_DEFERRED_REASON.to_owned(),
+            json!({
+                "state": "not_implemented",
+                "order_id": order_id,
+                "reason": ORDER_EVENT_WATCH_DEFERRED_REASON,
+                "actions": [action],
+            }),
+        ))
     }
 }
 
@@ -1232,18 +1239,6 @@ where
     request.payload.input().get(key).and_then(Value::as_bool)
 }
 
-fn usize_input<P>(request: &OperationRequest<P>, key: &str) -> Option<usize>
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    request
-        .payload
-        .input()
-        .get(key)
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-}
-
 fn u32_input<P>(request: &OperationRequest<P>, key: &str) -> Option<u32>
 where
     P: OperationRequestPayload + OperationRequestData,
@@ -1254,13 +1249,6 @@ where
         .get(key)
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
-}
-
-fn u64_input<P>(request: &OperationRequest<P>, key: &str) -> Option<u64>
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    request.payload.input().get(key).and_then(Value::as_u64)
 }
 
 fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
@@ -1713,7 +1701,7 @@ mod tests {
     }
 
     #[test]
-    fn order_event_watch_reports_missing_order_with_target_actions() {
+    fn order_event_watch_returns_deferred_error_with_target_action() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(OrderOperationService::new(&config));
@@ -1722,15 +1710,30 @@ mod tests {
             OrderEventWatchRequest::from_data(data(&[("order_id", "ord_missing")])),
         )
         .expect("order event watch request");
-        let envelope = service
+        let error = service
             .execute(request)
-            .expect("order event watch result")
-            .to_envelope(OperationContext::default().envelope_context("req_order_watch"))
-            .expect("order event watch envelope");
+            .expect_err("order event watch deferred");
+        let envelope = crate::output_contract::OutputEnvelope::failure(
+            "order.event.watch",
+            error.to_output_error(),
+            OperationContext::default().envelope_context("req_order_watch"),
+        );
 
         assert_eq!(envelope.operation_id, "order.event.watch");
-        assert_eq!(envelope.result["state"], "missing");
-        assert_eq!(envelope.result["actions"][0], "radroots order list");
+        assert!(envelope.result.is_null());
+        assert_eq!(envelope.errors[0].code, "not_implemented");
+        assert_eq!(
+            envelope.errors[0].detail.as_ref().unwrap()["state"],
+            "not_implemented"
+        );
+        assert_eq!(
+            envelope.errors[0].detail.as_ref().unwrap()["order_id"],
+            "ord_missing"
+        );
+        assert_eq!(
+            envelope.next_actions[0].command,
+            "radroots order status get ord_missing"
+        );
     }
 
     fn sample_config(root: &Path) -> RuntimeConfig {
