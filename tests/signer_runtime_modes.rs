@@ -1584,6 +1584,141 @@ fn local_order_event_list_attempts_configured_direct_relay() {
 }
 
 #[test]
+fn local_order_failure_envelopes_are_structured_and_actionable() {
+    let sandbox = RadrootsCliSandbox::new();
+    let watch_args = ["--format", "json", "order", "event", "watch", "ord_missing"];
+    let (watch_output, watch) = sandbox.json_output(&watch_args);
+    assert!(!watch_output.status.success());
+    assert_eq!(watch["operation_id"], "order.event.watch");
+    assert_eq!(watch["result"], Value::Null);
+    assert_eq!(watch["errors"][0]["code"], "not_implemented");
+    assert_eq!(watch["errors"][0]["detail"]["state"], "not_implemented");
+    assert_eq!(watch["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(
+        watch["next_actions"][0]["command"],
+        "radroots order status get ord_missing"
+    );
+    assert_no_daemon_runtime_reference(&watch, &watch_args);
+
+    let submit_args = [
+        "--format",
+        "json",
+        "--publish-mode",
+        "nostr_relay",
+        "--dry-run",
+        "order",
+        "submit",
+        "ord_missing",
+    ];
+    let (submit_output, submit) = sandbox.json_output(&submit_args);
+    assert!(!submit_output.status.success());
+    assert_eq!(submit["errors"][0]["code"], "not_found");
+    assert_eq!(submit["errors"][0]["detail"]["state"], "missing");
+    assert_eq!(submit["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(submit["next_actions"][0]["command"], "radroots order list");
+    assert_eq!(
+        submit["next_actions"][1]["command"],
+        "radroots basket create"
+    );
+    assert_no_daemon_runtime_reference(&submit, &submit_args);
+
+    let status_args = ["--format", "json", "order", "status", "get", "ord_missing"];
+    let (status_output, status) = sandbox.json_output(&status_args);
+    assert!(!status_output.status.success());
+    assert_eq!(status["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(status["errors"][0]["detail"]["state"], "unconfigured");
+    assert_eq!(status["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(status["errors"][0]["detail"]["fetched_count"], 0);
+    assert_eq!(
+        status["next_actions"][0]["command"],
+        "radroots --relay wss://relay.example.com order status get ord_missing"
+    );
+    assert_no_daemon_runtime_reference(&status, &status_args);
+
+    let event_list_no_relay_args = ["--format", "json", "order", "event", "list"];
+    let (event_list_no_relay_output, event_list_no_relay) =
+        sandbox.json_output(&event_list_no_relay_args);
+    assert!(!event_list_no_relay_output.status.success());
+    assert_eq!(
+        event_list_no_relay["errors"][0]["code"],
+        "operation_unavailable"
+    );
+    assert_eq!(
+        event_list_no_relay["errors"][0]["detail"]["state"],
+        "unconfigured"
+    );
+    assert_eq!(
+        event_list_no_relay["next_actions"][0]["command"],
+        "radroots --relay wss://relay.example.com order event list"
+    );
+    assert_no_daemon_runtime_reference(&event_list_no_relay, &event_list_no_relay_args);
+
+    let event_list_no_account_args = [
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "order",
+        "event",
+        "list",
+    ];
+    let (event_list_no_account_output, event_list_no_account) =
+        sandbox.json_output(&event_list_no_account_args);
+    assert!(!event_list_no_account_output.status.success());
+    assert_eq!(
+        event_list_no_account["errors"][0]["code"],
+        "operation_unavailable"
+    );
+    assert_eq!(
+        event_list_no_account["errors"][0]["detail"]["state"],
+        "unconfigured"
+    );
+    assert_eq!(
+        event_list_no_account["next_actions"][0]["command"],
+        "radroots account create"
+    );
+    assert_no_daemon_runtime_reference(&event_list_no_account, &event_list_no_account_args);
+
+    let accept_args = [
+        "--format",
+        "json",
+        "--publish-mode",
+        "nostr_relay",
+        "--dry-run",
+        "order",
+        "accept",
+        "ord_missing",
+    ];
+    let (accept_output, accept) = sandbox.json_output(&accept_args);
+    assert!(!accept_output.status.success());
+    assert_eq!(accept["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(accept["errors"][0]["detail"]["state"], "unconfigured");
+    assert_eq!(accept["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(accept["errors"][0]["detail"]["decision"], "accepted");
+    assert_no_daemon_runtime_reference(&accept, &accept_args);
+
+    let decline_args = [
+        "--format",
+        "json",
+        "--publish-mode",
+        "nostr_relay",
+        "--dry-run",
+        "order",
+        "decline",
+        "ord_missing",
+        "--reason",
+        "not available",
+    ];
+    let (decline_output, decline) = sandbox.json_output(&decline_args);
+    assert!(!decline_output.status.success());
+    assert_eq!(decline["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(decline["errors"][0]["detail"]["state"], "unconfigured");
+    assert_eq!(decline["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(decline["errors"][0]["detail"]["decision"], "declined");
+    assert_no_daemon_runtime_reference(&decline, &decline_args);
+}
+
+#[test]
 fn local_order_fulfillment_update_requires_configured_relay_before_publish_preflight() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
