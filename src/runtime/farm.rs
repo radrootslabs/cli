@@ -15,6 +15,7 @@ use radroots_sdk::{
     SdkRadrootsdPublishReceipt, SdkRadrootsdSignerSessionRef, SdkTransportMode,
     SdkTransportReceipt, SignerConfig as SdkSignerConfig,
 };
+use serde_json::json;
 
 use crate::domain::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
@@ -148,7 +149,8 @@ fn rebind_inner(
     let from_seller_pubkey = from_account
         .as_ref()
         .map(|account| account.record.public_identity.public_key_hex.clone());
-    let target_account = accounts::resolve_account_selector(config, args.selector.as_str())?;
+    let target_account = accounts::resolve_account_selector(config, args.selector.as_str())
+        .map_err(|error| farm_rebind_selector_error(args.selector.as_str(), error))?;
     let to_seller_pubkey = target_account.record.public_identity.public_key_hex.clone();
     let seller_pubkey_changed = from_seller_pubkey
         .as_deref()
@@ -206,6 +208,23 @@ fn rebind_inner(
     })
 }
 
+fn farm_rebind_selector_error(selector: &str, error: RuntimeError) -> RuntimeError {
+    match error {
+        RuntimeError::Account(accounts::AccountRuntimeFailure::Unresolved(issue)) => {
+            accounts::AccountRuntimeFailure::unresolved_with_detail(
+                issue.message().to_owned(),
+                json!({
+                    "seller_actor_source": FARM_SELLER_ACTOR_SOURCE,
+                    "selector": selector,
+                    "actions": account_recovery_actions(),
+                }),
+            )
+            .into()
+        }
+        other => other,
+    }
+}
+
 pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView, RuntimeError> {
     let scope = scope_from_arg(args.scope);
     let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
@@ -230,6 +249,13 @@ pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView,
     let account_pubkey = configured_account
         .as_ref()
         .map(|account| account.record.public_identity.public_key_hex.as_str());
+    let reason = if configured_account.is_none() {
+        Some(missing_farm_bound_seller_reason(
+            resolved.document.selection.account.as_str(),
+        ))
+    } else {
+        None
+    };
 
     Ok(FarmSetView {
         state: "updated".to_owned(),
@@ -242,7 +268,7 @@ pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView,
             &resolved.document,
             account_pubkey,
         )),
-        reason: None,
+        reason,
         actions: farm_update_actions(config, &resolved.document, configured_account.as_ref()),
     })
 }
@@ -273,6 +299,14 @@ pub fn set_preflight(
     let account_pubkey = configured_account
         .as_ref()
         .map(|account| account.record.public_identity.public_key_hex.as_str());
+    let reason = if configured_account.is_none() {
+        Some(format!(
+            "dry run requested; farm draft was not written; {}",
+            missing_farm_bound_seller_reason(resolved.document.selection.account.as_str())
+        ))
+    } else {
+        Some("dry run requested; farm draft was not written".to_owned())
+    };
 
     Ok(FarmSetView {
         state: "dry_run".to_owned(),
@@ -285,7 +319,7 @@ pub fn set_preflight(
             &resolved.document,
             account_pubkey,
         )),
-        reason: Some("dry run requested; farm draft was not written".to_owned()),
+        reason,
         actions: farm_update_actions(config, &resolved.document, configured_account.as_ref()),
     })
 }
@@ -1734,10 +1768,19 @@ fn init_document(
     if let Some(document) = existing_document
         && document.selection.account != account.record.account_id.to_string()
     {
-        return Err(accounts::AccountRuntimeFailure::mismatch(format!(
+        let message = format!(
             "account mismatch: farm config is bound to seller account `{}`; use `radroots farm rebind {}` to change the farm-bound seller account",
             document.selection.account, account.record.account_id
-        ))
+        );
+        return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+            message,
+            json!({
+                "seller_actor_source": FARM_SELLER_ACTOR_SOURCE,
+                "farm_bound_seller_account_id": document.selection.account,
+                "attempted_seller_account_id": account.record.account_id.to_string(),
+                "actions": [format!("radroots farm rebind {}", account.record.account_id)],
+            }),
+        )
         .into());
     }
     let farm_d_tag = match args.farm_d_tag.as_deref() {
@@ -1876,6 +1919,10 @@ fn farm_setup_actions(
     account: Option<&AccountRecordView>,
 ) -> Vec<String> {
     let mut actions = vec!["radroots farm readiness check".to_owned()];
+    if account.is_none() {
+        actions.extend(farm_bound_seller_recovery_actions());
+        return actions;
+    }
     if farm_config::missing_fields(document).is_empty()
         && account
             .map(|account| farm_publish_readiness(config, account).executable)
@@ -1884,6 +1931,24 @@ fn farm_setup_actions(
         actions.push("radroots farm publish".to_owned());
     }
     actions
+}
+
+fn missing_farm_bound_seller_reason(account_id: &str) -> String {
+    format!("farm-bound seller account `{account_id}` is not present in the local account store")
+}
+
+fn farm_bound_seller_recovery_actions() -> Vec<String> {
+    vec![
+        "radroots account import <path>".to_owned(),
+        "radroots farm rebind <selector>".to_owned(),
+    ]
+}
+
+fn account_recovery_actions() -> Vec<String> {
+    vec![
+        "radroots account import <path>".to_owned(),
+        "radroots account create".to_owned(),
+    ]
 }
 
 fn missing_blocks_listing_defaults(missing: &[FarmMissingField]) -> bool {

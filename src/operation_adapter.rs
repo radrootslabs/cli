@@ -803,20 +803,62 @@ fn account_runtime_failure(
     operation_id: &str,
     failure: &AccountRuntimeFailure,
 ) -> OperationAdapterError {
-    let message = failure.to_string();
+    let message = failure.message().to_owned();
     match failure {
-        AccountRuntimeFailure::Unresolved(_) => OperationAdapterError::AccountUnresolved {
-            operation_id: operation_id.to_owned(),
+        AccountRuntimeFailure::Unresolved(_) => account_failure_output(
+            operation_id,
+            "account_unresolved",
             message,
-        },
-        AccountRuntimeFailure::WatchOnly(_) => OperationAdapterError::AccountWatchOnly {
-            operation_id: operation_id.to_owned(),
+            CliExitCode::AuthorizationFailed,
+            failure.detail_json(),
+            || OperationAdapterError::AccountUnresolved {
+                operation_id: operation_id.to_owned(),
+                message: failure.message().to_owned(),
+            },
+        ),
+        AccountRuntimeFailure::WatchOnly(_) => account_failure_output(
+            operation_id,
+            "account_watch_only",
             message,
-        },
-        AccountRuntimeFailure::Mismatch(_) => OperationAdapterError::AccountMismatch {
-            operation_id: operation_id.to_owned(),
+            CliExitCode::SignerUnavailable,
+            failure.detail_json(),
+            || OperationAdapterError::AccountWatchOnly {
+                operation_id: operation_id.to_owned(),
+                message: failure.message().to_owned(),
+            },
+        ),
+        AccountRuntimeFailure::Mismatch(_) => account_failure_output(
+            operation_id,
+            "account_mismatch",
             message,
+            CliExitCode::AuthorizationFailed,
+            failure.detail_json(),
+            || OperationAdapterError::AccountMismatch {
+                operation_id: operation_id.to_owned(),
+                message: failure.message().to_owned(),
+            },
+        ),
+    }
+}
+
+fn account_failure_output(
+    operation_id: &str,
+    code: &str,
+    message: String,
+    exit_code: CliExitCode,
+    detail_json: Option<&str>,
+    fallback: impl FnOnce() -> OperationAdapterError,
+) -> OperationAdapterError {
+    match detail_json {
+        Some(detail_json) => OperationAdapterError::DetailedFailure {
+            operation_id: operation_id.to_owned(),
+            code: code.to_owned(),
+            class: "account".to_owned(),
+            message,
+            exit_code,
+            detail_json: detail_json.to_owned(),
         },
+        None => fallback(),
     }
 }
 

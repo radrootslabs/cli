@@ -24,34 +24,80 @@ pub const SHARED_ACCOUNT_STORE_SOURCE: &str = "shared account store · local fir
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountRuntimeFailure {
-    Unresolved(String),
-    WatchOnly(String),
-    Mismatch(String),
+    Unresolved(AccountRuntimeFailureIssue),
+    WatchOnly(AccountRuntimeFailureIssue),
+    Mismatch(AccountRuntimeFailureIssue),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountRuntimeFailureIssue {
+    message: String,
+    detail_json: Option<String>,
+}
+
+impl AccountRuntimeFailureIssue {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            detail_json: None,
+        }
+    }
+
+    fn with_detail(message: impl Into<String>, detail: serde_json::Value) -> Self {
+        Self {
+            message: message.into(),
+            detail_json: Some(detail.to_string()),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        self.message.as_str()
+    }
 }
 
 impl AccountRuntimeFailure {
     pub fn unresolved(message: impl Into<String>) -> Self {
-        Self::Unresolved(message.into())
+        Self::Unresolved(AccountRuntimeFailureIssue::new(message))
+    }
+
+    pub fn unresolved_with_detail(message: impl Into<String>, detail: serde_json::Value) -> Self {
+        Self::Unresolved(AccountRuntimeFailureIssue::with_detail(message, detail))
     }
 
     pub fn watch_only(account_id: &radroots_identity::RadrootsIdentityId) -> Self {
-        Self::WatchOnly(format!(
+        Self::WatchOnly(AccountRuntimeFailureIssue::new(format!(
             "resolved account `{account_id}` is watch_only and cannot sign because it is not secret-backed"
-        ))
+        )))
     }
 
     pub fn mismatch(message: impl Into<String>) -> Self {
-        Self::Mismatch(message.into())
+        Self::Mismatch(AccountRuntimeFailureIssue::new(message))
+    }
+
+    pub fn mismatch_with_detail(message: impl Into<String>, detail: serde_json::Value) -> Self {
+        Self::Mismatch(AccountRuntimeFailureIssue::with_detail(message, detail))
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unresolved(issue) | Self::WatchOnly(issue) | Self::Mismatch(issue) => {
+                issue.message.as_str()
+            }
+        }
+    }
+
+    pub fn detail_json(&self) -> Option<&str> {
+        match self {
+            Self::Unresolved(issue) | Self::WatchOnly(issue) | Self::Mismatch(issue) => {
+                issue.detail_json.as_deref()
+            }
+        }
     }
 }
 
 impl fmt::Display for AccountRuntimeFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unresolved(message) | Self::WatchOnly(message) | Self::Mismatch(message) => {
-                formatter.write_str(message)
-            }
-        }
+        formatter.write_str(self.message())
     }
 }
 

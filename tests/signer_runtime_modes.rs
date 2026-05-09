@@ -1474,6 +1474,30 @@ fn farm_rebind_is_explicit_and_publish_defaults_ignore_ambient_selection() {
         "preserved"
     );
 
+    let same_seller_live = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "farm",
+        "rebind",
+        first_account_id,
+    ]);
+    assert_eq!(same_seller_live["operation_id"], "farm.rebind");
+    assert_eq!(
+        same_seller_live["result"]["publication_state_action"],
+        "preserved"
+    );
+    let same_seller_get = sandbox.json_success(&["--format", "json", "farm", "get"]);
+    assert_eq!(
+        same_seller_get["result"]["document"]["publication"]["profile_state"],
+        "published"
+    );
+    assert_eq!(
+        same_seller_get["result"]["document"]["publication"]["farm_state"],
+        "published"
+    );
+
     let second = sandbox.json_success(&["--format", "json", "account", "create"]);
     let second_account_id = second["result"]["account"]["id"]
         .as_str()
@@ -1506,6 +1530,44 @@ fn farm_rebind_is_explicit_and_publish_defaults_ignore_ambient_selection() {
     assert_eq!(retarget["operation_id"], "farm.create");
     assert_eq!(retarget["errors"][0]["code"], "account_mismatch");
     assert_contains(&retarget["errors"][0]["message"], "farm-bound seller");
+    assert_eq!(
+        retarget["errors"][0]["detail"]["seller_actor_source"],
+        "farm_config"
+    );
+    assert_eq!(
+        retarget["errors"][0]["detail"]["farm_bound_seller_account_id"],
+        first_account_id
+    );
+    assert_eq!(
+        retarget["errors"][0]["detail"]["attempted_seller_account_id"],
+        second_account_id
+    );
+    assert_next_action_present(
+        &retarget,
+        format!("radroots farm rebind {second_account_id}").as_str(),
+    );
+
+    let (missing_rebind_output, missing_rebind) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "farm",
+        "rebind",
+        "acct_missing",
+    ]);
+    assert!(!missing_rebind_output.status.success());
+    assert_eq!(missing_rebind["operation_id"], "farm.rebind");
+    assert_eq!(missing_rebind["errors"][0]["code"], "account_unresolved");
+    assert_eq!(
+        missing_rebind["errors"][0]["detail"]["seller_actor_source"],
+        "farm_config"
+    );
+    assert_eq!(
+        missing_rebind["errors"][0]["detail"]["selector"],
+        "acct_missing"
+    );
+    assert_next_action_present(&missing_rebind, "radroots account import <path>");
+    assert_next_action_present(&missing_rebind, "radroots account create");
 
     let publish_dry_run = sandbox.json_success(&[
         "--format",
@@ -1638,6 +1700,118 @@ fn farm_rebind_is_explicit_and_publish_defaults_ignore_ambient_selection() {
         rebound_get["result"]["document"]["publication"]["farm_state"],
         "not_published"
     );
+}
+
+#[test]
+fn missing_farm_bound_seller_blocks_listing_create_and_guides_setup_repair() {
+    let sandbox = RadrootsCliSandbox::new();
+    let first = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let first_account_id = first["result"]["account"]["id"]
+        .as_str()
+        .expect("first account id");
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Missing Seller Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "account",
+        "selection",
+        "update",
+        second_account_id,
+    ]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "remove",
+        first_account_id,
+    ]);
+
+    let updated = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "profile",
+        "update",
+        "--field",
+        "name",
+        "--value",
+        "Missing Seller Farm Updated",
+    ]);
+    assert_eq!(updated["operation_id"], "farm.profile.update");
+    assert_contains(&updated["result"]["reason"], "farm-bound seller account");
+    assert_action_present(&updated, "radroots account import <path>");
+    assert_action_present(&updated, "radroots farm rebind <selector>");
+
+    let listing_path = sandbox.root().join("missing-seller-listing.toml");
+    let (listing_output, listing) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "listing",
+        "create",
+        "--output",
+        listing_path.to_string_lossy().as_ref(),
+        "--key",
+        "missing-seller-eggs",
+        "--title",
+        "Missing Seller Eggs",
+        "--category",
+        "eggs",
+        "--summary",
+        "Fresh eggs",
+        "--bin-id",
+        "bin-1",
+        "--quantity-amount",
+        "1",
+        "--quantity-unit",
+        "each",
+        "--price-amount",
+        "6",
+        "--price-currency",
+        "USD",
+        "--price-per-amount",
+        "1",
+        "--price-per-unit",
+        "each",
+        "--available",
+        "10",
+    ]);
+    assert!(!listing_output.status.success());
+    assert_eq!(listing["operation_id"], "listing.create");
+    assert_eq!(listing["errors"][0]["code"], "account_unresolved");
+    assert_contains(
+        &listing["errors"][0]["message"],
+        "farm-bound seller account",
+    );
+    assert_eq!(
+        listing["errors"][0]["detail"]["seller_actor_source"],
+        "farm_config"
+    );
+    assert_eq!(
+        listing["errors"][0]["detail"]["farm_bound_seller_account_id"],
+        first_account_id
+    );
+    assert_next_action_present(&listing, "radroots account import <path>");
+    assert_next_action_present(&listing, "radroots farm rebind <selector>");
+    assert!(!listing_path.exists());
 }
 
 #[test]
@@ -2380,6 +2554,16 @@ fn assert_action_present(value: &Value, action: &str) {
     );
 }
 
+fn assert_next_action_present(value: &Value, action: &str) {
+    assert!(
+        next_action_commands(value)
+            .iter()
+            .any(|entry| *entry == action),
+        "expected next action `{action}` in `{}`",
+        value["next_actions"]
+    );
+}
+
 fn assert_action_absent(value: &Value, action: &str) {
     assert!(
         action_list(value).iter().all(|entry| *entry != action),
@@ -2394,5 +2578,14 @@ fn action_list(value: &Value) -> Vec<&str> {
         .expect("actions")
         .iter()
         .map(|entry| entry.as_str().expect("action"))
+        .collect()
+}
+
+fn next_action_commands(value: &Value) -> Vec<&str> {
+    value["next_actions"]
+        .as_array()
+        .expect("next actions")
+        .iter()
+        .filter_map(|entry| entry["command"].as_str())
         .collect()
 }

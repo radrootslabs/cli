@@ -33,6 +33,7 @@ use radroots_sql_core::SqliteExecutor;
 use radroots_trade::listing::publish::validate_listing_for_seller;
 use radroots_trade::listing::validation::validate_listing_event;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::domain::runtime::{
     FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
@@ -2246,10 +2247,21 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
         return Ok(defaults);
     };
     let Some(account) = configured_account(config, &resolved.document.selection.account)? else {
-        return Err(RuntimeError::Config(format!(
-            "farm config account `{}` is not present in the local account store",
-            resolved.document.selection.account
-        )));
+        let account_id = resolved.document.selection.account.clone();
+        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
+            format!(
+                "farm-bound seller account `{account_id}` is not present in the local account store"
+            ),
+            json!({
+                "seller_actor_source": "farm_config",
+                "farm_bound_seller_account_id": account_id,
+                "actions": [
+                    "radroots account import <path>",
+                    "radroots farm rebind <selector>",
+                ],
+            }),
+        )
+        .into());
     };
 
     defaults.farm_config_present = true;
