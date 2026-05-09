@@ -498,11 +498,10 @@ impl OperationService<OrderEventListRequest> for OrderOperationService<'_> {
         request: OperationRequest<OrderEventListRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let order_id = string_input(&request, "order_id");
-        let view =
-            crate::runtime::order::history(self.config, order_id.as_deref()).map_err(|error| {
-                OperationAdapterError::runtime_failure(request.operation_id(), error)
-            })?;
-        history_result::<OrderEventListResult>(request.operation_id(), &view)
+        let view = crate::runtime::order::event_list(self.config, order_id.as_deref()).map_err(
+            |error| OperationAdapterError::runtime_failure(request.operation_id(), error),
+        )?;
+        event_list_result::<OrderEventListResult>(request.operation_id(), &view)
     }
 }
 
@@ -1246,9 +1245,9 @@ fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
     })
 }
 
-fn history_result<R>(
+fn event_list_result<R>(
     operation_id: &str,
-    view: &crate::domain::runtime::OrderHistoryView,
+    view: &crate::domain::runtime::OrderEventListView,
 ) -> Result<OperationResult<R>, OperationAdapterError>
 where
     R: OperationResultData,
@@ -1260,7 +1259,7 @@ where
                 format!("order event list finished with state `{}`", view.state)
             });
             if disposition == CommandDisposition::ExternalUnavailable {
-                let detail = order_history_error_detail(view);
+                let detail = order_event_list_error_detail(view);
                 Err(OperationAdapterError::network_unavailable_with_detail(
                     operation_id,
                     message,
@@ -1270,7 +1269,7 @@ where
                 Err(OperationAdapterError::operation_unavailable_with_detail(
                     operation_id,
                     message,
-                    order_history_error_detail(view),
+                    order_event_list_error_detail(view),
                 ))
             } else {
                 Err(OperationAdapterError::from_command_disposition(
@@ -1283,7 +1282,7 @@ where
     }
 }
 
-fn order_history_error_detail(view: &crate::domain::runtime::OrderHistoryView) -> Value {
+fn order_event_list_error_detail(view: &crate::domain::runtime::OrderEventListView) -> Value {
     json!({
         "state": &view.state,
         "seller_pubkey": &view.seller_pubkey,

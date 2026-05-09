@@ -80,8 +80,8 @@ use radroots_trade::order::{
 use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{
-    OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderFulfillmentView,
-    OrderGetView, OrderHistoryEntryView, OrderHistoryView, OrderInventoryBinView,
+    OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
+    OrderEventListView, OrderFulfillmentView, OrderGetView, OrderInventoryBinView,
     OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderPaymentView,
     OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView, OrderSettlementView,
     OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
@@ -768,12 +768,12 @@ pub fn watch(
     })
 }
 
-pub fn history(
+pub fn event_list(
     config: &RuntimeConfig,
     order_id: Option<&str>,
-) -> Result<OrderHistoryView, RuntimeError> {
+) -> Result<OrderEventListView, RuntimeError> {
     if config.relay.urls.is_empty() {
-        return Ok(order_history_unconfigured(
+        return Ok(order_event_list_unconfigured(
             None,
             "order event list requires at least one configured relay".to_owned(),
             Vec::new(),
@@ -784,7 +784,7 @@ pub fn history(
     let seller = match accounts::resolve_account(config)? {
         Some(account) => account,
         None => {
-            return Ok(order_history_unconfigured(
+            return Ok(order_event_list_unconfigured(
                 None,
                 "order event list requires a selected seller account".to_owned(),
                 config.relay.urls.clone(),
@@ -801,7 +801,7 @@ pub fn history(
             target_relays,
             failed_relays,
         }) => {
-            return Ok(order_history_unavailable(
+            return Ok(order_event_list_unavailable(
                 seller_pubkey,
                 reason,
                 target_relays,
@@ -811,7 +811,11 @@ pub fn history(
         Err(error) => return Err(RuntimeError::Network(error.to_string())),
     };
 
-    Ok(order_history_from_receipt(seller_pubkey, order_id, receipt))
+    Ok(order_event_list_from_receipt(
+        seller_pubkey,
+        order_id,
+        receipt,
+    ))
 }
 
 pub fn decide(
@@ -4104,13 +4108,13 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
     }
 }
 
-fn order_history_unconfigured(
+fn order_event_list_unconfigured(
     seller_pubkey: Option<String>,
     reason: String,
     target_relays: Vec<String>,
     actions: Vec<String>,
-) -> OrderHistoryView {
-    OrderHistoryView {
+) -> OrderEventListView {
+    OrderEventListView {
         state: "unconfigured".to_owned(),
         source: ORDER_EVENT_LIST_SOURCE.to_owned(),
         seller_pubkey,
@@ -4127,13 +4131,13 @@ fn order_history_unconfigured(
     }
 }
 
-fn order_history_unavailable(
+fn order_event_list_unavailable(
     seller_pubkey: String,
     reason: String,
     target_relays: Vec<String>,
     failed_relays: Vec<DirectRelayFailure>,
-) -> OrderHistoryView {
-    OrderHistoryView {
+) -> OrderEventListView {
+    OrderEventListView {
         state: "unavailable".to_owned(),
         source: ORDER_EVENT_LIST_SOURCE.to_owned(),
         seller_pubkey: Some(seller_pubkey),
@@ -4150,11 +4154,11 @@ fn order_history_unavailable(
     }
 }
 
-fn order_history_from_receipt(
+fn order_event_list_from_receipt(
     seller_pubkey: String,
     order_id: Option<&str>,
     receipt: DirectRelayFetchReceipt,
-) -> OrderHistoryView {
+) -> OrderEventListView {
     let DirectRelayFetchReceipt {
         target_relays,
         connected_relays,
@@ -4167,7 +4171,7 @@ fn order_history_from_receipt(
     let mut orders = Vec::new();
 
     for event in events {
-        match order_history_entry_from_event(&event, seller_pubkey.as_str()) {
+        match order_event_list_entry_from_event(&event, seller_pubkey.as_str()) {
             Ok(entry) => {
                 decoded_count += 1;
                 if order_id.is_none_or(|order_id| entry.id == order_id) {
@@ -4196,7 +4200,7 @@ fn order_history_from_receipt(
         None
     };
 
-    OrderHistoryView {
+    OrderEventListView {
         state: if orders.is_empty() { "empty" } else { "ready" }.to_owned(),
         source: ORDER_EVENT_LIST_SOURCE.to_owned(),
         seller_pubkey: Some(seller_pubkey),
@@ -8113,10 +8117,10 @@ fn order_decision_binding_error_view(
     view
 }
 
-fn order_history_entry_from_event(
+fn order_event_list_entry_from_event(
     event: &RadrootsNostrEvent,
     seller_pubkey: &str,
-) -> Result<OrderHistoryEntryView, RuntimeError> {
+) -> Result<OrderEventListEntryView, RuntimeError> {
     let event_kind = event_kind_u32(event);
     if event_kind != KIND_TRADE_ORDER_REQUEST {
         return Err(RuntimeError::Config(format!(
@@ -8144,7 +8148,7 @@ fn order_history_entry_from_event(
     let listing_event_id = context.listing_event.as_ref().map(|event| event.id.clone());
     let created_at_unix = u64::from(event.created_at);
 
-    Ok(OrderHistoryEntryView {
+    Ok(OrderEventListEntryView {
         id: envelope.order_id.clone(),
         state: "requested".to_owned(),
         event_id: Some(event.id),
@@ -10409,11 +10413,12 @@ mod tests {
         order_cancellation_event_parts, order_cancellation_payload_from_status,
         order_cancellation_preflight_view_from_status, order_decision_dry_run_view,
         order_decision_preflight_view_from_status, order_decision_view_from_resolution,
-        order_economics_from_resolved_listing, order_fulfillment_dry_run_view,
-        order_fulfillment_preflight_view_from_status, order_history_entry_from_event,
-        order_history_from_receipt, order_payment_dry_run_view, order_payment_event_parts,
-        order_payment_payload_from_status, order_payment_preflight_view_from_status,
-        order_receipt_dry_run_view, order_receipt_event_parts, order_receipt_payload_from_status,
+        order_economics_from_resolved_listing, order_event_list_entry_from_event,
+        order_event_list_from_receipt, order_fulfillment_dry_run_view,
+        order_fulfillment_preflight_view_from_status, order_payment_dry_run_view,
+        order_payment_event_parts, order_payment_payload_from_status,
+        order_payment_preflight_view_from_status, order_receipt_dry_run_view,
+        order_receipt_event_parts, order_receipt_payload_from_status,
         order_receipt_preflight_view_from_status, order_relay_publish_client, order_request_filter,
         order_revision_decision_event_parts, order_revision_decision_payload_from_proposal,
         order_revision_decision_preflight_view_from_status, order_revision_event_parts,
@@ -10722,8 +10727,8 @@ mod tests {
             .sign_with_keys(buyer.keys())
             .expect("signed order request");
 
-        let entry =
-            order_history_entry_from_event(&event, seller_pubkey.as_str()).expect("history entry");
+        let entry = order_event_list_entry_from_event(&event, seller_pubkey.as_str())
+            .expect("history entry");
 
         assert_eq!(entry.id, "ord_AAAAAAAAAAAAAAAAAAAAAg");
         assert_eq!(entry.state, "requested");
@@ -11580,7 +11585,7 @@ mod tests {
     }
 
     #[test]
-    fn order_history_counts_decoded_before_order_id_narrowing() {
+    fn order_event_list_counts_decoded_before_order_id_narrowing() {
         let seller = RadrootsIdentity::generate();
         let other_seller = RadrootsIdentity::generate();
         let buyer = RadrootsIdentity::generate();
@@ -11625,13 +11630,14 @@ mod tests {
             ],
         };
 
-        let history = order_history_from_receipt(seller_pubkey, Some(first_order_id), receipt);
+        let event_list =
+            order_event_list_from_receipt(seller_pubkey, Some(first_order_id), receipt);
 
-        assert_eq!(history.fetched_count, 3);
-        assert_eq!(history.decoded_count, 2);
-        assert_eq!(history.skipped_count, 1);
-        assert_eq!(history.count, 1);
-        assert_eq!(history.orders[0].id, first_order_id);
+        assert_eq!(event_list.fetched_count, 3);
+        assert_eq!(event_list.decoded_count, 2);
+        assert_eq!(event_list.skipped_count, 1);
+        assert_eq!(event_list.count, 1);
+        assert_eq!(event_list.orders[0].id, first_order_id);
     }
 
     #[test]

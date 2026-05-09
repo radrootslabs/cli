@@ -2137,7 +2137,7 @@ pub struct OrderWorkflowView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OrderHistoryView {
+pub struct OrderEventListView {
     pub state: String,
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2158,12 +2158,12 @@ pub struct OrderHistoryView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub orders: Vec<OrderHistoryEntryView>,
+    pub orders: Vec<OrderEventListEntryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
 }
 
-impl OrderHistoryView {
+impl OrderEventListView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "unconfigured" => CommandDisposition::Unconfigured,
@@ -2175,7 +2175,7 @@ impl OrderHistoryView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OrderHistoryEntryView {
+pub struct OrderEventListEntryView {
     pub id: String,
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
