@@ -9,6 +9,13 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
+use radroots_replica_db::{farm, farm_member_claim, migrations};
+use radroots_replica_db_schema::farm::IFarmFields;
+use radroots_replica_db_schema::farm_member_claim::IFarmMemberClaimFields;
+use radroots_replica_sync::{
+    RadrootsReplicaPendingPublishBatch, radroots_replica_pending_publish_batch,
+};
+use radroots_sql_core::SqliteExecutor;
 use serde_json::Value;
 use serde_json::json;
 
@@ -22,6 +29,7 @@ use support::{
 
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
+const SYNC_PUSH_FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
 
 struct JsonRpcRequest {
     headers: String,
@@ -206,6 +214,123 @@ fn content_length(headers: &str) -> usize {
                 .then(|| value.trim().parse::<usize>().expect("content length"))
         })
         .expect("content-length header")
+}
+
+struct RelayPublishServer {
+    endpoint: String,
+    requests: Receiver<Value>,
+    handle: JoinHandle<()>,
+}
+
+impl RelayPublishServer {
+    fn with_publish_outcomes(outcomes: Vec<(bool, &'static str)>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind relay");
+        let endpoint = format!("ws://{}", listener.local_addr().expect("relay addr"));
+        let (tx, requests) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            for (accepted, reason) in outcomes {
+                let (stream, _) = listener.accept().expect("accept relay connection");
+                handle_relay_publish_connection(stream, accepted, reason, &tx);
+            }
+        });
+
+        Self {
+            endpoint,
+            requests,
+            handle,
+        }
+    }
+
+    fn endpoint(&self) -> &str {
+        self.endpoint.as_str()
+    }
+
+    fn take_requests(self, count: usize) -> Vec<Value> {
+        let requests = (0..count)
+            .map(|_| {
+                self.requests
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("relay publish request")
+            })
+            .collect::<Vec<_>>();
+        self.handle.join().expect("relay server join");
+        requests
+    }
+}
+
+fn handle_relay_publish_connection(
+    stream: TcpStream,
+    accepted: bool,
+    reason: &str,
+    tx: &mpsc::Sender<Value>,
+) {
+    let mut websocket = tungstenite::accept(stream).expect("accept websocket");
+    let event = read_relay_event_message(&mut websocket);
+    let event_id = event["id"].as_str().expect("event id").to_owned();
+    tx.send(event).expect("relay request send");
+    websocket
+        .send(tungstenite::Message::Text(
+            json!(["OK", event_id, accepted, reason]).to_string().into(),
+        ))
+        .expect("relay ok send");
+}
+
+fn read_relay_event_message(websocket: &mut tungstenite::WebSocket<TcpStream>) -> Value {
+    loop {
+        let message = websocket.read().expect("relay message");
+        if !message.is_text() {
+            continue;
+        }
+        let value: Value =
+            serde_json::from_str(message.to_text().expect("relay text")).expect("relay json");
+        if value.get(0).and_then(Value::as_str) == Some("EVENT") {
+            return value.get(1).cloned().expect("relay event payload");
+        }
+    }
+}
+
+fn seed_sync_push_farm(sandbox: &RadrootsCliSandbox, d_tag: &str, pubkey: &str) {
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
+    migrations::run_all_up(&executor).expect("replica migrations");
+    farm::create(
+        &executor,
+        &IFarmFields {
+            d_tag: d_tag.to_owned(),
+            pubkey: pubkey.to_owned(),
+            name: "Sync Push Farm".to_owned(),
+            about: Some("sync push process fixture".to_owned()),
+            website: None,
+            picture: None,
+            banner: None,
+            location_primary: None,
+            location_city: None,
+            location_region: None,
+            location_country: None,
+        },
+    )
+    .expect("seed sync push farm");
+}
+
+fn seed_sync_push_member_claim(
+    sandbox: &RadrootsCliSandbox,
+    member_pubkey: &str,
+    farm_pubkey: &str,
+) {
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
+    migrations::run_all_up(&executor).expect("replica migrations");
+    farm_member_claim::create(
+        &executor,
+        &IFarmMemberClaimFields {
+            member_pubkey: member_pubkey.to_owned(),
+            farm_pubkey: farm_pubkey.to_owned(),
+        },
+    )
+    .expect("seed sync push member claim");
+}
+
+fn sync_push_pending_batch(sandbox: &RadrootsCliSandbox) -> RadrootsReplicaPendingPublishBatch {
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
+    radroots_replica_pending_publish_batch(&executor).expect("sync push pending batch")
 }
 
 #[test]
@@ -2902,6 +3027,142 @@ fn seller_dry_runs_preflight_without_mutating_farm_or_listing_files() {
         fs::read_to_string(&listing_file).expect("listing after dry-run"),
         listing_before
     );
+}
+
+#[test]
+fn sync_push_partial_mixed_author_queue_reports_error_envelope() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let selected_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("selected public key");
+    sandbox.json_success(&["--format", "json", "store", "init"]);
+    let other_pubkey = identity_public(81).public_key_hex;
+    let other_pubkey_canonical = other_pubkey.to_ascii_lowercase();
+    seed_sync_push_farm(&sandbox, SYNC_PUSH_FARM_D_TAG, selected_pubkey);
+    seed_sync_push_member_claim(&sandbox, other_pubkey.as_str(), selected_pubkey);
+    let batch = sync_push_pending_batch(&sandbox);
+    let expected_publishable_count = batch
+        .pending_events
+        .iter()
+        .filter(|event| event.author.eq_ignore_ascii_case(selected_pubkey))
+        .count();
+    let expected_skipped_count = batch.pending_count - expected_publishable_count;
+    assert!(expected_publishable_count > 0);
+    assert!(expected_skipped_count > 0);
+    let relay =
+        RelayPublishServer::with_publish_outcomes(vec![(true, ""); expected_publishable_count]);
+    let relay_url = relay.endpoint().to_owned();
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        relay_url.as_str(),
+        "--approval-token",
+        "approve",
+        "sync",
+        "push",
+    ]);
+
+    assert!(!output.status.success(), "{value}");
+    assert_eq!(value["operation_id"], "sync.push");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "network_unavailable", "{value}");
+    assert_eq!(value["errors"][0]["detail"]["state"], "partial");
+    assert_eq!(
+        value["errors"][0]["detail"]["queue"]["pending_count"],
+        json!(expected_skipped_count)
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["published_count"],
+        json!(expected_publishable_count)
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["skipped_count"],
+        json!(expected_skipped_count)
+    );
+    assert_contains(
+        &value["errors"][0]["detail"]["reason"],
+        "belong to another author",
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["actions"][1],
+        "radroots account list"
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["actions"][2],
+        format!("radroots --account-id {other_pubkey_canonical} sync push")
+    );
+    assert_eq!(
+        value["next_actions"][2]["command"],
+        format!("radroots --account-id {other_pubkey_canonical} sync push")
+    );
+    let requests = relay.take_requests(expected_publishable_count);
+    assert_eq!(requests.len(), expected_publishable_count);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request["pubkey"] == selected_pubkey)
+    );
+    assert_no_removed_command_reference(&value, &["sync", "push"]);
+    assert_no_daemon_runtime_reference(&value, &["sync", "push"]);
+}
+
+#[test]
+fn sync_push_other_author_only_queue_reports_unconfigured_error_envelope() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&["--format", "json", "store", "init"]);
+    let other_pubkey = identity_public(82).public_key_hex;
+    let other_pubkey_canonical = other_pubkey.to_ascii_lowercase();
+    seed_sync_push_farm(&sandbox, SYNC_PUSH_FARM_D_TAG, other_pubkey.as_str());
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--approval-token",
+        "approve",
+        "sync",
+        "push",
+    ]);
+
+    assert!(!output.status.success(), "{value}");
+    assert_eq!(value["operation_id"], "sync.push");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(
+        value["errors"][0]["code"], "operation_unavailable",
+        "{value}"
+    );
+    assert_eq!(value["errors"][0]["detail"]["state"], "unconfigured");
+    let pending_count = value["errors"][0]["detail"]["queue"]["pending_count"]
+        .as_u64()
+        .expect("pending count");
+    assert!(pending_count > 0);
+    assert_eq!(value["errors"][0]["detail"]["publishable_count"], 0);
+    assert_eq!(value["errors"][0]["detail"]["published_count"], 0);
+    assert_eq!(value["errors"][0]["detail"]["skipped_count"], pending_count);
+    assert_contains(
+        &value["errors"][0]["detail"]["reason"],
+        "belong to another author",
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["actions"][1],
+        "radroots account list"
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["actions"][2],
+        format!("radroots --account-id {other_pubkey_canonical} sync push")
+    );
+    assert_eq!(
+        value["next_actions"][2]["command"],
+        format!("radroots --account-id {other_pubkey_canonical} sync push")
+    );
+    assert_no_removed_command_reference(&value, &["sync", "push"]);
+    assert_no_daemon_runtime_reference(&value, &["sync", "push"]);
 }
 
 #[test]

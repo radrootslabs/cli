@@ -45,6 +45,7 @@ const SYNC_READY_ACTION: &str = "radroots market product search eggs";
 const MARKET_READY_ACTION: &str = "radroots market product search eggs";
 const INGEST_SOURCE: &str = "direct Nostr relay fetch · local replica ingest";
 const PUBLISH_SOURCE: &str = "direct Nostr relay publish · local replica sync";
+pub(crate) const RADROOTSD_SYNC_PUSH_UNAVAILABLE_REASON: &str = "sync push is only available in publish mode `nostr_relay`; radrootsd sync push is not implemented";
 const RELAY_FETCH_LIMIT: usize = 1_000;
 const MARKET_REFRESH_KINDS: &[u32] = &[KIND_PROFILE, KIND_FARM, KIND_LISTING];
 const SYNC_PULL_KINDS: &[u32] = &[
@@ -246,20 +247,13 @@ where
         &RadrootsReplicaPendingPublishEvent,
     ) -> Result<DirectRelayPublishReceipt, DirectRelayPublishError>,
 {
+    if matches!(config.publish.mode, PublishMode::Radrootsd) {
+        return Ok(push_radrootsd_unavailable_view(config));
+    }
+
     let snapshot = inspect_sync(config)?;
     if snapshot.state == "unconfigured" {
         return Ok(push_unconfigured_view(snapshot));
-    }
-
-    if matches!(config.publish.mode, PublishMode::Radrootsd) {
-        let mut view = empty_action_from_snapshot(snapshot, "push");
-        view.state = "unavailable".to_owned();
-        view.reason = Some(
-            "sync push is only available in publish mode `nostr_relay`; radrootsd sync push is not implemented"
-                .to_owned(),
-        );
-        view.actions = vec!["radroots --publish-mode nostr_relay sync push".to_owned()];
-        return Ok(view);
     }
 
     let signing = match accounts::resolve_local_signing_identity(config) {
@@ -448,6 +442,42 @@ fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncAc
     }
 }
 
+fn push_radrootsd_unavailable_view(config: &RuntimeConfig) -> SyncActionView {
+    SyncActionView {
+        direction: "push".to_owned(),
+        state: "unavailable".to_owned(),
+        source: PUBLISH_SOURCE.to_owned(),
+        local_root: config.local.root.display().to_string(),
+        replica_db: "not_checked".to_owned(),
+        relay_count: config.relay.urls.len(),
+        publish_policy: config.relay.publish_policy.as_str().to_owned(),
+        freshness: SyncFreshnessView {
+            state: "not_checked".to_owned(),
+            display: "not checked".to_owned(),
+            age_seconds: None,
+            last_event_at: None,
+        },
+        queue: SyncQueueView {
+            expected_count: 0,
+            pending_count: 0,
+        },
+        target_relays: config.relay.urls.clone(),
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: None,
+        ingested_count: None,
+        publishable_count: None,
+        published_count: None,
+        skipped_count: None,
+        unsupported_count: None,
+        failed_count: None,
+        publish_plan: None,
+        reason: Some(RADROOTSD_SYNC_PUSH_UNAVAILABLE_REASON.to_owned()),
+        actions: vec!["radroots --publish-mode nostr_relay sync push".to_owned()],
+    }
+}
+
 fn push_unconfigured_view(snapshot: SyncSnapshot) -> SyncActionView {
     let mut view = empty_action_from_snapshot(snapshot, "push");
     if view.replica_db == "ready" && view.relay_count == 0 {
@@ -508,9 +538,11 @@ fn sync_push_plan<'a>(
     let mut publishable_events = Vec::new();
     let mut event_kinds = BTreeMap::<u32, SyncPublishPlanKindView>::new();
     let mut authors = BTreeMap::<String, SyncPublishPlanAuthorView>::new();
+    let selected_author = canonical_pubkey_hex(selected_pubkey);
 
     for event in &batch.pending_events {
-        let is_publishable = event.author.eq_ignore_ascii_case(selected_pubkey);
+        let event_author = canonical_pubkey_hex(event.author.as_str());
+        let is_publishable = event_author == selected_author;
         let kind = event_kinds
             .entry(event.kind)
             .or_insert_with(|| SyncPublishPlanKindView {
@@ -525,9 +557,9 @@ fn sync_push_plan<'a>(
 
         let author =
             authors
-                .entry(event.author.clone())
+                .entry(event_author.clone())
                 .or_insert_with(|| SyncPublishPlanAuthorView {
-                    author: event.author.clone(),
+                    author: event_author.clone(),
                     eligibility: if is_publishable {
                         "selected".to_owned()
                     } else {
@@ -548,7 +580,7 @@ fn sync_push_plan<'a>(
             author.skipped_count += 1;
             counts.skipped_count += 1;
             if counts.first_skipped_author.is_none() {
-                counts.first_skipped_author = Some(event.author.clone());
+                counts.first_skipped_author = Some(event_author);
             }
         }
     }
@@ -559,11 +591,15 @@ fn sync_push_plan<'a>(
         counts,
         publishable_events,
         SyncPublishPlanView {
-            selected_author: selected_pubkey.to_owned(),
+            selected_author,
             event_kinds: event_kinds.into_values().collect(),
             authors: authors.into_values().collect(),
         },
     )
+}
+
+fn canonical_pubkey_hex(pubkey: &str) -> String {
+    pubkey.to_ascii_lowercase()
 }
 
 fn sync_push_dry_run_reason(counts: &SyncPushCounts) -> Option<String> {
@@ -1070,8 +1106,9 @@ mod tests {
             .public_key_hex
             .clone();
         let other_pubkey = identity(42).public_key_hex();
+        let other_pubkey_upper = other_pubkey.to_ascii_uppercase();
         seed_replica_farm(&config, selected_pubkey.as_str());
-        seed_replica_farm(&config, other_pubkey.as_str());
+        seed_replica_farm(&config, other_pubkey_upper.as_str());
 
         let view = push_with_publisher(&config, |_, _, _| panic!("dry run must not publish"))
             .expect("sync push dry run");
@@ -1309,6 +1346,31 @@ mod tests {
         assert_eq!(view.published_count, Some(0));
         assert_eq!(view.failed_count, Some(1));
         assert!(status.pending_count > 0);
+    }
+
+    #[test]
+    fn sync_push_rejects_radrootsd_before_store_relay_or_signer_checks() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path(), Vec::new());
+        config.publish.mode = PublishMode::Radrootsd;
+
+        let view = push_with_publisher(&config, |_, _, _| {
+            panic!("radrootsd sync push must not publish")
+        })
+        .expect("radrootsd sync push view");
+
+        assert_eq!(view.state, "unavailable");
+        assert_eq!(view.replica_db, "not_checked");
+        assert_eq!(view.relay_count, 0);
+        assert_eq!(
+            view.reason.as_deref(),
+            Some(super::RADROOTSD_SYNC_PUSH_UNAVAILABLE_REASON)
+        );
+        assert_eq!(
+            view.actions,
+            vec!["radroots --publish-mode nostr_relay sync push"]
+        );
+        assert!(!config.local.replica_db_path.exists());
     }
 
     #[test]
