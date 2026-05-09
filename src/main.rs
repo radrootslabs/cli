@@ -476,13 +476,18 @@ fn validate_publish_mode_contract(
     if matches!(config.publish.mode, PublishMode::Radrootsd)
         && requires_nostr_relay_publish_mode(spec.operation_id)
     {
+        let message = format!(
+            "`{}` cannot run with publish mode `radrootsd`; radrootsd publish transport is only implemented for farm and listing publish operations",
+            spec.cli_path
+        );
+        let actions = nostr_relay_publish_mode_recovery_actions(spec.operation_id);
         return Err(OperationAdapterError::operation_unavailable_with_detail(
             spec.operation_id,
-            format!(
-                "`{}` cannot run with publish mode `radrootsd`; radrootsd publish transport is only implemented for farm and listing publish operations",
-                spec.cli_path
-            ),
+            message.clone(),
             json!({
+                "state": "unavailable",
+                "reason": message,
+                "actions": actions,
                 "publish": {
                     "mode": config.publish.mode.as_str(),
                     "source": config.publish.source.as_str(),
@@ -498,6 +503,14 @@ fn validate_publish_mode_contract(
         ));
     }
     Ok(())
+}
+
+fn nostr_relay_publish_mode_recovery_actions(operation_id: &str) -> Vec<String> {
+    if operation_id == "sync.push" {
+        vec!["radroots --publish-mode nostr_relay sync push".to_owned()]
+    } else {
+        Vec::new()
+    }
 }
 
 fn is_publish_mode_routed_operation(operation_id: &str) -> bool {

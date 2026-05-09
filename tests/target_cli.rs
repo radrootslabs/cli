@@ -2863,6 +2863,81 @@ fn online_requires_relay_for_external_network_operations() {
 }
 
 #[test]
+fn radrootsd_sync_push_failure_exposes_nostr_relay_recovery_action() {
+    let sandbox = RadrootsCliSandbox::new();
+    let (json_output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--publish-mode",
+        "radrootsd",
+        "sync",
+        "push",
+    ]);
+
+    assert_eq!(json_output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "sync.push");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["state"], "unavailable");
+    assert_eq!(value["errors"][0]["detail"]["publish"]["mode"], "radrootsd");
+    assert_eq!(
+        value["errors"][0]["detail"]["publish"]["state"],
+        "unavailable"
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["actions"][0],
+        "radroots --publish-mode nostr_relay sync push"
+    );
+    assert_eq!(value["next_actions"][0]["kind"], "cli_command");
+    assert_eq!(
+        value["next_actions"][0]["command"],
+        "radroots --publish-mode nostr_relay sync push"
+    );
+
+    let ndjson_output = sandbox
+        .command()
+        .args([
+            "--format",
+            "ndjson",
+            "--publish-mode",
+            "radrootsd",
+            "sync",
+            "push",
+        ])
+        .output()
+        .expect("run sync push ndjson");
+    let frames = ndjson_from_stdout(&ndjson_output);
+    let terminal = frames.last().expect("terminal frame");
+
+    assert_eq!(ndjson_output.status.code(), Some(3));
+    assert_eq!(terminal["operation_id"], "sync.push");
+    assert_eq!(terminal["frame_type"], "error");
+    assert_eq!(
+        terminal["payload"]["next_actions"][0]["command"],
+        "radroots --publish-mode nostr_relay sync push"
+    );
+
+    let human_output = sandbox
+        .command()
+        .args(["--publish-mode", "radrootsd", "sync", "push"])
+        .output()
+        .expect("run sync push human");
+    let stdout = String::from_utf8(human_output.stdout).expect("utf8 stdout");
+
+    assert_eq!(human_output.status.code(), Some(3));
+    assert!(stdout.starts_with("sync.push: error\n"));
+    assert!(stdout.contains("error: operation_unavailable"));
+    assert!(stdout.contains("state: unavailable"));
+    assert!(stdout.contains("publish_mode: radrootsd"));
+    assert!(stdout.contains("publish_state: unavailable"));
+    assert!(
+        stdout.contains("reason: `radroots sync push` cannot run with publish mode `radrootsd`")
+    );
+    assert!(stdout.contains("- radroots --publish-mode nostr_relay sync push"));
+    assert!(serde_json::from_str::<Value>(&stdout).is_err());
+}
+
+#[test]
 fn online_order_event_watch_returns_deferred_without_relay_preflight() {
     let sandbox = RadrootsCliSandbox::new();
     let (output, value) = sandbox.json_output(&[
