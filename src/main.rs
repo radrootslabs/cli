@@ -575,16 +575,22 @@ fn render_human_envelope(
         writeln!(handle, "error: {}", error.code)?;
         writeln!(handle, "message: {}", error.message)?;
     }
-    if let Some(mode) = human_publish_mode(&envelope.result) {
+    let display = human_display_source(envelope);
+    if !envelope.errors.is_empty()
+        && let Some(state) = human_state(display)
+    {
+        writeln!(handle, "state: {state}")?;
+    }
+    if let Some(mode) = human_publish_mode(display) {
         writeln!(handle, "publish_mode: {mode}")?;
     }
-    if let Some(state) = human_publish_state(&envelope.result) {
+    if let Some(state) = human_publish_state(display) {
         writeln!(handle, "publish_state: {state}")?;
     }
-    if let Some(reason) = human_reason(&envelope.result) {
+    if let Some(reason) = human_reason(display) {
         writeln!(handle, "reason: {reason}")?;
     }
-    let actions = human_actions(envelope);
+    let actions = human_actions(envelope, display);
     if !actions.is_empty() {
         writeln!(handle, "next:")?;
         for action in actions {
@@ -592,6 +598,21 @@ fn render_human_envelope(
         }
     }
     Ok(())
+}
+
+fn human_display_source(envelope: &OutputEnvelope) -> &Value {
+    if !envelope.result.is_null() {
+        return &envelope.result;
+    }
+    envelope
+        .errors
+        .first()
+        .and_then(|error| error.detail.as_ref())
+        .unwrap_or(&envelope.result)
+}
+
+fn human_state(result: &Value) -> Option<&str> {
+    human_string_path(result, &["state"])
 }
 
 fn human_publish_mode(result: &Value) -> Option<&str> {
@@ -615,9 +636,8 @@ fn human_reason(result: &Value) -> Option<&str> {
         .or_else(|| human_string_path(result, &["checks", "account", "reason"]))
 }
 
-fn human_actions(envelope: &OutputEnvelope) -> Vec<String> {
-    let mut actions = envelope
-        .result
+fn human_actions(envelope: &OutputEnvelope, display: &Value) -> Vec<String> {
+    let mut actions = display
         .get("actions")
         .and_then(Value::as_array)
         .into_iter()

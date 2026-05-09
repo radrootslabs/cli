@@ -2208,6 +2208,32 @@ fn human_failure_output_preserves_error_code_and_message() {
 }
 
 #[test]
+fn human_failure_output_renders_structured_error_detail() {
+    let output = radroots()
+        .args([
+            "--format",
+            "human",
+            "order",
+            "event",
+            "watch",
+            "ord_missing",
+        ])
+        .output()
+        .expect("run order event watch");
+
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+
+    assert!(stdout.starts_with("order.event.watch: error\n"));
+    assert!(stdout.contains("request_id: req_order_event_watch_"));
+    assert!(stdout.contains("error: not_implemented"));
+    assert!(stdout.contains("state: not_implemented"));
+    assert!(stdout.contains("reason: relay-backed order event watch is not implemented"));
+    assert!(stdout.contains("- radroots order status get ord_missing"));
+    assert!(serde_json::from_str::<Value>(&stdout).is_err());
+}
+
+#[test]
 fn request_ids_are_invocation_unique_and_preserve_caller_fields() {
     let first = radroots()
         .args([
