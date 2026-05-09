@@ -743,6 +743,44 @@ impl FarmSetView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct FarmRebindView {
+    pub state: String,
+    pub source: String,
+    pub scope: String,
+    pub path: String,
+    pub config_present: bool,
+    pub dry_run: bool,
+    pub seller_actor_source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_seller_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_seller_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_state_action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<FarmConfigSummaryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl FarmRebindView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct FarmStatusView {
     pub state: String,
     pub source: String,
@@ -808,8 +846,9 @@ pub struct FarmPublishView {
     pub path: String,
     pub config_present: bool,
     pub dry_run: bool,
-    pub selected_account_id: String,
-    pub selected_account_pubkey: String,
+    pub seller_account_id: String,
+    pub seller_pubkey: String,
+    pub seller_actor_source: String,
     pub farm_d_tag: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_signer_session_id: Option<String>,
@@ -908,9 +947,10 @@ pub struct RelayFailureView {
 pub struct FarmConfigSummaryView {
     pub scope: String,
     pub path: String,
-    pub selected_account_id: String,
+    pub seller_account_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_account_pubkey: Option<String>,
+    pub seller_pubkey: Option<String>,
+    pub seller_actor_source: String,
     pub farm_d_tag: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -931,7 +971,7 @@ pub struct FarmConfigDocumentView {
 #[derive(Debug, Clone, Serialize)]
 pub struct FarmSelectionView {
     pub scope: String,
-    pub account: String,
+    pub seller_account_id: String,
     pub farm_d_tag: String,
 }
 

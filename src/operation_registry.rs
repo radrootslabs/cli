@@ -473,6 +473,21 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false
     ),
     operation!(
+        "farm.rebind",
+        "radroots farm rebind",
+        "farm",
+        "farm_rebind",
+        "FarmRebindRequest",
+        "FarmRebindResult",
+        "Rebind farm seller account.",
+        Seller,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
         "farm.profile.update",
         "radroots farm profile update",
         "farm",
@@ -1213,6 +1228,7 @@ mod tests {
         "sync.watch",
         "farm.create",
         "farm.get",
+        "farm.rebind",
         "farm.profile.update",
         "farm.location.update",
         "farm.fulfillment.update",
@@ -1270,6 +1286,7 @@ mod tests {
         "sync.pull",
         "sync.push",
         "farm.create",
+        "farm.rebind",
         "farm.profile.update",
         "farm.location.update",
         "farm.fulfillment.update",
@@ -1307,7 +1324,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 68);
+        assert_eq!(OPERATION_REGISTRY.len(), 69);
     }
 
     #[test]
@@ -1352,6 +1369,7 @@ mod tests {
             "account.attach_secret",
             "account.remove",
             "sync.push",
+            "farm.rebind",
             "farm.publish",
             "listing.publish",
             "listing.archive",

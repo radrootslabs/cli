@@ -118,6 +118,12 @@ pub struct FarmCreateArgs {
 }
 
 #[derive(Debug, Clone)]
+pub struct FarmRebindArgs {
+    pub scope: Option<FarmScopeArg>,
+    pub selector: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct FarmUpdateArgs {
     pub scope: Option<FarmScopeArg>,
     pub field: FarmFieldArg,

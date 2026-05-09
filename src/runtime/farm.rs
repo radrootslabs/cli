@@ -19,7 +19,7 @@ use radroots_sdk::{
 use crate::domain::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
     FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishJobView,
-    FarmPublishView, FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
+    FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
     RelayFailureView,
 };
 use crate::runtime::RuntimeError;
@@ -37,10 +37,12 @@ use crate::runtime::farm_config::{
 };
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime_args::{
-    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmScopeArg, FarmScopedArgs, FarmUpdateArgs,
+    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
+    FarmUpdateArgs,
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
+const FARM_SELLER_ACTOR_SOURCE: &str = "farm_config";
 const RELAY_FARM_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
 const RADROOTSD_FARM_WRITE_SOURCE: &str = "radrootsd publish transport · signer session";
 const RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD: &str = "bridge.profile.publish";
@@ -96,6 +98,111 @@ pub fn init_preflight(
         )),
         reason: Some("dry run requested; farm draft was not written".to_owned()),
         actions: farm_setup_actions(config, &document, Some(&selected_account)),
+    })
+}
+
+pub fn rebind(
+    config: &RuntimeConfig,
+    args: &FarmRebindArgs,
+) -> Result<FarmRebindView, RuntimeError> {
+    rebind_inner(config, args, false)
+}
+
+pub fn rebind_preflight(
+    config: &RuntimeConfig,
+    args: &FarmRebindArgs,
+) -> Result<FarmRebindView, RuntimeError> {
+    rebind_inner(config, args, true)
+}
+
+fn rebind_inner(
+    config: &RuntimeConfig,
+    args: &FarmRebindArgs,
+    dry_run: bool,
+) -> Result<FarmRebindView, RuntimeError> {
+    let scope = scope_from_arg(args.scope);
+    let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
+    let path = farm_config::config_path(&config.paths, resolved_scope)?;
+    let Some(resolved) = farm_config::load(config, Some(resolved_scope))? else {
+        return Ok(FarmRebindView {
+            state: "unconfigured".to_owned(),
+            source: FARM_CONFIG_SOURCE.to_owned(),
+            scope: resolved_scope.as_str().to_owned(),
+            path: path.display().to_string(),
+            config_present: false,
+            dry_run,
+            seller_actor_source: FARM_SELLER_ACTOR_SOURCE.to_owned(),
+            from_seller_account_id: None,
+            from_seller_pubkey: None,
+            to_seller_account_id: None,
+            to_seller_pubkey: None,
+            seller_pubkey_changed: None,
+            publication_state_action: None,
+            config: None,
+            reason: Some(format!("no farm config found at {}", path.display())),
+            actions: vec!["radroots farm create".to_owned()],
+        });
+    };
+
+    let from_account = configured_account(config, &resolved.document.selection.account)?;
+    let from_seller_pubkey = from_account
+        .as_ref()
+        .map(|account| account.record.public_identity.public_key_hex.clone());
+    let target_account = accounts::resolve_account_selector(config, args.selector.as_str())?;
+    let to_seller_pubkey = target_account.record.public_identity.public_key_hex.clone();
+    let seller_pubkey_changed = from_seller_pubkey
+        .as_deref()
+        .is_none_or(|pubkey| !pubkey.eq_ignore_ascii_case(to_seller_pubkey.as_str()));
+    let publication_state_action = if seller_pubkey_changed {
+        "cleared"
+    } else {
+        "preserved"
+    };
+    let mut document = resolved.document.clone();
+    document.selection.account = target_account.record.account_id.to_string();
+    if seller_pubkey_changed {
+        document.publication = FarmPublicationStatus::default();
+    }
+    let written_path = if dry_run {
+        resolved.path.clone()
+    } else {
+        farm_config::write(&config.paths, resolved.scope, &document)?
+    };
+    let state = if dry_run { "dry_run" } else { "rebound" };
+
+    Ok(FarmRebindView {
+        state: state.to_owned(),
+        source: FARM_CONFIG_SOURCE.to_owned(),
+        scope: resolved.scope.as_str().to_owned(),
+        path: written_path.display().to_string(),
+        config_present: true,
+        dry_run,
+        seller_actor_source: FARM_SELLER_ACTOR_SOURCE.to_owned(),
+        from_seller_account_id: Some(resolved.document.selection.account.clone()),
+        from_seller_pubkey,
+        to_seller_account_id: Some(target_account.record.account_id.to_string()),
+        to_seller_pubkey: Some(to_seller_pubkey.clone()),
+        seller_pubkey_changed: Some(seller_pubkey_changed),
+        publication_state_action: Some(publication_state_action.to_owned()),
+        config: Some(summary_view(
+            resolved.scope,
+            written_path.display().to_string(),
+            &document,
+            Some(to_seller_pubkey.as_str()),
+        )),
+        reason: Some(if dry_run {
+            "dry run requested; farm seller binding was not written".to_owned()
+        } else {
+            "farm seller binding updated".to_owned()
+        }),
+        actions: if dry_run {
+            vec![format!(
+                "radroots --approval-token approve farm rebind {}",
+                args.selector
+            )]
+        } else {
+            vec!["radroots farm readiness check".to_owned()]
+        },
     })
 }
 
@@ -245,7 +352,8 @@ pub fn status(
     };
     let mut actions = Vec::new();
     if account.is_none() {
-        actions.push("radroots account create".to_owned());
+        actions.push("radroots account import <path>".to_owned());
+        actions.push("radroots farm rebind <selector>".to_owned());
     } else if draft_missing.is_empty() {
         actions.extend(publish.actions.clone());
     } else {
@@ -275,7 +383,7 @@ pub fn status(
             account_pubkey,
         )),
         missing: if account.is_none() {
-            vec!["Selected account".to_owned()]
+            vec!["Farm-bound seller account".to_owned()]
         } else {
             let mut missing = missing_field_labels(draft_missing.as_slice());
             missing.extend(publish.missing);
@@ -382,8 +490,11 @@ fn relay_farm_publish_readiness(
             reason: Some(
                 accounts::AccountRuntimeFailure::watch_only(&account.record.account_id).to_string(),
             ),
-            missing: vec!["Write-capable account".to_owned()],
-            actions: vec!["radroots account attach-secret".to_owned()],
+            missing: vec!["Write-capable farm-bound seller account".to_owned()],
+            actions: vec![format!(
+                "radroots account attach-secret {} <path>",
+                account.record.account_id
+            )],
         };
     }
 
@@ -469,8 +580,11 @@ pub fn publish(
                 "farm config account `{}` is not present in the local account store",
                 resolved.document.selection.account
             ),
-            vec!["Selected account".to_owned()],
-            vec!["radroots account create".to_owned()],
+            vec!["Farm-bound seller account".to_owned()],
+            vec![
+                "radroots account import <path>".to_owned(),
+                "radroots farm rebind <selector>".to_owned(),
+            ],
             config.output.dry_run,
             true,
             resolved.document.selection.account.clone(),
@@ -545,7 +659,11 @@ fn dry_run_publish_view(
 ) -> Result<FarmPublishView, RuntimeError> {
     match config.publish.mode {
         PublishMode::NostrRelay => {
-            if let Err(error) = resolve_farm_signing_identity(config, account_pubkey) {
+            if let Err(error) = resolve_farm_signing_identity(
+                config,
+                resolved.document.selection.account.as_str(),
+                account_pubkey,
+            ) {
                 return match error {
                     ActorWriteBindingError::Account(failure) => Err(failure.into()),
                     error => Ok(binding_error_publish_view(
@@ -650,7 +768,11 @@ fn publish_via_direct_relay(
     profile_idempotency_key: Option<String>,
     farm_idempotency_key: Option<String>,
 ) -> Result<FarmPublishView, RuntimeError> {
-    let signing = match resolve_farm_signing_identity(config, account_pubkey.as_str()) {
+    let signing = match resolve_farm_signing_identity(
+        config,
+        resolved.document.selection.account.as_str(),
+        account_pubkey.as_str(),
+    ) {
         Ok(signing) => signing,
         Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
@@ -883,8 +1005,8 @@ fn missing_publish_view(
     actions: Vec<String>,
     dry_run: bool,
     config_present: bool,
-    selected_account_id: String,
-    selected_account_pubkey: String,
+    seller_account_id: String,
+    seller_pubkey: String,
     farm_d_tag: String,
 ) -> FarmPublishView {
     FarmPublishView {
@@ -894,8 +1016,9 @@ fn missing_publish_view(
         path,
         config_present,
         dry_run,
-        selected_account_id,
-        selected_account_pubkey,
+        seller_account_id,
+        seller_pubkey,
+        seller_actor_source: FARM_SELLER_ACTOR_SOURCE.to_owned(),
         farm_d_tag,
         requested_signer_session_id: args.signer_session_id.clone(),
         profile: not_submitted_component(
@@ -914,6 +1037,7 @@ fn missing_publish_view(
 
 fn resolve_farm_signing_identity(
     config: &RuntimeConfig,
+    account_id: &str,
     account_pubkey: &str,
 ) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(
@@ -926,7 +1050,7 @@ fn resolve_farm_signing_identity(
             ))
         });
     }
-    let signing = accounts::resolve_local_signing_identity(config)
+    let signing = accounts::resolve_local_signing_identity_for_account(config, account_id)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -937,7 +1061,7 @@ fn resolve_farm_signing_identity(
     if !selected_pubkey.eq_ignore_ascii_case(account_pubkey) {
         return Err(ActorWriteBindingError::Account(
             accounts::AccountRuntimeFailure::mismatch(format!(
-                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign farm pubkey `{account_pubkey}`"
+                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign farm-bound seller pubkey `{account_pubkey}`"
             )),
         ));
     }
@@ -962,8 +1086,9 @@ fn base_publish_view(
         path: resolved.path.display().to_string(),
         config_present: true,
         dry_run: config.output.dry_run,
-        selected_account_id: resolved.document.selection.account.clone(),
-        selected_account_pubkey: account_pubkey.to_owned(),
+        seller_account_id: resolved.document.selection.account.clone(),
+        seller_pubkey: account_pubkey.to_owned(),
+        seller_actor_source: FARM_SELLER_ACTOR_SOURCE.to_owned(),
         farm_d_tag: resolved.document.selection.farm_d_tag.clone(),
         requested_signer_session_id: args.signer_session_id.clone(),
         profile,
@@ -1606,6 +1731,15 @@ fn init_document(
     args: &FarmCreateArgs,
 ) -> Result<FarmConfigDocument, RuntimeError> {
     let existing_document = existing.map(|resolved| &resolved.document);
+    if let Some(document) = existing_document
+        && document.selection.account != account.record.account_id.to_string()
+    {
+        return Err(accounts::AccountRuntimeFailure::mismatch(format!(
+            "account mismatch: farm config is bound to seller account `{}`; use `radroots farm rebind {}` to change the farm-bound seller account",
+            document.selection.account, account.record.account_id
+        ))
+        .into());
+    }
     let farm_d_tag = match args.farm_d_tag.as_deref() {
         Some(value) => required_d_tag(value, "farm_d_tag")?,
         None => existing_document
@@ -1925,8 +2059,9 @@ fn summary_view(
     FarmConfigSummaryView {
         scope: scope.as_str().to_owned(),
         path,
-        selected_account_id: document.selection.account.clone(),
-        selected_account_pubkey: account_pubkey.map(str::to_owned),
+        seller_account_id: document.selection.account.clone(),
+        seller_pubkey: account_pubkey.map(str::to_owned),
+        seller_actor_source: FARM_SELLER_ACTOR_SOURCE.to_owned(),
         farm_d_tag: document.selection.farm_d_tag.clone(),
         name: resolved_name(document).unwrap_or_default(),
         location_primary: resolved_location_primary(document),
@@ -1939,7 +2074,7 @@ fn document_view(document: &FarmConfigDocument) -> FarmConfigDocumentView {
     FarmConfigDocumentView {
         selection: FarmSelectionView {
             scope: document.selection.scope.as_str().to_owned(),
-            account: document.selection.account.clone(),
+            seller_account_id: document.selection.account.clone(),
             farm_d_tag: document.selection.farm_d_tag.clone(),
         },
         profile: document.profile.clone(),

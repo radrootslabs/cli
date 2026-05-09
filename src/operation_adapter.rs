@@ -1294,6 +1294,9 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 insert_string(&mut input, "country", &args.country);
                 insert_string(&mut input, "delivery_method", &args.delivery_method);
             }
+            FarmCommand::Rebind(args) => {
+                insert_string(&mut input, "selector", &args.selector);
+            }
             FarmCommand::Profile(args) => match &args.command {
                 FarmProfileCommand::Update(args) => {
                     insert_string(&mut input, "field", &args.field);
@@ -1563,6 +1566,7 @@ target_operation_contracts! {
     SyncWatch => (SyncWatchRequest, SyncWatchResult, "sync.watch"),
     FarmCreate => (FarmCreateRequest, FarmCreateResult, "farm.create"),
     FarmGet => (FarmGetRequest, FarmGetResult, "farm.get"),
+    FarmRebind => (FarmRebindRequest, FarmRebindResult, "farm.rebind"),
     FarmProfileUpdate => (FarmProfileUpdateRequest, FarmProfileUpdateResult, "farm.profile.update"),
     FarmLocationUpdate => (FarmLocationUpdateRequest, FarmLocationUpdateResult, "farm.location.update"),
     FarmFulfillmentUpdate => (FarmFulfillmentUpdateRequest, FarmFulfillmentUpdateResult, "farm.fulfillment.update"),
@@ -1746,6 +1750,28 @@ mod tests {
                 .get("default")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn adapter_maps_farm_rebind_selector() {
+        let parsed = TargetCliArgs::try_parse_from(["radroots", "farm", "rebind", "acct_test"])
+            .expect("target args parse");
+
+        let request = TargetOperationRequest::from_target_args(&parsed)
+            .expect("operation request from target args");
+        let TargetOperationRequest::FarmRebind(request) = request else {
+            panic!("expected farm rebind request")
+        };
+
+        assert_eq!(request.operation_id(), "farm.rebind");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("selector")
+                .and_then(Value::as_str),
+            Some("acct_test")
         );
     }
 

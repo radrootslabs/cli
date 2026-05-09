@@ -6,14 +6,15 @@ use crate::operation_adapter::{
     FarmCreateRequest, FarmCreateResult, FarmFulfillmentUpdateRequest, FarmFulfillmentUpdateResult,
     FarmGetRequest, FarmGetResult, FarmLocationUpdateRequest, FarmLocationUpdateResult,
     FarmProfileUpdateRequest, FarmProfileUpdateResult, FarmPublishRequest, FarmPublishResult,
-    FarmReadinessCheckRequest, FarmReadinessCheckResult, OperationAdapterError, OperationRequest,
-    OperationRequestData, OperationRequestPayload, OperationResult, OperationResultData,
-    OperationService,
+    FarmReadinessCheckRequest, FarmReadinessCheckResult, FarmRebindRequest, FarmRebindResult,
+    OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
+    OperationResult, OperationResultData, OperationService,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{PublishMode, RuntimeConfig};
 use crate::runtime_args::{
-    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmScopeArg, FarmScopedArgs, FarmUpdateArgs,
+    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
+    FarmUpdateArgs,
 };
 
 pub struct FarmOperationService<'a> {
@@ -49,11 +50,16 @@ impl OperationService<FarmCreateRequest> for FarmOperationService<'_> {
             delivery_method: string_input(&request, "delivery_method"),
         };
         if request.context.dry_run {
-            let view = map_runtime(crate::runtime::farm::init_preflight(self.config, &args))?;
+            let view =
+                crate::runtime::farm::init_preflight(self.config, &args).map_err(|error| {
+                    OperationAdapterError::runtime_failure(request.operation_id(), error)
+                })?;
             return serialized_operation_result::<FarmCreateResult, _>(&view);
         }
 
-        let view = map_runtime(crate::runtime::farm::init(self.config, &args))?;
+        let view = crate::runtime::farm::init(self.config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
         serialized_operation_result::<FarmCreateResult, _>(&view)
     }
 }
@@ -70,6 +76,37 @@ impl OperationService<FarmGetRequest> for FarmOperationService<'_> {
         };
         let view = map_runtime(crate::runtime::farm::get(self.config, &args))?;
         serialized_operation_result::<FarmGetResult, _>(&view)
+    }
+}
+
+impl OperationService<FarmRebindRequest> for FarmOperationService<'_> {
+    type Result = FarmRebindResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<FarmRebindRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = FarmRebindArgs {
+            scope: scope_input(&request)?,
+            selector: required_string(&request, "selector")?,
+        };
+        if request.context.dry_run {
+            let view =
+                crate::runtime::farm::rebind_preflight(self.config, &args).map_err(|error| {
+                    OperationAdapterError::runtime_failure(request.operation_id(), error)
+                })?;
+            return serialized_operation_result::<FarmRebindResult, _>(&view);
+        }
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
+
+        let view = crate::runtime::farm::rebind(self.config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
+        serialized_operation_result::<FarmRebindResult, _>(&view)
     }
 }
 
@@ -348,7 +385,7 @@ mod tests {
     use super::FarmOperationService;
     use crate::operation_adapter::{
         FarmCreateRequest, FarmGetRequest, FarmPublishRequest, FarmReadinessCheckRequest,
-        OperationAdapter, OperationContext, OperationData, OperationRequest,
+        FarmRebindRequest, OperationAdapter, OperationContext, OperationData, OperationRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -419,6 +456,22 @@ mod tests {
         let request =
             OperationRequest::new(OperationContext::default(), FarmPublishRequest::default())
                 .expect("farm publish request");
+        let error = service.execute(request).expect_err("approval required");
+        assert!(format!("{error}").contains("approval_token"));
+        assert_eq!(error.to_output_error().code, "approval_required");
+        assert_eq!(error.to_output_error().exit_code, 6);
+    }
+
+    #[test]
+    fn farm_rebind_requires_approval_token_unless_dry_run() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(FarmOperationService::new(&config));
+        let request = OperationRequest::new(
+            OperationContext::default(),
+            FarmRebindRequest::from_data(data(&[("selector", "acct_test")])),
+        )
+        .expect("farm rebind request");
         let error = service.execute(request).expect_err("approval required");
         assert!(format!("{error}").contains("approval_token"));
         assert_eq!(error.to_output_error().code, "approval_required");

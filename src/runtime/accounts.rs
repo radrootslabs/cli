@@ -436,6 +436,29 @@ pub fn resolve_local_signing_identity(
     Ok(AccountSigningIdentity { account, identity })
 }
 
+pub fn resolve_local_signing_identity_for_account(
+    config: &RuntimeConfig,
+    account_id: &str,
+) -> Result<AccountSigningIdentity, RuntimeError> {
+    let manager = account_manager(config)?;
+    let snapshot = snapshot_from_manager(&manager)?;
+    let Some(account) = snapshot
+        .accounts
+        .iter()
+        .find(|account| account.record.account_id.as_str() == account_id)
+        .cloned()
+    else {
+        return Err(AccountRuntimeFailure::unresolved(format!(
+            "farm-bound seller account `{account_id}` is not present in the local account store"
+        ))
+        .into());
+    };
+    let Some(identity) = manager.get_signing_identity(&account.record.account_id)? else {
+        return Err(AccountRuntimeFailure::watch_only(&account.record.account_id).into());
+    };
+    Ok(AccountSigningIdentity { account, identity })
+}
+
 pub fn account_summary_view(account: &AccountRecordView) -> AccountSummaryView {
     AccountSummaryView::from_account_runtime(
         &account.record,

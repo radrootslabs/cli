@@ -198,6 +198,9 @@ fn execute_request(
         TargetOperationRequest::FarmGet(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
+        TargetOperationRequest::FarmRebind(request) => {
+            execute_with(FarmOperationService::new(config), request)
+        }
         TargetOperationRequest::FarmProfileUpdate(request) => {
             execute_with(FarmOperationService::new(config), request)
         }

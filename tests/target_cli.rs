@@ -3341,6 +3341,11 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
         "account.remove",
         &["account", "remove", "acct_missing"],
     );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "farm.rebind",
+        &["farm", "rebind", "acct_missing"],
+    );
     assert_required_approval_token_rejected(&sandbox, "farm.publish", &["farm", "publish"]);
     assert_required_approval_token_rejected(
         &sandbox,

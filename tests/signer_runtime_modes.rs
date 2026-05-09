@@ -1393,6 +1393,368 @@ fn local_farm_publish_persists_publication_after_profile_and_farm_publish() {
 }
 
 #[test]
+fn farm_rebind_is_explicit_and_publish_defaults_ignore_ambient_selection() {
+    let sandbox = RadrootsCliSandbox::new();
+    let first = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let first_account_id = first["result"]["account"]["id"]
+        .as_str()
+        .expect("first account id");
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_path = farm["result"]["config"]["path"]
+        .as_str()
+        .expect("farm path");
+    let farm_d_tag = farm["result"]["config"]["farm_d_tag"]
+        .as_str()
+        .expect("farm d tag");
+    let first_pubkey = farm["result"]["config"]["seller_pubkey"]
+        .as_str()
+        .expect("first pubkey");
+    assert_eq!(
+        farm["result"]["config"]["seller_account_id"],
+        first_account_id
+    );
+    assert_eq!(farm["result"]["config"]["seller_pubkey"], first_pubkey);
+    assert_eq!(
+        farm["result"]["config"]["seller_actor_source"],
+        "farm_config"
+    );
+    assert!(
+        farm["result"]["config"]
+            .get("selected_account_id")
+            .is_none()
+    );
+
+    let relay = FarmPartialRelayServer::profile_and_farm_accept();
+    let relay_url = relay.endpoint().to_owned();
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        relay_url.as_str(),
+        "--approval-token",
+        "approve",
+        "farm",
+        "publish",
+    ]);
+    let _requests = relay.take_requests();
+    let published = sandbox.json_success(&["--format", "json", "farm", "get"]);
+    assert_eq!(
+        published["result"]["document"]["publication"]["profile_state"],
+        "published"
+    );
+    assert_eq!(
+        published["result"]["document"]["publication"]["farm_state"],
+        "published"
+    );
+
+    let same_seller_dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "farm",
+        "rebind",
+        first_account_id,
+    ]);
+    assert_eq!(same_seller_dry_run["operation_id"], "farm.rebind");
+    assert_eq!(
+        same_seller_dry_run["result"]["publication_state_action"],
+        "preserved"
+    );
+
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+    assert_ne!(first_account_id, second_account_id);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "account",
+        "selection",
+        "update",
+        second_account_id,
+    ]);
+
+    let (retarget_output, retarget) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm Retarget",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    assert!(!retarget_output.status.success());
+    assert_eq!(retarget["operation_id"], "farm.create");
+    assert_eq!(retarget["errors"][0]["code"], "account_mismatch");
+    assert_contains(&retarget["errors"][0]["message"], "farm-bound seller");
+
+    let publish_dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--dry-run",
+        "farm",
+        "publish",
+    ]);
+    assert_eq!(publish_dry_run["operation_id"], "farm.publish");
+    assert_eq!(publish_dry_run["result"]["state"], "dry_run");
+    assert_eq!(
+        publish_dry_run["result"]["seller_account_id"],
+        first_account_id
+    );
+    assert_eq!(publish_dry_run["result"]["seller_pubkey"], first_pubkey);
+    assert!(
+        publish_dry_run["result"]
+            .get("selected_account_id")
+            .is_none()
+    );
+
+    let listing_path = sandbox.root().join("drift-listing.toml");
+    let listing = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "create",
+        "--output",
+        listing_path.to_string_lossy().as_ref(),
+        "--key",
+        "drift-eggs",
+        "--title",
+        "Eggs",
+        "--category",
+        "eggs",
+        "--summary",
+        "Fresh eggs",
+        "--bin-id",
+        "bin-1",
+        "--quantity-amount",
+        "1",
+        "--quantity-unit",
+        "each",
+        "--price-amount",
+        "6",
+        "--price-currency",
+        "USD",
+        "--price-per-amount",
+        "1",
+        "--price-per-unit",
+        "each",
+        "--available",
+        "10",
+    ]);
+    assert_eq!(listing["operation_id"], "listing.create");
+    assert_eq!(listing["result"]["seller_pubkey"], first_pubkey);
+    assert_eq!(listing["result"]["farm_d_tag"], farm_d_tag);
+
+    let farm_before_dry_run = fs::read_to_string(farm_path).expect("farm before dry-run rebind");
+    let dry_rebind = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "farm",
+        "rebind",
+        second_account_id,
+    ]);
+    assert_eq!(dry_rebind["operation_id"], "farm.rebind");
+    assert_eq!(dry_rebind["result"]["state"], "dry_run");
+    assert_eq!(
+        dry_rebind["result"]["from_seller_account_id"],
+        first_account_id
+    );
+    assert_eq!(dry_rebind["result"]["from_seller_pubkey"], first_pubkey);
+    assert_eq!(
+        dry_rebind["result"]["to_seller_account_id"],
+        second_account_id
+    );
+    let second_pubkey = dry_rebind["result"]["to_seller_pubkey"]
+        .as_str()
+        .expect("second pubkey");
+    assert_eq!(dry_rebind["result"]["to_seller_pubkey"], second_pubkey);
+    assert_eq!(dry_rebind["result"]["seller_pubkey_changed"], true);
+    assert_eq!(dry_rebind["result"]["publication_state_action"], "cleared");
+    assert_eq!(
+        fs::read_to_string(farm_path).expect("farm after dry-run rebind"),
+        farm_before_dry_run
+    );
+
+    let (unapproved_output, unapproved) =
+        sandbox.json_output(&["--format", "json", "farm", "rebind", second_account_id]);
+    assert!(!unapproved_output.status.success());
+    assert_eq!(unapproved["operation_id"], "farm.rebind");
+    assert_eq!(unapproved["errors"][0]["code"], "approval_required");
+
+    let rebound = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "farm",
+        "rebind",
+        second_account_id,
+    ]);
+    assert_eq!(rebound["operation_id"], "farm.rebind");
+    assert_eq!(rebound["result"]["state"], "rebound");
+    assert_eq!(
+        rebound["result"]["config"]["seller_account_id"],
+        second_account_id
+    );
+    assert_eq!(rebound["result"]["config"]["seller_pubkey"], second_pubkey);
+    assert_eq!(rebound["result"]["config"]["farm_d_tag"], farm_d_tag);
+    assert_eq!(rebound["result"]["config"]["name"], "Green Farm");
+    assert_eq!(rebound["result"]["config"]["location_primary"], "farmstand");
+    assert_eq!(rebound["result"]["config"]["delivery_method"], "pickup");
+    assert_eq!(rebound["result"]["publication_state_action"], "cleared");
+
+    let rebound_get = sandbox.json_success(&["--format", "json", "farm", "get"]);
+    assert_eq!(
+        rebound_get["result"]["document"]["selection"]["seller_account_id"],
+        second_account_id
+    );
+    assert_eq!(
+        rebound_get["result"]["document"]["publication"]["profile_state"],
+        "not_published"
+    );
+    assert_eq!(
+        rebound_get["result"]["document"]["publication"]["farm_state"],
+        "not_published"
+    );
+}
+
+#[test]
+fn farm_rebind_allows_watch_only_target_and_attach_secret_recovers_publish() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Watch Rebind Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let watch_identity = identity_secret(56);
+    let watch_public = watch_identity.to_public();
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "watch-rebind-public", &watch_public);
+    let secret_identity_file =
+        write_secret_identity_profile(&sandbox, "watch-rebind-secret", &watch_identity);
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let watch_account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("watch account id");
+    assert_eq!(imported["result"]["account"]["custody"], "watch_only");
+
+    let rebound = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "farm",
+        "rebind",
+        watch_account_id,
+    ]);
+    assert_eq!(rebound["operation_id"], "farm.rebind");
+    assert_eq!(
+        rebound["result"]["config"]["seller_account_id"],
+        watch_account_id
+    );
+
+    let readiness = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "farm",
+        "readiness",
+        "check",
+    ]);
+    assert_eq!(readiness["operation_id"], "farm.readiness.check");
+    assert_eq!(readiness["result"]["publish_state"], "unconfigured");
+    assert_eq!(
+        readiness["result"]["missing"][0],
+        "Write-capable farm-bound seller account"
+    );
+    assert_action_present(
+        &readiness,
+        format!("radroots account attach-secret {watch_account_id} <path>").as_str(),
+    );
+
+    let (publish_output, publish) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--dry-run",
+        "farm",
+        "publish",
+    ]);
+    assert!(!publish_output.status.success());
+    assert_eq!(publish["operation_id"], "farm.publish");
+    assert_eq!(publish["errors"][0]["code"], "account_watch_only");
+
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "attach-secret",
+        watch_account_id,
+        secret_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let recovered = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--dry-run",
+        "farm",
+        "publish",
+    ]);
+    assert_eq!(recovered["operation_id"], "farm.publish");
+    assert_eq!(recovered["result"]["state"], "dry_run");
+    assert_eq!(recovered["result"]["seller_account_id"], watch_account_id);
+    assert_eq!(
+        recovered["result"]["seller_pubkey"],
+        watch_public.public_key_hex
+    );
+}
+
+#[test]
 fn local_seller_publish_commands_attempt_configured_direct_relay() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);

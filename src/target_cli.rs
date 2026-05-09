@@ -164,6 +164,7 @@ impl TargetCommand {
             Self::Farm(args) => match &args.command {
                 FarmCommand::Create(_) => "farm.create",
                 FarmCommand::Get => "farm.get",
+                FarmCommand::Rebind(_) => "farm.rebind",
                 FarmCommand::Profile(profile) => match profile.command {
                     FarmProfileCommand::Update(_) => "farm.profile.update",
                 },
@@ -467,6 +468,7 @@ pub struct FarmArgs {
 pub enum FarmCommand {
     Create(FarmCreateArgs),
     Get,
+    Rebind(FarmRebindArgs),
     Profile(FarmProfileArgs),
     Location(FarmLocationArgs),
     Fulfillment(FarmFulfillmentArgs),
@@ -500,6 +502,11 @@ pub struct FarmCreateArgs {
     pub country: Option<String>,
     #[arg(long = "delivery-method")]
     pub delivery_method: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmRebindArgs {
+    pub selector: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1040,9 +1047,9 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{
-        AccountCommand, OrderCommand, OrderFulfillmentCommand, OrderFulfillmentStateArg,
-        OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand, OrderSettlementCommand,
-        TargetCliArgs, TargetOutputFormat,
+        AccountCommand, FarmCommand, OrderCommand, OrderFulfillmentCommand,
+        OrderFulfillmentStateArg, OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand,
+        OrderSettlementCommand, TargetCliArgs, TargetOutputFormat,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
 
@@ -1155,6 +1162,21 @@ mod tests {
             Some(std::ffi::OsStr::new("identity.json"))
         );
         assert!(args.default);
+    }
+
+    #[test]
+    fn target_parser_accepts_farm_rebind_selector() {
+        let parsed = TargetCliArgs::try_parse_from(["radroots", "farm", "rebind", "acct_test"])
+            .expect("target args parse");
+
+        assert_eq!(parsed.command.operation_id(), "farm.rebind");
+        let crate::target_cli::TargetCommand::Farm(farm) = parsed.command else {
+            panic!("expected farm command")
+        };
+        let FarmCommand::Rebind(args) = farm.command else {
+            panic!("expected farm rebind command")
+        };
+        assert_eq!(args.selector.as_deref(), Some("acct_test"));
     }
 
     #[test]
