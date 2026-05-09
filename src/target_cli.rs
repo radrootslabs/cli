@@ -185,6 +185,7 @@ impl TargetCommand {
                 ListingCommand::List => "listing.list",
                 ListingCommand::Update(_) => "listing.update",
                 ListingCommand::Validate(_) => "listing.validate",
+                ListingCommand::Rebind(_) => "listing.rebind",
                 ListingCommand::Publish(_) => "listing.publish",
                 ListingCommand::Archive(_) => "listing.archive",
             },
@@ -588,6 +589,7 @@ pub enum ListingCommand {
     List,
     Update(FileArgs),
     Validate(FileArgs),
+    Rebind(ListingRebindArgs),
     Publish(FileArgs),
     Archive(FileArgs),
 }
@@ -639,6 +641,14 @@ pub struct ListingCreateArgs {
 #[derive(Debug, Clone, Args)]
 pub struct FileArgs {
     pub file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListingRebindArgs {
+    pub file: Option<PathBuf>,
+    pub selector: Option<String>,
+    #[arg(long = "farm-d-tag")]
+    pub farm_d_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1047,7 +1057,7 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{
-        AccountCommand, FarmCommand, OrderCommand, OrderFulfillmentCommand,
+        AccountCommand, FarmCommand, ListingCommand, OrderCommand, OrderFulfillmentCommand,
         OrderFulfillmentStateArg, OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand,
         OrderSettlementCommand, TargetCliArgs, TargetOutputFormat,
     };
@@ -1177,6 +1187,34 @@ mod tests {
             panic!("expected farm rebind command")
         };
         assert_eq!(args.selector.as_deref(), Some("acct_test"));
+    }
+
+    #[test]
+    fn target_parser_accepts_listing_rebind_inputs() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "listing",
+            "rebind",
+            "listing.toml",
+            "acct_test",
+            "--farm-d-tag",
+            "AAAAAAAAAAAAAAAAAAAAAw",
+        ])
+        .expect("target args parse");
+
+        assert_eq!(parsed.command.operation_id(), "listing.rebind");
+        let crate::target_cli::TargetCommand::Listing(listing) = parsed.command else {
+            panic!("expected listing command")
+        };
+        let ListingCommand::Rebind(args) = listing.command else {
+            panic!("expected listing rebind command")
+        };
+        assert_eq!(
+            args.file.as_ref().map(|path| path.as_os_str()),
+            Some(std::ffi::OsStr::new("listing.toml"))
+        );
+        assert_eq!(args.selector.as_deref(), Some("acct_test"));
+        assert_eq!(args.farm_d_tag.as_deref(), Some("AAAAAAAAAAAAAAAAAAAAAw"));
     }
 
     #[test]

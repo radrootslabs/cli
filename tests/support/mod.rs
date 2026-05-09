@@ -308,6 +308,10 @@ pub fn replace_latest_listing_event_id(
 }
 
 pub fn create_listing_draft(sandbox: &RadrootsCliSandbox, key: &str) -> PathBuf {
+    let accounts = sandbox.json_success(&["--format", "json", "account", "list"]);
+    if accounts["result"]["count"].as_u64().unwrap_or_default() == 0 {
+        sandbox.json_success(&["--format", "json", "account", "create"]);
+    }
     let listing_file = sandbox.root().join(format!("{key}.toml"));
     let listing_file_arg = listing_file.to_string_lossy();
     let value = sandbox.json_success(&[
@@ -358,11 +362,15 @@ pub fn identity_secret(seed: u8) -> RadrootsIdentity {
 pub fn make_listing_publishable(path: &Path, farm_d_tag: &str) {
     let raw = fs::read_to_string(path).expect("listing draft");
     let mut seller_pubkey_present = false;
+    let mut in_seller_actor = false;
     let patched = raw
         .lines()
         .map(|line| {
             let trimmed = line.trim_start();
-            if trimmed.starts_with("seller_pubkey =") {
+            if trimmed.starts_with('[') {
+                in_seller_actor = trimmed == "[seller_actor]";
+            }
+            if in_seller_actor && trimmed.starts_with("pubkey =") {
                 seller_pubkey_present = !trimmed.ends_with("\"\"");
                 line.to_owned()
             } else if trimmed.starts_with("farm_d_tag =") {
@@ -384,13 +392,17 @@ pub fn make_listing_publishable(path: &Path, farm_d_tag: &str) {
 pub fn make_listing_publishable_with_seller(path: &Path, farm_d_tag: &str, seller_pubkey: &str) {
     let raw = fs::read_to_string(path).expect("listing draft");
     let mut seller_pubkey_field_present = false;
+    let mut in_seller_actor = false;
     let patched = raw
         .lines()
         .map(|line| {
             let trimmed = line.trim_start();
-            if trimmed.starts_with("seller_pubkey =") {
+            if trimmed.starts_with('[') {
+                in_seller_actor = trimmed == "[seller_actor]";
+            }
+            if in_seller_actor && trimmed.starts_with("pubkey =") {
                 seller_pubkey_field_present = true;
-                format!("{}seller_pubkey = \"{}\"", line_indent(line), seller_pubkey)
+                format!("{}pubkey = \"{}\"", line_indent(line), seller_pubkey)
             } else if trimmed.starts_with("farm_d_tag =") {
                 format!("{}farm_d_tag = \"{}\"", line_indent(line), farm_d_tag)
             } else if trimmed.starts_with("method =") {

@@ -1386,6 +1386,11 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
             | ListingCommand::Validate(args)
             | ListingCommand::Publish(args)
             | ListingCommand::Archive(args) => insert_path(&mut input, "file", &args.file),
+            ListingCommand::Rebind(args) => {
+                insert_path(&mut input, "file", &args.file);
+                insert_string(&mut input, "selector", &args.selector);
+                insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
+            }
             ListingCommand::List => {}
         },
         TargetCommand::Market(args) => match &args.command {
@@ -1619,6 +1624,7 @@ target_operation_contracts! {
     ListingList => (ListingListRequest, ListingListResult, "listing.list"),
     ListingUpdate => (ListingUpdateRequest, ListingUpdateResult, "listing.update"),
     ListingValidate => (ListingValidateRequest, ListingValidateResult, "listing.validate"),
+    ListingRebind => (ListingRebindRequest, ListingRebindResult, "listing.rebind"),
     ListingPublish => (ListingPublishRequest, ListingPublishResult, "listing.publish"),
     ListingArchive => (ListingArchiveRequest, ListingArchiveResult, "listing.archive"),
     MarketRefresh => (MarketRefreshRequest, MarketRefreshResult, "market.refresh"),
@@ -1814,6 +1820,48 @@ mod tests {
                 .get("selector")
                 .and_then(Value::as_str),
             Some("acct_test")
+        );
+    }
+
+    #[test]
+    fn adapter_maps_listing_rebind_inputs() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "listing",
+            "rebind",
+            "listing.toml",
+            "acct_test",
+            "--farm-d-tag",
+            "AAAAAAAAAAAAAAAAAAAAAw",
+        ])
+        .expect("target args parse");
+
+        let request = TargetOperationRequest::from_target_args(&parsed)
+            .expect("operation request from target args");
+        let TargetOperationRequest::ListingRebind(request) = request else {
+            panic!("expected listing rebind request")
+        };
+
+        assert_eq!(request.operation_id(), "listing.rebind");
+        assert_eq!(
+            request.payload.input.get("file").and_then(Value::as_str),
+            Some("listing.toml")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("selector")
+                .and_then(Value::as_str),
+            Some("acct_test")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("farm_d_tag")
+                .and_then(Value::as_str),
+            Some("AAAAAAAAAAAAAAAAAAAAAw")
         );
     }
 

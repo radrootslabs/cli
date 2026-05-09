@@ -791,7 +791,21 @@ fn myc_mode_allows_read_inspection_commands() {
 #[test]
 fn local_listing_publish_fails_without_local_account_authority() {
     let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
     let listing_file = create_listing_draft(&sandbox, "local-no-account");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "remove",
+        account_id,
+    ]);
 
     let (output, value) = sandbox.json_output(&[
         "--format",
@@ -813,14 +827,28 @@ fn local_listing_publish_fails_without_local_account_authority() {
     assert_eq!(value["errors"][0]["detail"]["class"], "account");
     assert_contains(
         &value["errors"][0]["message"],
-        "no resolved account pubkey is available",
+        "listing-bound seller account",
     );
 }
 
 #[test]
 fn local_listing_publish_dry_run_validates_local_account_authority() {
     let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
     let listing_file = create_listing_draft(&sandbox, "local-dry-run-no-account");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "remove",
+        account_id,
+    ]);
 
     let (output, value) = sandbox.json_output(&[
         "--format",
@@ -842,7 +870,21 @@ fn local_listing_publish_dry_run_validates_local_account_authority() {
 #[test]
 fn local_listing_update_dry_run_validates_local_account_authority() {
     let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
     let listing_file = create_listing_draft(&sandbox, "local-update-dry-run-no-account");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "remove",
+        account_id,
+    ]);
 
     let (output, value) = sandbox.json_output(&[
         "--format",
@@ -1013,7 +1055,7 @@ fn local_listing_publish_fails_when_selected_account_does_not_match_seller() {
     assert_eq!(value["errors"][0]["detail"]["class"], "account");
     assert_contains(
         &value["errors"][0]["message"],
-        "cannot sign listing seller_pubkey",
+        "listing draft is bound to seller account",
     );
     assert_no_removed_command_reference(&value, &["listing", "publish", "account mismatch"]);
 }

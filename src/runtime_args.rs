@@ -168,6 +168,13 @@ pub struct ListingFileArgs {
 }
 
 #[derive(Debug, Clone)]
+pub struct ListingRebindArgs {
+    pub file: PathBuf,
+    pub selector: String,
+    pub farm_d_tag: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ListingMutationArgs {
     pub file: PathBuf,
     pub idempotency_key: Option<String>,

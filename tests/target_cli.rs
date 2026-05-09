@@ -59,7 +59,7 @@ impl OneShotJsonRpcServer {
                     "signer_session_id": "session_test",
                     "event_kind": 30402,
                     "event_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-                    "event_addr": "30402:daemon_test:radrootsd-router",
+                    "event_addr": null,
                     "relay_count": 2,
                     "acknowledged_relay_count": 1
                 }
@@ -989,14 +989,10 @@ signer_session_ref = "session_test"
     assert_eq!(value["result"]["event_id"], "e".repeat(64));
     assert_eq!(
         value["result"]["event_addr"],
-        "30402:daemon_test:radrootsd-router"
+        value["result"]["listing_addr"]
     );
-    assert_eq!(
-        value["result"]["listing_addr"],
-        "30402:daemon_test:radrootsd-router"
-    );
-    assert_eq!(value["result"]["listing_id"], "radrootsd-router");
-    assert_eq!(value["result"]["seller_pubkey"], "daemon_test");
+    assert!(value["result"]["listing_id"].is_string());
+    assert!(value["result"]["seller_pubkey"].is_string());
     assert_eq!(value["result"]["signer_mode"], "nip46");
     assert_eq!(value["result"]["signer_session_id"], "session_test");
     assert_eq!(
@@ -1205,7 +1201,7 @@ fn radrootsd_farm_publish_missing_signer_binding_points_to_capability_binding() 
 }
 
 #[test]
-fn radrootsd_listing_writes_dry_run_use_draft_identity_without_local_account() {
+fn radrootsd_listing_writes_dry_run_reject_missing_invocation_account() {
     for operation in ["publish", "update", "archive"] {
         let sandbox = RadrootsCliSandbox::new();
         let seller = identity_public(42);
@@ -1249,25 +1245,16 @@ signer_session_ref = "session_test"
             .expect("run radrootsd dry-run listing write");
         let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
 
-        assert!(output.status.success());
+        assert!(!output.status.success());
         assert_eq!(value["operation_id"], format!("listing.{operation}"));
-        assert_eq!(value["result"]["state"], "dry_run");
-        assert_eq!(
-            value["result"]["source"],
-            "radrootsd publish transport · signer session"
-        );
-        assert_eq!(value["result"]["seller_pubkey"], seller.public_key_hex);
-        assert_eq!(
-            value["result"]["requested_signer_session_id"],
-            "session_test"
-        );
-        assert_eq!(value["result"]["signer_mode"], "nip46");
-        assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
+        assert_eq!(value["result"], Value::Null);
+        assert_eq!(value["errors"][0]["code"], "account_unresolved");
+        assert_eq!(value["errors"][0]["detail"]["class"], "account");
     }
 }
 
 #[test]
-fn radrootsd_listing_writes_use_draft_identity_without_local_account() {
+fn radrootsd_listing_writes_reject_missing_invocation_account() {
     for operation in ["publish", "update", "archive"] {
         let sandbox = RadrootsCliSandbox::new();
         let seller = identity_public(43);
@@ -1292,11 +1279,8 @@ target = "http://myc.invalid"
 signer_session_ref = "session_test"
 "#,
         );
-        let server = OneShotJsonRpcServer::listing_publish();
-
         let mut command = sandbox.command();
         command
-            .env("RADROOTS_RPC_URL", &server.endpoint)
             .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
             .args([
                 "--format",
@@ -1311,23 +1295,12 @@ signer_session_ref = "session_test"
             ]);
         let output = command.output().expect("run radrootsd listing write");
         let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-        let request = server.take_request();
 
-        assert!(output.status.success());
+        assert!(!output.status.success());
         assert_eq!(value["operation_id"], format!("listing.{operation}"));
-        assert_eq!(
-            value["result"]["source"],
-            "radrootsd publish transport · signer session"
-        );
-        assert_eq!(
-            value["result"]["listing_addr"],
-            "30402:daemon_test:radrootsd-router"
-        );
-        assert_eq!(value["result"]["listing_id"], "radrootsd-router");
-        assert_eq!(value["result"]["seller_pubkey"], "daemon_test");
-        assert_eq!(request.body["method"], "bridge.listing.publish");
-        assert_eq!(request.body["params"]["signer_session_id"], "session_test");
-        assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
+        assert_eq!(value["result"], Value::Null);
+        assert_eq!(value["errors"][0]["code"], "account_unresolved");
+        assert_eq!(value["errors"][0]["detail"]["class"], "account");
     }
 }
 
@@ -1352,14 +1325,9 @@ fn radrootsd_listing_publish_bridge_errors_are_classified() {
         ),
     ] {
         let sandbox = RadrootsCliSandbox::new();
-        let seller = identity_public(44);
         let listing_file =
             create_listing_draft(&sandbox, format!("radrootsd-bridge-error-{class}").as_str());
-        make_listing_publishable_with_seller(
-            &listing_file,
-            "AAAAAAAAAAAAAAAAAAAAAw",
-            seller.public_key_hex.as_str(),
-        );
+        make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
         sandbox.write_app_config(
             r#"[publish]
 mode = "radrootsd"
@@ -2051,6 +2019,103 @@ fn listing_list_reports_default_local_drafts() {
     assert!(listing["seller_pubkey"].is_string());
     assert!(listing["farm_d_tag"].is_string());
     assert_no_removed_command_reference(&value, &["listing", "list"]);
+}
+
+#[test]
+fn listing_rebind_updates_seller_actor_with_approval() {
+    let sandbox = RadrootsCliSandbox::new();
+    let first = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let first_account_id = first["result"]["account"]["id"]
+        .as_str()
+        .expect("first account id");
+    let listing_file = create_listing_draft(&sandbox, "rebind-listing");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+    let initial_validation = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "validate",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+    let first_pubkey = initial_validation["result"]["seller_pubkey"]
+        .as_str()
+        .expect("first pubkey");
+    let before = fs::read_to_string(&listing_file).expect("listing before");
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+
+    let dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "rebind",
+        listing_file.to_string_lossy().as_ref(),
+        second_account_id,
+        "--farm-d-tag",
+        "AAAAAAAAAAAAAAAAAAAAAw",
+    ]);
+    assert_eq!(dry_run["operation_id"], "listing.rebind");
+    assert_eq!(dry_run["result"]["state"], "dry_run");
+    assert_eq!(
+        dry_run["result"]["from_seller_account_id"],
+        first_account_id
+    );
+    assert_eq!(dry_run["result"]["from_seller_pubkey"], first_pubkey);
+    assert_eq!(dry_run["result"]["to_seller_account_id"], second_account_id);
+    let second_pubkey = dry_run["result"]["to_seller_pubkey"]
+        .as_str()
+        .expect("second pubkey");
+    assert_eq!(dry_run["result"]["seller_pubkey_changed"], true);
+    assert_eq!(
+        fs::read_to_string(&listing_file).expect("listing after dry-run"),
+        before
+    );
+
+    let unapproved = sandbox.json_output(&[
+        "--format",
+        "json",
+        "listing",
+        "rebind",
+        listing_file.to_string_lossy().as_ref(),
+        second_account_id,
+        "--farm-d-tag",
+        "AAAAAAAAAAAAAAAAAAAAAw",
+    ]);
+    assert!(!unapproved.0.status.success());
+    assert_eq!(unapproved.1["errors"][0]["code"], "approval_required");
+
+    let rebound = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "listing",
+        "rebind",
+        listing_file.to_string_lossy().as_ref(),
+        second_account_id,
+        "--farm-d-tag",
+        "AAAAAAAAAAAAAAAAAAAAAw",
+    ]);
+    assert_eq!(rebound["operation_id"], "listing.rebind");
+    assert_eq!(rebound["result"]["state"], "rebound");
+    let after = fs::read_to_string(&listing_file).expect("listing after rebind");
+    assert!(after.contains("[seller_actor]"));
+    assert!(after.contains(second_account_id));
+    assert!(after.contains("source = \"listing_rebind\""));
+
+    let validation = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "validate",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+    assert_eq!(validation["result"]["valid"], true);
+    assert_eq!(validation["result"]["seller_account_id"], second_account_id);
+    assert_eq!(validation["result"]["seller_pubkey"], second_pubkey);
 }
 
 #[test]

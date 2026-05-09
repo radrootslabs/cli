@@ -2260,9 +2260,11 @@ pub struct ListingNewView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_account_id: Option<String>,
+    pub seller_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_actor_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub farm_d_tag: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2294,7 +2296,11 @@ pub struct ListingValidateView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_actor_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub farm_d_tag: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2343,7 +2349,11 @@ pub struct ListingSummaryView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_actor_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub farm_d_tag: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2558,7 +2568,9 @@ pub struct ListingMutationView {
     pub file: String,
     pub listing_id: String,
     pub listing_addr: String,
+    pub seller_account_id: String,
     pub seller_pubkey: String,
+    pub seller_actor_source: String,
     pub event_kind: u32,
     #[serde(default)]
     pub dry_run: bool,
@@ -2605,6 +2617,50 @@ impl ListingMutationView {
         match self.state.as_str() {
             "unconfigured" => CommandDisposition::Unconfigured,
             "unavailable" => CommandDisposition::ExternalUnavailable,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListingRebindView {
+    pub state: String,
+    pub source: String,
+    pub file: String,
+    pub listing_id: String,
+    pub dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_seller_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_seller_actor_source: Option<String>,
+    pub to_seller_account_id: String,
+    pub to_seller_pubkey: String,
+    pub to_seller_actor_source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_listing_addr: Option<String>,
+    pub to_listing_addr: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_farm_d_tag: Option<String>,
+    pub to_farm_d_tag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub farm_d_tag_changed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl ListingRebindView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
             "error" => CommandDisposition::InternalError,
             _ => CommandDisposition::Success,
         }

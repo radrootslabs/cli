@@ -70,6 +70,18 @@ impl AccountRuntimeFailure {
         )))
     }
 
+    pub fn watch_only_with_detail(
+        account_id: impl fmt::Display,
+        detail: serde_json::Value,
+    ) -> Self {
+        Self::WatchOnly(AccountRuntimeFailureIssue::with_detail(
+            format!(
+                "resolved account `{account_id}` is watch_only and cannot sign because it is not secret-backed"
+            ),
+            detail,
+        ))
+    }
+
     pub fn mismatch(message: impl Into<String>) -> Self {
         Self::Mismatch(AccountRuntimeFailureIssue::new(message))
     }

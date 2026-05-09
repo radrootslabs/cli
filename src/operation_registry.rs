@@ -638,6 +638,21 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false
     ),
     operation!(
+        "listing.rebind",
+        "radroots listing rebind",
+        "listing",
+        "listing_rebind",
+        "ListingRebindRequest",
+        "ListingRebindResult",
+        "Rebind a listing draft to an explicit seller actor.",
+        Seller,
+        true,
+        Required,
+        High,
+        false,
+        true
+    ),
+    operation!(
         "listing.publish",
         "radroots listing publish",
         "listing",
@@ -1239,6 +1254,7 @@ mod tests {
         "listing.list",
         "listing.update",
         "listing.validate",
+        "listing.rebind",
         "listing.publish",
         "listing.archive",
         "market.refresh",
@@ -1293,6 +1309,7 @@ mod tests {
         "farm.publish",
         "listing.create",
         "listing.update",
+        "listing.rebind",
         "listing.publish",
         "listing.archive",
         "market.refresh",
@@ -1324,7 +1341,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 69);
+        assert_eq!(OPERATION_REGISTRY.len(), 70);
     }
 
     #[test]
@@ -1371,6 +1388,7 @@ mod tests {
             "sync.push",
             "farm.rebind",
             "farm.publish",
+            "listing.rebind",
             "listing.publish",
             "listing.archive",
             "order.submit",

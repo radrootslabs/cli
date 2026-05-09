@@ -7,15 +7,15 @@ use crate::domain::runtime::{CommandDisposition, ListingMutationView};
 use crate::operation_adapter::{
     ListingArchiveRequest, ListingArchiveResult, ListingCreateRequest, ListingCreateResult,
     ListingGetRequest, ListingGetResult, ListingListRequest, ListingListResult,
-    ListingPublishRequest, ListingPublishResult, ListingUpdateRequest, ListingUpdateResult,
-    ListingValidateRequest, ListingValidateResult, OperationAdapterError, OperationRequest,
-    OperationRequestData, OperationRequestPayload, OperationResult, OperationResultData,
-    OperationService,
+    ListingPublishRequest, ListingPublishResult, ListingRebindRequest, ListingRebindResult,
+    ListingUpdateRequest, ListingUpdateResult, ListingValidateRequest, ListingValidateResult,
+    OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
+    OperationResult, OperationResultData, OperationService,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime_args::{
-    ListingCreateArgs, ListingFileArgs, ListingMutationArgs, RecordLookupArgs,
+    ListingCreateArgs, ListingFileArgs, ListingMutationArgs, ListingRebindArgs, RecordLookupArgs,
 };
 
 pub struct ListingOperationService<'a> {
@@ -141,6 +141,34 @@ impl OperationService<ListingValidateRequest> for ListingOperationService<'_> {
             crate::runtime::listing::validate(self.config, &args),
         )?;
         serialized_operation_result::<ListingValidateResult, _>(&view)
+    }
+}
+
+impl OperationService<ListingRebindRequest> for ListingOperationService<'_> {
+    type Result = ListingRebindResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<ListingRebindRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = ListingRebindArgs {
+            file: required_path(&request, "file")?,
+            selector: required_string(&request, "selector")?,
+            farm_d_tag: string_input(&request, "farm_d_tag"),
+        };
+        if request.context.dry_run {
+            let view = map_runtime(
+                request.operation_id(),
+                crate::runtime::listing::rebind_preflight(self.config, &args),
+            )?;
+            return serialized_operation_result::<ListingRebindResult, _>(&view);
+        }
+        require_approval(&request)?;
+        let view = map_runtime(
+            request.operation_id(),
+            crate::runtime::listing::rebind(self.config, &args),
+        )?;
+        serialized_operation_result::<ListingRebindResult, _>(&view)
     }
 }
 
@@ -367,7 +395,7 @@ mod tests {
     };
 
     #[test]
-    fn listing_service_supports_create_dry_run_without_sell_path() {
+    fn listing_service_requires_seller_actor_for_create_dry_run() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(ListingOperationService::new(&config));
@@ -378,16 +406,13 @@ mod tests {
             ListingCreateRequest::from_data(data(&[("key", "eggs"), ("title", "Eggs")])),
         )
         .expect("listing create request");
-        let envelope = service
+        let error = service
             .execute(request)
-            .expect("listing create result")
-            .to_envelope(context.envelope_context("req_listing_create"))
-            .expect("listing create envelope");
+            .expect_err("listing create seller actor");
+        let output_error = error.to_output_error();
 
-        assert_eq!(envelope.operation_id, "listing.create");
-        assert_eq!(envelope.dry_run, true);
-        assert_eq!(envelope.result["state"], "dry_run");
-        assert_eq!(envelope.result["key"], "eggs");
+        assert_eq!(output_error.code, "account_unresolved");
+        assert!(output_error.detail.expect("detail")["seller_actor_source"] == "resolved_account");
     }
 
     #[test]

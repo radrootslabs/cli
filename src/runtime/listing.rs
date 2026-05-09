@@ -38,8 +38,8 @@ use serde_json::json;
 use crate::domain::runtime::{
     FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
     ListingMutationEventView, ListingMutationJobView, ListingMutationLocalReplicaView,
-    ListingMutationView, ListingNewView, ListingSummaryView, ListingValidateView,
-    ListingValidationIssueView, RelayFailureView, SyncFreshnessView,
+    ListingMutationView, ListingNewView, ListingRebindView, ListingSummaryView,
+    ListingValidateView, ListingValidationIssueView, RelayFailureView, SyncFreshnessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -54,7 +54,7 @@ use crate::runtime::farm_config;
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::freshness_from_executor;
 use crate::runtime_args::{
-    ListingCreateArgs, ListingFileArgs, ListingMutationArgs, RecordLookupArgs,
+    ListingCreateArgs, ListingFileArgs, ListingMutationArgs, ListingRebindArgs, RecordLookupArgs,
 };
 
 const DRAFT_KIND: &str = "listing_draft_v1";
@@ -64,6 +64,9 @@ const RELAY_LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · local ke
 const RADROOTSD_LISTING_WRITE_SOURCE: &str = "radrootsd publish transport · signer session";
 const RADROOTSD_BRIDGE_LISTING_PUBLISH_METHOD: &str = "bridge.listing.publish";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
+const LISTING_SELLER_ACTOR_SOURCE_FARM_CONFIG: &str = "farm_config";
+const LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
+const LISTING_SELLER_ACTOR_SOURCE_REBIND: &str = "listing_rebind";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -73,6 +76,7 @@ struct ListingDraftDocument {
     version: u32,
     kind: String,
     listing: ListingDraftMeta,
+    seller_actor: ListingDraftSellerActor,
     product: ListingDraftProduct,
     primary_bin: ListingDraftPrimaryBin,
     inventory: ListingDraftInventory,
@@ -88,7 +92,14 @@ struct ListingDraftDocument {
 struct ListingDraftMeta {
     d_tag: String,
     farm_d_tag: String,
-    seller_pubkey: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListingDraftSellerActor {
+    account_id: String,
+    pubkey: String,
+    source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,9 +183,6 @@ struct ListingDraftDiscount {
 
 #[derive(Debug, Clone)]
 struct ListingValidationContext {
-    selected_account_id: Option<String>,
-    selected_account_pubkey: Option<String>,
-    selected_farm_d_tag: Option<String>,
     farm_setup_action: String,
 }
 
@@ -185,8 +193,9 @@ struct ListingAuthoringDefaults {
     farm_next_action: Option<String>,
     farm_reason: Option<String>,
     farm_name: Option<String>,
-    selected_account_id: Option<String>,
-    selected_account_pubkey: Option<String>,
+    seller_account_id: String,
+    seller_pubkey: String,
+    seller_actor_source: String,
     selected_farm_d_tag: Option<String>,
     delivery_method: Option<String>,
     location: Option<ListingDraftLocation>,
@@ -195,7 +204,9 @@ struct ListingAuthoringDefaults {
 #[derive(Debug, Clone)]
 struct CanonicalListingDraft {
     listing_id: String,
+    seller_account_id: String,
     seller_pubkey: String,
+    seller_actor_source: String,
     farm_d_tag: String,
     listing: RadrootsListing,
 }
@@ -263,9 +274,6 @@ pub fn scaffold(
         "radroots listing validate {}",
         output_path.display()
     )];
-    if defaults.selected_account_pubkey.is_none() {
-        actions.push("radroots account create".to_owned());
-    }
     if let Some(action) = &defaults.farm_next_action {
         actions.push(action.clone());
     }
@@ -276,8 +284,9 @@ pub fn scaffold(
         file: output_path.display().to_string(),
         listing_id: draft.listing.d_tag,
         key: non_empty(draft.product.key.clone()),
-        selected_account_id: defaults.selected_account_id,
-        seller_pubkey: defaults.selected_account_pubkey,
+        seller_account_id: Some(defaults.seller_account_id),
+        seller_pubkey: Some(defaults.seller_pubkey),
+        seller_actor_source: Some(defaults.seller_actor_source),
         farm_d_tag: defaults.selected_farm_d_tag,
         delivery_method: non_empty(draft.delivery.method.clone()),
         location_primary: non_empty(draft.location.primary.clone()),
@@ -298,9 +307,6 @@ pub fn scaffold_preflight(
         "radroots listing validate {}",
         output_path.display()
     )];
-    if defaults.selected_account_pubkey.is_none() {
-        actions.push("radroots account create".to_owned());
-    }
     if let Some(action) = &defaults.farm_next_action {
         actions.push(action.clone());
     }
@@ -311,8 +317,9 @@ pub fn scaffold_preflight(
         file: output_path.display().to_string(),
         listing_id: draft.listing.d_tag,
         key: non_empty(draft.product.key.clone()),
-        selected_account_id: defaults.selected_account_id,
-        seller_pubkey: defaults.selected_account_pubkey,
+        seller_account_id: Some(defaults.seller_account_id),
+        seller_pubkey: Some(defaults.seller_pubkey),
+        seller_actor_source: Some(defaults.seller_actor_source),
         farm_d_tag: defaults.selected_farm_d_tag,
         delivery_method: non_empty(draft.delivery.method.clone()),
         location_primary: non_empty(draft.location.primary.clone()),
@@ -333,7 +340,11 @@ fn build_listing_draft(
         listing: ListingDraftMeta {
             d_tag: generate_d_tag(),
             farm_d_tag: defaults.selected_farm_d_tag.clone().unwrap_or_default(),
-            seller_pubkey: defaults.selected_account_pubkey.clone().unwrap_or_default(),
+        },
+        seller_actor: ListingDraftSellerActor {
+            account_id: defaults.seller_account_id.clone(),
+            pubkey: defaults.seller_pubkey.clone(),
+            source: defaults.seller_actor_source.clone(),
         },
         product: ListingDraftProduct {
             key: args.key.clone().unwrap_or_default(),
@@ -481,8 +492,10 @@ pub fn validate(
                 file: args.file.display().to_string(),
                 valid: false,
                 listing_id: None,
-                seller_pubkey: context.selected_account_pubkey.clone(),
-                farm_d_tag: context.selected_farm_d_tag.clone(),
+                seller_account_id: None,
+                seller_pubkey: None,
+                seller_actor_source: None,
+                farm_d_tag: None,
                 issues: vec![ListingValidationIssueView {
                     field: "toml".to_owned(),
                     message: error.to_string(),
@@ -502,7 +515,7 @@ pub fn validate(
                 Err(error) => {
                     return Ok(invalid_validation_view(
                         args.file.as_path(),
-                        parsed.listing.d_tag.as_str(),
+                        &parsed,
                         &context,
                         ListingValidationIssueView {
                             field: "listing".to_owned(),
@@ -512,6 +525,14 @@ pub fn validate(
                     ));
                 }
             };
+            if let Some(issue) = listing_bound_account_issue(config, &canonical, &contents)? {
+                return Ok(invalid_validation_view(
+                    args.file.as_path(),
+                    &parsed,
+                    &context,
+                    issue,
+                ));
+            }
             let event = RadrootsNostrEvent {
                 id: String::new(),
                 author: canonical.seller_pubkey.clone(),
@@ -528,14 +549,16 @@ pub fn validate(
                     file: args.file.display().to_string(),
                     valid: true,
                     listing_id: Some(canonical.listing_id),
+                    seller_account_id: Some(canonical.seller_account_id),
                     seller_pubkey: Some(canonical.seller_pubkey),
+                    seller_actor_source: Some(canonical.seller_actor_source),
                     farm_d_tag: Some(canonical.farm_d_tag),
                     issues: Vec::new(),
                     actions: vec![format!("radroots listing publish {}", args.file.display())],
                 }),
                 Err(error) => Ok(invalid_validation_view(
                     args.file.as_path(),
-                    parsed.listing.d_tag.as_str(),
+                    &parsed,
                     &context,
                     issue_from_trade_validation(error, &contents),
                 )),
@@ -543,7 +566,7 @@ pub fn validate(
         }
         Err(error) => Ok(invalid_validation_view(
             args.file.as_path(),
-            parsed.listing.d_tag.as_str(),
+            &parsed,
             &context,
             error.into_issue(),
         )),
@@ -572,7 +595,7 @@ pub fn list(config: &RuntimeConfig) -> Result<ListingListView, RuntimeError> {
             continue;
         }
         match load_listing_draft(path.as_path()) {
-            Ok(loaded) => listings.push(summary_from_loaded(&loaded, context.as_ref())),
+            Ok(loaded) => listings.push(summary_from_loaded(config, &loaded, context.as_ref())),
             Err(issue) => listings.push(summary_for_invalid_file(path.as_path(), issue)),
         }
     }
@@ -607,6 +630,174 @@ pub fn list(config: &RuntimeConfig) -> Result<ListingListView, RuntimeError> {
     })
 }
 
+pub fn rebind(
+    config: &RuntimeConfig,
+    args: &ListingRebindArgs,
+) -> Result<ListingRebindView, RuntimeError> {
+    rebind_inner(config, args, false)
+}
+
+pub fn rebind_preflight(
+    config: &RuntimeConfig,
+    args: &ListingRebindArgs,
+) -> Result<ListingRebindView, RuntimeError> {
+    rebind_inner(config, args, true)
+}
+
+fn rebind_inner(
+    config: &RuntimeConfig,
+    args: &ListingRebindArgs,
+    dry_run: bool,
+) -> Result<ListingRebindView, RuntimeError> {
+    let contents = fs::read_to_string(&args.file)?;
+    let mut draft = toml::from_str::<ListingDraftDocument>(&contents).map_err(|error| {
+        RuntimeError::Config(format!(
+            "invalid listing draft {}: {error}",
+            args.file.display()
+        ))
+    })?;
+    let listing_id = draft.listing.d_tag.trim().to_owned();
+    if !is_d_tag_base64url(&listing_id) {
+        return Err(RuntimeError::Config(format!(
+            "invalid listing draft {}: listing d_tag must be a 22-character base64url identifier",
+            args.file.display()
+        )));
+    }
+
+    let target_account = accounts::resolve_account_selector(config, args.selector.as_str())
+        .map_err(|error| listing_rebind_selector_error(args.selector.as_str(), error))?;
+    let from_seller_account_id = non_empty(draft.seller_actor.account_id.clone());
+    let from_seller_pubkey = non_empty(draft.seller_actor.pubkey.clone());
+    let from_seller_actor_source = non_empty(draft.seller_actor.source.clone());
+    let from_farm_d_tag = non_empty(draft.listing.farm_d_tag.clone());
+    let target_account_id = target_account.record.account_id.to_string();
+    let target_pubkey = target_account.record.public_identity.public_key_hex.clone();
+    let target_farm_d_tag = resolve_rebind_farm_d_tag(
+        config,
+        args,
+        from_seller_account_id.as_deref(),
+        from_farm_d_tag.as_deref(),
+        target_account_id.as_str(),
+    )?;
+    let from_listing_addr = from_seller_pubkey
+        .as_ref()
+        .map(|pubkey| listing_addr(pubkey, listing_id.as_str()));
+    let to_listing_addr = listing_addr(target_pubkey.as_str(), listing_id.as_str());
+    let seller_pubkey_changed = from_seller_pubkey
+        .as_deref()
+        .map(|pubkey| !pubkey.eq_ignore_ascii_case(target_pubkey.as_str()));
+    let listing_addr_changed = from_listing_addr
+        .as_deref()
+        .map(|addr| addr != to_listing_addr.as_str());
+    let farm_d_tag_changed = from_farm_d_tag
+        .as_deref()
+        .map(|d_tag| d_tag != target_farm_d_tag.as_str());
+
+    draft.seller_actor.account_id = target_account_id.clone();
+    draft.seller_actor.pubkey = target_pubkey.clone();
+    draft.seller_actor.source = LISTING_SELLER_ACTOR_SOURCE_REBIND.to_owned();
+    draft.listing.farm_d_tag = target_farm_d_tag.clone();
+
+    if !dry_run {
+        write_listing_draft(args.file.as_path(), &draft, true)?;
+    }
+
+    Ok(ListingRebindView {
+        state: if dry_run { "dry_run" } else { "rebound" }.to_owned(),
+        source: LISTING_SOURCE.to_owned(),
+        file: args.file.display().to_string(),
+        listing_id,
+        dry_run,
+        from_seller_account_id,
+        from_seller_pubkey,
+        from_seller_actor_source,
+        to_seller_account_id: target_account_id,
+        to_seller_pubkey: target_pubkey,
+        to_seller_actor_source: LISTING_SELLER_ACTOR_SOURCE_REBIND.to_owned(),
+        seller_pubkey_changed,
+        from_listing_addr,
+        to_listing_addr,
+        listing_addr_changed,
+        from_farm_d_tag,
+        to_farm_d_tag: target_farm_d_tag,
+        farm_d_tag_changed,
+        reason: Some(if dry_run {
+            "dry run requested; listing seller actor binding was not written".to_owned()
+        } else {
+            "listing seller actor binding updated".to_owned()
+        }),
+        actions: if dry_run {
+            vec![format!(
+                "radroots --approval-token approve listing rebind {} {}",
+                args.file.display(),
+                args.selector
+            )]
+        } else {
+            vec![format!("radroots listing validate {}", args.file.display())]
+        },
+    })
+}
+
+fn resolve_rebind_farm_d_tag(
+    config: &RuntimeConfig,
+    args: &ListingRebindArgs,
+    from_seller_account_id: Option<&str>,
+    from_farm_d_tag: Option<&str>,
+    target_account_id: &str,
+) -> Result<String, RuntimeError> {
+    if let Some(explicit) = args
+        .farm_d_tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !is_d_tag_base64url(explicit) {
+            return Err(RuntimeError::Config(
+                "listing rebind --farm-d-tag must be a 22-character base64url identifier"
+                    .to_owned(),
+            ));
+        }
+        return Ok(explicit.to_owned());
+    }
+    if from_seller_account_id == Some(target_account_id)
+        && let Some(existing) = from_farm_d_tag
+    {
+        return Ok(existing.to_owned());
+    }
+    if let Some(resolved) = farm_config::load(config, None)?
+        && resolved.document.selection.account == target_account_id
+    {
+        return Ok(resolved.document.selection.farm_d_tag);
+    }
+    Err(RuntimeError::Config(format!(
+        "listing rebind requires --farm-d-tag when target account `{target_account_id}` is not bound by the selected farm config"
+    )))
+}
+
+fn listing_rebind_selector_error(selector: &str, error: RuntimeError) -> RuntimeError {
+    match error {
+        RuntimeError::Account(accounts::AccountRuntimeFailure::Unresolved(issue)) => {
+            accounts::AccountRuntimeFailure::unresolved_with_detail(
+                issue.message().to_owned(),
+                json!({
+                    "seller_actor_source": LISTING_SELLER_ACTOR_SOURCE_REBIND,
+                    "selector": selector,
+                    "actions": [
+                        "radroots account import <path>",
+                        "radroots account create",
+                    ],
+                }),
+            )
+            .into()
+        }
+        other => other,
+    }
+}
+
+fn listing_addr(seller_pubkey: &str, listing_id: &str) -> String {
+    format!("{KIND_LISTING}:{seller_pubkey}:{listing_id}")
+}
+
 fn load_listing_draft(path: &Path) -> Result<LoadedListingDraft, ListingValidationIssueView> {
     let contents = fs::read_to_string(path).map_err(|error| ListingValidationIssueView {
         field: "file".to_owned(),
@@ -631,10 +822,13 @@ fn load_listing_draft(path: &Path) -> Result<LoadedListingDraft, ListingValidati
 }
 
 fn summary_from_loaded(
+    config: &RuntimeConfig,
     loaded: &LoadedListingDraft,
     context: Result<&ListingValidationContext, &String>,
 ) -> ListingSummaryView {
-    let mut seller_pubkey = non_empty(loaded.document.listing.seller_pubkey.clone());
+    let mut seller_account_id = non_empty(loaded.document.seller_actor.account_id.clone());
+    let mut seller_pubkey = non_empty(loaded.document.seller_actor.pubkey.clone());
+    let mut seller_actor_source = non_empty(loaded.document.seller_actor.source.clone());
     let mut farm_d_tag = non_empty(loaded.document.listing.farm_d_tag.clone());
     let mut issues = Vec::new();
     let mut state = "draft";
@@ -643,9 +837,16 @@ fn summary_from_loaded(
         Ok(context) => {
             match canonicalize_draft(&loaded.document, loaded.contents.as_str(), context) {
                 Ok(canonical) => {
+                    seller_account_id = Some(canonical.seller_account_id.clone());
                     seller_pubkey = Some(canonical.seller_pubkey.clone());
+                    seller_actor_source = Some(canonical.seller_actor_source.clone());
                     farm_d_tag = Some(canonical.farm_d_tag.clone());
                     issues = listing_ready_issues(&canonical, loaded.contents.as_str());
+                    if let Ok(Some(issue)) =
+                        listing_bound_account_issue(config, &canonical, loaded.contents.as_str())
+                    {
+                        issues.push(issue);
+                    }
                     if issues.is_empty() {
                         state = "ready";
                     }
@@ -668,7 +869,9 @@ fn summary_from_loaded(
         product_key: non_empty(loaded.document.product.key.clone()),
         title: non_empty(loaded.document.product.title.clone()),
         category: non_empty(loaded.document.product.category.clone()),
+        seller_account_id,
         seller_pubkey,
+        seller_actor_source,
         farm_d_tag,
         location_primary: non_empty(loaded.document.location.primary.clone()),
         updated_at_unix: loaded.updated_at_unix,
@@ -713,7 +916,9 @@ fn summary_for_invalid_file(path: &Path, issue: ListingValidationIssueView) -> L
         product_key: None,
         title: None,
         category: None,
+        seller_account_id: None,
         seller_pubkey: None,
+        seller_actor_source: None,
         farm_d_tag: None,
         location_primary: None,
         updated_at_unix: modified_unix(path).unwrap_or_default(),
@@ -856,10 +1061,14 @@ fn mutate(
     let mut canonical = canonicalize_draft(&parsed, &contents, &context).map_err(|error| {
         let issue = match error {
             ListingDraftValidationError::MissingSellerAccount(issue) => {
-                return accounts::AccountRuntimeFailure::unresolved(format!(
-                    "{} ({})",
-                    issue.message, issue.field
-                ))
+                return accounts::AccountRuntimeFailure::unresolved_with_detail(
+                    format!("{} ({})", issue.message, issue.field),
+                    json!({
+                        "seller_actor_source": "listing_draft",
+                        "listing_file": args.file.display().to_string(),
+                        "actions": listing_bound_account_recovery_actions(args.file.as_path()),
+                    }),
+                )
                 .into();
             }
             ListingDraftValidationError::Issue(issue) => issue,
@@ -871,6 +1080,7 @@ fn mutate(
             issue.field
         ))
     })?;
+    ensure_listing_bound_account(config, &canonical, args.file.as_path())?;
 
     if matches!(operation, ListingMutationOperation::Archive) {
         canonical.listing.availability = Some(RadrootsListingAvailability::Status {
@@ -928,7 +1138,9 @@ fn mutate(
             file: args.file.display().to_string(),
             listing_id: canonical.listing_id.clone(),
             listing_addr: listing_addr.clone(),
+            seller_account_id: canonical.seller_account_id.clone(),
             seller_pubkey: canonical.seller_pubkey.clone(),
+            seller_actor_source: canonical.seller_actor_source.clone(),
             event_kind: KIND_LISTING,
             dry_run: true,
             deduplicated: false,
@@ -1203,6 +1415,18 @@ fn radrootsd_mutation_view(
         .event_addr
         .as_deref()
         .and_then(daemon_listing_identity);
+    if let Some(identity) = daemon_identity.as_ref()
+        && (!identity
+            .seller_pubkey
+            .eq_ignore_ascii_case(canonical.seller_pubkey.as_str())
+            || identity.listing_id != canonical.listing_id)
+    {
+        return Err(RuntimeError::Config(format!(
+            "radrootsd listing publish returned event_addr identity `{}` that does not match listing draft `{}`",
+            radrootsd.event_addr.as_deref().unwrap_or_default(),
+            listing_addr
+        )));
+    }
     let event_addr = radrootsd
         .event_addr
         .clone()
@@ -1212,10 +1436,7 @@ fn radrootsd_mutation_view(
         .as_ref()
         .map(|identity| identity.listing_id.clone())
         .unwrap_or_else(|| canonical.listing_id.clone());
-    let seller_pubkey = daemon_identity
-        .as_ref()
-        .map(|identity| identity.seller_pubkey.clone())
-        .unwrap_or_else(|| canonical.seller_pubkey.clone());
+    let seller_pubkey = canonical.seller_pubkey.clone();
     event.author = seller_pubkey.clone();
     let job_status = radrootsd.status.clone();
     let state = match operation {
@@ -1232,7 +1453,9 @@ fn radrootsd_mutation_view(
         file: args.file.display().to_string(),
         listing_id,
         listing_addr: event_addr.clone(),
+        seller_account_id: canonical.seller_account_id.clone(),
         seller_pubkey,
+        seller_actor_source: canonical.seller_actor_source.clone(),
         event_kind: event_kind.unwrap_or(KIND_LISTING),
         dry_run: false,
         deduplicated: radrootsd.deduplicated,
@@ -1327,21 +1550,7 @@ fn scaffold_contents(draft: &ListingDraftDocument) -> Result<String, RuntimeErro
 }
 
 fn validation_context(config: &RuntimeConfig) -> Result<ListingValidationContext, RuntimeError> {
-    let defaults = authoring_defaults(config)?;
-    let selected_farm_d_tag = match (
-        defaults.farm_config_present,
-        defaults.selected_farm_d_tag,
-        defaults.selected_account_pubkey.clone(),
-    ) {
-        (true, d_tag, _) => d_tag,
-        (false, Some(d_tag), _) => Some(d_tag),
-        (false, None, Some(pubkey)) => resolve_selected_farm_d_tag(config, pubkey.as_str())?,
-        (false, None, None) => None,
-    };
     Ok(ListingValidationContext {
-        selected_account_id: defaults.selected_account_id,
-        selected_account_pubkey: defaults.selected_account_pubkey,
-        selected_farm_d_tag,
         farm_setup_action: farm_setup_action(config)?,
     })
 }
@@ -1359,9 +1568,6 @@ fn radrootsd_mutation_validation_context(
     config: &RuntimeConfig,
 ) -> Result<ListingValidationContext, RuntimeError> {
     Ok(ListingValidationContext {
-        selected_account_id: None,
-        selected_account_pubkey: None,
-        selected_farm_d_tag: None,
         farm_setup_action: farm_setup_action(config)?,
     })
 }
@@ -1369,7 +1575,7 @@ fn radrootsd_mutation_validation_context(
 fn canonicalize_draft(
     draft: &ListingDraftDocument,
     contents: &str,
-    context: &ListingValidationContext,
+    _context: &ListingValidationContext,
 ) -> Result<CanonicalListingDraft, ListingDraftValidationError> {
     if draft.version != 1 {
         return Err(issue_for_field(
@@ -1398,31 +1604,62 @@ fn canonicalize_draft(
         .into());
     }
 
-    let seller_pubkey = if let Some(pubkey) = non_empty(draft.listing.seller_pubkey.clone()) {
-        pubkey
-    } else if let Some(pubkey) = context.selected_account_pubkey.clone() {
+    let seller_account_id =
+        if let Some(account_id) = non_empty(draft.seller_actor.account_id.clone()) {
+            account_id
+        } else {
+            return Err(ListingDraftValidationError::MissingSellerAccount(
+                issue_for_field(
+                    contents,
+                    "seller_actor.account_id",
+                    "missing listing seller_actor account_id",
+                ),
+            ));
+        };
+
+    let seller_pubkey = if let Some(pubkey) = non_empty(draft.seller_actor.pubkey.clone()) {
         pubkey
     } else {
         return Err(ListingDraftValidationError::MissingSellerAccount(
             issue_for_field(
                 contents,
-                "listing.seller_pubkey",
-                "missing seller_pubkey and no resolved account pubkey is available",
+                "seller_actor.pubkey",
+                "missing listing seller_actor pubkey",
             ),
         ));
     };
 
-    let farm_d_tag = if let Some(d_tag) = non_empty(draft.listing.farm_d_tag.clone()) {
-        d_tag
-    } else if let Some(d_tag) = context.selected_farm_d_tag.clone() {
-        d_tag
+    let seller_actor_source = if let Some(source) = non_empty(draft.seller_actor.source.clone()) {
+        source
     } else {
+        return Err(ListingDraftValidationError::MissingSellerAccount(
+            issue_for_field(
+                contents,
+                "seller_actor.source",
+                "missing listing seller_actor source",
+            ),
+        ));
+    };
+    if !matches!(
+        seller_actor_source.as_str(),
+        LISTING_SELLER_ACTOR_SOURCE_FARM_CONFIG
+            | LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT
+            | LISTING_SELLER_ACTOR_SOURCE_REBIND
+    ) {
         return Err(issue_for_field(
             contents,
-            "listing.farm_d_tag",
-            "missing farm_d_tag and no selected farm config is available",
+            "seller_actor.source",
+            format!("unsupported listing seller_actor source `{seller_actor_source}`"),
         )
         .into());
+    }
+
+    let farm_d_tag = if let Some(d_tag) = non_empty(draft.listing.farm_d_tag.clone()) {
+        d_tag
+    } else {
+        return Err(
+            issue_for_field(contents, "listing.farm_d_tag", "missing listing farm_d_tag").into(),
+        );
     };
     if !is_d_tag_base64url(&farm_d_tag) {
         return Err(issue_for_field(
@@ -1542,7 +1779,9 @@ fn canonicalize_draft(
 
     Ok(CanonicalListingDraft {
         listing_id,
+        seller_account_id,
         seller_pubkey,
+        seller_actor_source,
         farm_d_tag,
         listing,
     })
@@ -1725,17 +1964,134 @@ fn build_listing_discounts(
     Ok((!discounts.is_empty()).then_some(discounts))
 }
 
+fn listing_bound_account_issue(
+    config: &RuntimeConfig,
+    canonical: &CanonicalListingDraft,
+    contents: &str,
+) -> Result<Option<ListingValidationIssueView>, RuntimeError> {
+    let Some(account) = configured_account(config, &canonical.seller_account_id)? else {
+        return Ok(Some(issue_for_field(
+            contents,
+            "seller_actor.account_id",
+            format!(
+                "listing seller_actor account_id `{}` is not present in the local account store",
+                canonical.seller_account_id
+            ),
+        )));
+    };
+    let account_pubkey = account.record.public_identity.public_key_hex;
+    if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
+        return Ok(Some(issue_for_field(
+            contents,
+            "seller_actor.pubkey",
+            format!(
+                "listing seller_actor pubkey `{}` does not match account `{}` pubkey `{account_pubkey}`",
+                canonical.seller_pubkey, canonical.seller_account_id
+            ),
+        )));
+    }
+    Ok(None)
+}
+
+fn ensure_listing_bound_account(
+    config: &RuntimeConfig,
+    canonical: &CanonicalListingDraft,
+    file: &Path,
+) -> Result<(), RuntimeError> {
+    validate_invocation_account_matches_bound(config, canonical, file)?;
+    let Some(account) = configured_account(config, &canonical.seller_account_id)? else {
+        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
+            format!(
+                "listing-bound seller account `{}` is not present in the local account store",
+                canonical.seller_account_id
+            ),
+            json!({
+                "seller_actor_source": canonical.seller_actor_source,
+                "listing_seller_account_id": canonical.seller_account_id,
+                "listing_file": file.display().to_string(),
+                "actions": listing_bound_account_recovery_actions(file),
+            }),
+        )
+        .into());
+    };
+    let account_pubkey = account.record.public_identity.public_key_hex;
+    if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
+        return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+            format!(
+                "account mismatch: listing-bound seller account `{}` pubkey `{account_pubkey}` cannot sign listing seller_pubkey `{}`",
+                canonical.seller_account_id, canonical.seller_pubkey
+            ),
+            json!({
+                "seller_actor_source": canonical.seller_actor_source,
+                "listing_seller_account_id": canonical.seller_account_id,
+                "listing_seller_pubkey": canonical.seller_pubkey,
+                "account_pubkey": account_pubkey,
+                "listing_file": file.display().to_string(),
+                "actions": listing_bound_account_recovery_actions(file),
+            }),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_invocation_account_matches_bound(
+    config: &RuntimeConfig,
+    canonical: &CanonicalListingDraft,
+    file: &Path,
+) -> Result<(), RuntimeError> {
+    let Some(selector) = config
+        .account
+        .selector
+        .as_deref()
+        .map(str::trim)
+        .filter(|selector| !selector.is_empty())
+    else {
+        return Ok(());
+    };
+    let attempted = accounts::resolve_account_selector(config, selector)?;
+    if attempted.record.account_id.to_string() == canonical.seller_account_id {
+        return Ok(());
+    }
+    Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+        format!(
+            "account mismatch: listing draft is bound to seller account `{}`; invocation selected `{}`",
+            canonical.seller_account_id, attempted.record.account_id
+        ),
+        json!({
+            "seller_actor_source": canonical.seller_actor_source,
+            "listing_seller_account_id": canonical.seller_account_id,
+            "attempted_seller_account_id": attempted.record.account_id.to_string(),
+            "listing_file": file.display().to_string(),
+            "actions": listing_bound_account_recovery_actions(file),
+        }),
+    )
+    .into())
+}
+
+fn listing_bound_account_recovery_actions(file: &Path) -> Vec<String> {
+    vec![
+        "radroots account import <path>".to_owned(),
+        format!("radroots listing rebind {} <selector>", file.display()),
+    ]
+}
+
 fn invalid_validation_view(
     file: &Path,
-    listing_id: &str,
+    draft: &ListingDraftDocument,
     context: &ListingValidationContext,
     issue: ListingValidationIssueView,
 ) -> ListingValidateView {
     let mut actions = vec![format!("edit {}", file.display())];
-    if context.selected_account_id.is_none() {
+    if draft.seller_actor.account_id.trim().is_empty() {
         actions.push("radroots account create".to_owned());
+    } else {
+        actions.push(format!(
+            "radroots listing rebind {} <selector>",
+            file.display()
+        ));
     }
-    if context.selected_farm_d_tag.is_none() {
+    if draft.listing.farm_d_tag.trim().is_empty() {
         actions.push(context.farm_setup_action.clone());
     }
 
@@ -1744,9 +2100,11 @@ fn invalid_validation_view(
         source: LISTING_SOURCE.to_owned(),
         file: file.display().to_string(),
         valid: false,
-        listing_id: non_empty(listing_id.to_owned()),
-        seller_pubkey: context.selected_account_pubkey.clone(),
-        farm_d_tag: context.selected_farm_d_tag.clone(),
+        listing_id: non_empty(draft.listing.d_tag.clone()),
+        seller_account_id: non_empty(draft.seller_actor.account_id.clone()),
+        seller_pubkey: non_empty(draft.seller_actor.pubkey.clone()),
+        seller_actor_source: non_empty(draft.seller_actor.source.clone()),
+        farm_d_tag: non_empty(draft.listing.farm_d_tag.clone()),
         issues: vec![issue],
         actions,
     }
@@ -1798,7 +2156,9 @@ fn radrootsd_preflight_view(
         file: args.file.display().to_string(),
         listing_id: canonical.listing_id.clone(),
         listing_addr: listing_addr.clone(),
+        seller_account_id: canonical.seller_account_id.clone(),
         seller_pubkey: canonical.seller_pubkey.clone(),
+        seller_actor_source: canonical.seller_actor_source.clone(),
         event_kind: KIND_LISTING,
         dry_run: false,
         deduplicated: false,
@@ -1843,7 +2203,9 @@ fn direct_relay_error_view(
         file: args.file.display().to_string(),
         listing_id: canonical.listing_id.clone(),
         listing_addr: listing_addr.clone(),
+        seller_account_id: canonical.seller_account_id.clone(),
         seller_pubkey: canonical.seller_pubkey.clone(),
+        seller_actor_source: canonical.seller_actor_source.clone(),
         event_kind: KIND_LISTING,
         dry_run: false,
         deduplicated: false,
@@ -1947,7 +2309,11 @@ fn resolve_listing_signing_identity(
     config: &RuntimeConfig,
     canonical: &CanonicalListingDraft,
 ) -> Result<accounts::AccountSigningIdentity, RuntimeError> {
-    let signing = accounts::resolve_local_signing_identity(config)?;
+    let signing = accounts::resolve_local_signing_identity_for_account(
+        config,
+        canonical.seller_account_id.as_str(),
+    )
+    .map_err(|error| listing_bound_signing_error(error, canonical))?;
     let account_pubkey = signing
         .account
         .record
@@ -1955,13 +2321,64 @@ fn resolve_listing_signing_identity(
         .public_key_hex
         .as_str();
     if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
-        return Err(accounts::AccountRuntimeFailure::mismatch(format!(
-            "account mismatch: resolved account pubkey `{account_pubkey}` cannot sign listing seller_pubkey `{}`",
-            canonical.seller_pubkey
-        ))
+        return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+            format!(
+                "account mismatch: listing-bound seller account `{}` pubkey `{account_pubkey}` cannot sign listing seller_pubkey `{}`",
+                canonical.seller_account_id, canonical.seller_pubkey
+            ),
+            json!({
+                "seller_actor_source": canonical.seller_actor_source,
+                "listing_seller_account_id": canonical.seller_account_id,
+                "listing_seller_pubkey": canonical.seller_pubkey,
+                "account_pubkey": account_pubkey,
+                "actions": [
+                    "radroots account import <path>",
+                    "radroots account attach-secret <account-id> <path>",
+                ],
+            }),
+        )
         .into());
     }
     Ok(signing)
+}
+
+fn listing_bound_signing_error(
+    error: RuntimeError,
+    canonical: &CanonicalListingDraft,
+) -> RuntimeError {
+    match error {
+        RuntimeError::Account(accounts::AccountRuntimeFailure::Unresolved(issue)) => {
+            accounts::AccountRuntimeFailure::unresolved_with_detail(
+                issue.message().to_owned(),
+                json!({
+                    "seller_actor_source": canonical.seller_actor_source,
+                    "listing_seller_account_id": canonical.seller_account_id,
+                    "listing_seller_pubkey": canonical.seller_pubkey,
+                    "actions": [
+                        "radroots account import <path>",
+                        format!("radroots listing rebind <file> {}", canonical.seller_account_id),
+                    ],
+                }),
+            )
+            .into()
+        }
+        RuntimeError::Account(accounts::AccountRuntimeFailure::WatchOnly(issue)) => {
+            accounts::AccountRuntimeFailure::watch_only_with_detail(
+                &canonical.seller_account_id,
+                json!({
+                    "seller_actor_source": canonical.seller_actor_source,
+                    "listing_seller_account_id": canonical.seller_account_id,
+                    "listing_seller_pubkey": canonical.seller_pubkey,
+                    "reason": issue.message(),
+                    "actions": [
+                        format!("radroots account attach-secret {} <path>", canonical.seller_account_id),
+                    ],
+                }),
+            )
+            .into()
+        }
+        other => other,
+    }
 }
 
 fn binding_error_view(
@@ -1984,7 +2401,9 @@ fn binding_error_view(
         file: args.file.display().to_string(),
         listing_id: canonical.listing_id.clone(),
         listing_addr,
+        seller_account_id: canonical.seller_account_id.clone(),
         seller_pubkey: canonical.seller_pubkey.clone(),
+        seller_actor_source: canonical.seller_actor_source.clone(),
         event_kind: KIND_LISTING,
         dry_run: false,
         deduplicated: false,
@@ -2045,7 +2464,9 @@ fn published_mutation_view(
         file: args.file.display().to_string(),
         listing_id: canonical.listing_id.clone(),
         listing_addr: listing_addr.clone(),
+        seller_account_id: canonical.seller_account_id.clone(),
         seller_pubkey: canonical.seller_pubkey.clone(),
+        seller_actor_source: canonical.seller_actor_source.clone(),
         event_kind: KIND_LISTING,
         dry_run: false,
         deduplicated: false,
@@ -2178,7 +2599,7 @@ fn issue_from_trade_validation(
     match error {
         RadrootsTradeListingValidationError::InvalidSeller => issue_for_field(
             contents,
-            "listing.seller_pubkey",
+            "seller_actor.pubkey",
             "listing author does not match the farm pubkey",
         ),
         RadrootsTradeListingValidationError::MissingTitle => {
@@ -2222,7 +2643,20 @@ fn issue_from_trade_validation(
 }
 
 fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults, RuntimeError> {
-    let selected_account = accounts::resolve_account(config)?;
+    let account_resolution = accounts::resolve_account_resolution(config)?;
+    let Some(selected_account) = account_resolution.resolved_account.clone() else {
+        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
+            "no resolved account is available for listing seller actor",
+            json!({
+                "seller_actor_source": LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT,
+                "actions": [
+                    "radroots account create",
+                    "radroots account import <path>",
+                ],
+            }),
+        )
+        .into());
+    };
     let mut defaults = ListingAuthoringDefaults {
         farm_config_present: false,
         farm_defaults_ready: false,
@@ -2232,12 +2666,13 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
                 .to_owned(),
         ),
         farm_name: None,
-        selected_account_id: selected_account
-            .as_ref()
-            .map(|account| account.record.account_id.to_string()),
-        selected_account_pubkey: selected_account
-            .as_ref()
-            .map(|account| account.record.public_identity.public_key_hex.clone()),
+        seller_account_id: selected_account.record.account_id.to_string(),
+        seller_pubkey: selected_account
+            .record
+            .public_identity
+            .public_key_hex
+            .clone(),
+        seller_actor_source: LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
         selected_farm_d_tag: None,
         delivery_method: None,
         location: None,
@@ -2273,8 +2708,9 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
         .and_then(non_empty)
         .or_else(|| non_empty(resolved.document.profile.name.clone()))
         .or_else(|| non_empty(resolved.document.farm.name.clone()));
-    defaults.selected_account_id = Some(resolved.document.selection.account.clone());
-    defaults.selected_account_pubkey = Some(account.record.public_identity.public_key_hex.clone());
+    defaults.seller_account_id = resolved.document.selection.account.clone();
+    defaults.seller_pubkey = account.record.public_identity.public_key_hex.clone();
+    defaults.seller_actor_source = LISTING_SELLER_ACTOR_SOURCE_FARM_CONFIG.to_owned();
     defaults.selected_farm_d_tag = Some(resolved.document.selection.farm_d_tag.clone());
     let draft_missing = farm_config::missing_fields(&resolved.document);
     defaults.farm_defaults_ready = !draft_missing.iter().any(|field| {
@@ -2298,18 +2734,6 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
         );
     }
     Ok(defaults)
-}
-
-fn resolve_selected_farm_d_tag(
-    config: &RuntimeConfig,
-    seller_pubkey: &str,
-) -> Result<Option<String>, RuntimeError> {
-    if !config.local.replica_db_path.exists() {
-        return Ok(None);
-    }
-    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
-    db.farm_unique_d_tag_by_pubkey(seller_pubkey)
-        .map_err(RuntimeError::from)
 }
 
 fn draft_location_from_model(location: &RadrootsListingLocation) -> ListingDraftLocation {
@@ -2416,7 +2840,9 @@ fn line_for_field(contents: &str, field: &str) -> Option<usize> {
         "kind" => &["kind ="],
         "listing.d_tag" => &["d_tag ="],
         "listing.farm_d_tag" => &["farm_d_tag ="],
-        "listing.seller_pubkey" => &["seller_pubkey ="],
+        "seller_actor.account_id" => &["[seller_actor]", "account_id ="],
+        "seller_actor.pubkey" => &["[seller_actor]", "pubkey ="],
+        "seller_actor.source" => &["[seller_actor]", "source ="],
         "product.key" => &["key ="],
         "product.title" => &["title ="],
         "product.category" => &["category ="],
@@ -2669,7 +3095,11 @@ mod tests {
             listing: super::ListingDraftMeta {
                 d_tag: "AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
                 farm_d_tag: "AAAAAAAAAAAAAAAAAAAAAw".to_owned(),
-                seller_pubkey: "a".repeat(64),
+            },
+            seller_actor: super::ListingDraftSellerActor {
+                account_id: "acct_seller".to_owned(),
+                pubkey: "a".repeat(64),
+                source: super::LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
             },
             product: super::ListingDraftProduct {
                 key: "sku".to_owned(),
@@ -2720,7 +3150,11 @@ mod tests {
             listing: super::ListingDraftMeta {
                 d_tag: "AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
                 farm_d_tag: "AAAAAAAAAAAAAAAAAAAAAw".to_owned(),
-                seller_pubkey: seller_pubkey.clone(),
+            },
+            seller_actor: super::ListingDraftSellerActor {
+                account_id: "acct_seller".to_owned(),
+                pubkey: seller_pubkey.clone(),
+                source: super::LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
             },
             product: super::ListingDraftProduct {
                 key: "sku".to_owned(),
@@ -2769,9 +3203,6 @@ mod tests {
         };
         let contents = toml::to_string_pretty(&document).expect("render draft");
         let context = super::ListingValidationContext {
-            selected_account_id: Some("acct_seller".to_owned()),
-            selected_account_pubkey: Some(seller_pubkey),
-            selected_farm_d_tag: Some("AAAAAAAAAAAAAAAAAAAAAw".to_owned()),
             farm_setup_action: "radroots farm create".to_owned(),
         };
 

@@ -231,6 +231,9 @@ fn execute_request(
         TargetOperationRequest::ListingValidate(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
+        TargetOperationRequest::ListingRebind(request) => {
+            execute_with(ListingOperationService::new(config), request)
+        }
         TargetOperationRequest::ListingPublish(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
