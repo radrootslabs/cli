@@ -2903,11 +2903,17 @@ pub struct SyncActionView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connected_relays: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acknowledged_relays: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed_relays: Vec<RelayFailureView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fetched_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingested_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publishable_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2925,6 +2931,7 @@ impl SyncActionView {
         match self.state.as_str() {
             "unconfigured" => CommandDisposition::Unconfigured,
             "unavailable" => CommandDisposition::ExternalUnavailable,
+            "partial" => CommandDisposition::ExternalUnavailable,
             "error" => CommandDisposition::InternalError,
             _ => CommandDisposition::Success,
         }

@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::domain::runtime::{CommandDisposition, SyncActionView, SyncStatusView};
 use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, RelayListRequest, RelayListResult,
@@ -53,8 +54,8 @@ impl OperationService<SyncStatusGetRequest> for RuntimeOperationService<'_> {
         &self,
         _request: OperationRequest<SyncStatusGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = map_runtime(crate::runtime::sync::status(self.config))?;
-        serialized_operation_result::<SyncStatusGetResult, _>(&view)
+        let view = map_runtime("sync.status.get", crate::runtime::sync::status(self.config))?;
+        sync_status_result(&view)
     }
 }
 
@@ -65,8 +66,8 @@ impl OperationService<SyncPullRequest> for RuntimeOperationService<'_> {
         &self,
         _request: OperationRequest<SyncPullRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = map_runtime(crate::runtime::sync::pull(self.config))?;
-        serialized_operation_result::<SyncPullResult, _>(&view)
+        let view = map_runtime("sync.pull", crate::runtime::sync::pull(self.config))?;
+        sync_action_result::<SyncPullResult>("sync.pull", &view)
     }
 }
 
@@ -75,10 +76,13 @@ impl OperationService<SyncPushRequest> for RuntimeOperationService<'_> {
 
     fn execute(
         &self,
-        _request: OperationRequest<SyncPushRequest>,
+        request: OperationRequest<SyncPushRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = map_runtime(crate::runtime::sync::push(self.config))?;
-        serialized_operation_result::<SyncPushResult, _>(&view)
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required("sync.push"));
+        }
+        let view = map_runtime("sync.push", crate::runtime::sync::push(self.config))?;
+        sync_action_result::<SyncPushResult>("sync.push", &view)
     }
 }
 
@@ -93,7 +97,10 @@ impl OperationService<SyncWatchRequest> for RuntimeOperationService<'_> {
             frames: usize_input(&request, "frames").unwrap_or(1),
             interval_ms: u64_input(&request, "interval_ms").unwrap_or(1_000),
         };
-        let view = map_runtime(crate::runtime::sync::watch(self.config, &args))?;
+        let view = map_runtime(
+            "sync.watch",
+            crate::runtime::sync::watch(self.config, &args),
+        )?;
         serialized_operation_result::<SyncWatchResult, _>(&view)
     }
 }
@@ -106,8 +113,81 @@ where
     OperationResult::new(R::from_serializable(value)?)
 }
 
-fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
-    result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
+fn sync_status_result(
+    view: &SyncStatusView,
+) -> Result<OperationResult<SyncStatusGetResult>, OperationAdapterError> {
+    match view.disposition() {
+        CommandDisposition::Success => serialized_operation_result::<SyncStatusGetResult, _>(view),
+        disposition => Err(sync_view_error(
+            "sync.status.get",
+            disposition,
+            view,
+            view.reason.as_deref(),
+        )),
+    }
+}
+
+fn sync_action_result<R>(
+    operation_id: &str,
+    view: &SyncActionView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_operation_result::<R, _>(view),
+        disposition => Err(sync_view_error(
+            operation_id,
+            disposition,
+            view,
+            view.reason.as_deref(),
+        )),
+    }
+}
+
+fn sync_view_error<T>(
+    operation_id: &str,
+    disposition: CommandDisposition,
+    view: &T,
+    reason: Option<&str>,
+) -> OperationAdapterError
+where
+    T: Serialize,
+{
+    let detail = serde_json::to_value(view).unwrap_or_else(|_| Value::Object(Default::default()));
+    let message = reason
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("`{operation_id}` is not ready"));
+    match disposition {
+        CommandDisposition::Unconfigured => {
+            OperationAdapterError::operation_unavailable_with_detail(operation_id, message, detail)
+        }
+        CommandDisposition::ExternalUnavailable => {
+            OperationAdapterError::network_unavailable_with_detail(operation_id, message, detail)
+        }
+        CommandDisposition::Unsupported => OperationAdapterError::InvalidInput {
+            operation_id: operation_id.to_owned(),
+            message,
+        },
+        CommandDisposition::ValidationFailed => OperationAdapterError::ValidationFailed {
+            operation_id: operation_id.to_owned(),
+            message,
+        },
+        CommandDisposition::NotFound => OperationAdapterError::NotFound {
+            operation_id: operation_id.to_owned(),
+            message,
+        },
+        CommandDisposition::InternalError | CommandDisposition::Success => {
+            OperationAdapterError::Runtime(message)
+        }
+    }
+}
+
+fn map_runtime<T>(
+    operation_id: &str,
+    result: Result<T, RuntimeError>,
+) -> Result<T, OperationAdapterError> {
+    result.map_err(|error| OperationAdapterError::runtime_failure(operation_id, error))
 }
 
 fn usize_input<P>(request: &OperationRequest<P>, key: &str) -> Option<usize>
@@ -189,13 +269,12 @@ mod tests {
         let sync =
             OperationRequest::new(OperationContext::default(), SyncStatusGetRequest::default())
                 .expect("sync status request");
-        let sync_envelope = service
-            .execute(sync)
-            .expect("sync status result")
-            .to_envelope(OperationContext::default().envelope_context("req_sync"))
-            .expect("sync envelope");
-        assert_eq!(sync_envelope.operation_id, "sync.status.get");
-        assert_eq!(sync_envelope.result["state"], "unconfigured");
+        let error = service.execute(sync).expect_err("sync status unconfigured");
+        let output = error.to_output_error();
+
+        assert_eq!(output.code, "operation_unavailable");
+        assert_eq!(output.exit_code, 3);
+        assert!(error.to_string().contains("sync.status.get"));
     }
 
     fn sample_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {

@@ -1725,7 +1725,6 @@ fn target_outputs_do_not_suggest_removed_command_families() {
         ["--format", "json", "market", "listing", "get", "eggs"].as_slice(),
         ["--format", "json", "listing", "get", "eggs"].as_slice(),
         ["--format", "json", "listing", "list"].as_slice(),
-        ["--format", "json", "sync", "status", "get"].as_slice(),
         [
             "--format",
             "json",
@@ -1738,6 +1737,13 @@ fn target_outputs_do_not_suggest_removed_command_families() {
         let value = sandbox.json_success(args);
         assert_no_removed_command_reference(&value, args);
     }
+
+    let sync_args = ["--format", "json", "sync", "status", "get"];
+    let (output, value) = sandbox.json_output(&sync_args);
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "sync.status.get");
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_no_removed_command_reference(&value, &sync_args);
 }
 
 #[test]
@@ -2091,6 +2097,10 @@ fn offline_forbids_external_network_operations() {
             ["--format", "json", "--offline", "sync", "pull"].as_slice(),
         ),
         (
+            "sync.push",
+            ["--format", "json", "--offline", "sync", "push"].as_slice(),
+        ),
+        (
             "market.refresh",
             ["--format", "json", "--offline", "market", "refresh"].as_slice(),
         ),
@@ -2233,6 +2243,21 @@ fn offline_allows_supported_external_dry_run() {
 
     assert_eq!(publish["operation_id"], "listing.publish");
     assert_eq!(publish["result"]["state"], "dry_run");
+
+    sandbox.json_success(&["--format", "json", "store", "init"]);
+    let sync_push = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--offline",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--dry-run",
+        "sync",
+        "push",
+    ]);
+
+    assert_eq!(sync_push["operation_id"], "sync.push");
+    assert_eq!(sync_push["result"]["state"], "ready");
 }
 
 #[test]
@@ -2432,6 +2457,14 @@ fn listing_publish_invalid_draft_returns_validation_failure() {
 #[test]
 fn online_requires_relay_for_external_network_operations() {
     for (operation_id, args) in [
+        (
+            "sync.pull",
+            ["--format", "json", "--online", "sync", "pull"].as_slice(),
+        ),
+        (
+            "sync.push",
+            ["--format", "json", "--online", "sync", "push"].as_slice(),
+        ),
         (
             "market.refresh",
             ["--format", "json", "--online", "market", "refresh"].as_slice(),
@@ -2882,17 +2915,23 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(market["result"]["state"], "unconfigured");
     assert_eq!(market["result"]["replica_db"], "missing");
 
-    let sync_pull = sandbox.json_success(&["--format", "json", "--dry-run", "sync", "pull"]);
+    let (sync_pull_output, sync_pull) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "sync", "pull"]);
+    assert!(!sync_pull_output.status.success());
     assert_eq!(sync_pull["operation_id"], "sync.pull");
     assert_eq!(sync_pull["dry_run"], true);
-    assert_eq!(sync_pull["result"]["state"], "unconfigured");
-    assert_eq!(sync_pull["result"]["replica_db"], "missing");
+    assert_eq!(sync_pull["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(sync_pull["errors"][0]["detail"]["state"], "unconfigured");
+    assert_eq!(sync_pull["errors"][0]["detail"]["replica_db"], "missing");
 
-    let sync_push = sandbox.json_success(&["--format", "json", "--dry-run", "sync", "push"]);
+    let (sync_push_output, sync_push) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "sync", "push"]);
+    assert!(!sync_push_output.status.success());
     assert_eq!(sync_push["operation_id"], "sync.push");
     assert_eq!(sync_push["dry_run"], true);
-    assert_eq!(sync_push["result"]["state"], "unconfigured");
-    assert_eq!(sync_push["result"]["replica_db"], "missing");
+    assert_eq!(sync_push["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(sync_push["errors"][0]["detail"]["state"], "unconfigured");
+    assert_eq!(sync_push["errors"][0]["detail"]["replica_db"], "missing");
 
     sandbox.json_success(&["--format", "json", "store", "init"]);
     let relay_refresh = sandbox.json_success(&[
@@ -2913,6 +2952,25 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     );
     assert_eq!(relay_refresh["result"]["fetched_count"], 0);
     assert_eq!(relay_refresh["result"]["ingested_count"], 0);
+
+    let sync_push_ready = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        "ws://127.0.0.1:9",
+        "--dry-run",
+        "sync",
+        "push",
+    ]);
+    assert_eq!(sync_push_ready["operation_id"], "sync.push");
+    assert_eq!(sync_push_ready["dry_run"], true);
+    assert_eq!(sync_push_ready["result"]["state"], "ready");
+    assert_eq!(
+        sync_push_ready["result"]["target_relays"][0],
+        "ws://127.0.0.1:9"
+    );
+    assert_eq!(sync_push_ready["result"]["publishable_count"], 0);
+    assert_eq!(sync_push_ready["result"]["published_count"], 0);
 
     let empty_search =
         sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
@@ -3037,6 +3095,11 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
         &sandbox,
         "listing.archive",
         &["listing", "archive", "missing-listing.toml"],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "sync.push",
+        &["--relay", "ws://127.0.0.1:9", "sync", "push"],
     );
     assert_required_approval_token_rejected(&sandbox, "order.submit", &["order", "submit"]);
     assert_required_approval_token_rejected(&sandbox, "order.accept", &["order", "accept"]);

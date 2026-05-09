@@ -422,7 +422,7 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         "Push local signed updates to relays.",
         Any,
         true,
-        Conditional,
+        Required,
         High,
         true,
         true
@@ -1136,6 +1136,7 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
         operation_id,
         "signer.status.get"
             | "farm.publish"
+            | "sync.push"
             | "listing.publish"
             | "listing.archive"
             | "order.submit"
@@ -1153,7 +1154,8 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
 pub fn requires_nostr_relay_publish_mode(operation_id: &str) -> bool {
     matches!(
         operation_id,
-        "order.submit"
+        "sync.push"
+            | "order.submit"
             | "order.accept"
             | "order.decline"
             | "order.cancel"
@@ -1349,6 +1351,7 @@ mod tests {
             "account.import",
             "account.attach_secret",
             "account.remove",
+            "sync.push",
             "farm.publish",
             "listing.publish",
             "listing.archive",
@@ -1479,6 +1482,7 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected = [
             "signer.status.get",
+            "sync.push",
             "farm.publish",
             "listing.publish",
             "listing.archive",
@@ -1506,6 +1510,7 @@ mod tests {
             .map(|operation| operation.operation_id)
             .collect::<BTreeSet<_>>();
         let expected = [
+            "sync.push",
             "order.submit",
             "order.accept",
             "order.decline",

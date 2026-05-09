@@ -8,13 +8,16 @@ use radroots_events::kinds::{
     KIND_LIST_SET_PICTURE, KIND_LIST_SET_RELAY, KIND_LIST_SET_RELEASE_ARTIFACT,
     KIND_LIST_SET_STARTER_PACK, KIND_LIST_SET_VIDEO, KIND_LISTING, KIND_PLOT, KIND_PROFILE,
 };
+use radroots_events_codec::wire::WireEventParts;
+use radroots_identity::RadrootsIdentity;
 use radroots_nostr::prelude::{
     RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_kind,
 };
 use radroots_replica_db::{ReplicaSql, migrations};
 use radroots_replica_sync::{
-    RadrootsReplicaEventsError, RadrootsReplicaIngestOutcome, radroots_replica_ingest_event,
-    radroots_replica_sync_status,
+    RadrootsReplicaEventsError, RadrootsReplicaIngestOutcome, RadrootsReplicaPendingPublishEvent,
+    radroots_replica_ingest_event, radroots_replica_ingest_event_state,
+    radroots_replica_pending_publish_batch, radroots_replica_sync_status,
 };
 use radroots_sql_core::SqliteExecutor;
 
@@ -23,18 +26,23 @@ use crate::domain::runtime::{
     SyncWatchFrameView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::accounts;
+use crate::runtime::config::{PublishMode, RuntimeConfig};
 use crate::runtime::direct_relay::{
-    DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, fetch_events_from_relays,
+    DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, DirectRelayPublishError,
+    DirectRelayPublishReceipt, fetch_events_from_relays, publish_parts_with_identity,
 };
 use crate::runtime_args::SyncWatchArgs;
 
 const SYNC_SOURCE: &str = "local replica · local first";
-const RELAY_SETUP_ACTION: &str = "radroots --relay wss://relay.example.com sync pull";
+const RELAY_PULL_SETUP_ACTION: &str = "radroots --relay wss://relay.example.com sync pull";
+const RELAY_PUSH_SETUP_ACTION: &str = "radroots --relay wss://relay.example.com sync push";
 const SYNC_PULL_ACTION: &str = "radroots sync pull";
+const SYNC_PUSH_ACTION: &str = "radroots sync push";
 const SYNC_READY_ACTION: &str = "radroots market product search eggs";
 const MARKET_READY_ACTION: &str = "radroots market product search eggs";
 const INGEST_SOURCE: &str = "direct Nostr relay fetch · local replica ingest";
+const PUBLISH_SOURCE: &str = "direct Nostr relay publish · local replica sync";
 const RELAY_FETCH_LIMIT: usize = 1_000;
 const MARKET_REFRESH_KINDS: &[u32] = &[KIND_PROFILE, KIND_FARM, KIND_LISTING];
 const SYNC_PULL_KINDS: &[u32] = &[
@@ -143,6 +151,8 @@ where
         view.target_relays = config.relay.urls.clone();
         view.fetched_count = Some(0);
         view.ingested_count = Some(0);
+        view.publishable_count = None;
+        view.published_count = None;
         view.skipped_count = Some(0);
         view.unsupported_count = Some(0);
         view.failed_count = Some(0);
@@ -194,9 +204,12 @@ where
         },
         target_relays: receipt.target_relays,
         connected_relays: receipt.connected_relays,
+        acknowledged_relays: Vec::new(),
         failed_relays: relay_failures(receipt.failed_relays),
         fetched_count: Some(ingest.fetched_count),
         ingested_count: Some(ingest.ingested_count),
+        publishable_count: None,
+        published_count: None,
         skipped_count: Some(ingest.skipped_count),
         unsupported_count: Some(ingest.unsupported_count),
         failed_count: Some(ingest.failed_count),
@@ -206,11 +219,176 @@ where
 }
 
 pub fn push(config: &RuntimeConfig) -> Result<SyncActionView, RuntimeError> {
-    narrowed_action(
+    push_with_publisher(config, |identity, relay_urls, event| {
+        publish_parts_with_identity(
+            identity,
+            relay_urls,
+            WireEventParts {
+                kind: event.draft.kind,
+                content: event.draft.content.clone(),
+                tags: event.draft.tags.clone(),
+            },
+        )
+    })
+}
+
+fn push_with_publisher<F>(
+    config: &RuntimeConfig,
+    mut publisher: F,
+) -> Result<SyncActionView, RuntimeError>
+where
+    F: FnMut(
+        &RadrootsIdentity,
+        &[String],
+        &RadrootsReplicaPendingPublishEvent,
+    ) -> Result<DirectRelayPublishReceipt, DirectRelayPublishError>,
+{
+    let snapshot = inspect_sync(config)?;
+    if snapshot.state == "unconfigured" {
+        return Ok(push_unconfigured_view(snapshot));
+    }
+
+    if matches!(config.publish.mode, PublishMode::Radrootsd) {
+        let mut view = empty_action_from_snapshot(snapshot, "push");
+        view.state = "unavailable".to_owned();
+        view.reason = Some(
+            "sync push is only available in publish mode `nostr_relay`; radrootsd sync push is not implemented"
+                .to_owned(),
+        );
+        view.actions = vec!["radroots --publish-mode nostr_relay sync push".to_owned()];
+        return Ok(view);
+    }
+
+    let signing = match accounts::resolve_local_signing_identity(config) {
+        Ok(signing) => signing,
+        Err(RuntimeError::Account(failure)) => {
+            let mut view = empty_action_from_snapshot(snapshot, "push");
+            view.state = "unconfigured".to_owned();
+            view.reason = Some(failure.to_string());
+            view.actions = vec![
+                "radroots account create".to_owned(),
+                "radroots account attach-secret".to_owned(),
+            ];
+            return Ok(view);
+        }
+        Err(error) => return Err(error),
+    };
+
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    migrations::run_all_up(&executor)?;
+    let batch = radroots_replica_pending_publish_batch(&executor)?;
+    let selected_pubkey = signing
+        .account
+        .record
+        .public_identity
+        .public_key_hex
+        .as_str();
+    let mut counts = SyncPushCounts::from_batch(&batch);
+    let publishable_events = batch
+        .pending_events
+        .iter()
+        .filter(|event| {
+            if event.author.eq_ignore_ascii_case(selected_pubkey) {
+                true
+            } else {
+                counts.skipped_count += 1;
+                false
+            }
+        })
+        .collect::<Vec<_>>();
+    counts.publishable_count = publishable_events.len();
+
+    if config.output.dry_run {
+        let state = if counts.publishable_count > 0 {
+            "dry_run"
+        } else {
+            "ready"
+        };
+        return Ok(push_view(
+            config,
+            state,
+            SyncQueueView {
+                expected_count: batch.expected_count,
+                pending_count: batch.pending_count,
+            },
+            snapshot.freshness,
+            counts,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Some("dry run requested; relay publish skipped".to_owned()),
+            if batch.pending_count > 0 {
+                vec![SYNC_PUSH_ACTION.to_owned()]
+            } else {
+                vec!["radroots sync status get".to_owned()]
+            },
+        ));
+    }
+
+    let mut connected_relays = Vec::new();
+    let mut acknowledged_relays = Vec::new();
+    let mut failed_relays = Vec::new();
+
+    for event in publishable_events {
+        match publisher(&signing.identity, &config.relay.urls, event) {
+            Ok(receipt) => {
+                push_unique_many(&mut connected_relays, receipt.connected_relays.iter());
+                push_unique_many(&mut acknowledged_relays, receipt.acknowledged_relays.iter());
+                failed_relays.extend(relay_failures(receipt.failed_relays));
+                let signed_event = radroots_event_from_nostr(&receipt.event);
+                radroots_replica_ingest_event_state(
+                    &executor,
+                    &signed_event,
+                    event.d_tag.as_str(),
+                    event.content_hash.as_str(),
+                )?;
+                counts.published_count += 1;
+            }
+            Err(error) => {
+                counts.failed_count += 1;
+                let failure = sync_push_publish_failure(error);
+                push_unique_many(&mut connected_relays, failure.connected_relays.iter());
+                failed_relays.extend(failure.failed_relays);
+                if counts.first_failure_reason.is_none() {
+                    counts.first_failure_reason = Some(failure.reason);
+                }
+                break;
+            }
+        }
+    }
+
+    let queue = radroots_replica_sync_status(&executor)?;
+    let freshness = freshness_from_executor(&executor)?;
+    let state = if counts.failed_count > 0 && counts.published_count > 0 {
+        "partial"
+    } else if counts.failed_count > 0 {
+        "unavailable"
+    } else if counts.published_count > 0 {
+        "published"
+    } else {
+        "ready"
+    };
+    let reason = counts.reason();
+    let actions = match state {
+        "published" | "ready" => vec!["radroots sync status get".to_owned()],
+        _ => vec![SYNC_PUSH_ACTION.to_owned()],
+    };
+
+    Ok(push_view(
         config,
-        "push",
-        "relay publish is not wired into `radroots sync push` yet",
-    )
+        state,
+        SyncQueueView {
+            expected_count: queue.expected_count,
+            pending_count: queue.pending_count,
+        },
+        freshness,
+        counts,
+        connected_relays,
+        acknowledged_relays,
+        failed_relays,
+        reason,
+        actions,
+    ))
 }
 
 pub fn watch(config: &RuntimeConfig, args: &SyncWatchArgs) -> Result<SyncWatchView, RuntimeError> {
@@ -251,42 +429,6 @@ pub fn watch(config: &RuntimeConfig, args: &SyncWatchArgs) -> Result<SyncWatchVi
     })
 }
 
-fn narrowed_action(
-    config: &RuntimeConfig,
-    direction: &str,
-    unavailable_reason: &str,
-) -> Result<SyncActionView, RuntimeError> {
-    let snapshot = inspect_sync(config)?;
-    if snapshot.state == "unconfigured" {
-        return Ok(empty_action_from_snapshot(snapshot, direction));
-    }
-
-    let mut actions = vec!["radroots sync status get".to_owned()];
-    actions.extend(snapshot.actions);
-
-    Ok(SyncActionView {
-        direction: direction.to_owned(),
-        state: "unavailable".to_owned(),
-        source: snapshot.source,
-        local_root: snapshot.local_root,
-        replica_db: snapshot.replica_db,
-        relay_count: snapshot.relay_count,
-        publish_policy: snapshot.publish_policy,
-        freshness: snapshot.freshness,
-        queue: snapshot.queue,
-        target_relays: Vec::new(),
-        connected_relays: Vec::new(),
-        failed_relays: Vec::new(),
-        fetched_count: None,
-        ingested_count: None,
-        skipped_count: None,
-        unsupported_count: None,
-        failed_count: None,
-        reason: Some(unavailable_reason.to_owned()),
-        actions,
-    })
-}
-
 fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncActionView {
     SyncActionView {
         direction: direction.to_owned(),
@@ -300,14 +442,139 @@ fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncAc
         queue: snapshot.queue,
         target_relays: Vec::new(),
         connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
         fetched_count: None,
         ingested_count: None,
+        publishable_count: None,
+        published_count: None,
         skipped_count: None,
         unsupported_count: None,
         failed_count: None,
         reason: snapshot.reason,
         actions: snapshot.actions,
+    }
+}
+
+fn push_unconfigured_view(snapshot: SyncSnapshot) -> SyncActionView {
+    let mut view = empty_action_from_snapshot(snapshot, "push");
+    if view.replica_db == "ready" && view.relay_count == 0 {
+        view.actions = vec![RELAY_PUSH_SETUP_ACTION.to_owned()];
+    }
+    view
+}
+
+fn push_view(
+    config: &RuntimeConfig,
+    state: &str,
+    queue: SyncQueueView,
+    freshness: SyncFreshnessView,
+    counts: SyncPushCounts,
+    connected_relays: Vec<String>,
+    acknowledged_relays: Vec<String>,
+    failed_relays: Vec<RelayFailureView>,
+    reason: Option<String>,
+    actions: Vec<String>,
+) -> SyncActionView {
+    SyncActionView {
+        direction: "push".to_owned(),
+        state: state.to_owned(),
+        source: PUBLISH_SOURCE.to_owned(),
+        local_root: config.local.root.display().to_string(),
+        replica_db: "ready".to_owned(),
+        relay_count: config.relay.urls.len(),
+        publish_policy: config.relay.publish_policy.as_str().to_owned(),
+        freshness,
+        queue,
+        target_relays: config.relay.urls.clone(),
+        connected_relays,
+        acknowledged_relays,
+        failed_relays,
+        fetched_count: None,
+        ingested_count: None,
+        publishable_count: Some(counts.publishable_count),
+        published_count: Some(counts.published_count),
+        skipped_count: Some(counts.skipped_count),
+        unsupported_count: Some(counts.unsupported_count),
+        failed_count: Some(counts.failed_count),
+        reason,
+        actions,
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct SyncPushCounts {
+    pending_count: usize,
+    publishable_count: usize,
+    published_count: usize,
+    skipped_count: usize,
+    unsupported_count: usize,
+    failed_count: usize,
+    first_failure_reason: Option<String>,
+}
+
+impl SyncPushCounts {
+    fn from_batch(batch: &radroots_replica_sync::RadrootsReplicaPendingPublishBatch) -> Self {
+        Self {
+            pending_count: batch.pending_count,
+            ..Self::default()
+        }
+    }
+
+    fn reason(&self) -> Option<String> {
+        if self.failed_count > 0 {
+            return Some(match &self.first_failure_reason {
+                Some(reason) => format!(
+                    "{} pending event(s) failed publish: {reason}",
+                    self.failed_count
+                ),
+                None => format!("{} pending event(s) failed publish", self.failed_count),
+            });
+        }
+        if self.pending_count > 0 && self.publishable_count == 0 {
+            return Some(
+                "pending local replica events belong to another author and were not signed"
+                    .to_owned(),
+            );
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SyncPushPublishFailure {
+    reason: String,
+    connected_relays: Vec<String>,
+    failed_relays: Vec<RelayFailureView>,
+}
+
+fn sync_push_publish_failure(error: DirectRelayPublishError) -> SyncPushPublishFailure {
+    match error {
+        DirectRelayPublishError::Connect {
+            reason,
+            connected_relays,
+            failed_relays,
+            ..
+        } => SyncPushPublishFailure {
+            reason: format!("direct relay connection failed: {reason}"),
+            connected_relays,
+            failed_relays: relay_failures(failed_relays),
+        },
+        DirectRelayPublishError::Publish {
+            reason,
+            connected_relays,
+            failed_relays,
+            ..
+        } => SyncPushPublishFailure {
+            reason: format!("direct relay publish failed: {reason}"),
+            connected_relays,
+            failed_relays: relay_failures(failed_relays),
+        },
+        other => SyncPushPublishFailure {
+            reason: other.to_string(),
+            connected_relays: Vec::new(),
+            failed_relays: Vec::new(),
+        },
     }
 }
 
@@ -343,7 +610,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
     let mut actions = Vec::new();
 
     if relay_count == 0 {
-        actions.push(RELAY_SETUP_ACTION.to_owned());
+        actions.push(RELAY_PULL_SETUP_ACTION.to_owned());
         return Ok(SyncSnapshot {
             state: "unconfigured".to_owned(),
             source: SYNC_SOURCE.to_owned(),
@@ -363,7 +630,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
 
     actions.push(SYNC_PULL_ACTION.to_owned());
     if queue.pending_count > 0 {
-        actions.push("radroots sync push".to_owned());
+        actions.push(SYNC_PUSH_ACTION.to_owned());
     }
 
     Ok(SyncSnapshot {
@@ -513,6 +780,14 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
         .collect()
 }
 
+fn push_unique_many<'a>(target: &mut Vec<String>, values: impl Iterator<Item = &'a String>) {
+    for value in values {
+        if !target.contains(value) {
+            target.push(value.clone());
+        }
+    }
+}
+
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -549,13 +824,18 @@ mod tests {
     use radroots_nostr::prelude::{
         RadrootsNostrEvent, RadrootsNostrFilter, radroots_nostr_build_event,
     };
+    use radroots_replica_db::{farm, migrations};
+    use radroots_replica_db_schema::farm::IFarmFields;
+    use radroots_replica_sync::radroots_replica_sync_status;
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
+    use radroots_sql_core::SqliteExecutor;
     use tempfile::tempdir;
 
     use super::{
-        DirectRelayFetchError, DirectRelayFetchReceipt, market_refresh_with_fetcher,
-        pull_with_fetcher,
+        DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt,
+        DirectRelayPublishReceipt, market_refresh_with_fetcher, pull_with_fetcher,
+        push_with_publisher,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -604,6 +884,136 @@ mod tests {
             view.actions,
             vec!["radroots --relay wss://relay.example.com sync pull"]
         );
+    }
+
+    #[test]
+    fn sync_push_dry_run_reports_pending_without_publish_or_state_update() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        config.output.dry_run = true;
+        crate::runtime::local::init(&config).expect("store init");
+        let signing =
+            crate::runtime::accounts::create_or_migrate_default_account(&config).expect("account");
+        seed_replica_farm(
+            &config,
+            signing
+                .account
+                .record
+                .public_identity
+                .public_key_hex
+                .as_str(),
+        );
+
+        let view = push_with_publisher(&config, |_, _, _| panic!("dry run must not publish"))
+            .expect("sync push dry run");
+        let status = radroots_replica_sync_status(
+            &SqliteExecutor::open(&config.local.replica_db_path).expect("open replica"),
+        )
+        .expect("status");
+
+        assert_eq!(view.state, "dry_run");
+        assert_eq!(view.target_relays, vec!["wss://relay.example.com"]);
+        assert_eq!(view.publishable_count, Some(status.pending_count));
+        assert_eq!(view.published_count, Some(0));
+        assert_eq!(view.failed_count, Some(0));
+        assert!(status.pending_count > 0);
+    }
+
+    #[test]
+    fn sync_push_publishes_pending_local_author_events_and_updates_state() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        crate::runtime::local::init(&config).expect("store init");
+        let signing =
+            crate::runtime::accounts::create_or_migrate_default_account(&config).expect("account");
+        seed_replica_farm(
+            &config,
+            signing
+                .account
+                .record
+                .public_identity
+                .public_key_hex
+                .as_str(),
+        );
+        let before = radroots_replica_sync_status(
+            &SqliteExecutor::open(&config.local.replica_db_path).expect("open replica"),
+        )
+        .expect("status before");
+
+        let view = push_with_publisher(&config, |identity, relays, event| {
+            let signed = signed_event(
+                identity,
+                WireEventParts {
+                    kind: event.draft.kind,
+                    content: event.draft.content.clone(),
+                    tags: event.draft.tags.clone(),
+                },
+            );
+            Ok(DirectRelayPublishReceipt {
+                event_id: signed.id.to_hex(),
+                created_at: u32::try_from(signed.created_at.as_secs()).unwrap_or(u32::MAX),
+                signature: signed.sig.to_string(),
+                event: signed,
+                target_relays: relays.to_vec(),
+                connected_relays: relays.to_vec(),
+                acknowledged_relays: relays.to_vec(),
+                failed_relays: Vec::new(),
+            })
+        })
+        .expect("sync push");
+        let after = radroots_replica_sync_status(
+            &SqliteExecutor::open(&config.local.replica_db_path).expect("open replica"),
+        )
+        .expect("status after");
+
+        assert!(before.pending_count > 0);
+        assert_eq!(view.state, "published");
+        assert_eq!(view.published_count, Some(before.pending_count));
+        assert_eq!(view.failed_count, Some(0));
+        assert_eq!(view.connected_relays, vec!["wss://relay.example.com"]);
+        assert_eq!(view.acknowledged_relays, vec!["wss://relay.example.com"]);
+        assert_eq!(after.pending_count, 0);
+    }
+
+    #[test]
+    fn sync_push_failed_publish_leaves_pending_state_retryable() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        crate::runtime::local::init(&config).expect("store init");
+        let signing =
+            crate::runtime::accounts::create_or_migrate_default_account(&config).expect("account");
+        seed_replica_farm(
+            &config,
+            signing
+                .account
+                .record
+                .public_identity
+                .public_key_hex
+                .as_str(),
+        );
+
+        let view = push_with_publisher(&config, |_, relays, _| {
+            Err(super::DirectRelayPublishError::Publish {
+                event_id: "0".repeat(64),
+                reason: "relay refused event".to_owned(),
+                target_relays: relays.to_vec(),
+                connected_relays: relays.to_vec(),
+                failed_relays: vec![DirectRelayFailure {
+                    relay: relays[0].clone(),
+                    reason: "relay refused event".to_owned(),
+                }],
+            })
+        })
+        .expect("sync push failure view");
+        let status = radroots_replica_sync_status(
+            &SqliteExecutor::open(&config.local.replica_db_path).expect("open replica"),
+        )
+        .expect("status");
+
+        assert_eq!(view.state, "unavailable");
+        assert_eq!(view.published_count, Some(0));
+        assert_eq!(view.failed_count, Some(1));
+        assert!(status.pending_count > 0);
     }
 
     #[test]
@@ -861,6 +1271,28 @@ mod tests {
             .expect("event builder")
             .sign_with_keys(identity.keys())
             .expect("signed event")
+    }
+
+    fn seed_replica_farm(config: &RuntimeConfig, pubkey: &str) {
+        let executor = SqliteExecutor::open(&config.local.replica_db_path).expect("open replica");
+        migrations::run_all_up(&executor).expect("migrations");
+        let _ = farm::create(
+            &executor,
+            &IFarmFields {
+                d_tag: FARM_D_TAG.to_owned(),
+                pubkey: pubkey.to_owned(),
+                name: "Local Farm".to_owned(),
+                about: Some("local replica farm".to_owned()),
+                website: None,
+                picture: None,
+                banner: None,
+                location_primary: None,
+                location_city: None,
+                location_region: None,
+                location_country: None,
+            },
+        )
+        .expect("farm");
     }
 
     fn identity(seed: u8) -> RadrootsIdentity {
