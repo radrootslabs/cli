@@ -1479,8 +1479,14 @@ mod tests {
         assert_eq!(detail["order_id"], "ord_missing");
         assert_eq!(detail["actions"][0], "radroots order list");
         assert_eq!(detail["actions"][1], "radroots basket create");
-        assert_eq!(envelope.next_actions[0].command, "radroots order list");
-        assert_eq!(envelope.next_actions[1].command, "radroots basket create");
+        assert_eq!(
+            envelope.next_actions[0].command.as_deref(),
+            Some("radroots order list")
+        );
+        assert_eq!(
+            envelope.next_actions[1].command.as_deref(),
+            Some("radroots basket create")
+        );
     }
 
     #[test]
@@ -1836,8 +1842,8 @@ mod tests {
             OperationContext::default().envelope_context("req_order_status"),
         );
         assert_eq!(
-            envelope.next_actions[0].command,
-            "radroots --relay wss://relay.example.com order status get ord_pending"
+            envelope.next_actions[0].command.as_deref(),
+            Some("radroots --relay wss://relay.example.com order status get ord_pending")
         );
     }
 
@@ -1867,8 +1873,8 @@ mod tests {
             "radroots --relay wss://relay.example.com order event list"
         );
         assert_eq!(
-            envelope.next_actions[0].command,
-            "radroots --relay wss://relay.example.com order event list"
+            envelope.next_actions[0].command.as_deref(),
+            Some("radroots --relay wss://relay.example.com order event list")
         );
     }
 
@@ -1901,7 +1907,10 @@ mod tests {
             envelope.errors[0].detail.as_ref().unwrap()["actions"][0],
             "radroots account create"
         );
-        assert_eq!(envelope.next_actions[0].command, "radroots account create");
+        assert_eq!(
+            envelope.next_actions[0].command.as_deref(),
+            Some("radroots account create")
+        );
     }
 
     #[test]
@@ -1935,8 +1944,8 @@ mod tests {
             "ord_missing"
         );
         assert_eq!(
-            envelope.next_actions[0].command,
-            "radroots order status get ord_missing"
+            envelope.next_actions[0].command.as_deref(),
+            Some("radroots order status get ord_missing")
         );
     }
 

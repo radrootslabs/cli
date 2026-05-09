@@ -124,7 +124,7 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false,
         None,
         Low,
-        false,
+        true,
         false
     ),
     operation!(
@@ -139,7 +139,7 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false,
         None,
         Low,
-        false,
+        true,
         false
     ),
     operation!(
@@ -154,7 +154,7 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false,
         None,
         Low,
-        false,
+        true,
         false
     ),
     operation!(
@@ -1435,6 +1435,9 @@ mod tests {
             .map(|operation| operation.operation_id)
             .collect::<BTreeSet<_>>();
         let expected = [
+            "health.status.get",
+            "health.check.run",
+            "config.get",
             "account.list",
             "relay.list",
             "sync.pull",

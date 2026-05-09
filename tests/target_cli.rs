@@ -407,6 +407,37 @@ fn assert_public_signer_session_binding_message(value: &Value) {
     );
 }
 
+fn assert_rpc_bearer_token_next_action(actions: &Value) {
+    let action = actions
+        .as_array()
+        .expect("next actions")
+        .iter()
+        .find(|action| action["env_var"] == "RADROOTS_RPC_BEARER_TOKEN")
+        .expect("rpc bearer token next action");
+
+    assert_eq!(action["kind"], "operator_config");
+    assert_eq!(action["label"], "configure rpc bearer token");
+    assert_eq!(action["command"], Value::Null);
+    assert_eq!(action["description"], "configure RADROOTS_RPC_BEARER_TOKEN");
+}
+
+fn assert_signer_session_next_action(actions: &Value) {
+    let action = actions
+        .as_array()
+        .expect("next actions")
+        .iter()
+        .find(|action| action["config_key"] == "signer.remote_nip46.signer_session_ref")
+        .expect("signer session next action");
+
+    assert_eq!(action["kind"], "operator_config");
+    assert_eq!(action["label"], "configure signer session binding");
+    assert_eq!(action["command"], Value::Null);
+    assert_eq!(
+        action["description"],
+        "configure signer.remote_nip46 signer_session_ref"
+    );
+}
+
 #[test]
 fn removed_global_flags_are_rejected_publicly() {
     for args in [
@@ -467,6 +498,42 @@ fn config_get_exposes_resolved_publish_state() {
         value["result"]["actions"][0],
         "configure RADROOTS_RPC_BEARER_TOKEN"
     );
+    assert_eq!(
+        value["result"]["actions"][1],
+        "configure signer.remote_nip46 signer_session_ref"
+    );
+    assert_rpc_bearer_token_next_action(&value["next_actions"]);
+    assert_signer_session_next_action(&value["next_actions"]);
+}
+
+#[test]
+fn config_get_radrootsd_missing_signer_binding_mirrors_operator_next_action() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
+
+    let mut command = sandbox.command();
+    command
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .args(["--format", "json", "config", "get"]);
+    let output = command.output().expect("run config get");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+
+    assert!(output.status.success());
+    assert_eq!(value["operation_id"], "config.get");
+    assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
+    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
+    assert_eq!(
+        value["result"]["actions"][0],
+        "configure signer.remote_nip46 signer_session_ref"
+    );
+    assert_eq!(
+        value["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .len(),
+        1
+    );
+    assert_signer_session_next_action(&value["next_actions"]);
 }
 
 #[test]
@@ -674,6 +741,17 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
         value["result"]["actions"][2],
         "configure RADROOTS_RPC_BEARER_TOKEN"
     );
+    assert_eq!(
+        value["result"]["actions"][3],
+        "configure signer.remote_nip46 signer_session_ref"
+    );
+    assert_eq!(value["next_actions"][0]["command"], "radroots store init");
+    assert_eq!(
+        value["next_actions"][1]["command"],
+        "radroots account create"
+    );
+    assert_rpc_bearer_token_next_action(&value["next_actions"]);
+    assert_signer_session_next_action(&value["next_actions"]);
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
@@ -731,6 +809,17 @@ fn health_check_exposes_publish_readiness() {
         value["result"]["actions"][2],
         "configure RADROOTS_RPC_BEARER_TOKEN"
     );
+    assert_eq!(
+        value["result"]["actions"][3],
+        "configure signer.remote_nip46 signer_session_ref"
+    );
+    assert_eq!(value["next_actions"][0]["command"], "radroots store init");
+    assert_eq!(
+        value["next_actions"][1]["command"],
+        "radroots account create"
+    );
+    assert_rpc_bearer_token_next_action(&value["next_actions"]);
+    assert_signer_session_next_action(&value["next_actions"]);
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
@@ -2027,6 +2116,22 @@ fn next_actions_mirror_result_actions_for_json_and_ndjson() {
         terminal["payload"]["next_actions"][0]["command"],
         "radroots store init"
     );
+
+    for args in [
+        &["--format", "ndjson", "config", "get"][..],
+        &["--format", "ndjson", "health", "status", "get"][..],
+        &["--format", "ndjson", "health", "check", "run"][..],
+    ] {
+        let daemon = RadrootsCliSandbox::new();
+        daemon.write_app_config("[publish]\nmode = \"radrootsd\"\n");
+        let output = daemon.command().args(args).output().expect("run ndjson");
+        let frames = ndjson_from_stdout(&output);
+        let terminal = frames.last().expect("terminal ndjson frame");
+
+        assert!(output.status.success(), "{args:?}");
+        assert_rpc_bearer_token_next_action(&terminal["payload"]["next_actions"]);
+        assert_signer_session_next_action(&terminal["payload"]["next_actions"]);
+    }
 }
 
 #[test]

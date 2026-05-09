@@ -153,10 +153,7 @@ fn next_actions_from_actions_value(actions_value: Option<&Value>) -> Vec<NextAct
         .filter_map(Value::as_str)
         .filter_map(next_action_from_action_string)
         .fold(Vec::<NextAction>::new(), |mut actions, action| {
-            if !actions
-                .iter()
-                .any(|existing| existing.command == action.command)
-            {
+            if !actions.contains(&action) {
                 actions.push(action);
             }
             actions
@@ -164,13 +161,38 @@ fn next_actions_from_actions_value(actions_value: Option<&Value>) -> Vec<NextAct
 }
 
 fn next_action_from_action_string(action: &str) -> Option<NextAction> {
+    let action = action.trim();
+    if action == "configure RADROOTS_RPC_BEARER_TOKEN" {
+        return Some(NextAction {
+            kind: NextActionKind::OperatorConfig,
+            label: "configure rpc bearer token".to_owned(),
+            command: None,
+            description: Some(action.to_owned()),
+            env_var: Some("RADROOTS_RPC_BEARER_TOKEN".to_owned()),
+            config_key: None,
+        });
+    }
+    if action == "configure signer.remote_nip46 signer_session_ref" {
+        return Some(NextAction {
+            kind: NextActionKind::OperatorConfig,
+            label: "configure signer session binding".to_owned(),
+            command: None,
+            description: Some(action.to_owned()),
+            env_var: None,
+            config_key: Some("signer.remote_nip46.signer_session_ref".to_owned()),
+        });
+    }
     let command = action.trim().strip_prefix("run ").unwrap_or(action).trim();
     if !command.starts_with("radroots ") {
         return None;
     }
     Some(NextAction {
+        kind: NextActionKind::CliCommand,
         label: next_action_label(command),
-        command: command.to_owned(),
+        command: Some(command.to_owned()),
+        description: None,
+        env_var: None,
+        config_key: None,
     })
 }
 
@@ -273,8 +295,23 @@ impl CliExitCode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NextAction {
+    pub kind: NextActionKind,
     pub label: String,
-    pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_var: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NextActionKind {
+    CliCommand,
+    OperatorConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -330,8 +367,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        CliExitCode, EnvelopeContext, NdjsonFrame, NdjsonFrameType, OUTPUT_SCHEMA_VERSION,
-        OutputEnvelope, OutputError,
+        CliExitCode, EnvelopeContext, NdjsonFrame, NdjsonFrameType, NextActionKind,
+        OUTPUT_SCHEMA_VERSION, OutputEnvelope, OutputError,
     };
 
     #[test]
@@ -400,10 +437,69 @@ mod tests {
         );
 
         assert_eq!(envelope.next_actions.len(), 2);
+        assert_eq!(envelope.next_actions[0].kind, NextActionKind::CliCommand);
         assert_eq!(envelope.next_actions[0].label, "order list");
-        assert_eq!(envelope.next_actions[0].command, "radroots order list");
+        assert_eq!(
+            envelope.next_actions[0].command.as_deref(),
+            Some("radroots order list")
+        );
+        assert_eq!(envelope.next_actions[1].kind, NextActionKind::CliCommand);
         assert_eq!(envelope.next_actions[1].label, "basket create");
-        assert_eq!(envelope.next_actions[1].command, "radroots basket create");
+        assert_eq!(
+            envelope.next_actions[1].command.as_deref(),
+            Some("radroots basket create")
+        );
+    }
+
+    #[test]
+    fn failure_envelope_derives_operator_config_next_actions() {
+        let mut error = OutputError::new(
+            "operation_unavailable",
+            "publish mode needs operator configuration",
+            CliExitCode::RuntimeUnavailable,
+        );
+        error.detail = Some(json!({
+            "actions": [
+                "configure RADROOTS_RPC_BEARER_TOKEN",
+                "configure signer.remote_nip46 signer_session_ref",
+                "configure RADROOTS_RPC_BEARER_TOKEN"
+            ]
+        }));
+        let envelope = OutputEnvelope::failure(
+            "config.get",
+            error,
+            EnvelopeContext::new("req_config", false),
+        );
+        let value = serde_json::to_value(&envelope).expect("serialize envelope");
+
+        assert_eq!(envelope.next_actions.len(), 2);
+        assert_eq!(
+            envelope.next_actions[0].kind,
+            NextActionKind::OperatorConfig
+        );
+        assert_eq!(envelope.next_actions[0].label, "configure rpc bearer token");
+        assert_eq!(envelope.next_actions[0].command, None);
+        assert_eq!(
+            envelope.next_actions[0].env_var.as_deref(),
+            Some("RADROOTS_RPC_BEARER_TOKEN")
+        );
+        assert_eq!(
+            envelope.next_actions[1].kind,
+            NextActionKind::OperatorConfig
+        );
+        assert_eq!(
+            envelope.next_actions[1].label,
+            "configure signer session binding"
+        );
+        assert_eq!(envelope.next_actions[1].command, None);
+        assert_eq!(
+            envelope.next_actions[1].config_key.as_deref(),
+            Some("signer.remote_nip46.signer_session_ref")
+        );
+        assert_eq!(value["next_actions"][0]["kind"], "operator_config");
+        assert_eq!(value["next_actions"][0]["command"], Value::Null);
+        assert_eq!(value["next_actions"][1]["kind"], "operator_config");
+        assert_eq!(value["next_actions"][1]["command"], Value::Null);
     }
 
     #[test]

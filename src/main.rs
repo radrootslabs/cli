@@ -629,7 +629,13 @@ fn human_actions(envelope: &OutputEnvelope) -> Vec<String> {
         actions = envelope
             .next_actions
             .iter()
-            .map(|action| action.command.clone())
+            .map(|action| {
+                action
+                    .command
+                    .clone()
+                    .or_else(|| action.description.clone())
+                    .unwrap_or_else(|| action.label.clone())
+            })
             .collect();
     }
     actions.into_iter().fold(Vec::new(), |mut unique, action| {
