@@ -86,8 +86,7 @@ use crate::domain::runtime::{
     OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView, OrderSettlementView,
     OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
     OrderStatusLifecycleReceiptView, OrderStatusLifecycleView, OrderStatusPaymentView,
-    OrderStatusRevisionView, OrderStatusView, OrderSubmitView, OrderSummaryView, OrderWatchView,
-    RelayFailureView,
+    OrderStatusRevisionView, OrderStatusView, OrderSubmitView, OrderSummaryView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -101,7 +100,7 @@ use crate::runtime_args::{
     OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftCreateArgs,
     OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
     OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderSettlementArgs,
-    OrderSettlementDecisionArg, OrderStatusArgs, OrderSubmitArgs, OrderWatchArgs, RecordLookupArgs,
+    OrderSettlementDecisionArg, OrderStatusArgs, OrderSubmitArgs, RecordLookupArgs,
 };
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
@@ -119,8 +118,6 @@ const ORDER_PAYMENT_SOURCE: &str = "direct Nostr relay payment publish · local 
 const ORDER_SETTLEMENT_SOURCE: &str = "direct Nostr relay settlement publish · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
 const ORDER_STATUS_SOURCE: &str = "direct Nostr relay status fetch · active order reducer";
-const ORDER_EVENT_WATCH_UNAVAILABLE_REASON: &str =
-    "relay-backed order event watch is not implemented";
 const ORDER_EVENT_LIST_RELAY_ACTION: &str =
     "radroots --relay wss://relay.example.com order event list";
 const ORDERS_DIR: &str = "orders/drafts";
@@ -708,64 +705,6 @@ pub fn submit(
         Ok(view) => Ok(view),
         Err(error) => Err(error),
     }
-}
-
-pub fn watch(
-    config: &RuntimeConfig,
-    args: &OrderWatchArgs,
-) -> Result<OrderWatchView, RuntimeError> {
-    if args.frames == Some(0) {
-        return Err(RuntimeError::Config(
-            "--frames must be greater than zero when provided".to_owned(),
-        ));
-    }
-
-    let file = draft_lookup_path(config, args.key.as_str());
-    if !file.exists() {
-        return Ok(OrderWatchView {
-            state: "missing".to_owned(),
-            source: ORDER_SOURCE.to_owned(),
-            order_id: args.key.clone(),
-            job_id: None,
-            interval_ms: args.interval_ms,
-            reason: Some(format!("order draft `{}` was not found", args.key)),
-            workflow: None,
-            frames: Vec::new(),
-            actions: vec!["radroots order list".to_owned()],
-        });
-    }
-
-    let loaded = match load_draft(file.as_path()) {
-        Ok(loaded) => loaded,
-        Err(reason) => {
-            return Ok(OrderWatchView {
-                state: "error".to_owned(),
-                source: ORDER_SOURCE.to_owned(),
-                order_id: args.key.clone(),
-                job_id: None,
-                interval_ms: args.interval_ms,
-                reason: Some(reason),
-                workflow: None,
-                frames: Vec::new(),
-                actions: Vec::new(),
-            });
-        }
-    };
-
-    Ok(OrderWatchView {
-        state: "unavailable".to_owned(),
-        source: ORDER_SOURCE.to_owned(),
-        order_id: loaded.document.order.order_id.clone(),
-        job_id: None,
-        interval_ms: args.interval_ms,
-        reason: Some(ORDER_EVENT_WATCH_UNAVAILABLE_REASON.to_owned()),
-        workflow: None,
-        frames: Vec::new(),
-        actions: vec![format!(
-            "radroots order get {}",
-            loaded.document.order.order_id
-        )],
-    })
 }
 
 pub fn event_list(

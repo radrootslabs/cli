@@ -2063,63 +2063,6 @@ impl OrderStatusView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct OrderSubmitWatchView {
-    pub submit: OrderSubmitView,
-    pub watch: OrderWatchView,
-}
-
-impl OrderSubmitWatchView {
-    pub fn disposition(&self) -> CommandDisposition {
-        let submit = self.submit.disposition();
-        if submit != CommandDisposition::Success {
-            return submit;
-        }
-        self.watch.disposition()
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct OrderWatchView {
-    pub state: String,
-    pub source: String,
-    pub order_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub job_id: Option<String>,
-    pub interval_ms: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workflow: Option<OrderWorkflowView>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub frames: Vec<OrderWatchFrameView>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub actions: Vec<String>,
-}
-
-impl OrderWatchView {
-    pub fn disposition(&self) -> CommandDisposition {
-        match self.state.as_str() {
-            "unconfigured" => CommandDisposition::Unconfigured,
-            "unavailable" => CommandDisposition::ExternalUnavailable,
-            "error" => CommandDisposition::InternalError,
-            _ => CommandDisposition::Success,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct OrderWatchFrameView {
-    pub sequence: usize,
-    pub observed_at_unix: u64,
-    pub state: String,
-    pub terminal: bool,
-    pub signer_mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct OrderWorkflowView {
     pub state: String,
     pub source: String,

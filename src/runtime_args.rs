@@ -325,13 +325,6 @@ pub struct OrderStatusArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderWatchArgs {
-    pub key: String,
-    pub frames: Option<usize>,
-    pub interval_ms: u64,
-}
-
-#[derive(Debug, Clone)]
 pub struct RecordLookupArgs {
     pub key: String,
 }
