@@ -2090,6 +2090,7 @@ dependencies = [
  "radroots_events",
  "radroots_events_codec",
  "radroots_identity",
+ "radroots_nostr",
  "radroots_trade",
  "reqwest",
  "serde",

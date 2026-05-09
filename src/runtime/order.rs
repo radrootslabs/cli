@@ -38,8 +38,7 @@ use radroots_events_codec::trade::{
     active_trade_event_context_from_tags, active_trade_fulfillment_update_event_build,
     active_trade_fulfillment_update_from_event, active_trade_order_cancel_event_build,
     active_trade_order_cancel_from_event, active_trade_order_decision_event_build,
-    active_trade_order_request_event_build, active_trade_order_request_from_event,
-    active_trade_order_revision_decision_event_build,
+    active_trade_order_request_from_event, active_trade_order_revision_decision_event_build,
     active_trade_order_revision_decision_from_event,
     active_trade_order_revision_proposal_event_build,
     active_trade_order_revision_proposal_from_event, active_trade_payment_recorded_event_build,
@@ -59,6 +58,10 @@ use radroots_replica_db_schema::nostr_event_state::{
 };
 use radroots_replica_db_schema::trade_product::{
     ITradeProductFieldsFilter, ITradeProductFindMany, TradeProduct,
+};
+use radroots_sdk::{
+    RadrootsSdkClient, RadrootsSdkConfig, SdkEnvironment, SdkPublishError, SdkPublishReceipt,
+    SdkRelayFailure, SdkTransportMode, SdkTransportReceipt, SignerConfig as SdkSignerConfig,
 };
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
@@ -9713,36 +9716,66 @@ fn publish_order_request(
         id: loaded.document.order.listing_event_id.clone(),
         relays: None,
     };
-    let parts = active_trade_order_request_event_build(&listing_event, &payload)
-        .map_err(|error| RuntimeError::Config(format!("encode order request event: {error}")))?;
-    let event_kind = parts.kind;
-    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let client = order_relay_publish_client(config)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            RuntimeError::Network(format!("build relay order submit runtime: {error}"))
+        })?;
+    let receipt = runtime
+        .block_on(client.trade().publish_order_request_with_identity(
+            &signing.identity,
+            &listing_event,
+            &payload,
+        ))
+        .map_err(map_sdk_order_submit_error)?;
 
-    Ok(published_order_submit_view(
-        config, loaded, args, event_kind, receipt,
-    ))
+    published_order_submit_view(config, loaded, args, receipt)
+}
+
+fn order_relay_publish_client(config: &RuntimeConfig) -> Result<RadrootsSdkClient, RuntimeError> {
+    let mut sdk_config = RadrootsSdkConfig::for_environment(SdkEnvironment::Custom);
+    sdk_config.transport = SdkTransportMode::RelayDirect;
+    sdk_config.signer = SdkSignerConfig::LocalIdentity;
+    sdk_config.relay.urls = config.relay.urls.clone();
+    RadrootsSdkClient::from_config(sdk_config)
+        .map_err(|error| RuntimeError::Config(format!("configure relay order submit: {error}")))
+}
+
+fn map_sdk_order_submit_error(error: SdkPublishError) -> RuntimeError {
+    let message = format!("relay order submit failed: {error}");
+    match error {
+        SdkPublishError::Config(_)
+        | SdkPublishError::Encode(_)
+        | SdkPublishError::UnsupportedTransport { .. }
+        | SdkPublishError::UnsupportedSignerMode { .. } => RuntimeError::Config(message),
+        SdkPublishError::Relay(_)
+        | SdkPublishError::RelaySetup { .. }
+        | SdkPublishError::RelayNotAcknowledged { .. }
+        | SdkPublishError::Radrootsd(_) => RuntimeError::Network(message),
+    }
 }
 
 fn published_order_submit_view(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
     args: &OrderSubmitArgs,
-    event_kind: u32,
-    receipt: DirectRelayPublishReceipt,
-) -> OrderSubmitView {
-    let DirectRelayPublishReceipt {
-        event: _,
+    receipt: SdkPublishReceipt,
+) -> Result<OrderSubmitView, RuntimeError> {
+    let SdkPublishReceipt {
         event_id,
-        created_at: _,
-        signature: _,
-        target_relays,
-        connected_relays,
-        acknowledged_relays,
-        failed_relays,
+        event_kind,
+        transport_receipt,
+        ..
     } = receipt;
+    let SdkTransportReceipt::RelayDirect(relay) = transport_receipt else {
+        return Err(RuntimeError::Config(
+            "relay order submit returned a non-relay transport receipt".to_owned(),
+        ));
+    };
 
-    OrderSubmitView {
+    Ok(OrderSubmitView {
         state: "submitted".to_owned(),
         source: ORDER_SUBMIT_SOURCE.to_owned(),
         order_id: loaded.document.order.order_id.clone(),
@@ -9753,14 +9786,14 @@ fn published_order_submit_view(
         buyer_account_id: loaded.document.buyer_account_id.clone(),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
-        event_id: Some(event_id),
-        event_kind: Some(event_kind),
+        event_id: event_id.or(Some(relay.event_id)),
+        event_kind: event_kind.or(Some(relay.event_kind)),
         dry_run: false,
         deduplicated: false,
-        target_relays,
-        connected_relays,
-        acknowledged_relays,
-        failed_relays: relay_failures(failed_relays),
+        target_relays: relay.target_relays,
+        connected_relays: relay.connected_relays,
+        acknowledged_relays: relay.acknowledged_relays,
+        failed_relays: sdk_relay_failures(relay.failed_relays),
         idempotency_key: args.idempotency_key.clone(),
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
         signer_session_id: None,
@@ -9769,7 +9802,7 @@ fn published_order_submit_view(
         job: None,
         issues: Vec::new(),
         actions: Vec::new(),
-    }
+    })
 }
 
 fn order_binding_error_view(
@@ -10067,6 +10100,16 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
         .map(|failure| RelayFailureView {
             relay: failure.relay,
             reason: failure.reason,
+        })
+        .collect()
+}
+
+fn sdk_relay_failures(failures: Vec<SdkRelayFailure>) -> Vec<RelayFailureView> {
+    failures
+        .into_iter()
+        .map(|failure| RelayFailureView {
+            relay: failure.relay_url,
+            reason: failure.error,
         })
         .collect()
 }
@@ -10371,7 +10414,7 @@ mod tests {
         order_history_from_receipt, order_payment_dry_run_view, order_payment_event_parts,
         order_payment_payload_from_status, order_payment_preflight_view_from_status,
         order_receipt_dry_run_view, order_receipt_event_parts, order_receipt_payload_from_status,
-        order_receipt_preflight_view_from_status, order_request_filter,
+        order_receipt_preflight_view_from_status, order_relay_publish_client, order_request_filter,
         order_revision_decision_event_parts, order_revision_decision_payload_from_proposal,
         order_revision_decision_preflight_view_from_status, order_revision_event_parts,
         order_revision_inventory_preflight_view, order_revision_payload_from_status,
@@ -10436,6 +10479,29 @@ mod tests {
         assert!(rendered.contains("kind = \"order_draft_v1\""));
         assert!(rendered.contains("order_id = \"ord_AAAAAAAAAAAAAAAAAAAAAg\""));
         assert!(rendered.contains("listing_event_id"));
+    }
+
+    #[test]
+    fn order_relay_publish_client_uses_configured_relay_and_local_identity() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://127.0.0.1:9001".to_owned()];
+
+        let client = order_relay_publish_client(&config).expect("relay order publish client");
+
+        assert_eq!(
+            client.transport(),
+            radroots_sdk::SdkTransportMode::RelayDirect
+        );
+        assert_eq!(client.signer(), radroots_sdk::SignerConfig::LocalIdentity);
+        match client.resolved_transport_target() {
+            radroots_sdk::SdkResolvedTransportTarget::RelayDirect { relay_urls } => {
+                assert_eq!(relay_urls.as_slice(), ["ws://127.0.0.1:9001"]);
+            }
+            radroots_sdk::SdkResolvedTransportTarget::Radrootsd { .. } => {
+                panic!("order submit must use relay direct transport");
+            }
+        }
     }
 
     #[test]
