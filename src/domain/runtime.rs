@@ -2921,6 +2921,8 @@ pub struct SyncActionView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub publish_plan: Option<SyncPublishPlanView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
@@ -2936,6 +2938,34 @@ impl SyncActionView {
             _ => CommandDisposition::Success,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncPublishPlanView {
+    pub selected_author: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub event_kinds: Vec<SyncPublishPlanKindView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<SyncPublishPlanAuthorView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncPublishPlanKindView {
+    pub kind: u32,
+    pub pending_count: usize,
+    pub publishable_count: usize,
+    pub skipped_count: usize,
+    pub unsupported_count: usize,
+    pub failed_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncPublishPlanAuthorView {
+    pub author: String,
+    pub eligibility: String,
+    pub pending_count: usize,
+    pub publishable_count: usize,
+    pub skipped_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
