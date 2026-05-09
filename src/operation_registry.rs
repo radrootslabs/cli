@@ -1094,12 +1094,12 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         "order_event_watch",
         "OrderEventWatchRequest",
         "OrderEventWatchResult",
-        "Stream order events.",
+        "Report deferred order event watch status.",
         Any,
         false,
         None,
         Low,
-        true,
+        false,
         false
     ),
 ];
@@ -1114,7 +1114,7 @@ pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
     match operation_id {
         "sync.pull" | "sync.push" | "sync.watch" | "market.refresh" | "farm.publish"
         | "listing.publish" | "listing.archive" | "order.submit" | "order.status.get"
-        | "order.event.list" | "order.event.watch" => NetworkRequirement::External {
+        | "order.event.list" => NetworkRequirement::External {
             dry_run_requires_network: false,
         },
         "order.accept"
@@ -1425,7 +1425,6 @@ mod tests {
             "basket.list",
             "order.list",
             "order.event.list",
-            "order.event.watch",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -1464,7 +1463,6 @@ mod tests {
             "order.receipt.record",
             "order.status.get",
             "order.event.list",
-            "order.event.watch",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

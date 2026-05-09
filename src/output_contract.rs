@@ -410,21 +410,21 @@ mod tests {
     fn ndjson_frames_serialize_one_json_object_per_line() {
         let frames = [
             NdjsonFrame::new(
-                "order.event.watch",
+                "sync.watch",
                 "req_watch",
                 0,
                 NdjsonFrameType::Started,
                 json!({ "state": "started" }),
             ),
             NdjsonFrame::new(
-                "order.event.watch",
+                "sync.watch",
                 "req_watch",
                 1,
                 NdjsonFrameType::Event,
                 json!({ "state": "submitted" }),
             ),
             NdjsonFrame::new(
-                "order.event.watch",
+                "sync.watch",
                 "req_watch",
                 2,
                 NdjsonFrameType::Completed,
@@ -440,7 +440,7 @@ mod tests {
         for line in rendered.lines() {
             let value: Value = serde_json::from_str(line).expect("line is json");
             assert_eq!(value["schema_version"], OUTPUT_SCHEMA_VERSION);
-            assert_eq!(value["operation_id"], "order.event.watch");
+            assert_eq!(value["operation_id"], "sync.watch");
             assert!(value["frame_type"].is_string());
         }
     }

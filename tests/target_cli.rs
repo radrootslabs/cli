@@ -2059,6 +2059,28 @@ fn unsupported_ndjson_returns_structured_invalid_input() {
     assert_eq!(frames[1]["frame_type"], "error");
     assert_eq!(frames[1]["errors"][0]["code"], "invalid_input");
     assert_eq!(frames[1]["errors"][0]["exit_code"], 2);
+
+    let watch_output = radroots()
+        .args([
+            "--format",
+            "ndjson",
+            "order",
+            "event",
+            "watch",
+            "ord_missing",
+        ])
+        .output()
+        .expect("run order event watch ndjson");
+
+    assert_eq!(watch_output.status.code(), Some(2));
+    let watch_frames = ndjson_from_stdout(&watch_output);
+    assert_eq!(watch_frames.len(), 2);
+    assert_eq!(watch_frames[0]["operation_id"], "order.event.watch");
+    assert_eq!(watch_frames[0]["frame_type"], "started");
+    assert_eq!(watch_frames[1]["operation_id"], "order.event.watch");
+    assert_eq!(watch_frames[1]["frame_type"], "error");
+    assert_eq!(watch_frames[1]["errors"][0]["code"], "invalid_input");
+    assert_eq!(watch_frames[1]["errors"][0]["exit_code"], 2);
 }
 
 #[test]
@@ -2432,19 +2454,6 @@ fn online_requires_relay_for_external_network_operations() {
             .as_slice(),
         ),
         (
-            "order.event.watch",
-            [
-                "--format",
-                "json",
-                "--online",
-                "order",
-                "event",
-                "watch",
-                "ord_missing",
-            ]
-            .as_slice(),
-        ),
-        (
             "order.cancel",
             [
                 "--format",
@@ -2562,6 +2571,39 @@ fn online_requires_relay_for_external_network_operations() {
                 .contains("requires at least one configured relay")
         );
     }
+}
+
+#[test]
+fn online_order_event_watch_returns_deferred_without_relay_preflight() {
+    let sandbox = RadrootsCliSandbox::new();
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--online",
+        "order",
+        "event",
+        "watch",
+        "ord_missing",
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "order.event.watch");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "not_implemented");
+    assert_eq!(value["errors"][0]["detail"]["state"], "not_implemented");
+    assert_eq!(value["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(
+        value["next_actions"][0]["command"],
+        "radroots order status get ord_missing"
+    );
+    assert!(
+        !value["errors"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("configured relay")
+    );
+    assert_no_daemon_runtime_reference(&value, &["order", "event", "watch"]);
 }
 
 #[test]
