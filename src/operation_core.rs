@@ -139,6 +139,7 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
         let actions = health_actions(self.config, store.state.as_str(), &account, &publish);
         json_operation_result::<HealthCheckRunResult>(json!({
             "state": state,
+            "account_resolution": account_resolution_view(&account),
             "checks": {
                 "workspace": {
                     "state": "ready",

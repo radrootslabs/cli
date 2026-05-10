@@ -617,8 +617,8 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         "Update general listing fields.",
         Seller,
         true,
-        Conditional,
-        Medium,
+        Required,
+        High,
         false,
         true
     ),
@@ -1412,6 +1412,7 @@ mod tests {
             "farm.publish",
             "listing.rebind",
             "listing.publish",
+            "listing.update",
             "listing.archive",
             "order.submit",
             "order.rebind",

@@ -679,6 +679,11 @@ fn health_check_exposes_publish_readiness() {
 
     assert_eq!(value["operation_id"], "health.check.run");
     assert_eq!(value["result"]["state"], "needs_attention");
+    assert_eq!(
+        value["result"]["account_resolution"]["status"],
+        "unresolved"
+    );
+    assert_eq!(value["result"]["account_resolution"]["source"], "none");
     assert_eq!(value["result"]["checks"]["publish"]["mode"], "radrootsd");
     assert_eq!(value["result"]["checks"]["publish"]["state"], "unavailable");
     assert_eq!(value["result"]["checks"]["publish"]["executable"], false);
@@ -722,6 +727,19 @@ fn health_check_marks_relay_publish_ready_with_secret_backed_local_account() {
 
     assert_eq!(value["operation_id"], "health.check.run");
     assert_eq!(value["result"]["state"], "ready");
+    assert_eq!(value["result"]["account_resolution"]["status"], "resolved");
+    assert_eq!(
+        value["result"]["account_resolution"]["source"],
+        "default_account"
+    );
+    assert_eq!(
+        value["result"]["account_resolution"]["resolved_account"]["custody"],
+        "secret_backed"
+    );
+    assert_eq!(
+        value["result"]["account_resolution"]["resolved_account"]["write_capable"],
+        true
+    );
     assert_eq!(value["result"]["checks"]["publish"]["mode"], "nostr_relay");
     assert_eq!(value["result"]["checks"]["publish"]["state"], "ready");
     assert_eq!(value["result"]["checks"]["publish"]["executable"], true);
