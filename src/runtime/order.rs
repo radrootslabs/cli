@@ -78,6 +78,7 @@ use radroots_trade::order::{
     reduce_active_order_events, reduce_listing_inventory_accounting,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::domain::runtime::{
     OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
@@ -123,6 +124,8 @@ const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected sell
 const ORDER_STATUS_SOURCE: &str = "direct Nostr relay status fetch · active order reducer";
 const ORDER_EVENT_LIST_RELAY_ACTION: &str =
     "radroots --relay wss://relay.example.com order event list";
+const ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
+const ORDER_BUYER_ACTOR_SOURCE_REBIND: &str = "order_rebind";
 const ORDERS_DIR: &str = "orders/drafts";
 
 static ORDER_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -133,10 +136,9 @@ struct OrderDraftDocument {
     version: u32,
     kind: String,
     order: OrderDraft,
+    buyer_actor: OrderDraftBuyerActor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     listing_lookup: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    buyer_account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +164,14 @@ struct OrderDraft {
 struct OrderDraftItem {
     bin_id: String,
     bin_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderDraftBuyerActor {
+    account_id: String,
+    pubkey: String,
+    source: String,
 }
 
 #[derive(Debug, Clone)]
@@ -289,14 +299,8 @@ pub fn scaffold(
         explicit_listing_addr.as_deref(),
     )?;
 
-    let selected_account = accounts::resolve_account(config)?;
-    let buyer_account_id = selected_account
-        .as_ref()
-        .map(|account| account.record.account_id.to_string());
-    let buyer_pubkey = selected_account
-        .as_ref()
-        .map(|account| account.record.public_identity.public_key_hex.clone())
-        .unwrap_or_default();
+    let buyer_actor = resolve_initial_buyer_actor(config)?;
+    let buyer_pubkey = buyer_actor.pubkey.clone();
 
     let listing_addr = resolved_listing
         .as_ref()
@@ -342,8 +346,8 @@ pub fn scaffold(
             items,
             economics,
         },
+        buyer_actor,
         listing_lookup,
-        buyer_account_id,
     };
     save_draft(file.as_path(), &document)?;
 
@@ -373,14 +377,8 @@ pub fn scaffold_preflight(
         explicit_listing_addr.as_deref(),
     )?;
 
-    let selected_account = accounts::resolve_account(config)?;
-    let buyer_account_id = selected_account
-        .as_ref()
-        .map(|account| account.record.account_id.to_string());
-    let buyer_pubkey = selected_account
-        .as_ref()
-        .map(|account| account.record.public_identity.public_key_hex.clone())
-        .unwrap_or_default();
+    let buyer_actor = resolve_initial_buyer_actor(config)?;
+    let buyer_pubkey = buyer_actor.pubkey.clone();
 
     let listing_addr = resolved_listing
         .as_ref()
@@ -423,8 +421,8 @@ pub fn scaffold_preflight(
             items,
             economics,
         },
+        buyer_actor,
         listing_lookup,
-        buyer_account_id,
     };
 
     let mut view: OrderNewView = view_from_loaded(LoadedOrderDraft {
@@ -455,6 +453,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             listing_event_id: None,
             buyer_account_id: None,
             buyer_pubkey: None,
+            buyer_actor_source: None,
             seller_pubkey: None,
             ready_for_submit: false,
             items: Vec::new(),
@@ -484,6 +483,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             listing_event_id: None,
             buyer_account_id: None,
             buyer_pubkey: None,
+            buyer_actor_source: None,
             seller_pubkey: None,
             ready_for_submit: false,
             items: Vec::new(),
@@ -568,6 +568,7 @@ pub fn submit(
             listing_event_id: None,
             buyer_account_id: None,
             buyer_pubkey: None,
+            buyer_actor_source: None,
             seller_pubkey: None,
             event_id: None,
             event_kind: None,
@@ -604,6 +605,7 @@ pub fn submit(
                 listing_event_id: None,
                 buyer_account_id: None,
                 buyer_pubkey: None,
+                buyer_actor_source: None,
                 seller_pubkey: None,
                 event_id: None,
                 event_kind: None,
@@ -640,8 +642,9 @@ pub fn submit(
             listing_lookup: loaded.document.listing_lookup.clone(),
             listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
             listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
-            buyer_account_id: loaded.document.buyer_account_id.clone(),
+            buyer_account_id: buyer_account_id(&loaded.document),
             buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+            buyer_actor_source: buyer_actor_source(&loaded.document),
             seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
             event_id: None,
             event_kind: None,
@@ -8741,8 +8744,9 @@ fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr,
         listing_event_id,
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
         seller_pubkey,
         ready_for_submit,
         items: loaded
@@ -8783,7 +8787,9 @@ fn summary_from_loaded(loaded: &LoadedOrderDraft) -> OrderSummaryView {
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr,
         listing_event_id,
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_account_id: buyer_account_id(&loaded.document),
+        buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
         item_count: loaded.document.order.items.len(),
         economics: loaded.document.order.economics.clone(),
         updated_at_unix: loaded.updated_at_unix,
@@ -8807,6 +8813,8 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
         listing_addr: None,
         listing_event_id: None,
         buyer_account_id: None,
+        buyer_pubkey: None,
+        buyer_actor_source: None,
         item_count: 0,
         economics: None,
         updated_at_unix: modified_unix(path).unwrap_or_default(),
@@ -8946,15 +8954,48 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
         )),
     }
 
-    if document
-        .buyer_account_id
-        .as_deref()
-        .is_none_or(|value| value.trim().is_empty())
-        && document.order.buyer_pubkey.trim().is_empty()
+    if document.buyer_actor.account_id.trim().is_empty() {
+        issues.push(issue(
+            "buyer_actor.account_id",
+            "buyer_actor account_id is required before order submit",
+        ));
+    }
+    if document.buyer_actor.pubkey.trim().is_empty() {
+        issues.push(issue(
+            "buyer_actor.pubkey",
+            "buyer_actor pubkey is required before order submit",
+        ));
+    }
+    if document.buyer_actor.source.trim().is_empty() {
+        issues.push(issue(
+            "buyer_actor.source",
+            "buyer_actor source is required before order submit",
+        ));
+    } else if !matches!(
+        document.buyer_actor.source.as_str(),
+        ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT | ORDER_BUYER_ACTOR_SOURCE_REBIND
+    ) {
+        issues.push(issue(
+            "buyer_actor.source",
+            format!(
+                "unsupported buyer_actor source `{}`",
+                document.buyer_actor.source
+            ),
+        ));
+    }
+    if document.order.buyer_pubkey.trim().is_empty() {
+        issues.push(issue(
+            "order.buyer_pubkey",
+            "order buyer_pubkey is required before order submit",
+        ));
+    } else if !document
+        .order
+        .buyer_pubkey
+        .eq_ignore_ascii_case(document.buyer_actor.pubkey.as_str())
     {
         issues.push(issue(
-            "buyer_account_id",
-            "buyer account or buyer_pubkey is required before order submit",
+            "order.buyer_pubkey",
+            "order buyer_pubkey must match buyer_actor pubkey",
         ));
     }
 
@@ -8989,8 +9030,18 @@ fn actions_for_document(
         "edit {} and fill the remaining draft fields",
         file.display()
     ));
-    if document.buyer_account_id.is_none() && document.order.buyer_pubkey.trim().is_empty() {
-        actions.push("radroots account create".to_owned());
+    if document.buyer_actor.account_id.trim().is_empty()
+        || document.buyer_actor.pubkey.trim().is_empty()
+        || document.order.buyer_pubkey.trim().is_empty()
+        || !document
+            .order
+            .buyer_pubkey
+            .eq_ignore_ascii_case(document.buyer_actor.pubkey.as_str())
+    {
+        actions.push(format!(
+            "radroots order rebind {} <selector>",
+            document.order.order_id
+        ));
     }
     if document.order.items.is_empty()
         || issues
@@ -9000,6 +9051,38 @@ fn actions_for_document(
         actions.push(format!("radroots order get {}", document.order.order_id));
     }
     actions
+}
+
+fn resolve_initial_buyer_actor(
+    config: &RuntimeConfig,
+) -> Result<OrderDraftBuyerActor, RuntimeError> {
+    let resolution = accounts::resolve_account_resolution(config)?;
+    let Some(account) = resolution.resolved_account else {
+        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
+            accounts::unresolved_account_reason(config)?,
+            json!({
+                "buyer_actor_source": ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT,
+                "actions": [
+                    "radroots account create",
+                    "radroots account import <path>",
+                ],
+            }),
+        )
+        .into());
+    };
+    Ok(OrderDraftBuyerActor {
+        account_id: account.record.account_id.to_string(),
+        pubkey: account.record.public_identity.public_key_hex,
+        source: ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
+    })
+}
+
+fn buyer_account_id(document: &OrderDraftDocument) -> Option<String> {
+    non_empty_string(document.buyer_actor.account_id.clone())
+}
+
+fn buyer_actor_source(document: &OrderDraftDocument) -> Option<String> {
+    non_empty_string(document.buyer_actor.source.clone())
 }
 
 fn order_submit_listing_freshness_view(
@@ -9246,8 +9329,9 @@ fn order_submit_unconfigured_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: None,
@@ -9283,8 +9367,9 @@ fn order_submit_invalid_quantity_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: None,
@@ -9553,8 +9638,9 @@ fn order_submit_deduplicated_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: Some(request.request_event_id.clone()),
         event_kind: Some(KIND_TRADE_ORDER_REQUEST),
@@ -9591,8 +9677,9 @@ fn order_submit_dry_run_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: None,
@@ -9635,8 +9722,9 @@ fn order_submit_invalid_existing_request_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: Some(KIND_TRADE_ORDER_REQUEST),
@@ -9767,8 +9855,9 @@ fn published_order_submit_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: event_id.or(Some(relay.event_id)),
         event_kind: event_kind.or(Some(relay.event_kind)),
@@ -9811,8 +9900,9 @@ fn order_binding_error_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
-        buyer_account_id: loaded.document.buyer_account_id.clone(),
+        buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: None,
@@ -10327,6 +10417,7 @@ impl From<OrderGetView> for OrderNewView {
             listing_event_id: view.listing_event_id,
             buyer_account_id: view.buyer_account_id,
             buyer_pubkey: view.buyer_pubkey,
+            buyer_actor_source: view.buyer_actor_source,
             seller_pubkey: view.seller_pubkey,
             ready_for_submit: view.ready_for_submit,
             items: view.items,
@@ -10383,8 +10474,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        LoadedOrderDraft, ORDER_DRAFT_KIND, ORDER_SUBMIT_SOURCE, OrderDraft, OrderDraftDocument,
-        OrderDraftItem, OrderStatusContext, ResolvedOrderEconomicsProduct, ResolvedOrderListing,
+        LoadedOrderDraft, ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT, ORDER_DRAFT_KIND,
+        ORDER_SUBMIT_SOURCE, OrderDraft, OrderDraftBuyerActor, OrderDraftDocument, OrderDraftItem,
+        OrderStatusContext, ResolvedOrderEconomicsProduct, ResolvedOrderListing,
         ResolvedSellerOrderRequest, SellerOrderRequestResolution,
         accepted_order_decision_payload_from_request, active_request_record_from_resolved,
         canonical_order_request_payload_from_loaded, collect_issues,
@@ -10456,8 +10548,12 @@ mod tests {
                     2,
                 )),
             },
+            buyer_actor: OrderDraftBuyerActor {
+                account_id: "acct_demo".to_owned(),
+                pubkey: "a".repeat(64),
+                source: ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
+            },
             listing_lookup: Some("fresh-eggs".to_owned()),
-            buyer_account_id: Some("acct_demo".to_owned()),
         };
 
         let rendered = toml::to_string_pretty(&document).expect("render draft");
@@ -10661,8 +10757,12 @@ mod tests {
                     2,
                 )),
             },
+            buyer_actor: OrderDraftBuyerActor {
+                account_id: "acct_demo".to_owned(),
+                pubkey: "a".repeat(64),
+                source: ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
+            },
             listing_lookup: Some("fresh-eggs".to_owned()),
-            buyer_account_id: Some("acct_demo".to_owned()),
         };
 
         let inspection = inspect_document(&document);
@@ -15832,8 +15932,12 @@ mod tests {
                         2,
                     )),
                 },
+                buyer_actor: OrderDraftBuyerActor {
+                    account_id: "acct_test".to_owned(),
+                    pubkey: fixture.buyer_pubkey.clone(),
+                    source: ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
+                },
                 listing_lookup: Some("test-listing".to_owned()),
-                buyer_account_id: Some("acct_test".to_owned()),
             },
         }
     }

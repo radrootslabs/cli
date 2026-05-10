@@ -3906,9 +3906,15 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         quote_economics.clone()
     );
     let order_draft = fs::read_to_string(order_file).expect("read order draft");
+    assert!(order_draft.contains("[buyer_actor]"));
+    assert!(order_draft.contains("source = \"resolved_account\""));
     assert!(order_draft.contains("[order.economics]"));
     assert!(order_draft.contains("pricing_basis = \"listing_event\""));
     assert_eq!(quote["result"]["order"]["buyer_account_id"], account_id);
+    assert_eq!(
+        quote["result"]["order"]["buyer_actor_source"],
+        "resolved_account"
+    );
     assert_eq!(
         quote["result"]["order"]["listing_event_id"],
         listing_event_id
@@ -3927,6 +3933,10 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(
         orders["result"]["orders"][0]["buyer_account_id"],
         account_id
+    );
+    assert_eq!(
+        orders["result"]["orders"][0]["buyer_actor_source"],
+        "resolved_account"
     );
     assert_eq!(
         orders["result"]["orders"][0]["economics"],

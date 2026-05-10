@@ -17,7 +17,6 @@ use crate::operation_adapter::{
     BasketValidateResult, OperationAdapterError, OperationRequest, OperationRequestData,
     OperationRequestPayload, OperationResult, OperationResultData, OperationService,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime_args::{OrderDraftAdjustmentArgs, OrderDraftCreateArgs};
 
@@ -468,7 +467,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
             .expect("validated basket has one item")
             .clone();
         if request.context.dry_run {
-            let order = map_runtime(crate::runtime::order::scaffold_preflight(
+            let order = crate::runtime::order::scaffold_preflight(
                 self.config,
                 &OrderDraftCreateArgs {
                     listing: item.listing.clone(),
@@ -477,7 +476,10 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
                     bin_count: Some(item.quantity),
                     adjustments: order_adjustments_from_basket(&loaded.document),
                 },
-            ))?;
+            )
+            .map_err(|error| {
+                OperationAdapterError::runtime_failure(request.operation_id(), error)
+            })?;
             return json_operation_result::<BasketQuoteCreateResult>(json!({
                 "state": "dry_run",
                 "source": BASKET_QUOTE_SOURCE,
@@ -489,7 +491,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
             }));
         }
 
-        let order = map_runtime(crate::runtime::order::scaffold(
+        let order = crate::runtime::order::scaffold(
             self.config,
             &OrderDraftCreateArgs {
                 listing: item.listing.clone(),
@@ -498,7 +500,8 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
                 bin_count: Some(item.quantity),
                 adjustments: order_adjustments_from_basket(&loaded.document),
             },
-        ))?;
+        )
+        .map_err(|error| OperationAdapterError::runtime_failure(request.operation_id(), error))?;
         let quote_economics = order.economics.clone();
         let quote = BasketQuote {
             quote_id: quote_economics
@@ -1032,10 +1035,6 @@ where
     OperationResult::new(R::from_value(value))
 }
 
-fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
-    result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
-}
-
 fn string_input<P>(request: &OperationRequest<P>, key: &str) -> Option<String>
 where
     P: OperationRequestPayload + OperationRequestData,
@@ -1071,6 +1070,7 @@ mod tests {
         BasketListRequest, BasketQuoteCreateRequest, BasketValidateRequest, OperationAdapter,
         OperationContext, OperationData, OperationRequest,
     };
+    use crate::runtime::accounts;
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
@@ -1242,6 +1242,7 @@ mod tests {
     fn basket_quote_create_materializes_order_draft() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
+        accounts::create_or_migrate_default_account(&config).expect("create buyer account");
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_quote");
         add_listing_item(&service, "basket_quote");
@@ -1265,13 +1266,36 @@ mod tests {
                 .unwrap()
                 .starts_with("ord_")
         );
-        assert!(PathBuf::from(envelope.result["quote"]["order_file"].as_str().unwrap()).exists());
+        assert!(
+            envelope.result["order"]["buyer_account_id"]
+                .as_str()
+                .expect("buyer account id")
+                .len()
+                > 8
+        );
+        assert!(
+            envelope.result["order"]["buyer_pubkey"]
+                .as_str()
+                .expect("buyer pubkey")
+                .len()
+                == 64
+        );
+        assert_eq!(
+            envelope.result["order"]["buyer_actor_source"],
+            "resolved_account"
+        );
+        let order_file = PathBuf::from(envelope.result["quote"]["order_file"].as_str().unwrap());
+        assert!(order_file.exists());
+        let draft = std::fs::read_to_string(order_file).expect("read order draft");
+        assert!(draft.contains("[buyer_actor]"));
+        assert!(draft.contains("source = \"resolved_account\""));
     }
 
     #[test]
     fn basket_quote_create_dry_run_skips_order_draft() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
+        accounts::create_or_migrate_default_account(&config).expect("create buyer account");
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_dry_run");
         add_listing_item(&service, "basket_dry_run");
@@ -1293,7 +1317,33 @@ mod tests {
         assert_eq!(envelope.dry_run, true);
         assert_eq!(envelope.result["state"], "dry_run");
         assert_eq!(envelope.result["order"]["state"], "dry_run");
+        assert_eq!(
+            envelope.result["order"]["buyer_actor_source"],
+            "resolved_account"
+        );
         assert!(!PathBuf::from(envelope.result["order"]["file"].as_str().unwrap()).exists());
+    }
+
+    #[test]
+    fn basket_quote_create_requires_resolved_buyer_account() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(BasketOperationService::new(&config));
+        create_basket(&service, "basket_no_buyer");
+        add_listing_item(&service, "basket_no_buyer");
+
+        let quote = OperationRequest::new(
+            OperationContext::default(),
+            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_no_buyer")])),
+        )
+        .expect("basket quote request");
+        let error = service.execute(quote).expect_err("missing buyer account");
+
+        let output_error = error.to_output_error();
+        assert_eq!(output_error.code, "account_unresolved");
+        let detail = output_error.detail.expect("account detail");
+        assert_eq!(detail["buyer_actor_source"], "resolved_account");
+        assert_eq!(detail["actions"][0], "radroots account create");
     }
 
     fn create_basket(service: &OperationAdapter<BasketOperationService<'_>>, basket_id: &str) {

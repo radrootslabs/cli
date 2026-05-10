@@ -1164,6 +1164,8 @@ pub struct OrderNewView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_actor_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     pub ready_for_submit: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1204,6 +1206,8 @@ pub struct OrderGetView {
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_actor_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     pub ready_for_submit: bool,
@@ -1270,6 +1274,8 @@ pub struct OrderSubmitView {
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_actor_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2225,6 +2231,10 @@ pub struct OrderSummaryView {
     pub listing_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_actor_source: Option<String>,
     pub item_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub economics: Option<RadrootsTradeOrderEconomics>,
