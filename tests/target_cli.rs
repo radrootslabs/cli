@@ -3819,6 +3819,39 @@ fn rewrite_order_bin(sandbox: &RadrootsCliSandbox, order_id: &str, bin_id: &str)
     fs::write(path, updated).expect("rewrite order draft bin");
 }
 
+fn rewrite_order_buyer_actor_pubkey(sandbox: &RadrootsCliSandbox, order_id: &str, pubkey: &str) {
+    let path = sandbox
+        .root()
+        .join("data/apps/cli/orders/drafts")
+        .join(format!("{order_id}.toml"));
+    let contents = fs::read_to_string(&path).expect("read order draft");
+    let mut in_buyer_actor = false;
+    let mut replaced = false;
+    let updated = contents
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('[') {
+                in_buyer_actor = trimmed == "[buyer_actor]";
+            }
+            if in_buyer_actor && trimmed.starts_with("pubkey =") {
+                replaced = true;
+                format!("{}pubkey = \"{}\"", line_indent(line), pubkey)
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(replaced, "buyer_actor pubkey field");
+    fs::write(path, format!("{updated}\n")).expect("rewrite order draft buyer actor");
+}
+
+fn line_indent(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    &line[..line.len() - trimmed.len()]
+}
+
 #[test]
 fn buyer_target_flow_acceptance_uses_target_operations() {
     let sandbox = RadrootsCliSandbox::new();
@@ -4027,6 +4060,174 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         !serde_json::to_string(&watch)
             .expect("watch json")
             .contains("local order drafts")
+    );
+}
+
+#[test]
+fn order_get_and_list_report_missing_bound_buyer_account() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "missing_buyer_account");
+
+    let ready = sandbox.json_success(&["--format", "json", "order", "get", order_id.as_str()]);
+    let account_id = ready["result"]["buyer_account_id"]
+        .as_str()
+        .expect("buyer account id");
+    assert_eq!(ready["result"]["state"], "ready");
+    assert_eq!(ready["result"]["buyer_account_id"], account_id);
+    assert_eq!(ready["result"]["buyer_custody"], "secret_backed");
+    assert_eq!(ready["result"]["buyer_write_capable"], true);
+
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "remove",
+        account_id,
+    ]);
+
+    let missing = sandbox.json_success(&["--format", "json", "order", "get", order_id.as_str()]);
+    assert_eq!(missing["operation_id"], "order.get");
+    assert_eq!(missing["result"]["state"], "draft");
+    assert_eq!(missing["result"]["ready_for_submit"], false);
+    assert_eq!(missing["result"]["buyer_account_id"], account_id);
+    assert_eq!(missing["result"]["buyer_custody"], Value::Null);
+    assert!(
+        missing["result"]["issues"]
+            .as_array()
+            .expect("issues")
+            .iter()
+            .any(|issue| issue["code"] == "account_unresolved")
+    );
+    assert!(
+        missing["result"]["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|action| action == "radroots account import <path>")
+    );
+    assert!(
+        missing["result"]["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|action| action
+                == &Value::String(format!("radroots order rebind {order_id} <selector>")))
+    );
+
+    let list = sandbox.json_success(&["--format", "json", "order", "list"]);
+    assert_eq!(list["result"]["state"], "degraded");
+    assert_eq!(list["result"]["orders"][0]["ready_for_submit"], false);
+    assert!(
+        list["result"]["orders"][0]["issues"]
+            .as_array()
+            .expect("issues")
+            .iter()
+            .any(|issue| issue["code"] == "account_unresolved")
+    );
+}
+
+#[test]
+fn order_get_marks_watch_only_bound_buyer_unready() {
+    let sandbox = RadrootsCliSandbox::new();
+    let public_identity = identity_public(92);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "order-watch-only-buyer", &public_identity);
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("watch account id");
+    assert_eq!(imported["result"]["account"]["custody"], "watch_only");
+
+    seed_orderable_listing(&sandbox, LISTING_ADDR);
+    sandbox.json_success(&["--format", "json", "basket", "create", "watch_buyer"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "watch_buyer",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "watch_buyer",
+    ]);
+    let order_id = quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id");
+
+    let get = sandbox.json_success(&["--format", "json", "order", "get", order_id]);
+    assert_eq!(get["result"]["state"], "draft");
+    assert_eq!(get["result"]["ready_for_submit"], false);
+    assert_eq!(get["result"]["buyer_account_id"], account_id);
+    assert_eq!(get["result"]["buyer_custody"], "watch_only");
+    assert_eq!(get["result"]["buyer_write_capable"], false);
+    assert!(
+        get["result"]["issues"]
+            .as_array()
+            .expect("issues")
+            .iter()
+            .any(|issue| issue["code"] == "account_watch_only")
+    );
+    assert!(
+        get["result"]["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|action| action
+                == &Value::String(format!(
+                    "radroots account attach-secret {account_id} <path>"
+                )))
+    );
+}
+
+#[test]
+fn order_get_marks_bound_buyer_pubkey_mismatch_unready() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "mismatched_buyer_actor");
+    let other_pubkey = identity_public(93).public_key_hex;
+    rewrite_order_buyer_actor_pubkey(&sandbox, order_id.as_str(), other_pubkey.as_str());
+
+    let get = sandbox.json_success(&["--format", "json", "order", "get", order_id.as_str()]);
+    assert_eq!(get["result"]["state"], "draft");
+    assert_eq!(get["result"]["ready_for_submit"], false);
+    assert_eq!(get["result"]["buyer_custody"], "secret_backed");
+    assert_eq!(get["result"]["buyer_write_capable"], true);
+    assert!(
+        get["result"]["issues"]
+            .as_array()
+            .expect("issues")
+            .iter()
+            .any(|issue| issue["code"] == "account_mismatch")
+    );
+    assert!(
+        get["result"]["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|action| action
+                == &Value::String(format!("radroots order rebind {order_id} <selector>")))
     );
 }
 

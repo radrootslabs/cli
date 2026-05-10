@@ -1166,6 +1166,10 @@ pub struct OrderNewView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_actor_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_custody: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_write_capable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     pub ready_for_submit: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1208,6 +1212,10 @@ pub struct OrderGetView {
     pub buyer_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_actor_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_custody: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_write_capable: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     pub ready_for_submit: bool,
@@ -1276,6 +1284,10 @@ pub struct OrderSubmitView {
     pub buyer_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_actor_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_custody: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_write_capable: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2235,6 +2247,10 @@ pub struct OrderSummaryView {
     pub buyer_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_actor_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_custody: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_write_capable: Option<bool>,
     pub item_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub economics: Option<RadrootsTradeOrderEconomics>,

@@ -351,11 +351,14 @@ pub fn scaffold(
     };
     save_draft(file.as_path(), &document)?;
 
-    let mut view: OrderNewView = view_from_loaded(LoadedOrderDraft {
-        file,
-        updated_at_unix: now_unix(),
-        document,
-    })
+    let mut view: OrderNewView = view_from_loaded(
+        config,
+        LoadedOrderDraft {
+            file,
+            updated_at_unix: now_unix(),
+            document,
+        },
+    )?
     .into();
     view.actions
         .insert(0, format!("radroots order get {}", view.order_id));
@@ -425,11 +428,14 @@ pub fn scaffold_preflight(
         listing_lookup,
     };
 
-    let mut view: OrderNewView = view_from_loaded(LoadedOrderDraft {
-        file,
-        updated_at_unix: now_unix(),
-        document,
-    })
+    let mut view: OrderNewView = view_from_loaded(
+        config,
+        LoadedOrderDraft {
+            file,
+            updated_at_unix: now_unix(),
+            document,
+        },
+    )?
     .into();
     view.state = "dry_run".to_owned();
     view.actions
@@ -454,6 +460,8 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             buyer_account_id: None,
             buyer_pubkey: None,
             buyer_actor_source: None,
+            buyer_custody: None,
+            buyer_write_capable: None,
             seller_pubkey: None,
             ready_for_submit: false,
             items: Vec::new(),
@@ -471,7 +479,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
     }
 
     match load_draft(file.as_path()) {
-        Ok(loaded) => Ok(view_from_loaded(loaded)),
+        Ok(loaded) => view_from_loaded(config, loaded),
         Err(reason) => Ok(OrderGetView {
             state: "error".to_owned(),
             source: ORDER_SOURCE.to_owned(),
@@ -484,6 +492,8 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             buyer_account_id: None,
             buyer_pubkey: None,
             buyer_actor_source: None,
+            buyer_custody: None,
+            buyer_write_capable: None,
             seller_pubkey: None,
             ready_for_submit: false,
             items: Vec::new(),
@@ -518,7 +528,7 @@ pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
             continue;
         }
         match load_draft(path.as_path()) {
-            Ok(loaded) => orders.push(summary_from_loaded(&loaded)),
+            Ok(loaded) => orders.push(summary_from_loaded(config, &loaded)?),
             Err(reason) => orders.push(summary_for_invalid_file(path.as_path(), reason)),
         }
     }
@@ -532,7 +542,10 @@ pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
 
     let state = if orders.is_empty() {
         "empty"
-    } else if orders.iter().any(|order| order.state == "error") {
+    } else if orders
+        .iter()
+        .any(|order| order.state == "error" || !order.ready_for_submit)
+    {
         "degraded"
     } else {
         "ready"
@@ -569,6 +582,8 @@ pub fn submit(
             buyer_account_id: None,
             buyer_pubkey: None,
             buyer_actor_source: None,
+            buyer_custody: None,
+            buyer_write_capable: None,
             seller_pubkey: None,
             event_id: None,
             event_kind: None,
@@ -606,6 +621,8 @@ pub fn submit(
                 buyer_account_id: None,
                 buyer_pubkey: None,
                 buyer_actor_source: None,
+                buyer_custody: None,
+                buyer_write_capable: None,
                 seller_pubkey: None,
                 event_id: None,
                 event_kind: None,
@@ -645,6 +662,8 @@ pub fn submit(
             buyer_account_id: buyer_account_id(&loaded.document),
             buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
             buyer_actor_source: buyer_actor_source(&loaded.document),
+            buyer_custody: None,
+            buyer_write_capable: None,
             seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
             event_id: None,
             event_kind: None,
@@ -8723,19 +8742,24 @@ fn decimal_from_adjustment(value: &str, field: &str) -> Result<RadrootsCoreDecim
     Ok(parsed)
 }
 
-fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
+fn view_from_loaded(
+    config: &RuntimeConfig,
+    loaded: LoadedOrderDraft,
+) -> Result<OrderGetView, RuntimeError> {
     let OrderInspection {
         state,
         ready_for_submit,
         listing_addr,
         listing_event_id,
         seller_pubkey,
+        buyer_custody,
+        buyer_write_capable,
         issues,
-    } = inspect_document(&loaded.document);
+    } = inspect_document(config, &loaded.document)?;
 
     let actions = actions_for_document(&loaded.document, loaded.file.as_path(), issues.as_slice());
 
-    OrderGetView {
+    Ok(OrderGetView {
         state,
         source: ORDER_SOURCE.to_owned(),
         lookup: loaded.document.order.order_id.clone(),
@@ -8747,6 +8771,8 @@ fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody,
+        buyer_write_capable,
         seller_pubkey,
         ready_for_submit,
         items: loaded
@@ -8766,20 +8792,25 @@ fn view_from_loaded(loaded: LoadedOrderDraft) -> OrderGetView {
         reason: None,
         issues,
         actions,
-    }
+    })
 }
 
-fn summary_from_loaded(loaded: &LoadedOrderDraft) -> OrderSummaryView {
+fn summary_from_loaded(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+) -> Result<OrderSummaryView, RuntimeError> {
     let OrderInspection {
         state,
         ready_for_submit,
         listing_addr,
         listing_event_id,
         seller_pubkey: _,
+        buyer_custody,
+        buyer_write_capable,
         issues,
-    } = inspect_document(&loaded.document);
+    } = inspect_document(config, &loaded.document)?;
 
-    OrderSummaryView {
+    Ok(OrderSummaryView {
         id: loaded.document.order.order_id.clone(),
         state,
         ready_for_submit,
@@ -8790,12 +8821,14 @@ fn summary_from_loaded(loaded: &LoadedOrderDraft) -> OrderSummaryView {
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody,
+        buyer_write_capable,
         item_count: loaded.document.order.items.len(),
         economics: loaded.document.order.economics.clone(),
         updated_at_unix: loaded.updated_at_unix,
         job: None,
         issues,
-    }
+    })
 }
 
 fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
@@ -8815,6 +8848,8 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
         buyer_account_id: None,
         buyer_pubkey: None,
         buyer_actor_source: None,
+        buyer_custody: None,
+        buyer_write_capable: None,
         item_count: 0,
         economics: None,
         updated_at_unix: modified_unix(path).unwrap_or_default(),
@@ -8823,7 +8858,10 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
     }
 }
 
-fn inspect_document(document: &OrderDraftDocument) -> OrderInspection {
+fn inspect_document(
+    config: &RuntimeConfig,
+    document: &OrderDraftDocument,
+) -> Result<OrderInspection, RuntimeError> {
     let listing_addr = non_empty_string(document.order.listing_addr.clone());
     let listing_event_id = non_empty_string(document.order.listing_event_id.clone());
     let parsed_listing_addr = listing_addr
@@ -8834,7 +8872,9 @@ fn inspect_document(document: &OrderDraftDocument) -> OrderInspection {
             .as_ref()
             .map(|listing| listing.seller_pubkey.clone())
     });
-    let issues = collect_issues(document);
+    let mut issues = collect_issues(document);
+    let buyer_readiness = inspect_buyer_actor_readiness(config, document)?;
+    issues.extend(buyer_readiness.issues);
     let ready_for_submit = issues.is_empty();
     let state = if ready_for_submit {
         "ready".to_owned()
@@ -8842,14 +8882,86 @@ fn inspect_document(document: &OrderDraftDocument) -> OrderInspection {
         "draft".to_owned()
     };
 
-    OrderInspection {
+    Ok(OrderInspection {
         state,
         ready_for_submit,
         listing_addr,
         listing_event_id,
         seller_pubkey,
+        buyer_custody: buyer_readiness
+            .account
+            .as_ref()
+            .map(|account| account.custody.as_str().to_owned()),
+        buyer_write_capable: buyer_readiness
+            .account
+            .as_ref()
+            .map(|account| account.write_capable),
         issues,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct OrderBuyerActorReadiness {
+    account: Option<accounts::AccountRecordView>,
+    issues: Vec<OrderIssueView>,
+}
+
+fn inspect_buyer_actor_readiness(
+    config: &RuntimeConfig,
+    document: &OrderDraftDocument,
+) -> Result<OrderBuyerActorReadiness, RuntimeError> {
+    let account_id = document.buyer_actor.account_id.trim();
+    let buyer_pubkey = document.buyer_actor.pubkey.trim();
+    if account_id.is_empty() || buyer_pubkey.is_empty() {
+        return Ok(OrderBuyerActorReadiness {
+            account: None,
+            issues: Vec::new(),
+        });
     }
+
+    let snapshot = accounts::snapshot(config)?;
+    let Some(account) = snapshot
+        .accounts
+        .into_iter()
+        .find(|account| account.record.account_id.as_str() == account_id)
+    else {
+        return Ok(OrderBuyerActorReadiness {
+            account: None,
+            issues: vec![issue_with_code(
+                "account_unresolved",
+                "buyer_actor.account_id",
+                format!(
+                    "order buyer_actor account_id `{account_id}` is not present in the local account store"
+                ),
+            )],
+        });
+    };
+
+    let account_pubkey = account.record.public_identity.public_key_hex.as_str();
+    let mut issues = Vec::new();
+    if !account_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
+        issues.push(issue_with_code(
+            "account_mismatch",
+            "buyer_actor.pubkey",
+            format!(
+                "order buyer_actor pubkey `{buyer_pubkey}` does not match local account `{account_id}` pubkey `{account_pubkey}`"
+            ),
+        ));
+    }
+    if !account.write_capable {
+        issues.push(issue_with_code(
+            "account_watch_only",
+            "buyer_actor.account_id",
+            format!(
+                "order buyer_actor account `{account_id}` is watch_only and cannot sign until a matching secret is attached"
+            ),
+        ));
+    }
+
+    Ok(OrderBuyerActorReadiness {
+        account: Some(account),
+        issues,
+    })
 }
 
 fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
@@ -9043,6 +9155,32 @@ fn actions_for_document(
             document.order.order_id
         ));
     }
+    if issues
+        .iter()
+        .any(|issue| issue.code == "account_unresolved")
+    {
+        actions.push("radroots account import <path>".to_owned());
+        actions.push(format!(
+            "radroots order rebind {} <selector>",
+            document.order.order_id
+        ));
+    }
+    if issues
+        .iter()
+        .any(|issue| issue.code == "account_watch_only")
+    {
+        actions.push(format!(
+            "radroots account attach-secret {} <path>",
+            document.buyer_actor.account_id
+        ));
+        actions.push(format!("radroots order get {}", document.order.order_id));
+    }
+    if issues.iter().any(|issue| issue.code == "account_mismatch") {
+        actions.push(format!(
+            "radroots order rebind {} <selector>",
+            document.order.order_id
+        ));
+    }
     if document.order.items.is_empty()
         || issues
             .iter()
@@ -9050,7 +9188,13 @@ fn actions_for_document(
     {
         actions.push(format!("radroots order get {}", document.order.order_id));
     }
-    actions
+    let mut deduped = Vec::new();
+    for action in actions {
+        if !deduped.contains(&action) {
+            deduped.push(action);
+        }
+    }
+    deduped
 }
 
 fn resolve_initial_buyer_actor(
@@ -9332,6 +9476,8 @@ fn order_submit_unconfigured_view(
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody: None,
+        buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: None,
@@ -9370,6 +9516,8 @@ fn order_submit_invalid_quantity_view(
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody: None,
+        buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: None,
@@ -9641,6 +9789,8 @@ fn order_submit_deduplicated_view(
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody: None,
+        buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: Some(request.request_event_id.clone()),
         event_kind: Some(KIND_TRADE_ORDER_REQUEST),
@@ -9680,6 +9830,8 @@ fn order_submit_dry_run_view(
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody: None,
+        buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: None,
@@ -9725,6 +9877,8 @@ fn order_submit_invalid_existing_request_view(
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody: None,
+        buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: Some(KIND_TRADE_ORDER_REQUEST),
@@ -9858,6 +10012,8 @@ fn published_order_submit_view(
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody: None,
+        buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: event_id.or(Some(relay.event_id)),
         event_kind: event_kind.or(Some(relay.event_kind)),
@@ -9903,6 +10059,8 @@ fn order_binding_error_view(
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody: None,
+        buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
         event_kind: None,
@@ -10402,6 +10560,8 @@ struct OrderInspection {
     listing_addr: Option<String>,
     listing_event_id: Option<String>,
     seller_pubkey: Option<String>,
+    buyer_custody: Option<String>,
+    buyer_write_capable: Option<bool>,
     issues: Vec<OrderIssueView>,
 }
 
@@ -10418,6 +10578,8 @@ impl From<OrderGetView> for OrderNewView {
             buyer_account_id: view.buyer_account_id,
             buyer_pubkey: view.buyer_pubkey,
             buyer_actor_source: view.buyer_actor_source,
+            buyer_custody: view.buyer_custody,
+            buyer_write_capable: view.buyer_write_capable,
             seller_pubkey: view.seller_pubkey,
             ready_for_submit: view.ready_for_submit,
             items: view.items,
@@ -10738,6 +10900,13 @@ mod tests {
 
     #[test]
     fn order_draft_requires_listing_event_id_for_submit_readiness() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let buyer = accounts::create_or_migrate_default_account(&config)
+            .expect("buyer account")
+            .account;
+        let buyer_account_id = buyer.record.account_id.to_string();
+        let buyer_pubkey = buyer.record.public_identity.public_key_hex;
         let document = OrderDraftDocument {
             version: 1,
             kind: ORDER_DRAFT_KIND.to_owned(),
@@ -10745,7 +10914,7 @@ mod tests {
                 order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
                 listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
                 listing_event_id: String::new(),
-                buyer_pubkey: "a".repeat(64),
+                buyer_pubkey: buyer_pubkey.clone(),
                 seller_pubkey: "deadbeef".to_owned(),
                 items: vec![OrderDraftItem {
                     bin_id: "bin-1".to_owned(),
@@ -10758,14 +10927,14 @@ mod tests {
                 )),
             },
             buyer_actor: OrderDraftBuyerActor {
-                account_id: "acct_demo".to_owned(),
-                pubkey: "a".repeat(64),
+                account_id: buyer_account_id,
+                pubkey: buyer_pubkey,
                 source: ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
             },
             listing_lookup: Some("fresh-eggs".to_owned()),
         };
 
-        let inspection = inspect_document(&document);
+        let inspection = inspect_document(&config, &document).expect("inspect order draft");
         assert_eq!(inspection.state, "draft");
         assert!(!inspection.ready_for_submit);
         assert!(
