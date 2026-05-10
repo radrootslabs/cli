@@ -4126,6 +4126,20 @@ fn order_get_and_list_report_missing_bound_buyer_account() {
             .iter()
             .any(|issue| issue["code"] == "account_unresolved")
     );
+
+    let (submit_output, submit) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "order",
+        "submit",
+        order_id.as_str(),
+    ]);
+    assert!(!submit_output.status.success());
+    assert_eq!(submit_output.status.code(), Some(5));
+    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["errors"][0]["code"], "account_unresolved");
+    assert_eq!(submit["errors"][0]["detail"]["order_id"], order_id);
 }
 
 #[test]
@@ -4199,6 +4213,17 @@ fn order_get_marks_watch_only_bound_buyer_unready() {
                 == &Value::String(format!(
                     "radroots account attach-secret {account_id} <path>"
                 )))
+    );
+
+    let (submit_output, submit) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+    assert!(!submit_output.status.success());
+    assert_eq!(submit_output.status.code(), Some(7));
+    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["errors"][0]["code"], "account_watch_only");
+    assert_eq!(
+        submit["errors"][0]["detail"]["order_buyer_account_id"],
+        account_id
     );
 }
 
@@ -4577,6 +4602,29 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     let second_account_id = second["result"]["account"]["id"]
         .as_str()
         .expect("second account id");
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "account",
+        "selection",
+        "update",
+        second_account_id,
+    ]);
+    let (drift_output, drift) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+    assert!(!drift_output.status.success());
+    assert_eq!(drift_output.status.code(), Some(8));
+    assert_eq!(drift["operation_id"], "order.submit");
+    assert_eq!(drift["errors"][0]["code"], "network_unavailable");
+    assert!(
+        drift["errors"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains(
+                "order submit requires at least one configured relay before publish preflight"
+            )
+    );
+
     let (output, mismatch) = sandbox.json_output(&[
         "--format",
         "json",

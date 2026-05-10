@@ -684,6 +684,8 @@ pub fn submit(
         });
     }
 
+    validate_bound_order_buyer_account(config, &loaded)?;
+
     if let Some(view) = order_submit_listing_freshness_view(config, &loaded, args)? {
         return Ok(view);
     }
@@ -691,10 +693,7 @@ pub fn submit(
         return Ok(view);
     }
 
-    let signing = match resolve_local_order_signing_identity(
-        config,
-        loaded.document.order.buyer_pubkey.as_str(),
-    ) {
+    let signing = match resolve_local_order_signing_identity(config, &loaded) {
         Ok(signing) => signing,
         Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => return Ok(order_binding_error_view(config, &loaded, args, error)),
@@ -10081,16 +10080,154 @@ fn order_binding_error_view(
     }
 }
 
+fn validate_bound_order_buyer_account(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+) -> Result<accounts::AccountRecordView, RuntimeError> {
+    let document = &loaded.document;
+    let account_id = document.buyer_actor.account_id.trim();
+    let buyer_pubkey = document.buyer_actor.pubkey.trim();
+    let snapshot = accounts::snapshot(config)?;
+    let Some(account) = snapshot
+        .accounts
+        .iter()
+        .find(|account| account.record.account_id.as_str() == account_id)
+        .cloned()
+    else {
+        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
+            format!(
+                "order-bound buyer account `{account_id}` is not present in the local account store"
+            ),
+            order_buyer_failure_detail(
+                loaded,
+                json!({
+                    "actions": [
+                        "radroots account import <path>",
+                        format!("radroots order rebind {} <selector>", document.order.order_id),
+                        format!("radroots order get {}", document.order.order_id),
+                    ],
+                }),
+            ),
+        )
+        .into());
+    };
+
+    let account_pubkey = account.record.public_identity.public_key_hex.as_str();
+    if !account_pubkey.eq_ignore_ascii_case(buyer_pubkey)
+        || !document
+            .order
+            .buyer_pubkey
+            .eq_ignore_ascii_case(buyer_pubkey)
+    {
+        return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+            format!(
+                "order-bound buyer account `{account_id}` does not match order buyer pubkey `{buyer_pubkey}`"
+            ),
+            order_buyer_failure_detail(
+                loaded,
+                json!({
+                    "attempted_buyer_account_id": account_id,
+                    "attempted_buyer_pubkey": account_pubkey,
+                    "actions": [
+                        format!("radroots order rebind {} <selector>", document.order.order_id),
+                        format!("radroots order get {}", document.order.order_id),
+                    ],
+                }),
+            ),
+        )
+        .into());
+    }
+
+    if !account.write_capable {
+        return Err(accounts::AccountRuntimeFailure::watch_only_with_detail(
+            account_id,
+            order_buyer_failure_detail(
+                loaded,
+                json!({
+                    "actions": [
+                        format!("radroots account attach-secret {account_id} <path>"),
+                        format!("radroots order get {}", document.order.order_id),
+                    ],
+                }),
+            ),
+        )
+        .into());
+    }
+
+    if let Some(selector) = config.account.selector.as_deref() {
+        let attempted = accounts::resolve_account_selector(config, selector).map_err(|_| {
+            accounts::AccountRuntimeFailure::unresolved_with_detail(
+                format!("account override `{selector}` did not resolve to a local buyer account"),
+                order_buyer_failure_detail(
+                    loaded,
+                    json!({
+                        "attempted_buyer_account_id": selector,
+                        "actions": [
+                            "radroots account list",
+                            format!("radroots order get {}", document.order.order_id),
+                        ],
+                    }),
+                ),
+            )
+        })?;
+        if attempted.record.account_id.as_str() != account_id {
+            let attempted_pubkey = attempted.record.public_identity.public_key_hex.as_str();
+            return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+                format!(
+                    "account override `{}` cannot retarget order `{}` bound to buyer account `{account_id}`",
+                    attempted.record.account_id, document.order.order_id
+                ),
+                order_buyer_failure_detail(
+                    loaded,
+                    json!({
+                        "attempted_buyer_account_id": attempted.record.account_id.to_string(),
+                        "attempted_buyer_pubkey": attempted_pubkey,
+                        "actions": [
+                            format!("radroots --account-id {account_id} order submit {}", document.order.order_id),
+                            format!("radroots order rebind {} <selector>", document.order.order_id),
+                            format!("radroots order get {}", document.order.order_id),
+                        ],
+                    }),
+                ),
+            )
+            .into());
+        }
+    }
+
+    Ok(account)
+}
+
+fn order_buyer_failure_detail(
+    loaded: &LoadedOrderDraft,
+    mut extra: serde_json::Value,
+) -> serde_json::Value {
+    let mut detail = json!({
+        "buyer_actor_source": loaded.document.buyer_actor.source.as_str(),
+        "order_buyer_account_id": loaded.document.buyer_actor.account_id.as_str(),
+        "order_buyer_pubkey": loaded.document.buyer_actor.pubkey.as_str(),
+        "order_file": loaded.file.display().to_string(),
+        "order_id": loaded.document.order.order_id.as_str(),
+    });
+    if let (Some(detail), Some(extra)) = (detail.as_object_mut(), extra.as_object_mut()) {
+        for (key, value) in std::mem::take(extra) {
+            detail.insert(key, value);
+        }
+    }
+    detail
+}
+
 fn resolve_local_order_signing_identity(
     config: &RuntimeConfig,
-    buyer_pubkey: &str,
+    loaded: &LoadedOrderDraft,
 ) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
         return Err(ActorWriteBindingError::Unconfigured(
             "order submit requires signer mode `local`".to_owned(),
         ));
     }
-    let signing = accounts::resolve_local_signing_identity(config)
+    let account_id = loaded.document.buyer_actor.account_id.trim();
+    let buyer_pubkey = loaded.document.buyer_actor.pubkey.trim();
+    let signing = accounts::resolve_local_signing_identity_for_account(config, account_id)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -10100,9 +10237,22 @@ fn resolve_local_order_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch(format!(
-                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
-            )),
+            accounts::AccountRuntimeFailure::mismatch_with_detail(
+                format!(
+                    "account mismatch: order-bound buyer account `{account_id}` pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
+                ),
+                order_buyer_failure_detail(
+                    loaded,
+                    json!({
+                        "attempted_buyer_account_id": signing.account.record.account_id.to_string(),
+                        "attempted_buyer_pubkey": selected_pubkey,
+                        "actions": [
+                            format!("radroots order rebind {} <selector>", loaded.document.order.order_id),
+                            format!("radroots order get {}", loaded.document.order.order_id),
+                        ],
+                    }),
+                ),
+            ),
         ));
     }
     Ok(signing)
