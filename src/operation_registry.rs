@@ -1358,7 +1358,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 70);
+        assert_eq!(OPERATION_REGISTRY.len(), 71);
     }
 
     #[test]
