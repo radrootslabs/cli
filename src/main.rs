@@ -42,7 +42,9 @@ use crate::operation_registry::{
 };
 use crate::operation_runtime::RuntimeOperationService;
 use crate::output_contract::OutputEnvelope;
-use crate::runtime::config::{PublishMode, RuntimeConfig, SignerBackend};
+use crate::runtime::config::{
+    PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
+};
 use crate::runtime::logging::initialize_logging;
 use crate::runtime_args::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
 use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
@@ -483,7 +485,7 @@ fn validate_publish_mode_contract(
         && requires_nostr_relay_publish_mode(spec.operation_id)
     {
         let message = format!(
-            "`{}` cannot run with publish mode `radrootsd`; radrootsd publish transport is only implemented for farm and listing publish operations",
+            "`{}` cannot run with publish mode `radrootsd`; {RADROOTSD_PUBLISH_DEFERRED_REASON}",
             spec.cli_path
         );
         let actions = nostr_relay_publish_mode_recovery_actions(spec.operation_id);
@@ -512,10 +514,25 @@ fn validate_publish_mode_contract(
 }
 
 fn nostr_relay_publish_mode_recovery_actions(operation_id: &str) -> Vec<String> {
-    if operation_id == "sync.push" {
-        vec!["radroots --publish-mode nostr_relay sync push".to_owned()]
-    } else {
-        Vec::new()
+    match operation_id {
+        "farm.publish" => vec![
+            "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish"
+                .to_owned(),
+        ],
+        "listing.publish" => vec![format!(
+            "radroots --publish-mode nostr_relay --relay wss://relay.example.com {}",
+            "listing publish <file>"
+        )],
+        "listing.update" => vec![format!(
+            "radroots --publish-mode nostr_relay --relay wss://relay.example.com {}",
+            "listing update <file>"
+        )],
+        "listing.archive" => vec![format!(
+            "radroots --publish-mode nostr_relay --relay wss://relay.example.com {}",
+            "listing archive <file>"
+        )],
+        "sync.push" => vec!["radroots --publish-mode nostr_relay sync push".to_owned()],
+        _ => Vec::new(),
     }
 }
 

@@ -31,7 +31,7 @@ use crate::runtime::accounts::{
     unresolved_account_reason,
 };
 use crate::runtime::config::{
-    PublishMode, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend,
+    PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
 };
 use crate::runtime::logging::LoggingState;
 use crate::runtime_args::LocalExportFormatArg;
@@ -201,6 +201,7 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
                 "store_path": self.config.account.store_path.display().to_string(),
                 "secrets_dir": self.config.account.secrets_dir.display().to_string(),
             },
+            "account_resolution": account_resolution_view(&account),
             "signer": {
                 "mode": self.config.signer.backend.as_str(),
             },
@@ -814,45 +815,12 @@ fn nostr_relay_publish_readiness(
     ("ready", true, None)
 }
 
-fn radrootsd_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
-    if config.rpc.bridge_bearer_token.is_none() {
-        return (
-            "unconfigured",
-            false,
-            Some(
-                "radrootsd publish requires bridge bearer token configuration from RADROOTS_RPC_BEARER_TOKEN"
-                    .to_owned(),
-            ),
-        );
-    }
-
-    if !radrootsd_signer_session_binding_configured(config) {
-        return (
-            "unconfigured",
-            false,
-            Some(
-                "radrootsd publish requires a signer.remote_nip46 capability binding with signer_session_ref for config and health readiness"
-                    .to_owned(),
-            ),
-        );
-    }
-
+fn radrootsd_publish_readiness(_config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
     (
-        "ready",
-        true,
-        Some(
-            "radrootsd bridge endpoint, bridge auth, and signer-session binding are configured; live bridge readiness is verified when publish runs"
-                .to_owned(),
-        ),
+        "unavailable",
+        false,
+        Some(RADROOTSD_PUBLISH_DEFERRED_REASON.to_owned()),
     )
-}
-
-fn radrootsd_signer_session_binding_configured(config: &RuntimeConfig) -> bool {
-    config
-        .capability_binding(SIGNER_REMOTE_NIP46_CAPABILITY)
-        .and_then(|binding| binding.signer_session_ref.as_deref())
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
 }
 
 fn health_status_state(store_state: &str, publish: &PublishRuntimeView) -> &'static str {
@@ -941,15 +909,10 @@ fn publish_recovery_actions(
             }
         }
         PublishMode::Radrootsd => {
-            if config.rpc.bridge_bearer_token.is_none() {
-                push_unique(&mut actions, "configure RADROOTS_RPC_BEARER_TOKEN");
-            }
-            if !radrootsd_signer_session_binding_configured(config) {
-                push_unique(
-                    &mut actions,
-                    "configure signer.remote_nip46 signer_session_ref",
-                );
-            }
+            push_unique(
+                &mut actions,
+                "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+            );
         }
     }
     actions

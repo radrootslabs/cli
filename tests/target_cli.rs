@@ -1,7 +1,6 @@
 mod support;
 
 use std::fs;
-use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
@@ -9,7 +8,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use radroots_events::RadrootsNostrEventPtr;
-use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
 use radroots_events::trade::{
     RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
 };
@@ -36,191 +34,6 @@ use support::{
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
 const SYNC_PUSH_FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
-
-struct JsonRpcRequest {
-    headers: String,
-    body: Value,
-}
-
-struct OneShotJsonRpcServer {
-    endpoint: String,
-    requests: Receiver<JsonRpcRequest>,
-    handle: JoinHandle<()>,
-}
-
-impl OneShotJsonRpcServer {
-    fn listing_publish() -> Self {
-        Self::listing_publish_response(json!({
-            "jsonrpc": "2.0",
-            "id": "radroots-sdk-listing-publish",
-            "result": {
-                "deduplicated": false,
-                "job": {
-                    "job_id": "job_listing_publish_test",
-                    "command": "bridge.listing.publish",
-                    "status": "published",
-                    "terminal": true,
-                    "recovered_after_restart": false,
-                    "signer_mode": "nip46",
-                    "signer_session_id": "session_test",
-                    "event_kind": 30402,
-                    "event_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-                    "event_addr": null,
-                    "relay_count": 2,
-                    "acknowledged_relay_count": 1
-                }
-            }
-        }))
-    }
-
-    fn farm_publish() -> Self {
-        Self::jsonrpc_sequence(vec![
-            json!({
-                "jsonrpc": "2.0",
-                "id": "radroots-sdk-profile-publish",
-                "result": {
-                    "deduplicated": false,
-                    "job": {
-                        "job_id": "job_profile_publish_test",
-                        "command": "bridge.profile.publish",
-                        "status": "published",
-                        "terminal": true,
-                        "recovered_after_restart": false,
-                        "signer_mode": "nip46",
-                        "signer_session_id": "session_test",
-                        "event_kind": 0,
-                        "event_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                        "event_addr": null,
-                        "relay_count": 2,
-                        "acknowledged_relay_count": 2
-                    }
-                }
-            }),
-            json!({
-                "jsonrpc": "2.0",
-                "id": "radroots-sdk-farm-publish",
-                "result": {
-                    "deduplicated": false,
-                    "job": {
-                        "job_id": "job_farm_publish_test",
-                        "command": "bridge.farm.publish",
-                        "status": "published",
-                        "terminal": true,
-                        "recovered_after_restart": false,
-                        "signer_mode": "nip46",
-                        "signer_session_id": "session_test",
-                        "event_kind": KIND_FARM,
-                        "event_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                        "event_addr": format!("{KIND_FARM}:daemon_test:radrootsd-farm"),
-                        "relay_count": 2,
-                        "acknowledged_relay_count": 1
-                    }
-                }
-            }),
-        ])
-    }
-
-    fn listing_publish_error(message: &str) -> Self {
-        Self::listing_publish_response(json!({
-            "jsonrpc": "2.0",
-            "id": "radroots-sdk-listing-publish",
-            "error": {
-                "code": -32000,
-                "message": message
-            }
-        }))
-    }
-
-    fn listing_publish_response(response: Value) -> Self {
-        Self::jsonrpc_sequence(vec![response])
-    }
-
-    fn jsonrpc_sequence(responses: Vec<Value>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake radrootsd");
-        let endpoint = format!(
-            "http://{}/jsonrpc",
-            listener.local_addr().expect("fake radrootsd addr")
-        );
-        let (tx, requests) = mpsc::channel();
-        let handle = thread::spawn(move || {
-            for response in responses {
-                let (mut stream, _) = listener.accept().expect("accept fake radrootsd request");
-                let request = read_jsonrpc_request(&mut stream);
-                tx.send(request).expect("send fake radrootsd request");
-                let response = response.to_string();
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                    response.len(),
-                    response
-                )
-                .expect("write fake radrootsd response");
-            }
-        });
-        Self {
-            endpoint,
-            requests,
-            handle,
-        }
-    }
-
-    fn take_request(self) -> JsonRpcRequest {
-        self.take_requests(1)
-            .into_iter()
-            .next()
-            .expect("one fake radrootsd request")
-    }
-
-    fn take_requests(self, count: usize) -> Vec<JsonRpcRequest> {
-        let request = (0..count)
-            .map(|_| {
-                self.requests
-                    .recv_timeout(Duration::from_secs(5))
-                    .expect("fake radrootsd request")
-            })
-            .collect::<Vec<_>>();
-        self.handle.join().expect("fake radrootsd join");
-        request
-    }
-}
-
-fn read_jsonrpc_request(stream: &mut TcpStream) -> JsonRpcRequest {
-    let mut bytes = Vec::new();
-    let mut buffer = [0_u8; 1024];
-    loop {
-        let count = stream.read(&mut buffer).expect("read fake radrootsd");
-        assert!(count > 0, "fake radrootsd request ended before headers");
-        bytes.extend_from_slice(&buffer[..count]);
-        if let Some(header_end) = find_header_end(&bytes) {
-            let headers = String::from_utf8_lossy(&bytes[..header_end]).to_string();
-            let content_length = content_length(&headers);
-            let body_start = header_end + 4;
-            while bytes.len() < body_start + content_length {
-                let count = stream.read(&mut buffer).expect("read fake radrootsd body");
-                assert!(count > 0, "fake radrootsd request ended before body");
-                bytes.extend_from_slice(&buffer[..count]);
-            }
-            let body = serde_json::from_slice(&bytes[body_start..body_start + content_length])
-                .expect("fake radrootsd json body");
-            return JsonRpcRequest { headers, body };
-        }
-    }
-}
-
-fn find_header_end(bytes: &[u8]) -> Option<usize> {
-    bytes.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-fn content_length(headers: &str) -> usize {
-    headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().expect("content length"))
-        })
-        .expect("content-length header")
-}
 
 struct RelayPublishServer {
     endpoint: String,
@@ -445,12 +258,13 @@ fn root_help_explains_publish_modes() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
     assert!(stdout.contains("nostr_relay uses direct relay publish"));
-    assert!(stdout.contains("radrootsd uses daemon-backed publish"));
+    assert!(stdout.contains("radrootsd is reserved and fails closed"));
     assert!(stdout.contains("Relay mode never silently falls back"));
     assert!(stdout.contains("Inspect local readiness and mode-specific recovery steps"));
     assert!(
-        stdout
-            .contains("Select nostr_relay direct relay publish or radrootsd daemon-backed publish")
+        stdout.contains(
+            "Select nostr_relay direct relay publish or reserved radrootsd guardrail mode"
+        )
     );
 }
 
@@ -461,47 +275,27 @@ fn help_lists(stdout: &str, command: &str) -> bool {
     })
 }
 
-fn assert_public_signer_session_binding_message(value: &Value) {
+fn assert_radrootsd_deferred_message(value: &Value) {
     let message = value["errors"][0]["message"]
         .as_str()
         .expect("error message");
-    assert!(message.contains("signer.remote_nip46"));
-    assert!(message.contains("signer_session_ref"));
+    assert!(message.contains("radrootsd publish mode is deferred"));
+    assert!(message.contains("publish mode `nostr_relay`"));
     assert!(
-        !message.contains("signer_session_id"),
-        "public CLI message should not reference unavailable explicit session input: {message}"
+        !message.contains("signer.remote_nip46"),
+        "deferred publish-mode message should not suggest signer-session setup: {message}"
     );
 }
 
-fn assert_rpc_bearer_token_next_action(actions: &Value) {
+fn assert_direct_relay_next_action(actions: &Value, command: &str) {
     let action = actions
         .as_array()
         .expect("next actions")
         .iter()
-        .find(|action| action["env_var"] == "RADROOTS_RPC_BEARER_TOKEN")
-        .expect("rpc bearer token next action");
+        .find(|action| action["command"] == command)
+        .expect("direct relay next action");
 
-    assert_eq!(action["kind"], "operator_config");
-    assert_eq!(action["label"], "configure rpc bearer token");
-    assert_eq!(action["command"], Value::Null);
-    assert_eq!(action["description"], "configure RADROOTS_RPC_BEARER_TOKEN");
-}
-
-fn assert_signer_session_next_action(actions: &Value) {
-    let action = actions
-        .as_array()
-        .expect("next actions")
-        .iter()
-        .find(|action| action["config_key"] == "signer.remote_nip46.signer_session_ref")
-        .expect("signer session next action");
-
-    assert_eq!(action["kind"], "operator_config");
-    assert_eq!(action["label"], "configure signer session binding");
-    assert_eq!(action["command"], Value::Null);
-    assert_eq!(
-        action["description"],
-        "configure signer.remote_nip46 signer_session_ref"
-    );
+    assert_eq!(action["kind"], "cli_command");
 }
 
 #[test]
@@ -539,9 +333,16 @@ fn config_get_exposes_resolved_publish_state() {
         "user config · local first"
     );
     assert_eq!(value["result"]["publish"]["transport_family"], "radrootsd");
-    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
+    assert_eq!(value["result"]["publish"]["state"], "unavailable");
     assert_eq!(value["result"]["publish"]["executable"], false);
-    assert_contains(&value["result"]["publish"]["reason"], "bridge bearer token");
+    assert_contains(
+        &value["result"]["publish"]["reason"],
+        "radrootsd publish mode is deferred",
+    );
+    assert_eq!(
+        value["result"]["account_resolution"]["status"],
+        "unresolved"
+    );
     assert_eq!(
         value["result"]["publish"]["provider"]["provider_runtime_id"],
         "radrootsd"
@@ -554,7 +355,7 @@ fn config_get_exposes_resolved_publish_state() {
         value["result"]["write_plane"]["binding_model"],
         "radrootsd_bridge_publish"
     );
-    assert_eq!(value["result"]["write_plane"]["state"], "unconfigured");
+    assert_eq!(value["result"]["write_plane"]["state"], "unavailable");
     assert_eq!(
         value["result"]["write_plane"]["bridge_auth_configured"],
         false
@@ -562,18 +363,16 @@ fn config_get_exposes_resolved_publish_state() {
     assert_eq!(value["result"]["rpc"]["bridge_auth_configured"], false);
     assert_eq!(
         value["result"]["actions"][0],
-        "configure RADROOTS_RPC_BEARER_TOKEN"
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
     );
-    assert_eq!(
-        value["result"]["actions"][1],
-        "configure signer.remote_nip46 signer_session_ref"
+    assert_direct_relay_next_action(
+        &value["next_actions"],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
     );
-    assert_rpc_bearer_token_next_action(&value["next_actions"]);
-    assert_signer_session_next_action(&value["next_actions"]);
 }
 
 #[test]
-fn config_get_radrootsd_missing_signer_binding_mirrors_operator_next_action() {
+fn config_get_radrootsd_with_bridge_auth_still_reports_deferred_publish_mode() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
 
@@ -587,10 +386,16 @@ fn config_get_radrootsd_missing_signer_binding_mirrors_operator_next_action() {
     assert!(output.status.success());
     assert_eq!(value["operation_id"], "config.get");
     assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
-    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
+    assert_eq!(value["result"]["publish"]["state"], "unavailable");
+    assert_eq!(value["result"]["publish"]["executable"], false);
+    assert_contains(
+        &value["result"]["publish"]["reason"],
+        "radrootsd publish mode is deferred",
+    );
+    assert_eq!(value["result"]["rpc"]["bridge_auth_configured"], true);
     assert_eq!(
         value["result"]["actions"][0],
-        "configure signer.remote_nip46 signer_session_ref"
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
     );
     assert_eq!(
         value["next_actions"]
@@ -599,11 +404,14 @@ fn config_get_radrootsd_missing_signer_binding_mirrors_operator_next_action() {
             .len(),
         1
     );
-    assert_signer_session_next_action(&value["next_actions"]);
+    assert_direct_relay_next_action(
+        &value["next_actions"],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+    );
 }
 
 #[test]
-fn config_get_marks_radrootsd_listing_publish_ready_with_bridge_auth_and_session_binding() {
+fn config_get_marks_radrootsd_deferred_even_with_bridge_auth_and_session_binding() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config(
         r#"[publish]
@@ -629,14 +437,21 @@ signer_session_ref = "session_ready"
     assert_eq!(value["operation_id"], "config.get");
     assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
     assert_eq!(value["result"]["publish"]["relay"]["ready"], false);
-    assert_eq!(value["result"]["publish"]["state"], "ready");
-    assert_eq!(value["result"]["publish"]["executable"], true);
+    assert_eq!(value["result"]["publish"]["state"], "unavailable");
+    assert_eq!(value["result"]["publish"]["executable"], false);
     assert_contains(
         &value["result"]["publish"]["reason"],
-        "live bridge readiness is verified when publish runs",
+        "radrootsd publish mode is deferred",
     );
-    assert_eq!(value["result"]["publish"]["provider"]["state"], "ready");
+    assert_eq!(
+        value["result"]["publish"]["provider"]["state"],
+        "unavailable"
+    );
     assert_eq!(value["result"]["rpc"]["bridge_auth_configured"], true);
+    assert_eq!(
+        value["result"]["actions"][0],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
+    );
 }
 
 #[test]
@@ -798,26 +613,27 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
     assert_eq!(value["result"]["publish"]["executable"], false);
     assert_eq!(
         value["result"]["publish"]["provider"]["state"],
-        "unconfigured"
+        "unavailable"
     );
-    assert_contains(&value["result"]["publish"]["reason"], "bridge bearer token");
+    assert_contains(
+        &value["result"]["publish"]["reason"],
+        "radrootsd publish mode is deferred",
+    );
     assert_eq!(value["result"]["actions"][0], "radroots store init");
     assert_eq!(value["result"]["actions"][1], "radroots account create");
     assert_eq!(
         value["result"]["actions"][2],
-        "configure RADROOTS_RPC_BEARER_TOKEN"
-    );
-    assert_eq!(
-        value["result"]["actions"][3],
-        "configure signer.remote_nip46 signer_session_ref"
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
     );
     assert_eq!(value["next_actions"][0]["command"], "radroots store init");
     assert_eq!(
         value["next_actions"][1]["command"],
         "radroots account create"
     );
-    assert_rpc_bearer_token_next_action(&value["next_actions"]);
-    assert_signer_session_next_action(&value["next_actions"]);
+    assert_direct_relay_next_action(
+        &value["next_actions"],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+    );
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
@@ -864,28 +680,27 @@ fn health_check_exposes_publish_readiness() {
     assert_eq!(value["operation_id"], "health.check.run");
     assert_eq!(value["result"]["state"], "needs_attention");
     assert_eq!(value["result"]["checks"]["publish"]["mode"], "radrootsd");
-    assert_eq!(
-        value["result"]["checks"]["publish"]["state"],
-        "unconfigured"
-    );
+    assert_eq!(value["result"]["checks"]["publish"]["state"], "unavailable");
     assert_eq!(value["result"]["checks"]["publish"]["executable"], false);
+    assert_contains(
+        &value["result"]["checks"]["publish"]["reason"],
+        "radrootsd publish mode is deferred",
+    );
     assert_eq!(value["result"]["actions"][0], "radroots store init");
     assert_eq!(value["result"]["actions"][1], "radroots account create");
     assert_eq!(
         value["result"]["actions"][2],
-        "configure RADROOTS_RPC_BEARER_TOKEN"
-    );
-    assert_eq!(
-        value["result"]["actions"][3],
-        "configure signer.remote_nip46 signer_session_ref"
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
     );
     assert_eq!(value["next_actions"][0]["command"], "radroots store init");
     assert_eq!(
         value["next_actions"][1]["command"],
         "radroots account create"
     );
-    assert_rpc_bearer_token_next_action(&value["next_actions"]);
-    assert_signer_session_next_action(&value["next_actions"]);
+    assert_direct_relay_next_action(
+        &value["next_actions"],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+    );
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
@@ -978,16 +793,20 @@ signer_session_ref = "session_test"
     assert!(output.status.success());
     assert_eq!(radrootsd_value["operation_id"], "farm.readiness.check");
     assert_eq!(radrootsd_value["result"]["publish_mode"], "radrootsd");
-    assert_eq!(radrootsd_value["result"]["publish_state"], "ready");
-    assert_eq!(radrootsd_value["result"]["publish_executable"], true);
+    assert_eq!(radrootsd_value["result"]["publish_state"], "unavailable");
+    assert_eq!(radrootsd_value["result"]["publish_executable"], false);
+    assert_contains(
+        &radrootsd_value["result"]["reason"],
+        "radrootsd publish mode is deferred",
+    );
     assert_eq!(
         radrootsd_value["result"]["actions"][0],
-        "radroots farm publish"
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish"
     );
 }
 
 #[test]
-fn radrootsd_listing_publish_reaches_listing_router_without_relay_config() {
+fn radrootsd_listing_publish_fails_closed_without_bridge_or_relay_side_effects() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let farm = sandbox.json_success(&[
@@ -1011,20 +830,10 @@ fn radrootsd_listing_publish_reaches_listing_router_without_relay_config() {
             .as_str()
             .expect("farm d tag"),
     );
-    sandbox.write_app_config(
-        r#"[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "explicit_endpoint"
-target = "http://myc.invalid"
-signer_session_ref = "session_test"
-"#,
-    );
-    let server = OneShotJsonRpcServer::listing_publish();
 
     let output = sandbox
         .command()
-        .env("RADROOTS_RPC_URL", &server.endpoint)
+        .env("RADROOTS_RPC_URL", "http://127.0.0.1:9")
         .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
         .args([
             "--format",
@@ -1042,53 +851,29 @@ signer_session_ref = "session_test"
         .output()
         .expect("run radrootsd listing publish");
     let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-    let request = server.take_request();
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
     assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+    assert_radrootsd_deferred_message(&value);
     assert_eq!(
-        value["result"]["source"],
-        "radrootsd publish transport · signer session"
+        value["errors"][0]["detail"]["actions"][0],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com listing publish <file>"
     );
-    assert_eq!(value["result"]["job_id"], "job_listing_publish_test");
-    assert_eq!(value["result"]["job_status"], "published");
-    assert_eq!(value["result"]["event_id"], "e".repeat(64));
-    assert_eq!(
-        value["result"]["event_addr"],
-        value["result"]["listing_addr"]
-    );
-    assert!(value["result"]["listing_id"].is_string());
-    assert!(value["result"]["seller_pubkey"].is_string());
-    assert_eq!(value["result"]["signer_mode"], "nip46");
-    assert_eq!(value["result"]["signer_session_id"], "session_test");
-    assert_eq!(
-        value["result"]["requested_signer_session_id"],
-        "session_test"
-    );
-    assert_eq!(value["result"]["idempotency_key"], "idem_listing");
-    assert_eq!(
-        value["result"]["job"]["rpc_method"],
-        "bridge.listing.publish"
-    );
-    assert_eq!(value["result"]["job"]["relay_count"], 2);
-    assert_eq!(value["result"]["job"]["acknowledged_relay_count"], 1);
-    assert_eq!(request.body["method"], "bridge.listing.publish");
-    assert_eq!(request.body["params"]["kind"], 30402);
-    assert_eq!(request.body["params"]["signer_session_id"], "session_test");
-    assert_eq!(request.body["params"]["idempotency_key"], "idem_listing");
-    assert!(
-        request
-            .headers
-            .to_ascii_lowercase()
-            .contains("authorization: bearer bridge_test")
+    assert_direct_relay_next_action(
+        &value["next_actions"],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com listing publish <file>",
     );
 }
 
 #[test]
-fn radrootsd_farm_publish_submits_profile_and_farm_without_relay_config() {
+fn radrootsd_farm_publish_fails_closed_without_bridge_or_relay_side_effects() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
-    let farm = sandbox.json_success(&[
+    sandbox.json_success(&[
         "--format",
         "json",
         "farm",
@@ -1102,24 +887,10 @@ fn radrootsd_farm_publish_submits_profile_and_farm_without_relay_config() {
         "--delivery-method",
         "pickup",
     ]);
-    let farm_d_tag = farm["result"]["config"]["farm_d_tag"]
-        .as_str()
-        .expect("farm d tag")
-        .to_owned();
-    sandbox.write_app_config(
-        r#"[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "explicit_endpoint"
-target = "http://myc.invalid"
-signer_session_ref = "session_test"
-"#,
-    );
-    let server = OneShotJsonRpcServer::farm_publish();
 
     let output = sandbox
         .command()
-        .env("RADROOTS_RPC_URL", &server.endpoint)
+        .env("RADROOTS_RPC_URL", "http://127.0.0.1:9")
         .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
         .args([
             "--format",
@@ -1136,84 +907,36 @@ signer_session_ref = "session_test"
         .output()
         .expect("run radrootsd farm publish");
     let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-    let requests = server.take_requests(2);
-    let profile_request = &requests[0];
-    let farm_request = &requests[1];
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
     assert_eq!(value["operation_id"], "farm.publish");
-    assert_eq!(value["result"]["state"], "published");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+    assert_radrootsd_deferred_message(&value);
     assert_eq!(
-        value["result"]["source"],
-        "radrootsd publish transport · signer session"
+        value["errors"][0]["detail"]["actions"][0],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish"
     );
-    assert_eq!(
-        value["result"]["requested_signer_session_id"],
-        "session_test"
-    );
-    assert_eq!(
-        value["result"]["profile"]["job_id"],
-        "job_profile_publish_test"
-    );
-    assert_eq!(value["result"]["farm"]["job_id"], "job_farm_publish_test");
-    assert_eq!(value["result"]["profile"]["event_kind"], KIND_PROFILE);
-    assert_eq!(value["result"]["farm"]["event_kind"], KIND_FARM);
-    assert_eq!(value["result"]["profile"]["event_id"], "a".repeat(64));
-    assert_eq!(value["result"]["farm"]["event_id"], "b".repeat(64));
-    assert_eq!(
-        value["result"]["profile"]["rpc_method"],
-        "bridge.profile.publish"
-    );
-    assert_eq!(value["result"]["farm"]["rpc_method"], "bridge.farm.publish");
-    assert_eq!(profile_request.body["method"], "bridge.profile.publish");
-    assert_eq!(farm_request.body["method"], "bridge.farm.publish");
-    assert_eq!(profile_request.body["params"]["profile_type"], "farm");
-    assert_eq!(
-        profile_request.body["params"]["signer_session_id"],
-        "session_test"
-    );
-    assert_eq!(
-        farm_request.body["params"]["signer_session_id"],
-        "session_test"
-    );
-    assert_eq!(
-        profile_request.body["params"]["idempotency_key"],
-        "idem_farm:profile"
-    );
-    assert_eq!(
-        farm_request.body["params"]["idempotency_key"],
-        "idem_farm:farm"
-    );
-    assert_eq!(farm_request.body["params"]["kind"], KIND_FARM);
-    assert_eq!(farm_request.body["params"]["farm"]["d_tag"], farm_d_tag);
-    assert!(
-        profile_request
-            .headers
-            .to_ascii_lowercase()
-            .contains("authorization: bearer bridge_test")
+    assert_direct_relay_next_action(
+        &value["next_actions"],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish",
     );
 
     let persisted = sandbox.json_success(&["--format", "json", "farm", "get"]);
     assert_eq!(
-        persisted["result"]["document"]["publication"]["profile_state"],
-        "published"
-    );
-    assert_eq!(
-        persisted["result"]["document"]["publication"]["farm_state"],
-        "published"
-    );
-    assert_eq!(
         persisted["result"]["document"]["publication"]["profile_event_id"],
-        "a".repeat(64)
+        Value::Null
     );
     assert_eq!(
         persisted["result"]["document"]["publication"]["farm_event_id"],
-        "b".repeat(64)
+        Value::Null
     );
 }
 
 #[test]
-fn radrootsd_farm_publish_missing_signer_binding_points_to_capability_binding() {
+fn radrootsd_farm_publish_ignores_signer_session_binding_and_fails_closed() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     sandbox.json_success(&[
@@ -1241,9 +964,11 @@ fn radrootsd_farm_publish_missing_signer_binding_points_to_capability_binding() 
     let dry_run: Value = serde_json::from_slice(&dry_run_output.stdout).expect("json output");
 
     assert!(!dry_run_output.status.success());
+    assert_eq!(dry_run_output.status.code(), Some(3));
     assert_eq!(dry_run["operation_id"], "farm.publish");
-    assert_eq!(dry_run["errors"][0]["code"], "signer_unconfigured");
-    assert_public_signer_session_binding_message(&dry_run);
+    assert_eq!(dry_run["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(dry_run["errors"][0]["detail"]["class"], "operation");
+    assert_radrootsd_deferred_message(&dry_run);
 
     let live_output = sandbox
         .command()
@@ -1261,13 +986,15 @@ fn radrootsd_farm_publish_missing_signer_binding_points_to_capability_binding() 
     let live: Value = serde_json::from_slice(&live_output.stdout).expect("json output");
 
     assert!(!live_output.status.success());
+    assert_eq!(live_output.status.code(), Some(3));
     assert_eq!(live["operation_id"], "farm.publish");
-    assert_eq!(live["errors"][0]["code"], "signer_unconfigured");
-    assert_public_signer_session_binding_message(&live);
+    assert_eq!(live["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(live["errors"][0]["detail"]["class"], "operation");
+    assert_radrootsd_deferred_message(&live);
 }
 
 #[test]
-fn radrootsd_listing_writes_dry_run_reject_missing_invocation_account() {
+fn radrootsd_listing_writes_dry_run_fail_closed_before_account_or_bridge_work() {
     for operation in ["publish", "update", "archive"] {
         let sandbox = RadrootsCliSandbox::new();
         let seller = identity_public(42);
@@ -1312,15 +1039,17 @@ signer_session_ref = "session_test"
         let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
 
         assert!(!output.status.success());
+        assert_eq!(output.status.code(), Some(3));
         assert_eq!(value["operation_id"], format!("listing.{operation}"));
         assert_eq!(value["result"], Value::Null);
-        assert_eq!(value["errors"][0]["code"], "account_unresolved");
-        assert_eq!(value["errors"][0]["detail"]["class"], "account");
+        assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+        assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+        assert_radrootsd_deferred_message(&value);
     }
 }
 
 #[test]
-fn radrootsd_listing_writes_reject_missing_invocation_account() {
+fn radrootsd_listing_writes_fail_closed_before_account_or_bridge_work() {
     for operation in ["publish", "update", "archive"] {
         let sandbox = RadrootsCliSandbox::new();
         let seller = identity_public(43);
@@ -1363,80 +1092,49 @@ signer_session_ref = "session_test"
         let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
 
         assert!(!output.status.success());
+        assert_eq!(output.status.code(), Some(3));
         assert_eq!(value["operation_id"], format!("listing.{operation}"));
         assert_eq!(value["result"], Value::Null);
-        assert_eq!(value["errors"][0]["code"], "account_unresolved");
-        assert_eq!(value["errors"][0]["detail"]["class"], "account");
+        assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+        assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+        assert_radrootsd_deferred_message(&value);
     }
 }
 
 #[test]
-fn radrootsd_listing_publish_bridge_errors_are_classified() {
-    for (message, code, class) in [
-        (
-            "unauthorized bridge bearer token",
-            "auth_unauthorized",
-            "auth",
-        ),
-        ("signer session unavailable", "signer_unavailable", "signer"),
-        (
-            "provider runtime unavailable",
-            "provider_unavailable",
-            "provider",
-        ),
-        (
-            "bridge.listing.publish is disabled",
-            "operation_unavailable",
-            "operation",
-        ),
-    ] {
-        let sandbox = RadrootsCliSandbox::new();
-        let listing_file =
-            create_listing_draft(&sandbox, format!("radrootsd-bridge-error-{class}").as_str());
-        make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
-        sandbox.write_app_config(
-            r#"[publish]
-mode = "radrootsd"
+fn radrootsd_listing_publish_does_not_surface_bridge_errors_before_guardrail() {
+    let sandbox = RadrootsCliSandbox::new();
+    let listing_file = create_listing_draft(&sandbox, "radrootsd-bridge-error");
+    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
+    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
 
-[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "explicit_endpoint"
-target = "http://myc.invalid"
-signer_session_ref = "session_test"
-"#,
-        );
-        let server = OneShotJsonRpcServer::listing_publish_error(message);
+    let mut command = sandbox.command();
+    command
+        .env("RADROOTS_RPC_URL", "http://127.0.0.1:9")
+        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .args([
+            "--format",
+            "json",
+            "--approval-token",
+            "approve",
+            "listing",
+            "publish",
+            listing_file.to_string_lossy().as_ref(),
+        ]);
+    let output = command.output().expect("run radrootsd listing publish");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
 
-        let mut command = sandbox.command();
-        command
-            .env("RADROOTS_RPC_URL", &server.endpoint)
-            .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
-            .args([
-                "--format",
-                "json",
-                "--approval-token",
-                "approve",
-                "listing",
-                "publish",
-                listing_file.to_string_lossy().as_ref(),
-            ]);
-        let output = command.output().expect("run radrootsd listing publish");
-        let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-        let request = server.take_request();
-
-        assert!(!output.status.success());
-        assert_eq!(value["operation_id"], "listing.publish");
-        assert_eq!(value["result"], Value::Null);
-        assert_eq!(value["errors"][0]["code"], code);
-        assert_eq!(value["errors"][0]["detail"]["class"], class);
-        assert_contains(&value["errors"][0]["message"], message);
-        assert_eq!(request.body["method"], "bridge.listing.publish");
-    }
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+    assert_radrootsd_deferred_message(&value);
 }
 
 #[test]
-fn radrootsd_listing_publish_bypasses_relay_signer_preflight() {
+fn radrootsd_listing_publish_fails_closed_before_relay_or_myc_preflight() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let farm = sandbox.json_success(&[
@@ -1473,11 +1171,11 @@ fn radrootsd_listing_publish_bypasses_relay_signer_preflight() {
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.status.code(), Some(3));
     assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["errors"][0]["code"], "signer_unconfigured");
-    assert_eq!(value["errors"][0]["detail"]["class"], "signer");
-    assert_public_signer_session_binding_message(&value);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+    assert_radrootsd_deferred_message(&value);
     assert!(
         !value["errors"][0]["message"]
             .as_str()
@@ -1525,12 +1223,16 @@ fn radrootsd_publish_mode_routes_listing_update() {
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.status.code(), Some(3));
     assert_eq!(value["operation_id"], "listing.update");
     assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "signer_unconfigured");
-    assert_eq!(value["errors"][0]["detail"]["class"], "signer");
-    assert_public_signer_session_binding_message(&value);
+    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
+    assert_radrootsd_deferred_message(&value);
+    assert_eq!(
+        value["errors"][0]["detail"]["actions"][0],
+        "radroots --publish-mode nostr_relay --relay wss://relay.example.com listing update <file>"
+    );
 }
 
 #[test]
@@ -2260,8 +1962,10 @@ fn next_actions_mirror_result_actions_for_json_and_ndjson() {
         let terminal = frames.last().expect("terminal ndjson frame");
 
         assert!(output.status.success(), "{args:?}");
-        assert_rpc_bearer_token_next_action(&terminal["payload"]["next_actions"]);
-        assert_signer_session_next_action(&terminal["payload"]["next_actions"]);
+        assert_direct_relay_next_action(
+            &terminal["payload"]["next_actions"],
+            "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+        );
     }
 }
 
@@ -3061,9 +2765,7 @@ fn radrootsd_sync_push_failure_exposes_nostr_relay_recovery_action() {
     assert!(stdout.contains("state: unavailable"));
     assert!(stdout.contains("publish_mode: radrootsd"));
     assert!(stdout.contains("publish_state: unavailable"));
-    assert!(
-        stdout.contains("reason: `radroots sync push` cannot run with publish mode `radrootsd`")
-    );
+    assert!(stdout.contains("radrootsd publish mode is deferred"));
     assert!(stdout.contains("- radroots --publish-mode nostr_relay sync push"));
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }

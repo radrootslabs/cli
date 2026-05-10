@@ -461,6 +461,7 @@ struct CapabilityBindingSpec {
 
 pub(crate) const SIGNER_REMOTE_NIP46_CAPABILITY: &str = "signer.remote_nip46";
 pub(crate) const INFERENCE_HYF_STDIO_CAPABILITY: &str = "inference.hyf_stdio";
+pub(crate) const RADROOTSD_PUBLISH_DEFERRED_REASON: &str = "radrootsd publish mode is deferred for the active CLI buyer/seller workflow; use publish mode `nostr_relay` with local signer custody and configured relays";
 
 const CAPABILITY_BINDING_SPECS: &[CapabilityBindingSpec] = &[
     CapabilityBindingSpec {

@@ -7,8 +7,9 @@ use crate::runtime::accounts::AccountRuntimeFailure;
 use crate::runtime::accounts::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolution_view};
 use crate::runtime::config::{RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend};
 use radroots_events::kinds::{
-    KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST,
-    KIND_TRADE_ORDER_REVISION, KIND_TRADE_ORDER_REVISION_RESPONSE,
+    KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE,
+    KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST, KIND_TRADE_ORDER_REVISION,
+    KIND_TRADE_ORDER_REVISION_RESPONSE, KIND_TRADE_RECEIPT,
 };
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
 use radroots_nostr_signer::prelude::{
@@ -292,43 +293,63 @@ fn deferred_myc_binding_status() -> SignerBindingStatusView {
     }
 }
 
-fn cli_write_kinds() -> [CliWriteKind; 9] {
+fn cli_write_kinds() -> [CliWriteKind; 14] {
     [
         CliWriteKind {
-            command: "farm profile publish",
+            command: "sync.push",
             event_kind: KIND_PROFILE,
         },
         CliWriteKind {
-            command: "farm publish",
+            command: "farm.publish",
             event_kind: KIND_FARM,
         },
         CliWriteKind {
-            command: "listing publish",
+            command: "listing.publish",
             event_kind: KIND_LISTING,
         },
         CliWriteKind {
-            command: "order submit",
+            command: "listing.update",
+            event_kind: KIND_LISTING,
+        },
+        CliWriteKind {
+            command: "listing.archive",
+            event_kind: KIND_LISTING,
+        },
+        CliWriteKind {
+            command: "order.submit",
             event_kind: KIND_TRADE_ORDER_REQUEST,
         },
         CliWriteKind {
-            command: "order accept",
+            command: "order.accept",
             event_kind: KIND_TRADE_ORDER_DECISION,
         },
         CliWriteKind {
-            command: "order decline",
+            command: "order.decline",
             event_kind: KIND_TRADE_ORDER_DECISION,
         },
         CliWriteKind {
-            command: "order revision propose",
+            command: "order.cancel",
+            event_kind: KIND_TRADE_CANCEL,
+        },
+        CliWriteKind {
+            command: "order.revision.propose",
             event_kind: KIND_TRADE_ORDER_REVISION,
         },
         CliWriteKind {
-            command: "order revision accept",
+            command: "order.revision.accept",
             event_kind: KIND_TRADE_ORDER_REVISION_RESPONSE,
         },
         CliWriteKind {
-            command: "order revision decline",
+            command: "order.revision.decline",
             event_kind: KIND_TRADE_ORDER_REVISION_RESPONSE,
+        },
+        CliWriteKind {
+            command: "order.fulfillment.update",
+            event_kind: KIND_TRADE_FULFILLMENT_UPDATE,
+        },
+        CliWriteKind {
+            command: "order.receipt.record",
+            event_kind: KIND_TRADE_RECEIPT,
         },
     ]
 }
@@ -374,15 +395,45 @@ mod tests {
     use radroots_events::kinds::KIND_TRADE_FORBIDDEN_3431;
 
     use super::{
-        KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST, KIND_TRADE_ORDER_REVISION,
-        KIND_TRADE_ORDER_REVISION_RESPONSE, cli_write_kinds,
+        KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION,
+        KIND_TRADE_ORDER_REQUEST, KIND_TRADE_ORDER_REVISION, KIND_TRADE_ORDER_REVISION_RESPONSE,
+        KIND_TRADE_RECEIPT, cli_write_kinds,
     };
+
+    #[test]
+    fn write_kind_readiness_matches_active_signed_mutations() {
+        let commands: Vec<&str> = cli_write_kinds()
+            .iter()
+            .map(|write_kind| write_kind.command)
+            .collect();
+
+        assert_eq!(
+            commands,
+            [
+                "sync.push",
+                "farm.publish",
+                "listing.publish",
+                "listing.update",
+                "listing.archive",
+                "order.submit",
+                "order.accept",
+                "order.decline",
+                "order.cancel",
+                "order.revision.propose",
+                "order.revision.accept",
+                "order.revision.decline",
+                "order.fulfillment.update",
+                "order.receipt.record",
+            ]
+        );
+        assert!(!commands.contains(&"signer.status.get"));
+    }
 
     #[test]
     fn order_submit_readiness_uses_active_order_request_kind() {
         let write_kind = cli_write_kinds()
             .into_iter()
-            .find(|kind| kind.command == "order submit")
+            .find(|kind| kind.command == "order.submit")
             .expect("order submit readiness");
 
         assert_eq!(write_kind.event_kind, KIND_TRADE_ORDER_REQUEST);
@@ -391,7 +442,7 @@ mod tests {
 
     #[test]
     fn order_decision_readiness_uses_active_order_decision_kind() {
-        for command in ["order accept", "order decline"] {
+        for command in ["order.accept", "order.decline"] {
             let write_kind = cli_write_kinds()
                 .into_iter()
                 .find(|kind| kind.command == command)
@@ -406,13 +457,13 @@ mod tests {
     fn order_revision_readiness_uses_active_revision_kinds() {
         let proposal = cli_write_kinds()
             .into_iter()
-            .find(|kind| kind.command == "order revision propose")
+            .find(|kind| kind.command == "order.revision.propose")
             .expect("order revision propose readiness");
 
         assert_eq!(proposal.event_kind, KIND_TRADE_ORDER_REVISION);
         assert_ne!(proposal.event_kind, KIND_TRADE_FORBIDDEN_3431);
 
-        for command in ["order revision accept", "order revision decline"] {
+        for command in ["order.revision.accept", "order.revision.decline"] {
             let write_kind = cli_write_kinds()
                 .into_iter()
                 .find(|kind| kind.command == command)
@@ -421,5 +472,29 @@ mod tests {
             assert_eq!(write_kind.event_kind, KIND_TRADE_ORDER_REVISION_RESPONSE);
             assert_ne!(write_kind.event_kind, KIND_TRADE_FORBIDDEN_3431);
         }
+    }
+
+    #[test]
+    fn order_follow_on_readiness_uses_active_trade_kinds() {
+        let cancel = cli_write_kinds()
+            .into_iter()
+            .find(|kind| kind.command == "order.cancel")
+            .expect("order cancel readiness");
+        assert_eq!(cancel.event_kind, KIND_TRADE_CANCEL);
+        assert_ne!(cancel.event_kind, KIND_TRADE_FORBIDDEN_3431);
+
+        let fulfillment = cli_write_kinds()
+            .into_iter()
+            .find(|kind| kind.command == "order.fulfillment.update")
+            .expect("order fulfillment readiness");
+        assert_eq!(fulfillment.event_kind, KIND_TRADE_FULFILLMENT_UPDATE);
+        assert_ne!(fulfillment.event_kind, KIND_TRADE_FORBIDDEN_3431);
+
+        let receipt = cli_write_kinds()
+            .into_iter()
+            .find(|kind| kind.command == "order.receipt.record")
+            .expect("order receipt readiness");
+        assert_eq!(receipt.event_kind, KIND_TRADE_RECEIPT);
+        assert_ne!(receipt.event_kind, KIND_TRADE_FORBIDDEN_3431);
     }
 }

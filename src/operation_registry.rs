@@ -1158,8 +1158,8 @@ pub fn get_operation(operation_id: &str) -> Option<&'static OperationSpec> {
 pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
     match operation_id {
         "sync.pull" | "sync.push" | "sync.watch" | "market.refresh" | "farm.publish"
-        | "listing.publish" | "listing.archive" | "order.submit" | "order.status.get"
-        | "order.event.list" => NetworkRequirement::External {
+        | "listing.publish" | "listing.update" | "listing.archive" | "order.submit"
+        | "order.status.get" | "order.event.list" => NetworkRequirement::External {
             dry_run_requires_network: false,
         },
         "order.accept"
@@ -1183,6 +1183,7 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
             | "farm.publish"
             | "sync.push"
             | "listing.publish"
+            | "listing.update"
             | "listing.archive"
             | "order.submit"
             | "order.accept"
@@ -1200,6 +1201,10 @@ pub fn requires_nostr_relay_publish_mode(operation_id: &str) -> bool {
     matches!(
         operation_id,
         "sync.push"
+            | "farm.publish"
+            | "listing.publish"
+            | "listing.update"
+            | "listing.archive"
             | "order.submit"
             | "order.accept"
             | "order.decline"
@@ -1511,6 +1516,7 @@ mod tests {
             "market.refresh",
             "farm.publish",
             "listing.publish",
+            "listing.update",
             "listing.archive",
             "order.submit",
             "order.accept",
@@ -1542,6 +1548,7 @@ mod tests {
             "sync.push",
             "farm.publish",
             "listing.publish",
+            "listing.update",
             "listing.archive",
             "order.submit",
             "order.accept",
@@ -1568,6 +1575,10 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected = [
             "sync.push",
+            "farm.publish",
+            "listing.publish",
+            "listing.update",
+            "listing.archive",
             "order.submit",
             "order.accept",
             "order.decline",

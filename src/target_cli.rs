@@ -31,7 +31,7 @@ impl TargetPublishMode {
 #[command(
     name = "radroots",
     about = "Operate Radroots local-first trade workflows.",
-    long_about = "Operate Radroots local-first trade workflows.\n\nPublish modes:\n  nostr_relay uses direct relay publish with local signer custody.\n  radrootsd uses daemon-backed publish for supported farm and listing publish flows.\n\nRelay mode never silently falls back to radrootsd.",
+    long_about = "Operate Radroots local-first trade workflows.\n\nPublish modes:\n  nostr_relay uses direct relay publish with local signer custody.\n  radrootsd is reserved and fails closed for active buyer and seller writes.\n\nRelay mode never silently falls back to radrootsd.",
     disable_help_subcommand = true
 )]
 pub struct TargetCliArgs {
@@ -45,7 +45,7 @@ pub struct TargetCliArgs {
         long = "publish-mode",
         global = true,
         value_enum,
-        help = "Select nostr_relay direct relay publish or radrootsd daemon-backed publish"
+        help = "Select nostr_relay direct relay publish or reserved radrootsd guardrail mode"
     )]
     pub publish_mode: Option<TargetPublishMode>,
     #[arg(long = "offline", global = true, action = ArgAction::SetTrue, conflicts_with = "online")]

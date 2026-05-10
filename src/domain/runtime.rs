@@ -502,6 +502,7 @@ impl AccountSummaryView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountResolutionView {
+    pub status: String,
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_account: Option<AccountSummaryView>,

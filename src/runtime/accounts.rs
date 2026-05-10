@@ -529,6 +529,12 @@ pub fn account_summary_view(account: &AccountRecordView) -> AccountSummaryView {
 
 pub fn account_resolution_view(resolution: &AccountResolution) -> AccountResolutionView {
     AccountResolutionView {
+        status: if resolution.resolved_account.is_some() {
+            "resolved"
+        } else {
+            "unresolved"
+        }
+        .to_owned(),
         source: resolution.source.as_str().to_owned(),
         resolved_account: resolution
             .resolved_account
@@ -543,6 +549,7 @@ pub fn account_resolution_view(resolution: &AccountResolution) -> AccountResolut
 
 pub fn empty_account_resolution_view() -> AccountResolutionView {
     AccountResolutionView {
+        status: "unresolved".to_owned(),
         source: AccountResolutionSource::None.as_str().to_owned(),
         resolved_account: None,
         default_account: None,
