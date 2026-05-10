@@ -2121,7 +2121,19 @@ fn local_seller_publish_commands_attempt_configured_direct_relay() {
         order_id,
     ]);
     assert!(!order_output.status.success());
-    assert_direct_relay_connection_failure(&order_value, "order.submit", &["order", "submit"]);
+    assert_eq!(order_value["operation_id"], "order.submit");
+    assert_eq!(order_value["result"], serde_json::Value::Null);
+    assert_eq!(order_value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(
+        order_value["errors"][0]["detail"]["issues"][0]["field"],
+        "order.listing_addr"
+    );
+    assert_contains(
+        &order_value["errors"][0]["detail"]["issues"][0]["message"],
+        "local market freshness",
+    );
+    assert_no_removed_command_reference(&order_value, &["order", "submit"]);
+    assert_no_daemon_runtime_reference(&order_value, &["order", "submit"]);
 }
 
 #[test]

@@ -39,7 +39,7 @@ use crate::domain::runtime::{
     FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
     ListingMutationEventView, ListingMutationJobView, ListingMutationLocalReplicaView,
     ListingMutationView, ListingNewView, ListingRebindView, ListingSummaryView,
-    ListingValidateView, ListingValidationIssueView, RelayFailureView, SyncFreshnessView,
+    ListingValidateView, ListingValidationIssueView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -52,7 +52,9 @@ use crate::runtime::direct_relay::{
 };
 use crate::runtime::farm_config;
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
-use crate::runtime::sync::freshness_from_executor;
+use crate::runtime::sync::{
+    RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
+};
 use crate::runtime_args::{
     ListingCreateArgs, ListingFileArgs, ListingMutationArgs, ListingRebindArgs, RecordLookupArgs,
 };
@@ -930,16 +932,12 @@ pub fn get(
     config: &RuntimeConfig,
     args: &RecordLookupArgs,
 ) -> Result<ListingGetView, RuntimeError> {
+    refresh_market_listing_if_needed(config)?;
     let freshness = if config.local.replica_db_path.exists() {
         let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
-        freshness_from_executor(&executor)?
+        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?
     } else {
-        SyncFreshnessView {
-            state: "never".to_owned(),
-            display: "never synced".to_owned(),
-            age_seconds: None,
-            last_event_at: None,
-        }
+        missing_freshness()
     };
     let provenance = FindResultProvenanceView {
         origin: "local_replica.trade_product".to_owned(),
@@ -1022,6 +1020,22 @@ pub fn get(
         reason: None,
         actions: Vec::new(),
     })
+}
+
+fn refresh_market_listing_if_needed(config: &RuntimeConfig) -> Result<(), RuntimeError> {
+    if !config.local.replica_db_path.exists()
+        || config.output.dry_run
+        || config.relay.urls.is_empty()
+    {
+        return Ok(());
+    }
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let freshness =
+        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?;
+    if crate::runtime::sync::freshness_requires_refresh(&freshness) {
+        let _ = market_refresh(config)?;
+    }
+    Ok(())
 }
 
 pub fn publish(

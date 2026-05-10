@@ -855,6 +855,8 @@ pub struct FarmPublishView {
     pub profile: FarmPublishComponentView,
     pub farm: FarmPublishComponentView,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_replica: Vec<FarmPublishLocalReplicaView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -907,6 +909,23 @@ pub struct FarmPublishComponentView {
     pub job: Option<FarmPublishJobView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event: Option<FarmPublishEventView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmPublishLocalReplicaView {
+    pub component: String,
+    pub state: String,
+    pub store_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingest_outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2778,6 +2797,36 @@ pub struct SyncFreshnessView {
     pub age_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<SyncRunFreshnessView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncRunFreshnessView {
+    pub scope: String,
+    pub relay_set_fingerprint: String,
+    pub relay_set_current: bool,
+    pub last_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_attempted_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_successful_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_completed_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale_after_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingested_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsupported_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

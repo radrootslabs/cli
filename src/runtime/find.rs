@@ -3,12 +3,15 @@ use radroots_sql_core::SqliteExecutor;
 
 use crate::domain::runtime::{
     FindHyfView, FindPriceView, FindQuantityView, FindResultHyfView, FindResultProvenanceView,
-    FindResultView, FindView, SyncFreshnessView,
+    FindResultView, FindView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::hyf::{self, HyfQueryRewriteRequest, HyfRequestContext};
-use crate::runtime::sync::freshness_from_executor;
+use crate::runtime::sync::{
+    RelayIngestScope, freshness_for_scope_from_executor, freshness_requires_refresh,
+    market_refresh, missing_freshness,
+};
 use crate::runtime_args::FindQueryArgs;
 
 const FIND_SOURCE: &str = "local replica · local first";
@@ -50,12 +53,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
             count: 0,
             relay_count: config.relay.urls.len(),
             replica_db: config.local.replica_db_path.display().to_string(),
-            freshness: SyncFreshnessView {
-                state: "never".to_owned(),
-                display: "never synced".to_owned(),
-                age_seconds: None,
-                last_event_at: None,
-            },
+            freshness: missing_freshness(),
             results: Vec::new(),
             hyf: None,
             reason: Some("local replica database is not initialized".to_owned()),
@@ -63,8 +61,10 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
         });
     }
 
+    refresh_market_if_needed(config)?;
     let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
-    let freshness = freshness_from_executor(db.executor())?;
+    let freshness =
+        freshness_for_scope_from_executor(config, db.executor(), RelayIngestScope::MarketRefresh)?;
     let applied_query_rewrite = attempt_query_rewrite(config, query.as_str(), &args.query);
     let effective_query_terms = applied_query_rewrite
         .as_ref()
@@ -134,6 +134,19 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
         reason,
         actions,
     })
+}
+
+fn refresh_market_if_needed(config: &RuntimeConfig) -> Result<(), RuntimeError> {
+    if config.output.dry_run || config.relay.urls.is_empty() {
+        return Ok(());
+    }
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let freshness =
+        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?;
+    if freshness_requires_refresh(&freshness) {
+        let _ = market_refresh(config)?;
+    }
+    Ok(())
 }
 
 fn attempt_query_rewrite(

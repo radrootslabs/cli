@@ -12,7 +12,7 @@ use radroots_events::kinds::{
 use radroots_events_codec::wire::WireEventParts;
 use radroots_identity::RadrootsIdentity;
 use radroots_nostr::prelude::{
-    RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_kind,
+    RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_event_from_nostr, radroots_nostr_kind,
 };
 use radroots_replica_db::{ReplicaSql, migrations};
 use radroots_replica_sync::{
@@ -20,12 +20,14 @@ use radroots_replica_sync::{
     radroots_replica_ingest_event, radroots_replica_ingest_event_state,
     radroots_replica_pending_publish_batch, radroots_replica_sync_status,
 };
-use radroots_sql_core::SqliteExecutor;
+use radroots_sql_core::{SqlExecutor, SqliteExecutor};
+use serde::Deserialize;
+use serde_json::json;
 
 use crate::domain::runtime::{
     RelayFailureView, SyncActionView, SyncFreshnessView, SyncPublishPlanAuthorView,
-    SyncPublishPlanKindView, SyncPublishPlanView, SyncQueueView, SyncStatusView,
-    SyncWatchFrameView, SyncWatchView,
+    SyncPublishPlanKindView, SyncPublishPlanView, SyncQueueView, SyncRunFreshnessView,
+    SyncStatusView, SyncWatchFrameView, SyncWatchView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -47,6 +49,10 @@ const INGEST_SOURCE: &str = "direct Nostr relay fetch · local replica ingest";
 const PUBLISH_SOURCE: &str = "direct Nostr relay publish · local replica sync";
 pub(crate) const RADROOTSD_SYNC_PUSH_UNAVAILABLE_REASON: &str = "sync push is only available in publish mode `nostr_relay`; radrootsd sync push is not implemented";
 const RELAY_FETCH_LIMIT: usize = 1_000;
+const RELAY_FETCH_MAX_PAGES: usize = 5;
+const MARKET_FRESHNESS_STALE_AFTER_SECONDS: u64 = 15 * 60;
+const SYNC_PULL_FRESHNESS_STALE_AFTER_SECONDS: u64 = 30 * 60;
+const SYNC_RUN_TABLE: &str = "radroots_cli_sync_run";
 const MARKET_REFRESH_KINDS: &[u32] = &[KIND_PROFILE, KIND_FARM, KIND_LISTING];
 const SYNC_PULL_KINDS: &[u32] = &[
     KIND_PROFILE,
@@ -84,6 +90,39 @@ struct SyncSnapshot {
     actions: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct SyncRunRecord {
+    scope: String,
+    relay_set_fingerprint: String,
+    target_relays_json: String,
+    connected_relays_json: String,
+    failed_relays_json: String,
+    started_at: u64,
+    completed_at: Option<u64>,
+    state: String,
+    fetched_count: usize,
+    ingested_count: usize,
+    skipped_count: usize,
+    unsupported_count: usize,
+    failed_count: usize,
+    failure_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncRunRow {
+    scope: String,
+    relay_set_fingerprint: String,
+    started_at: i64,
+    completed_at: Option<i64>,
+    state: String,
+    fetched_count: i64,
+    ingested_count: i64,
+    skipped_count: i64,
+    unsupported_count: i64,
+    failed_count: i64,
+    failure_reason: Option<String>,
+}
+
 pub fn status(config: &RuntimeConfig) -> Result<SyncStatusView, RuntimeError> {
     let snapshot = inspect_sync(config)?;
     Ok(SyncStatusView {
@@ -101,11 +140,11 @@ pub fn status(config: &RuntimeConfig) -> Result<SyncStatusView, RuntimeError> {
 }
 
 pub fn pull(config: &RuntimeConfig) -> Result<SyncActionView, RuntimeError> {
-    pull_with_fetcher(config, fetch_events_from_relays)
+    pull_with_fetcher(config, fetch_events_from_relays_windowed)
 }
 
 pub fn market_refresh(config: &RuntimeConfig) -> Result<SyncActionView, RuntimeError> {
-    market_refresh_with_fetcher(config, fetch_events_from_relays)
+    market_refresh_with_fetcher(config, fetch_events_from_relays_windowed)
 }
 
 fn pull_with_fetcher<F>(config: &RuntimeConfig, fetcher: F) -> Result<SyncActionView, RuntimeError>
@@ -129,6 +168,40 @@ where
     ) -> Result<DirectRelayFetchReceipt, DirectRelayFetchError>,
 {
     relay_ingest(config, RelayIngestScope::MarketRefresh, fetcher)
+}
+
+fn fetch_events_from_relays_windowed(
+    relay_urls: &[String],
+    base_filter: RadrootsNostrFilter,
+) -> Result<DirectRelayFetchReceipt, DirectRelayFetchError> {
+    let mut next_filter = base_filter.clone();
+    let mut merged: Option<DirectRelayFetchReceipt> = None;
+
+    for _ in 0..RELAY_FETCH_MAX_PAGES {
+        let receipt = fetch_events_from_relays(relay_urls, next_filter)?;
+        let page_len = receipt.events.len();
+        let oldest_created_at = receipt
+            .events
+            .iter()
+            .map(|event| event.created_at.as_secs())
+            .min();
+        merge_fetch_receipt(&mut merged, receipt);
+        if page_len < RELAY_FETCH_LIMIT {
+            break;
+        }
+        let Some(oldest_created_at) = oldest_created_at else {
+            break;
+        };
+        if oldest_created_at == 0 {
+            break;
+        }
+        next_filter = base_filter
+            .clone()
+            .until(RadrootsNostrTimestamp::from(oldest_created_at - 1))
+            .limit(RELAY_FETCH_LIMIT);
+    }
+
+    merged.ok_or(DirectRelayFetchError::MissingRelays)
 }
 
 fn relay_ingest<F>(
@@ -163,6 +236,7 @@ where
         return Ok(view);
     }
 
+    let started_at = unix_now();
     let receipt = match fetcher(&config.relay.urls, scope.filter()) {
         Ok(receipt) => receipt,
         Err(DirectRelayFetchError::Connect {
@@ -170,18 +244,49 @@ where
             target_relays,
             failed_relays,
         }) => {
+            let failed_relays = relay_failures(failed_relays);
+            let failure_reason = format!("direct relay connection failed: {reason}");
+            let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+            migrations::run_all_up(&executor)?;
+            record_sync_run(
+                &executor,
+                &sync_record_from_failure(
+                    scope,
+                    &config.relay.urls,
+                    target_relays.clone(),
+                    failed_relays.clone(),
+                    started_at,
+                    failure_reason.clone(),
+                )?,
+            )?;
             let mut view = empty_action_from_snapshot(snapshot, "pull");
             view.state = "unavailable".to_owned();
-            view.reason = Some(format!("direct relay connection failed: {reason}"));
+            view.reason = Some(failure_reason);
             view.target_relays = target_relays;
-            view.failed_relays = relay_failures(failed_relays);
+            view.failed_relays = failed_relays;
+            view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
             return Ok(view);
         }
         Err(error) => {
+            let failure_reason = error.to_string();
+            let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+            migrations::run_all_up(&executor)?;
+            record_sync_run(
+                &executor,
+                &sync_record_from_failure(
+                    scope,
+                    &config.relay.urls,
+                    config.relay.urls.clone(),
+                    Vec::new(),
+                    started_at,
+                    failure_reason.clone(),
+                )?,
+            )?;
             let mut view = empty_action_from_snapshot(snapshot, "pull");
             view.state = "unavailable".to_owned();
-            view.reason = Some(error.to_string());
+            view.reason = Some(failure_reason);
             view.target_relays = config.relay.urls.clone();
+            view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
             return Ok(view);
         }
     };
@@ -189,7 +294,11 @@ where
     let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
     migrations::run_all_up(&executor)?;
     let ingest = ingest_events(&executor, &receipt, scope)?;
-    let freshness = freshness_from_executor(&executor)?;
+    record_sync_run(
+        &executor,
+        &sync_record_from_ingest(scope, &config.relay.urls, &receipt, &ingest, started_at)?,
+    )?;
+    let freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
     let queue = radroots_replica_sync_status(&executor)?;
 
     Ok(SyncActionView {
@@ -456,6 +565,7 @@ fn push_radrootsd_unavailable_view(config: &RuntimeConfig) -> SyncActionView {
             display: "not checked".to_owned(),
             age_seconds: None,
             last_event_at: None,
+            run: None,
         },
         queue: SyncQueueView {
             expected_count: 0,
@@ -742,12 +852,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
             replica_db: "missing".to_owned(),
             relay_count: config.relay.urls.len(),
             publish_policy: config.relay.publish_policy.as_str().to_owned(),
-            freshness: SyncFreshnessView {
-                state: "never".to_owned(),
-                display: "never synced".to_owned(),
-                age_seconds: None,
-                last_event_at: None,
-            },
+            freshness: missing_freshness(),
             queue: SyncQueueView {
                 expected_count: 0,
                 pending_count: 0,
@@ -758,8 +863,10 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
     }
 
     let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    migrations::run_all_up(&executor)?;
     let queue = radroots_replica_sync_status(&executor)?;
-    let freshness = freshness_from_executor(&executor)?;
+    let freshness =
+        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::SyncPull)?;
     let relay_count = config.relay.urls.len();
     let publish_policy = config.relay.publish_policy.as_str().to_owned();
     let mut actions = Vec::new();
@@ -819,6 +926,7 @@ pub(crate) fn freshness_from_executor(
                 display: format!("synced {}", relative_age(age_seconds)),
                 age_seconds: Some(age_seconds),
                 last_event_at: Some(last_event_at),
+                run: None,
             }
         }
         None => SyncFreshnessView {
@@ -826,8 +934,366 @@ pub(crate) fn freshness_from_executor(
             display: "never synced".to_owned(),
             age_seconds: None,
             last_event_at: None,
+            run: None,
         },
     })
+}
+
+pub(crate) fn missing_freshness() -> SyncFreshnessView {
+    SyncFreshnessView {
+        state: "never".to_owned(),
+        display: "never synced".to_owned(),
+        age_seconds: None,
+        last_event_at: None,
+        run: None,
+    }
+}
+
+pub(crate) fn freshness_for_scope(
+    config: &RuntimeConfig,
+    scope: RelayIngestScope,
+) -> Result<SyncFreshnessView, RuntimeError> {
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    migrations::run_all_up(&executor)?;
+    freshness_for_scope_from_executor(config, &executor, scope)
+}
+
+pub(crate) fn freshness_for_scope_from_executor(
+    config: &RuntimeConfig,
+    executor: &SqliteExecutor,
+    scope: RelayIngestScope,
+) -> Result<SyncFreshnessView, RuntimeError> {
+    let last_event_at = ReplicaSql::new(executor).nostr_event_last_created_at()?;
+    let now = unix_now();
+    let age_seconds = last_event_at.map(|last_event_at| now.saturating_sub(last_event_at));
+    ensure_sync_run_table(executor)?;
+    let current_fingerprint = relay_set_fingerprint(&config.relay.urls);
+    let latest = latest_sync_run(executor, scope)?;
+    let current = latest
+        .as_ref()
+        .filter(|run| run.relay_set_fingerprint == current_fingerprint);
+    let last_success = current.filter(|run| sync_run_successful(run));
+    let state = freshness_state(scope, latest.as_ref(), current, last_success, age_seconds);
+    let display = freshness_display(scope, state.as_str(), age_seconds, current);
+
+    Ok(SyncFreshnessView {
+        state,
+        display,
+        age_seconds,
+        last_event_at,
+        run: latest.map(|run| sync_run_freshness_view(scope, run, current_fingerprint)),
+    })
+}
+
+pub(crate) fn freshness_requires_refresh(freshness: &SyncFreshnessView) -> bool {
+    matches!(
+        freshness.state.as_str(),
+        "never" | "stale" | "relay_set_changed" | "refresh_failed"
+    )
+}
+
+fn freshness_state(
+    scope: RelayIngestScope,
+    latest: Option<&SyncRunRecord>,
+    current: Option<&SyncRunRecord>,
+    last_success: Option<&SyncRunRecord>,
+    age_seconds: Option<u64>,
+) -> String {
+    let Some(latest) = latest else {
+        return "never".to_owned();
+    };
+    let Some(current) = current else {
+        return "relay_set_changed".to_owned();
+    };
+    if !sync_run_successful(current) {
+        return "refresh_failed".to_owned();
+    }
+    if last_success.is_none() {
+        return "refresh_failed".to_owned();
+    }
+    if age_seconds.is_none() {
+        return "fresh".to_owned();
+    }
+    if age_seconds.unwrap_or_default() > scope.stale_after_seconds() {
+        return "stale".to_owned();
+    }
+    if latest.state == "partial" {
+        return "partial".to_owned();
+    }
+    "fresh".to_owned()
+}
+
+fn freshness_display(
+    scope: RelayIngestScope,
+    state: &str,
+    age_seconds: Option<u64>,
+    run: Option<&SyncRunRecord>,
+) -> String {
+    match state {
+        "fresh" => match age_seconds {
+            Some(age_seconds) => format!("{} fresh {}", scope.display(), relative_age(age_seconds)),
+            None => format!("{} fresh; no market events yet", scope.display()),
+        },
+        "partial" => match age_seconds {
+            Some(age_seconds) => format!(
+                "{} partially refreshed {}",
+                scope.display(),
+                relative_age(age_seconds)
+            ),
+            None => format!(
+                "{} partially refreshed; no market events yet",
+                scope.display()
+            ),
+        },
+        "stale" => match age_seconds {
+            Some(age_seconds) => format!("{} stale {}", scope.display(), relative_age(age_seconds)),
+            None => format!("{} stale", scope.display()),
+        },
+        "relay_set_changed" => format!("{} relay set changed; refresh required", scope.display()),
+        "refresh_failed" => run
+            .and_then(|run| run.failure_reason.clone())
+            .unwrap_or_else(|| format!("{} refresh failed", scope.display())),
+        _ => format!("{} never synced", scope.display()),
+    }
+}
+
+fn sync_run_successful(run: &SyncRunRecord) -> bool {
+    matches!(run.state.as_str(), "success" | "partial")
+}
+
+fn sync_run_freshness_view(
+    scope: RelayIngestScope,
+    run: SyncRunRecord,
+    current_fingerprint: String,
+) -> SyncRunFreshnessView {
+    let relay_set_current = run.relay_set_fingerprint == current_fingerprint;
+    let successful = sync_run_successful(&run);
+    let last_successful_at = successful.then_some(run.completed_at.unwrap_or(run.started_at));
+    SyncRunFreshnessView {
+        scope: run.scope,
+        relay_set_fingerprint: run.relay_set_fingerprint,
+        relay_set_current,
+        last_state: run.state,
+        last_attempted_at: Some(run.started_at),
+        last_successful_at,
+        last_completed_at: run.completed_at,
+        stale_after_seconds: Some(scope.stale_after_seconds()),
+        fetched_count: Some(run.fetched_count),
+        ingested_count: Some(run.ingested_count),
+        skipped_count: Some(run.skipped_count),
+        unsupported_count: Some(run.unsupported_count),
+        failed_count: Some(run.failed_count),
+        failure_reason: run.failure_reason,
+    }
+}
+
+pub(crate) fn ensure_sync_run_table(executor: &SqliteExecutor) -> Result<(), RuntimeError> {
+    executor.exec(
+        "CREATE TABLE IF NOT EXISTS radroots_cli_sync_run (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT NOT NULL,
+            relay_set_fingerprint TEXT NOT NULL,
+            target_relays_json TEXT NOT NULL,
+            connected_relays_json TEXT NOT NULL,
+            failed_relays_json TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            completed_at INTEGER,
+            state TEXT NOT NULL,
+            fetched_count INTEGER NOT NULL,
+            ingested_count INTEGER NOT NULL,
+            skipped_count INTEGER NOT NULL,
+            unsupported_count INTEGER NOT NULL,
+            failed_count INTEGER NOT NULL,
+            failure_reason TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_radroots_cli_sync_run_scope_started
+            ON radroots_cli_sync_run(scope, started_at DESC);",
+        "[]",
+    )?;
+    Ok(())
+}
+
+fn latest_sync_run(
+    executor: &SqliteExecutor,
+    scope: RelayIngestScope,
+) -> Result<Option<SyncRunRecord>, RuntimeError> {
+    let rows = executor.query_raw(
+        &format!(
+            "SELECT scope,
+                    relay_set_fingerprint,
+                    started_at,
+                    completed_at,
+                    state,
+                    fetched_count,
+                    ingested_count,
+                    skipped_count,
+                    unsupported_count,
+                    failed_count,
+                    failure_reason
+             FROM {SYNC_RUN_TABLE}
+             WHERE scope = ?1
+             ORDER BY started_at DESC, id DESC
+             LIMIT 1"
+        ),
+        json!([scope.id()]).to_string().as_str(),
+    )?;
+    let mut rows: Vec<SyncRunRow> = serde_json::from_str(rows.as_str())?;
+    Ok(rows.pop().map(sync_run_record_from_row))
+}
+
+fn sync_run_record_from_row(row: SyncRunRow) -> SyncRunRecord {
+    SyncRunRecord {
+        scope: row.scope,
+        relay_set_fingerprint: row.relay_set_fingerprint,
+        target_relays_json: String::new(),
+        connected_relays_json: String::new(),
+        failed_relays_json: String::new(),
+        started_at: u64_from_db(row.started_at),
+        completed_at: row.completed_at.map(u64_from_db),
+        state: row.state,
+        fetched_count: usize_from_db(row.fetched_count),
+        ingested_count: usize_from_db(row.ingested_count),
+        skipped_count: usize_from_db(row.skipped_count),
+        unsupported_count: usize_from_db(row.unsupported_count),
+        failed_count: usize_from_db(row.failed_count),
+        failure_reason: row.failure_reason,
+    }
+}
+
+fn record_sync_run(executor: &SqliteExecutor, record: &SyncRunRecord) -> Result<(), RuntimeError> {
+    ensure_sync_run_table(executor)?;
+    executor.exec(
+        &format!(
+            "INSERT INTO {SYNC_RUN_TABLE} (
+                scope,
+                relay_set_fingerprint,
+                target_relays_json,
+                connected_relays_json,
+                failed_relays_json,
+                started_at,
+                completed_at,
+                state,
+                fetched_count,
+                ingested_count,
+                skipped_count,
+                unsupported_count,
+                failed_count,
+                failure_reason
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"
+        ),
+        json!([
+            record.scope.as_str(),
+            record.relay_set_fingerprint.as_str(),
+            record.target_relays_json.as_str(),
+            record.connected_relays_json.as_str(),
+            record.failed_relays_json.as_str(),
+            i64_from_u64(record.started_at),
+            record.completed_at.map(i64_from_u64),
+            record.state.as_str(),
+            i64_from_usize(record.fetched_count),
+            i64_from_usize(record.ingested_count),
+            i64_from_usize(record.skipped_count),
+            i64_from_usize(record.unsupported_count),
+            i64_from_usize(record.failed_count),
+            record.failure_reason.as_deref(),
+        ])
+        .to_string()
+        .as_str(),
+    )?;
+    Ok(())
+}
+
+fn sync_record_from_failure(
+    scope: RelayIngestScope,
+    relays: &[String],
+    target_relays: Vec<String>,
+    failed_relays: Vec<RelayFailureView>,
+    started_at: u64,
+    reason: String,
+) -> Result<SyncRunRecord, RuntimeError> {
+    Ok(SyncRunRecord {
+        scope: scope.id().to_owned(),
+        relay_set_fingerprint: relay_set_fingerprint(relays),
+        target_relays_json: serde_json::to_string(&target_relays)?,
+        connected_relays_json: serde_json::to_string(&Vec::<String>::new())?,
+        failed_relays_json: serde_json::to_string(&failed_relays)?,
+        started_at,
+        completed_at: Some(unix_now()),
+        state: "failed".to_owned(),
+        fetched_count: 0,
+        ingested_count: 0,
+        skipped_count: 0,
+        unsupported_count: 0,
+        failed_count: 1,
+        failure_reason: Some(reason),
+    })
+}
+
+fn sync_record_from_ingest(
+    scope: RelayIngestScope,
+    relays: &[String],
+    receipt: &DirectRelayFetchReceipt,
+    ingest: &RelayIngestCounts,
+    started_at: u64,
+) -> Result<SyncRunRecord, RuntimeError> {
+    let failed_relays = relay_failures(receipt.failed_relays.clone());
+    let state = if ingest.failed_count > 0 || !failed_relays.is_empty() {
+        "partial"
+    } else {
+        "success"
+    };
+    Ok(SyncRunRecord {
+        scope: scope.id().to_owned(),
+        relay_set_fingerprint: relay_set_fingerprint(relays),
+        target_relays_json: serde_json::to_string(&receipt.target_relays)?,
+        connected_relays_json: serde_json::to_string(&receipt.connected_relays)?,
+        failed_relays_json: serde_json::to_string(&failed_relays)?,
+        started_at,
+        completed_at: Some(unix_now()),
+        state: state.to_owned(),
+        fetched_count: ingest.fetched_count,
+        ingested_count: ingest.ingested_count,
+        skipped_count: ingest.skipped_count,
+        unsupported_count: ingest.unsupported_count,
+        failed_count: ingest.failed_count + failed_relays.len(),
+        failure_reason: ingest.reason(),
+    })
+}
+
+fn relay_set_fingerprint(relays: &[String]) -> String {
+    let mut normalized = relays
+        .iter()
+        .map(|relay| relay.trim().to_ascii_lowercase())
+        .filter(|relay| !relay.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    let mut hash = 0xcbf29ce484222325_u64;
+    for relay in normalized {
+        for byte in relay.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("relayset_{hash:016x}")
+}
+
+fn u64_from_db(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or_default()
+}
+
+fn usize_from_db(value: i64) -> usize {
+    usize::try_from(value).unwrap_or_default()
+}
+
+fn i64_from_u64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+fn i64_from_usize(value: usize) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -853,12 +1319,33 @@ impl RelayIngestCounts {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum RelayIngestScope {
+pub(crate) enum RelayIngestScope {
     SyncPull,
     MarketRefresh,
 }
 
 impl RelayIngestScope {
+    fn id(self) -> &'static str {
+        match self {
+            Self::SyncPull => "sync_pull",
+            Self::MarketRefresh => "market_refresh",
+        }
+    }
+
+    fn display(self) -> &'static str {
+        match self {
+            Self::SyncPull => "sync pull",
+            Self::MarketRefresh => "market refresh",
+        }
+    }
+
+    fn stale_after_seconds(self) -> u64 {
+        match self {
+            Self::SyncPull => SYNC_PULL_FRESHNESS_STALE_AFTER_SECONDS,
+            Self::MarketRefresh => MARKET_FRESHNESS_STALE_AFTER_SECONDS,
+        }
+    }
+
     fn kinds(self) -> &'static [u32] {
         match self {
             Self::SyncPull => SYNC_PULL_KINDS,
@@ -935,6 +1422,32 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
         .collect()
 }
 
+fn merge_fetch_receipt(
+    target: &mut Option<DirectRelayFetchReceipt>,
+    receipt: DirectRelayFetchReceipt,
+) {
+    match target {
+        Some(target) => {
+            push_unique_many(&mut target.target_relays, receipt.target_relays.iter());
+            push_unique_many(
+                &mut target.connected_relays,
+                receipt.connected_relays.iter(),
+            );
+            for failure in receipt.failed_relays {
+                if !target
+                    .failed_relays
+                    .iter()
+                    .any(|existing| existing.relay == failure.relay)
+                {
+                    target.failed_relays.push(failure);
+                }
+            }
+            target.events.extend(receipt.events);
+        }
+        None => *target = Some(receipt),
+    }
+}
+
 fn push_unique_many<'a>(target: &mut Vec<String>, values: impl Iterator<Item = &'a String>) {
     for value in values {
         if !target.contains(value) {
@@ -991,7 +1504,7 @@ mod tests {
     use super::{
         DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt,
         DirectRelayPublishReceipt, market_refresh_with_fetcher, pull_with_fetcher,
-        push_with_publisher,
+        push_with_publisher, status,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -1440,6 +1953,42 @@ mod tests {
         assert_eq!(view.ingested_count, Some(1));
         assert_eq!(view.unsupported_count, Some(1));
         assert_eq!(view.failed_count, Some(0));
+    }
+
+    #[test]
+    fn relay_refresh_records_current_run_freshness() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        crate::runtime::local::init(&config).expect("store init");
+        let seller = identity(10);
+
+        let view = market_refresh_with_fetcher(&config, fake_fetcher(vec![listing_event(&seller)]))
+            .expect("market refresh");
+
+        assert_eq!(view.freshness.state, "fresh");
+        let run = view.freshness.run.as_ref().expect("run freshness");
+        assert_eq!(run.scope, "market_refresh");
+        assert_eq!(run.last_state, "success");
+        assert_eq!(run.relay_set_current, true);
+        assert_eq!(run.fetched_count, Some(1));
+        assert_eq!(run.ingested_count, Some(1));
+    }
+
+    #[test]
+    fn sync_status_reports_relay_set_changed_freshness() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path(), vec!["wss://relay-a.example.com".to_owned()]);
+        crate::runtime::local::init(&config).expect("store init");
+        let seller = identity(11);
+        pull_with_fetcher(&config, fake_fetcher(vec![listing_event(&seller)])).expect("sync pull");
+        let changed = sample_config(dir.path(), vec!["wss://relay-b.example.com".to_owned()]);
+
+        let view = status(&changed).expect("sync status");
+
+        assert_eq!(view.freshness.state, "relay_set_changed");
+        let run = view.freshness.run.as_ref().expect("run freshness");
+        assert_eq!(run.scope, "sync_pull");
+        assert_eq!(run.relay_set_current, false);
     }
 
     #[test]

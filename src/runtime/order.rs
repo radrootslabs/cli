@@ -96,6 +96,9 @@ use crate::runtime::direct_relay::{
     fetch_events_from_relays, publish_parts_with_identity,
 };
 use crate::runtime::signer::ActorWriteBindingError;
+use crate::runtime::sync::{
+    RelayIngestScope, freshness_for_scope, freshness_requires_refresh, market_refresh,
+};
 use crate::runtime_args::{
     OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftCreateArgs,
     OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
@@ -689,6 +692,10 @@ pub fn submit(
             "order submit requires at least one configured relay before publish preflight"
                 .to_owned(),
         ));
+    }
+
+    if let Some(view) = order_submit_market_freshness_view(config, &loaded, args)? {
+        return Ok(view);
     }
 
     if let Some(view) =
@@ -9299,6 +9306,40 @@ fn order_submit_invalid_quantity_view(
             format!("radroots order get {}", loaded.document.order.order_id),
         ],
     }
+}
+
+fn order_submit_market_freshness_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+) -> Result<Option<OrderSubmitView>, RuntimeError> {
+    if config.output.dry_run {
+        return Ok(None);
+    }
+
+    let mut freshness = freshness_for_scope(config, RelayIngestScope::MarketRefresh)?;
+    if freshness_requires_refresh(&freshness) {
+        let _ = market_refresh(config)?;
+        freshness = freshness_for_scope(config, RelayIngestScope::MarketRefresh)?;
+    }
+    if !freshness_requires_refresh(&freshness) {
+        return Ok(None);
+    }
+
+    Ok(Some(order_submit_unconfigured_view(
+        config,
+        loaded,
+        args,
+        "order submit requires a current market refresh before signing; run `radroots market refresh` with the relays you trust, then submit again",
+        vec![issue(
+            "order.listing_addr",
+            format!(
+                "local market freshness is `{}`; current listing state must be refreshed before order submit",
+                freshness.state
+            ),
+        )],
+        vec!["radroots market refresh".to_owned()],
+    )))
 }
 
 fn order_submit_existing_request_preflight_view(

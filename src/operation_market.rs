@@ -504,6 +504,7 @@ mod tests {
             display: "fresh".to_owned(),
             age_seconds: Some(0),
             last_event_at: Some(0),
+            run: None,
         }
     }
 

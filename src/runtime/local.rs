@@ -14,6 +14,7 @@ use crate::domain::runtime::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime::sync::ensure_sync_run_table;
 use crate::runtime_args::LocalExportFormatArg;
 
 const LOCAL_SOURCE: &str = "local replica · local first";
@@ -23,6 +24,7 @@ pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
     ensure_local_roots(config)?;
     let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
     migrations::run_all_up(&executor)?;
+    ensure_sync_run_table(&executor)?;
     let manifest = export_manifest(&executor)?;
 
     Ok(LocalInitView {
@@ -44,6 +46,7 @@ pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeEr
     validate_local_roots(config)?;
     if config.local.replica_db_path.exists() {
         let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+        ensure_sync_run_table(&executor)?;
         let manifest = export_manifest(&executor)?;
         return Ok(LocalInitView {
             state: "ready".to_owned(),
@@ -95,6 +98,7 @@ pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, RuntimeError> {
     }
 
     let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    ensure_sync_run_table(&executor)?;
     let manifest = export_manifest(&executor)?;
     let sync = radroots_replica_sync_status(&executor)?;
 

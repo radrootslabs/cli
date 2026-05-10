@@ -9,19 +9,23 @@ use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::farm::encode::to_wire_parts_with_kind;
 use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
 use radroots_events_codec::wire::WireEventParts;
+use radroots_nostr::prelude::radroots_event_from_nostr;
+use radroots_replica_db::migrations;
+use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
 use radroots_sdk::{
     RadrootsSdkClient, RadrootsSdkConfig, RadrootsdAuth, SdkEnvironment, SdkPublishError,
     SdkPublishReceipt, SdkRadrootsdFarmPublishOptions, SdkRadrootsdProfilePublishOptions,
     SdkRadrootsdPublishReceipt, SdkRadrootsdSignerSessionRef, SdkTransportMode,
     SdkTransportReceipt, SignerConfig as SdkSignerConfig,
 };
+use radroots_sql_core::SqliteExecutor;
 use serde_json::json;
 
 use crate::domain::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
     FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishJobView,
-    FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
-    RelayFailureView,
+    FarmPublishLocalReplicaView, FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView,
+    FarmSetupView, FarmStatusView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{self, AccountRecordView};
@@ -829,6 +833,8 @@ fn publish_via_direct_relay(
         previews.profile.parts.clone(),
     )
     .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let profile_local_replica =
+        farm_local_replica_ingest_view(config, "profile", &profile_receipt, None);
     persist_profile_publication(config, &mut resolved, profile_receipt.event_id.clone())?;
 
     let farm_receipt = match publish_parts_with_identity(
@@ -847,13 +853,20 @@ fn publish_via_direct_relay(
                 profile_idempotency_key,
                 farm_idempotency_key,
                 profile_receipt,
+                profile_local_replica,
                 error,
             ));
         }
     };
+    let farm_local_replica = farm_local_replica_ingest_view(
+        config,
+        "farm",
+        &farm_receipt,
+        previews.farm.event.event_addr.clone(),
+    );
     persist_farm_publication(config, &mut resolved, farm_receipt.event_id.clone())?;
 
-    Ok(base_publish_view(
+    let mut view = base_publish_view(
         "published",
         config,
         args,
@@ -877,7 +890,9 @@ fn publish_via_direct_relay(
         ),
         None,
         Vec::new(),
-    ))
+    );
+    view.local_replica = vec![profile_local_replica, farm_local_replica];
+    Ok(view)
 }
 
 fn publish_via_radrootsd(
@@ -1063,6 +1078,7 @@ fn missing_publish_view(
             None,
         ),
         farm: not_submitted_component(farm_publish_rpc_method(config), KIND_FARM, args, None, None),
+        local_replica: Vec::new(),
         missing,
         reason: Some(reason),
         actions,
@@ -1127,6 +1143,7 @@ fn base_publish_view(
         requested_signer_session_id: args.signer_session_id.clone(),
         profile,
         farm,
+        local_replica: Vec::new(),
         missing: Vec::new(),
         reason,
         actions,
@@ -1283,10 +1300,11 @@ fn partial_publish_view(
     profile_idempotency_key: Option<String>,
     farm_idempotency_key: Option<String>,
     profile_receipt: DirectRelayPublishReceipt,
+    profile_local_replica: FarmPublishLocalReplicaView,
     farm_error: DirectRelayPublishError,
 ) -> FarmPublishView {
     let reason = format!("farm publish failed after profile publish: {farm_error}");
-    base_publish_view(
+    let mut view = base_publish_view(
         "partial",
         config,
         args,
@@ -1311,7 +1329,9 @@ fn partial_publish_view(
         ),
         Some(reason),
         vec!["radroots farm publish".to_owned()],
-    )
+    );
+    view.local_replica = vec![profile_local_replica];
+    view
 }
 
 fn published_component(
@@ -1342,6 +1362,94 @@ fn published_component(
         reason: None,
         job: None,
         event: args.print_event.then_some(event),
+    }
+}
+
+fn farm_local_replica_ingest_view(
+    config: &RuntimeConfig,
+    component: &str,
+    receipt: &DirectRelayPublishReceipt,
+    event_addr: Option<String>,
+) -> FarmPublishLocalReplicaView {
+    if !config.local.replica_db_path.exists() {
+        return FarmPublishLocalReplicaView {
+            component: component.to_owned(),
+            state: "unconfigured".to_owned(),
+            store_state: "missing".to_owned(),
+            ingest_outcome: None,
+            event_id: Some(receipt.event_id.clone()),
+            event_addr,
+            reason: Some("local replica database is not initialized".to_owned()),
+            actions: vec!["radroots store init".to_owned()],
+        };
+    }
+
+    let executor = match SqliteExecutor::open(&config.local.replica_db_path) {
+        Ok(executor) => executor,
+        Err(error) => {
+            return farm_local_replica_failed_view(
+                component,
+                receipt.event_id.clone(),
+                event_addr,
+                format!("failed to open local replica database: {error}"),
+            );
+        }
+    };
+    if let Err(error) = migrations::run_all_up(&executor) {
+        return farm_local_replica_failed_view(
+            component,
+            receipt.event_id.clone(),
+            event_addr,
+            format!("failed to migrate local replica database: {error}"),
+        );
+    }
+
+    let event = radroots_event_from_nostr(&receipt.event);
+    match radroots_replica_ingest_event(&executor, &event) {
+        Ok(RadrootsReplicaIngestOutcome::Applied) => FarmPublishLocalReplicaView {
+            component: component.to_owned(),
+            state: "applied".to_owned(),
+            store_state: "ready".to_owned(),
+            ingest_outcome: Some("applied".to_owned()),
+            event_id: Some(receipt.event_id.clone()),
+            event_addr,
+            reason: None,
+            actions: Vec::new(),
+        },
+        Ok(RadrootsReplicaIngestOutcome::Skipped) => FarmPublishLocalReplicaView {
+            component: component.to_owned(),
+            state: "skipped".to_owned(),
+            store_state: "ready".to_owned(),
+            ingest_outcome: Some("skipped".to_owned()),
+            event_id: Some(receipt.event_id.clone()),
+            event_addr,
+            reason: Some("shared replica ingest skipped the event".to_owned()),
+            actions: Vec::new(),
+        },
+        Err(error) => farm_local_replica_failed_view(
+            component,
+            receipt.event_id.clone(),
+            event_addr,
+            format!("failed to ingest farm publish event into local replica: {error}"),
+        ),
+    }
+}
+
+fn farm_local_replica_failed_view(
+    component: &str,
+    event_id: String,
+    event_addr: Option<String>,
+    reason: String,
+) -> FarmPublishLocalReplicaView {
+    FarmPublishLocalReplicaView {
+        component: component.to_owned(),
+        state: "failed".to_owned(),
+        store_state: "unavailable".to_owned(),
+        ingest_outcome: None,
+        event_id: Some(event_id),
+        event_addr,
+        reason: Some(reason),
+        actions: vec!["radroots store status get".to_owned()],
     }
 }
 
