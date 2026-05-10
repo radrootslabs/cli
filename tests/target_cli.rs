@@ -8,7 +8,13 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
+use radroots_events::trade::{
+    RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
+};
+use radroots_events_codec::trade::active_trade_order_request_event_build;
+use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
 use radroots_replica_db::{farm, farm_member_claim, migrations};
 use radroots_replica_db_schema::farm::IFarmFields;
 use radroots_replica_db_schema::farm_member_claim::IFarmMemberClaimFields;
@@ -21,7 +27,7 @@ use serde_json::json;
 
 use support::{
     RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
-    assert_no_removed_command_reference, create_listing_draft, identity_public,
+    assert_no_removed_command_reference, create_listing_draft, identity_public, identity_secret,
     make_listing_publishable, make_listing_publishable_with_seller, ndjson_from_stdout, radroots,
     remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing, toml_string,
     write_public_identity_profile,
@@ -255,6 +261,66 @@ impl RelayPublishServer {
             .collect::<Vec<_>>();
         self.handle.join().expect("relay server join");
         requests
+    }
+}
+
+struct RelayFetchServer {
+    endpoint: String,
+    handle: JoinHandle<()>,
+}
+
+impl RelayFetchServer {
+    fn with_events(events: Vec<RadrootsNostrEvent>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind relay fetch");
+        let endpoint = format!("ws://{}", listener.local_addr().expect("relay fetch addr"));
+        let handle = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept relay fetch connection");
+            handle_relay_fetch_connection(stream, events);
+        });
+        Self { endpoint, handle }
+    }
+
+    fn endpoint(&self) -> &str {
+        self.endpoint.as_str()
+    }
+
+    fn join(self) {
+        self.handle.join().expect("relay fetch server join");
+    }
+}
+
+fn handle_relay_fetch_connection(stream: TcpStream, events: Vec<RadrootsNostrEvent>) {
+    let mut websocket = tungstenite::accept(stream).expect("accept fetch websocket");
+    let subscription_id = read_relay_req_subscription_id(&mut websocket);
+    for event in events {
+        websocket
+            .send(tungstenite::Message::Text(
+                json!(["EVENT", subscription_id, event]).to_string().into(),
+            ))
+            .expect("relay event send");
+    }
+    websocket
+        .send(tungstenite::Message::Text(
+            json!(["EOSE", subscription_id]).to_string().into(),
+        ))
+        .expect("relay eose send");
+}
+
+fn read_relay_req_subscription_id(websocket: &mut tungstenite::WebSocket<TcpStream>) -> String {
+    loop {
+        let message = websocket.read().expect("relay req message");
+        if !message.is_text() {
+            continue;
+        }
+        let value: Value =
+            serde_json::from_str(message.to_text().expect("relay req text")).expect("relay json");
+        if value.get(0).and_then(Value::as_str) == Some("REQ") {
+            return value
+                .get(1)
+                .and_then(Value::as_str)
+                .expect("subscription id")
+                .to_owned();
+        }
     }
 }
 
@@ -3639,6 +3705,11 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
         &["--relay", "ws://127.0.0.1:9", "sync", "push"],
     );
     assert_required_approval_token_rejected(&sandbox, "order.submit", &["order", "submit"]);
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "order.rebind",
+        &["order", "rebind", "ord_missing", "acct_missing"],
+    );
     assert_required_approval_token_rejected(&sandbox, "order.accept", &["order", "accept"]);
     assert_required_approval_token_rejected(
         &sandbox,
@@ -3850,6 +3921,39 @@ fn rewrite_order_buyer_actor_pubkey(sandbox: &RadrootsCliSandbox, order_id: &str
 fn line_indent(line: &str) -> &str {
     let trimmed = line.trim_start();
     &line[..line.len() - trimmed.len()]
+}
+
+fn signed_order_request_event_for_quote(
+    buyer: &radroots_identity::RadrootsIdentity,
+    order_id: &str,
+    listing_event_id: &str,
+    economics: RadrootsTradeOrderEconomics,
+) -> RadrootsNostrEvent {
+    let buyer_pubkey = buyer.public_key_hex();
+    let seller_pubkey = "1".repeat(64);
+    let payload = RadrootsTradeOrderRequested {
+        order_id: order_id.to_owned(),
+        listing_addr: LISTING_ADDR.to_owned(),
+        buyer_pubkey,
+        seller_pubkey,
+        items: vec![RadrootsTradeOrderItem {
+            bin_id: "bin-1".to_owned(),
+            bin_count: 2,
+        }],
+        economics,
+    };
+    let parts = active_trade_order_request_event_build(
+        &RadrootsNostrEventPtr {
+            id: listing_event_id.to_owned(),
+            relays: None,
+        },
+        &payload,
+    )
+    .expect("order request parts");
+    radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+        .expect("nostr event builder")
+        .sign_with_keys(buyer.keys())
+        .expect("signed order request")
 }
 
 #[test]
@@ -4253,6 +4357,191 @@ fn order_get_marks_bound_buyer_pubkey_mismatch_unready() {
             .iter()
             .any(|action| action
                 == &Value::String(format!("radroots order rebind {order_id} <selector>")))
+    );
+}
+
+#[test]
+fn order_rebind_previews_and_writes_bound_buyer_actor_updates() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "order_rebind");
+    let order_file = sandbox
+        .root()
+        .join("data/apps/cli/orders/drafts")
+        .join(format!("{order_id}.toml"));
+    let before = fs::read_to_string(&order_file).expect("order before rebind");
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+
+    let dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "order",
+        "rebind",
+        order_id.as_str(),
+        second_account_id,
+    ]);
+    assert_eq!(dry_run["operation_id"], "order.rebind");
+    assert_eq!(dry_run["result"]["state"], "dry_run");
+    assert_eq!(dry_run["result"]["from_order_id"], order_id);
+    assert_eq!(dry_run["result"]["order_id_changed"], true);
+    assert_eq!(dry_run["result"]["buyer_pubkey_changed"], true);
+    assert_eq!(dry_run["result"]["to_buyer_account_id"], second_account_id);
+    assert_eq!(
+        dry_run["result"]["existing_request_check"],
+        "skipped_no_relays"
+    );
+    assert_eq!(
+        fs::read_to_string(&order_file).expect("order after dry-run rebind"),
+        before
+    );
+
+    let (unapproved_output, unapproved) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "rebind",
+        order_id.as_str(),
+        second_account_id,
+    ]);
+    assert!(!unapproved_output.status.success());
+    assert_eq!(unapproved["operation_id"], "order.rebind");
+    assert_eq!(unapproved["errors"][0]["code"], "approval_required");
+
+    let rebound = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "order",
+        "rebind",
+        order_id.as_str(),
+        second_account_id,
+    ]);
+    assert_eq!(rebound["operation_id"], "order.rebind");
+    assert_eq!(rebound["result"]["state"], "rebound");
+    assert_eq!(rebound["result"]["from_order_id"], order_id);
+    assert_eq!(rebound["result"]["order_id_changed"], true);
+    let rebound_order_id = rebound["result"]["to_order_id"]
+        .as_str()
+        .expect("rebound order id");
+    assert_ne!(rebound_order_id, order_id);
+    let rebound_file = rebound["result"]["file"].as_str().expect("rebound file");
+    assert!(!order_file.exists());
+    let after = fs::read_to_string(rebound_file).expect("order after rebind");
+    assert!(after.contains("[buyer_actor]"));
+    assert!(after.contains("source = \"order_rebind\""));
+    assert!(after.contains(format!("order_id = \"{rebound_order_id}\"").as_str()));
+    assert!(after.contains(format!("quote_id = \"quote_{rebound_order_id}\"").as_str()));
+
+    let get = sandbox.json_success(&["--format", "json", "order", "get", rebound_order_id]);
+    assert_eq!(get["result"]["state"], "ready");
+    assert_eq!(get["result"]["buyer_account_id"], second_account_id);
+    assert_eq!(get["result"]["buyer_actor_source"], "order_rebind");
+
+    let same = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "order",
+        "rebind",
+        rebound_order_id,
+        second_account_id,
+    ]);
+    assert_eq!(same["result"]["state"], "rebound");
+    assert_eq!(same["result"]["order_id_changed"], false);
+    assert_eq!(same["result"]["to_order_id"], rebound_order_id);
+}
+
+#[test]
+fn order_rebind_refuses_visible_published_request() {
+    let sandbox = RadrootsCliSandbox::new();
+    let buyer = identity_secret(94);
+    let buyer_public = buyer.to_public();
+    let buyer_public_file =
+        write_public_identity_profile(&sandbox, "rebind-visible-buyer", &buyer_public);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        buyer_public_file.to_string_lossy().as_ref(),
+    ]);
+    let listing_event_id = seed_orderable_listing(&sandbox, LISTING_ADDR);
+    sandbox.json_success(&["--format", "json", "basket", "create", "visible_rebind"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "visible_rebind",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "visible_rebind",
+    ]);
+    let order_id = quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id");
+    let economics: RadrootsTradeOrderEconomics =
+        serde_json::from_value(quote["result"]["quote"]["economics"].clone())
+            .expect("quote economics");
+    let event = signed_order_request_event_for_quote(
+        &buyer,
+        order_id,
+        listing_event_id.as_str(),
+        economics,
+    );
+    let target = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let target_account_id = target["result"]["account"]["id"]
+        .as_str()
+        .expect("target account id");
+    let relay = RelayFetchServer::with_events(vec![event]);
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "--relay",
+        relay.endpoint(),
+        "order",
+        "rebind",
+        order_id,
+        target_account_id,
+    ]);
+    relay.join();
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(10));
+    assert_eq!(value["operation_id"], "order.rebind");
+    assert_eq!(value["errors"][0]["code"], "validation_failed");
+    assert_eq!(
+        value["errors"][0]["detail"]["existing_request_check"],
+        "blocked_existing_request"
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["existing_request_event_ids"]
+            .as_array()
+            .expect("existing request ids")
+            .len(),
+        1
     );
 }
 

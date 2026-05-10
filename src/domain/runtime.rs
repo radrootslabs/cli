@@ -1338,6 +1338,46 @@ impl OrderSubmitView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OrderRebindView {
+    pub state: String,
+    pub source: String,
+    pub lookup: String,
+    pub file: String,
+    pub dry_run: bool,
+    pub from_order_id: String,
+    pub to_order_id: String,
+    pub order_id_changed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_buyer_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_buyer_actor_source: Option<String>,
+    pub to_buyer_account_id: String,
+    pub to_buyer_pubkey: String,
+    pub to_buyer_actor_source: String,
+    pub buyer_pubkey_changed: bool,
+    pub existing_request_check: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub existing_request_event_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderRebindView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "missing" => CommandDisposition::NotFound,
+            "invalid" => CommandDisposition::ValidationFailed,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct OrderDecisionView {
     pub state: String,
     pub source: String,

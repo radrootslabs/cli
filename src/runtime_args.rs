@@ -206,6 +206,12 @@ pub struct OrderSubmitArgs {
     pub idempotency_key: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct OrderRebindArgs {
+    pub key: String,
+    pub selector: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderDecisionArg {
     Accept,

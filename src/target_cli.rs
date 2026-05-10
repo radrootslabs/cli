@@ -220,6 +220,7 @@ impl TargetCommand {
                 OrderCommand::Submit(_) => "order.submit",
                 OrderCommand::Get(_) => "order.get",
                 OrderCommand::List => "order.list",
+                OrderCommand::Rebind(_) => "order.rebind",
                 OrderCommand::Accept(_) => "order.accept",
                 OrderCommand::Decline(_) => "order.decline",
                 OrderCommand::Cancel(_) => "order.cancel",
@@ -821,6 +822,7 @@ pub enum OrderCommand {
     Submit(OrderSubmitArgs),
     Get(OrderKeyArgs),
     List,
+    Rebind(OrderRebindArgs),
     Accept(OrderKeyArgs),
     Decline(OrderDeclineArgs),
     Cancel(OrderCancelArgs),
@@ -841,6 +843,12 @@ pub struct OrderSubmitArgs {
 #[derive(Debug, Clone, Args)]
 pub struct OrderKeyArgs {
     pub order_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderRebindArgs {
+    pub order_id: Option<String>,
+    pub selector: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1215,6 +1223,23 @@ mod tests {
         );
         assert_eq!(args.selector.as_deref(), Some("acct_test"));
         assert_eq!(args.farm_d_tag.as_deref(), Some("AAAAAAAAAAAAAAAAAAAAAw"));
+    }
+
+    #[test]
+    fn target_parser_accepts_order_rebind_inputs() {
+        let parsed =
+            TargetCliArgs::try_parse_from(["radroots", "order", "rebind", "ord_test", "acct_test"])
+                .expect("target args parse");
+
+        assert_eq!(parsed.command.operation_id(), "order.rebind");
+        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+            panic!("expected order command")
+        };
+        let OrderCommand::Rebind(args) = order.command else {
+            panic!("expected order rebind command")
+        };
+        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.selector.as_deref(), Some("acct_test"));
     }
 
     #[test]

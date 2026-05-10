@@ -84,8 +84,8 @@ use crate::domain::runtime::{
     OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
     OrderEventListView, OrderFulfillmentView, OrderGetView, OrderInventoryBinView,
     OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderPaymentView,
-    OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView, OrderSettlementView,
-    OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
+    OrderRebindView, OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView,
+    OrderSettlementView, OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
     OrderStatusLifecycleReceiptView, OrderStatusLifecycleView, OrderStatusPaymentView,
     OrderStatusRevisionView, OrderStatusView, OrderSubmitView, OrderSummaryView, RelayFailureView,
 };
@@ -102,9 +102,10 @@ use crate::runtime::sync::{
 };
 use crate::runtime_args::{
     OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftCreateArgs,
-    OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
-    OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderSettlementArgs,
-    OrderSettlementDecisionArg, OrderStatusArgs, OrderSubmitArgs, RecordLookupArgs,
+    OrderFulfillmentArgs, OrderPaymentArgs, OrderRebindArgs, OrderReceiptArgs,
+    OrderRevisionDecisionArg, OrderRevisionDecisionArgs, OrderRevisionProposeArgs,
+    OrderSettlementArgs, OrderSettlementDecisionArg, OrderStatusArgs, OrderSubmitArgs,
+    RecordLookupArgs,
 };
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
@@ -271,6 +272,12 @@ struct ResolvedInventoryListing {
 struct OrderDecisionInventoryPreflight {
     invalid_view: Option<OrderDecisionView>,
     inventory: Option<OrderInventoryView>,
+}
+
+#[derive(Debug, Clone)]
+struct OrderRebindExistingRequestCheck {
+    state: String,
+    event_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -733,6 +740,168 @@ pub fn submit(
         Ok(view) => Ok(view),
         Err(error) => Err(error),
     }
+}
+
+pub fn rebind(
+    config: &RuntimeConfig,
+    args: &OrderRebindArgs,
+) -> Result<OrderRebindView, RuntimeError> {
+    rebind_inner(config, args, false)
+}
+
+pub fn rebind_preflight(
+    config: &RuntimeConfig,
+    args: &OrderRebindArgs,
+) -> Result<OrderRebindView, RuntimeError> {
+    rebind_inner(config, args, true)
+}
+
+fn rebind_inner(
+    config: &RuntimeConfig,
+    args: &OrderRebindArgs,
+    dry_run: bool,
+) -> Result<OrderRebindView, RuntimeError> {
+    let file = draft_lookup_path(config, args.key.as_str());
+    if !file.exists() {
+        return Ok(OrderRebindView {
+            state: "missing".to_owned(),
+            source: ORDER_SOURCE.to_owned(),
+            lookup: args.key.clone(),
+            file: file.display().to_string(),
+            dry_run,
+            from_order_id: args.key.clone(),
+            to_order_id: args.key.clone(),
+            order_id_changed: false,
+            from_buyer_account_id: None,
+            from_buyer_pubkey: None,
+            from_buyer_actor_source: None,
+            to_buyer_account_id: args.selector.clone(),
+            to_buyer_pubkey: String::new(),
+            to_buyer_actor_source: ORDER_BUYER_ACTOR_SOURCE_REBIND.to_owned(),
+            buyer_pubkey_changed: false,
+            existing_request_check: "not_checked".to_owned(),
+            existing_request_event_ids: Vec::new(),
+            reason: Some(format!("order draft `{}` was not found", args.key)),
+            actions: vec![
+                "radroots order list".to_owned(),
+                "radroots basket create".to_owned(),
+            ],
+        });
+    }
+
+    let loaded = load_draft(file.as_path()).map_err(RuntimeError::Config)?;
+    let target_account = accounts::resolve_account_selector(config, args.selector.as_str())
+        .map_err(|error| order_rebind_selector_error(args.selector.as_str(), error))?;
+    let existing_request = order_rebind_existing_request_check(config, &loaded)?;
+    let from_order_id = loaded.document.order.order_id.clone();
+    let from_buyer_account_id = buyer_account_id(&loaded.document);
+    let from_buyer_pubkey = non_empty_string(loaded.document.buyer_actor.pubkey.clone());
+    let from_buyer_actor_source = buyer_actor_source(&loaded.document);
+    let target_account_id = target_account.record.account_id.to_string();
+    let target_pubkey = target_account.record.public_identity.public_key_hex.clone();
+    let current_buyer_pubkey = from_buyer_pubkey
+        .clone()
+        .or_else(|| non_empty_string(loaded.document.order.buyer_pubkey.clone()));
+    let buyer_pubkey_changed = current_buyer_pubkey
+        .as_deref()
+        .is_none_or(|pubkey| !pubkey.eq_ignore_ascii_case(target_pubkey.as_str()));
+
+    if !existing_request.event_ids.is_empty() {
+        return Ok(OrderRebindView {
+            state: "invalid".to_owned(),
+            source: ORDER_SOURCE.to_owned(),
+            lookup: args.key.clone(),
+            file: loaded.file.display().to_string(),
+            dry_run,
+            from_order_id: from_order_id.clone(),
+            to_order_id: from_order_id.clone(),
+            order_id_changed: false,
+            from_buyer_account_id,
+            from_buyer_pubkey,
+            from_buyer_actor_source,
+            to_buyer_account_id: target_account_id,
+            to_buyer_pubkey: target_pubkey,
+            to_buyer_actor_source: ORDER_BUYER_ACTOR_SOURCE_REBIND.to_owned(),
+            buyer_pubkey_changed,
+            existing_request_check: existing_request.state,
+            existing_request_event_ids: existing_request.event_ids,
+            reason: Some(
+                "order rebind refused because a valid order request is already visible for this order id"
+                    .to_owned(),
+            ),
+            actions: vec![
+                format!("radroots order status get {from_order_id}"),
+                "radroots basket quote create <basket-id>".to_owned(),
+            ],
+        });
+    }
+
+    let mut document = loaded.document.clone();
+    let to_order_id = if buyer_pubkey_changed {
+        next_order_id()
+    } else {
+        from_order_id.clone()
+    };
+    let order_id_changed = to_order_id != from_order_id;
+    document.order.order_id = to_order_id.clone();
+    document.order.buyer_pubkey = target_pubkey.clone();
+    document.buyer_actor.account_id = target_account_id.clone();
+    document.buyer_actor.pubkey = target_pubkey.clone();
+    document.buyer_actor.source = ORDER_BUYER_ACTOR_SOURCE_REBIND.to_owned();
+    if order_id_changed && let Some(economics) = document.order.economics.as_mut() {
+        economics.quote_id = format!("quote_{to_order_id}");
+    }
+
+    let output_file = if order_id_changed {
+        drafts_dir(config).join(format!("{to_order_id}.toml"))
+    } else {
+        loaded.file.clone()
+    };
+    if !dry_run {
+        if order_id_changed && output_file.exists() {
+            return Err(RuntimeError::Config(format!(
+                "order rebind target file {} already exists",
+                output_file.display()
+            )));
+        }
+        save_draft(output_file.as_path(), &document)?;
+        if order_id_changed && output_file != loaded.file {
+            fs::remove_file(loaded.file.as_path())?;
+        }
+    }
+
+    Ok(OrderRebindView {
+        state: if dry_run { "dry_run" } else { "rebound" }.to_owned(),
+        source: ORDER_SOURCE.to_owned(),
+        lookup: args.key.clone(),
+        file: output_file.display().to_string(),
+        dry_run,
+        from_order_id: from_order_id.clone(),
+        to_order_id: to_order_id.clone(),
+        order_id_changed,
+        from_buyer_account_id,
+        from_buyer_pubkey,
+        from_buyer_actor_source,
+        to_buyer_account_id: target_account_id,
+        to_buyer_pubkey: target_pubkey,
+        to_buyer_actor_source: ORDER_BUYER_ACTOR_SOURCE_REBIND.to_owned(),
+        buyer_pubkey_changed,
+        existing_request_check: existing_request.state,
+        existing_request_event_ids: Vec::new(),
+        reason: Some(if dry_run {
+            "dry run requested; order buyer actor binding was not written".to_owned()
+        } else {
+            "order buyer actor binding updated".to_owned()
+        }),
+        actions: if dry_run {
+            vec![format!(
+                "radroots --approval-token approve order rebind {} {}",
+                args.key, args.selector
+            )]
+        } else {
+            vec![format!("radroots order get {to_order_id}")]
+        },
+    })
 }
 
 pub fn event_list(
@@ -9194,6 +9363,65 @@ fn actions_for_document(
         }
     }
     deduped
+}
+
+fn order_rebind_selector_error(selector: &str, error: RuntimeError) -> RuntimeError {
+    match error {
+        RuntimeError::Accounts(_) | RuntimeError::Account(_) => {
+            accounts::AccountRuntimeFailure::unresolved_with_detail(
+                format!("order rebind target selector `{selector}` did not resolve"),
+                json!({
+                    "selector": selector,
+                    "actions": [
+                        "radroots account list",
+                        "radroots account import <path>",
+                        "radroots account create",
+                    ],
+                }),
+            )
+            .into()
+        }
+        other => other,
+    }
+}
+
+fn order_rebind_existing_request_check(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+) -> Result<OrderRebindExistingRequestCheck, RuntimeError> {
+    if config.relay.urls.is_empty() {
+        return Ok(OrderRebindExistingRequestCheck {
+            state: "skipped_no_relays".to_owned(),
+            event_ids: Vec::new(),
+        });
+    }
+
+    let filter = order_request_filter(
+        loaded.document.order.seller_pubkey.as_str(),
+        Some(loaded.document.order.order_id.as_str()),
+    )?;
+    let receipt = fetch_events_from_relays(&config.relay.urls, filter)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let mut event_ids = receipt
+        .events
+        .iter()
+        .filter_map(|event| {
+            order_submit_request_from_event(event, loaded)
+                .ok()
+                .map(|request| request.request_event_id)
+        })
+        .collect::<Vec<_>>();
+    event_ids.sort();
+    event_ids.dedup();
+
+    Ok(OrderRebindExistingRequestCheck {
+        state: if event_ids.is_empty() {
+            "clear".to_owned()
+        } else {
+            "blocked_existing_request".to_owned()
+        },
+        event_ids,
+    })
 }
 
 fn resolve_initial_buyer_actor(

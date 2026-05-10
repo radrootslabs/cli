@@ -1455,6 +1455,10 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 insert_string(&mut input, "order_id", &args.order_id);
             }
             OrderCommand::Get(args) => insert_string(&mut input, "order_id", &args.order_id),
+            OrderCommand::Rebind(args) => {
+                insert_string(&mut input, "order_id", &args.order_id);
+                insert_string(&mut input, "selector", &args.selector);
+            }
             OrderCommand::Accept(args) => insert_string(&mut input, "order_id", &args.order_id),
             OrderCommand::Decline(args) => {
                 insert_string(&mut input, "order_id", &args.order_id);
@@ -1643,6 +1647,7 @@ target_operation_contracts! {
     OrderSubmit => (OrderSubmitRequest, OrderSubmitResult, "order.submit"),
     OrderGet => (OrderGetRequest, OrderGetResult, "order.get"),
     OrderList => (OrderListRequest, OrderListResult, "order.list"),
+    OrderRebind => (OrderRebindRequest, OrderRebindResult, "order.rebind"),
     OrderAccept => (OrderAcceptRequest, OrderAcceptResult, "order.accept"),
     OrderDecline => (OrderDeclineRequest, OrderDeclineResult, "order.decline"),
     OrderCancel => (OrderCancelRequest, OrderCancelResult, "order.cancel"),
@@ -1862,6 +1867,37 @@ mod tests {
                 .get("farm_d_tag")
                 .and_then(Value::as_str),
             Some("AAAAAAAAAAAAAAAAAAAAAw")
+        );
+    }
+
+    #[test]
+    fn adapter_maps_order_rebind_inputs() {
+        let parsed =
+            TargetCliArgs::try_parse_from(["radroots", "order", "rebind", "ord_test", "acct_test"])
+                .expect("target args parse");
+
+        let request = TargetOperationRequest::from_target_args(&parsed)
+            .expect("operation request from target args");
+        let TargetOperationRequest::OrderRebind(request) = request else {
+            panic!("expected order rebind request")
+        };
+
+        assert_eq!(request.operation_id(), "order.rebind");
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("order_id")
+                .and_then(Value::as_str),
+            Some("ord_test")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("selector")
+                .and_then(Value::as_str),
+            Some("acct_test")
         );
     }
 

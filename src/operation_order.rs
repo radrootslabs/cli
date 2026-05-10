@@ -4,8 +4,8 @@ use serde_json::{Value, json};
 use crate::deferred_payment::deferred_payment_message;
 use crate::domain::runtime::{
     CommandDisposition, OrderCancellationView, OrderDecisionView, OrderFulfillmentView,
-    OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView, OrderStatusView,
-    OrderSubmitView,
+    OrderRebindView, OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView,
+    OrderStatusView, OrderSubmitView,
 };
 use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
@@ -14,18 +14,19 @@ use crate::operation_adapter::{
     OrderEventListRequest, OrderEventListResult, OrderEventWatchRequest, OrderEventWatchResult,
     OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, OrderGetRequest, OrderGetResult,
     OrderListRequest, OrderListResult, OrderPaymentRecordRequest, OrderPaymentRecordResult,
-    OrderReceiptRecordRequest, OrderReceiptRecordResult, OrderRevisionAcceptRequest,
-    OrderRevisionAcceptResult, OrderRevisionDeclineRequest, OrderRevisionDeclineResult,
-    OrderRevisionProposeRequest, OrderRevisionProposeResult, OrderSettlementAcceptRequest,
-    OrderSettlementAcceptResult, OrderSettlementRejectRequest, OrderSettlementRejectResult,
-    OrderStatusGetRequest, OrderStatusGetResult, OrderSubmitRequest, OrderSubmitResult,
+    OrderRebindRequest, OrderRebindResult, OrderReceiptRecordRequest, OrderReceiptRecordResult,
+    OrderRevisionAcceptRequest, OrderRevisionAcceptResult, OrderRevisionDeclineRequest,
+    OrderRevisionDeclineResult, OrderRevisionProposeRequest, OrderRevisionProposeResult,
+    OrderSettlementAcceptRequest, OrderSettlementAcceptResult, OrderSettlementRejectRequest,
+    OrderSettlementRejectResult, OrderStatusGetRequest, OrderStatusGetResult, OrderSubmitRequest,
+    OrderSubmitResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime_args::{
-    OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderReceiptArgs,
-    OrderRevisionDecisionArg, OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderStatusArgs,
-    OrderSubmitArgs, RecordLookupArgs,
+    OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderRebindArgs,
+    OrderReceiptArgs, OrderRevisionDecisionArg, OrderRevisionDecisionArgs,
+    OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs, RecordLookupArgs,
 };
 
 const ORDER_EVENT_WATCH_DEFERRED_REASON: &str = "relay-backed order event watch is not implemented";
@@ -97,6 +98,37 @@ impl OperationService<OrderListRequest> for OrderOperationService<'_> {
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let view = map_runtime(crate::runtime::order::list(self.config))?;
         serialized_target_result::<OrderListResult, _>(&view)
+    }
+}
+
+impl OperationService<OrderRebindRequest> for OrderOperationService<'_> {
+    type Result = OrderRebindResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<OrderRebindRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = OrderRebindArgs {
+            key: required_order_key(&request)?,
+            selector: required_string_input(&request, "selector")?,
+        };
+        if request.context.dry_run {
+            let view =
+                crate::runtime::order::rebind_preflight(self.config, &args).map_err(|error| {
+                    OperationAdapterError::runtime_failure(request.operation_id(), error)
+                })?;
+            return order_rebind_result::<OrderRebindResult>(request.operation_id(), &view);
+        }
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
+
+        let view = crate::runtime::order::rebind(self.config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
+        order_rebind_result::<OrderRebindResult>(request.operation_id(), &view)
     }
 }
 
@@ -1216,6 +1248,64 @@ where
             }
         }
     }
+}
+
+fn order_rebind_result<R>(
+    operation_id: &str,
+    view: &OrderRebindView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_target_result::<R, _>(view),
+        CommandDisposition::NotFound => Err(OperationAdapterError::not_found_with_detail(
+            operation_id,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| format!("order draft `{}` was not found", view.lookup)),
+            order_rebind_error_detail(view),
+        )),
+        CommandDisposition::ValidationFailed => {
+            Err(OperationAdapterError::validation_failed_with_detail(
+                operation_id,
+                view.reason.clone().unwrap_or_else(|| {
+                    format!("order rebind finished with state `{}`", view.state)
+                }),
+                order_rebind_error_detail(view),
+            ))
+        }
+        disposition => Err(OperationAdapterError::from_command_disposition(
+            operation_id,
+            disposition,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| format!("order rebind finished with state `{}`", view.state)),
+        )),
+    }
+}
+
+fn order_rebind_error_detail(view: &OrderRebindView) -> Value {
+    json!({
+        "state": &view.state,
+        "source": &view.source,
+        "lookup": &view.lookup,
+        "file": &view.file,
+        "dry_run": view.dry_run,
+        "from_order_id": &view.from_order_id,
+        "to_order_id": &view.to_order_id,
+        "order_id_changed": view.order_id_changed,
+        "from_buyer_account_id": &view.from_buyer_account_id,
+        "from_buyer_pubkey": &view.from_buyer_pubkey,
+        "from_buyer_actor_source": &view.from_buyer_actor_source,
+        "to_buyer_account_id": &view.to_buyer_account_id,
+        "to_buyer_pubkey": &view.to_buyer_pubkey,
+        "to_buyer_actor_source": &view.to_buyer_actor_source,
+        "buyer_pubkey_changed": view.buyer_pubkey_changed,
+        "existing_request_check": &view.existing_request_check,
+        "existing_request_event_ids": &view.existing_request_event_ids,
+        "actions": &view.actions,
+    })
 }
 
 fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
