@@ -127,6 +127,9 @@ const ORDER_EVENT_LIST_RELAY_ACTION: &str =
     "radroots --relay wss://relay.example.com order event list";
 const ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
 const ORDER_BUYER_ACTOR_SOURCE_REBIND: &str = "order_rebind";
+const ORDER_ACTOR_CONTEXT_ORDER_DRAFT: &str = "order_draft";
+const ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT: &str = "resolved_account";
+const ORDER_ACTOR_CONTEXT_NETWORK_ONLY: &str = "network_only";
 const ORDERS_DIR: &str = "orders/drafts";
 
 static ORDER_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -278,6 +281,35 @@ struct OrderDecisionInventoryPreflight {
 struct OrderRebindExistingRequestCheck {
     state: String,
     event_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct OrderDraftStatusActorContext {
+    source: &'static str,
+    buyer_pubkey: Option<String>,
+    seller_pubkey: Option<String>,
+    selected_account_pubkey: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct OrderEventListActorContext {
+    source: &'static str,
+    seller_pubkey: String,
+}
+
+#[derive(Debug, Clone)]
+struct OrderBoundBuyerWriteContext {
+    loaded: LoadedOrderDraft,
+    account: accounts::AccountRecordView,
+}
+
+#[derive(Debug, Clone)]
+struct OrderBuyerWriteActorContext {
+    bound: Option<OrderBoundBuyerWriteContext>,
+    selected_pubkey: String,
+    status_buyer_pubkey: Option<String>,
+    status_seller_pubkey: Option<String>,
+    status_context_source: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -911,24 +943,26 @@ pub fn event_list(
     if config.relay.urls.is_empty() {
         return Ok(order_event_list_unconfigured(
             None,
+            ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
             "order event list requires at least one configured relay".to_owned(),
             Vec::new(),
             vec![ORDER_EVENT_LIST_RELAY_ACTION.to_owned()],
         ));
     }
 
-    let seller = match accounts::resolve_account(config)? {
-        Some(account) => account,
+    let actor_context = match order_event_list_actor_context(config, order_id)? {
+        Some(context) => context,
         None => {
             return Ok(order_event_list_unconfigured(
                 None,
+                ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
                 "order event list requires a selected seller account".to_owned(),
                 config.relay.urls.clone(),
                 vec!["radroots account create".to_owned()],
             ));
         }
     };
-    let seller_pubkey = seller.record.public_identity.public_key_hex;
+    let seller_pubkey = actor_context.seller_pubkey;
     let filter = order_request_filter(seller_pubkey.as_str(), order_id)?;
     let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
         Ok(receipt) => receipt,
@@ -939,6 +973,7 @@ pub fn event_list(
         }) => {
             return Ok(order_event_list_unavailable(
                 seller_pubkey,
+                actor_context.source,
                 reason,
                 target_relays,
                 failed_relays,
@@ -950,6 +985,7 @@ pub fn event_list(
     Ok(order_event_list_from_receipt(
         seller_pubkey,
         order_id,
+        actor_context.source,
         receipt,
     ))
 }
@@ -1141,7 +1177,10 @@ pub fn revision_propose(
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
+            buyer_pubkey: None,
+            seller_pubkey: None,
             selected_account_pubkey: Some(selected_pubkey.as_str()),
+            actor_context_source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
         },
         receipt,
     );
@@ -1223,8 +1262,8 @@ pub fn revision_decide(
         return Ok(view);
     }
 
-    let buyer = match accounts::resolve_account(config)? {
-        Some(account) => account,
+    let actor_context = match order_buyer_write_actor_context(config, args.key.as_str())? {
+        Some(context) => context,
         None => {
             let mut view = order_revision_decision_base_view(
                 config,
@@ -1238,7 +1277,7 @@ pub fn revision_decide(
             return Ok(view);
         }
     };
-    let selected_pubkey = buyer.record.public_identity.public_key_hex;
+    let selected_pubkey = actor_context.selected_pubkey.clone();
     let filter = order_status_filter(args.key.as_str())?;
     let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
         Ok(receipt) => receipt,
@@ -1267,7 +1306,13 @@ pub fn revision_decide(
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
-            selected_account_pubkey: Some(selected_pubkey.as_str()),
+            buyer_pubkey: actor_context.status_buyer_pubkey.as_deref(),
+            seller_pubkey: actor_context.status_seller_pubkey.as_deref(),
+            selected_account_pubkey: actor_context
+                .bound
+                .is_none()
+                .then_some(selected_pubkey.as_str()),
+            actor_context_source: actor_context.status_context_source,
         },
         receipt,
     );
@@ -1315,19 +1360,26 @@ pub fn revision_decide(
         .buyer_pubkey
         .as_deref()
         .ok_or_else(|| RuntimeError::Config("accepted order is missing buyer_pubkey".to_owned()))?;
-    let signing =
-        match resolve_local_order_revision_decision_signing_identity(config, buyer_pubkey, args) {
-            Ok(signing) => signing,
-            Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
-            Err(error) => {
-                return Ok(order_revision_decision_binding_error_view(
-                    config,
-                    args,
-                    &status_view,
-                    error,
-                ));
-            }
-        };
+    let signing = match actor_context.bound.as_ref() {
+        Some(bound) => resolve_local_order_bound_buyer_signing_identity(
+            config,
+            &bound.loaded,
+            format!("order revision {}", args.decision.command()).as_str(),
+        ),
+        None => resolve_local_order_revision_decision_signing_identity(config, buyer_pubkey, args),
+    };
+    let signing = match signing {
+        Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
+        Err(error) => {
+            return Ok(order_revision_decision_binding_error_view(
+                config,
+                args,
+                &status_view,
+                error,
+            ));
+        }
+    };
     if args.decision == OrderRevisionDecisionArg::Accept {
         let issues = order_revision_inventory_issues(&status_view, &proposal.payload);
         if !issues.is_empty() {
@@ -1434,7 +1486,10 @@ pub fn fulfillment_update(
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
+            buyer_pubkey: None,
+            seller_pubkey: None,
             selected_account_pubkey: Some(selected_pubkey.as_str()),
+            actor_context_source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
         },
         receipt,
     );
@@ -1488,8 +1543,8 @@ pub fn cancel(
         return Ok(view);
     }
 
-    let selected_account = match accounts::resolve_account(config)? {
-        Some(account) => account,
+    let actor_context = match order_buyer_write_actor_context(config, args.key.as_str())? {
+        Some(context) => context,
         None => {
             let mut view =
                 order_cancellation_base_view(config, args, "unconfigured", config.output.dry_run);
@@ -1498,7 +1553,7 @@ pub fn cancel(
             return Ok(view);
         }
     };
-    let selected_pubkey = selected_account.record.public_identity.public_key_hex;
+    let selected_pubkey = actor_context.selected_pubkey.clone();
     let filter = order_status_filter(args.key.as_str())?;
     let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
         Ok(receipt) => receipt,
@@ -1521,7 +1576,13 @@ pub fn cancel(
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
-            selected_account_pubkey: Some(selected_pubkey.as_str()),
+            buyer_pubkey: actor_context.status_buyer_pubkey.as_deref(),
+            seller_pubkey: actor_context.status_seller_pubkey.as_deref(),
+            selected_account_pubkey: actor_context
+                .bound
+                .is_none()
+                .then_some(selected_pubkey.as_str()),
+            actor_context_source: actor_context.status_context_source,
         },
         receipt,
     );
@@ -1539,7 +1600,13 @@ pub fn cancel(
         .buyer_pubkey
         .as_deref()
         .ok_or_else(|| RuntimeError::Config("order is missing buyer_pubkey".to_owned()))?;
-    let signing = match resolve_local_order_cancellation_signing_identity(config, buyer_pubkey) {
+    let signing = match actor_context.bound.as_ref() {
+        Some(bound) => {
+            resolve_local_order_bound_buyer_signing_identity(config, &bound.loaded, "order cancel")
+        }
+        None => resolve_local_order_cancellation_signing_identity(config, buyer_pubkey),
+    };
+    let signing = match signing {
         Ok(signing) => signing,
         Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
@@ -1573,8 +1640,8 @@ pub fn receipt_record(
         return Ok(view);
     }
 
-    let selected_account = match accounts::resolve_account(config)? {
-        Some(account) => account,
+    let actor_context = match order_buyer_write_actor_context(config, args.key.as_str())? {
+        Some(context) => context,
         None => {
             let mut view =
                 order_receipt_base_view(config, args, "unconfigured", config.output.dry_run);
@@ -1583,7 +1650,7 @@ pub fn receipt_record(
             return Ok(view);
         }
     };
-    let selected_pubkey = selected_account.record.public_identity.public_key_hex;
+    let selected_pubkey = actor_context.selected_pubkey.clone();
     let filter = order_status_filter(args.key.as_str())?;
     let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
         Ok(receipt) => receipt,
@@ -1606,7 +1673,13 @@ pub fn receipt_record(
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
-            selected_account_pubkey: Some(selected_pubkey.as_str()),
+            buyer_pubkey: actor_context.status_buyer_pubkey.as_deref(),
+            seller_pubkey: actor_context.status_seller_pubkey.as_deref(),
+            selected_account_pubkey: actor_context
+                .bound
+                .is_none()
+                .then_some(selected_pubkey.as_str()),
+            actor_context_source: actor_context.status_context_source,
         },
         receipt,
     );
@@ -1623,7 +1696,15 @@ pub fn receipt_record(
     let buyer_pubkey = status_view.buyer_pubkey.as_deref().ok_or_else(|| {
         RuntimeError::Config("receiptable order is missing buyer_pubkey".to_owned())
     })?;
-    let signing = match resolve_local_order_receipt_signing_identity(config, buyer_pubkey) {
+    let signing = match actor_context.bound.as_ref() {
+        Some(bound) => resolve_local_order_bound_buyer_signing_identity(
+            config,
+            &bound.loaded,
+            "order receipt record",
+        ),
+        None => resolve_local_order_receipt_signing_identity(config, buyer_pubkey),
+    };
+    let signing = match signing {
         Ok(signing) => signing,
         Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
         Err(error) => {
@@ -1695,7 +1776,10 @@ pub fn payment_record(
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
+            buyer_pubkey: None,
+            seller_pubkey: None,
             selected_account_pubkey: Some(selected_pubkey.as_str()),
+            actor_context_source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
         },
         receipt,
     );
@@ -1787,7 +1871,10 @@ pub fn settlement_decision(
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
+            buyer_pubkey: None,
+            seller_pubkey: None,
             selected_account_pubkey: Some(selected_pubkey.as_str()),
+            actor_context_source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
         },
         receipt,
     );
@@ -1838,6 +1925,7 @@ pub fn status(
             state: "unconfigured".to_owned(),
             source: ORDER_STATUS_SOURCE.to_owned(),
             order_id: args.key.clone(),
+            actor_context_source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY.to_owned(),
             request_event_id: None,
             decision_event_id: None,
             agreement_event_id: None,
@@ -1879,6 +1967,7 @@ pub fn status(
                 state: "unavailable".to_owned(),
                 source: ORDER_STATUS_SOURCE.to_owned(),
                 order_id: args.key.clone(),
+                actor_context_source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY.to_owned(),
                 request_event_id: None,
                 decision_event_id: None,
                 agreement_event_id: None,
@@ -1907,14 +1996,14 @@ pub fn status(
         Err(error) => return Err(RuntimeError::Network(error.to_string())),
     };
 
-    let selected_account = accounts::resolve_account(config)?;
-    let selected_account_pubkey = selected_account
-        .as_ref()
-        .map(|account| account.record.public_identity.public_key_hex.as_str());
+    let actor_context = order_status_actor_context(config, args.key.as_str())?;
     let mut view = order_status_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
-            selected_account_pubkey,
+            buyer_pubkey: actor_context.buyer_pubkey.as_deref(),
+            seller_pubkey: actor_context.seller_pubkey.as_deref(),
+            selected_account_pubkey: actor_context.selected_account_pubkey.as_deref(),
+            actor_context_source: actor_context.source,
         },
         receipt,
     );
@@ -1962,7 +2051,10 @@ struct OrderRequestCandidateContext<'a> {
 #[derive(Debug, Clone, Copy)]
 struct OrderStatusContext<'a> {
     order_id: &'a str,
+    buyer_pubkey: Option<&'a str>,
+    seller_pubkey: Option<&'a str>,
     selected_account_pubkey: Option<&'a str>,
+    actor_context_source: &'static str,
 }
 
 #[cfg(test)]
@@ -1970,7 +2062,10 @@ fn order_status_from_receipt(order_id: &str, receipt: DirectRelayFetchReceipt) -
     order_status_from_receipt_with_context(
         OrderStatusContext {
             order_id,
+            buyer_pubkey: None,
+            seller_pubkey: None,
             selected_account_pubkey: None,
+            actor_context_source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
         },
         receipt,
     )
@@ -1984,7 +2079,10 @@ fn order_status_from_receipt_with_deferred_payment(
     order_status_reduction_from_receipt_inner(
         OrderStatusContext {
             order_id,
+            buyer_pubkey: None,
+            seller_pubkey: None,
             selected_account_pubkey: None,
+            actor_context_source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
         },
         receipt,
         true,
@@ -2253,6 +2351,7 @@ fn order_status_reduction_from_receipt_inner(
         state,
         source: ORDER_STATUS_SOURCE.to_owned(),
         order_id: projection.order_id,
+        actor_context_source: context.actor_context_source.to_owned(),
         request_event_id: projection.request_event_id,
         decision_event_id: projection.decision_event_id,
         agreement_event_id: projection.agreement_event_id,
@@ -2291,9 +2390,17 @@ fn order_status_request_matches_context(
     if record.payload.order_id != context.order_id {
         return false;
     }
-    context.selected_account_pubkey.is_none_or(|pubkey| {
-        record.payload.buyer_pubkey == pubkey || record.payload.seller_pubkey == pubkey
-    })
+    order_status_context_is_network_only(context)
+        || context
+            .buyer_pubkey
+            .is_some_and(|pubkey| record.payload.buyer_pubkey.eq_ignore_ascii_case(pubkey))
+        || context
+            .seller_pubkey
+            .is_some_and(|pubkey| record.payload.seller_pubkey.eq_ignore_ascii_case(pubkey))
+        || context.selected_account_pubkey.is_some_and(|pubkey| {
+            record.payload.buyer_pubkey.eq_ignore_ascii_case(pubkey)
+                || record.payload.seller_pubkey.eq_ignore_ascii_case(pubkey)
+        })
 }
 
 fn enrich_order_status_inventory(
@@ -2611,9 +2718,23 @@ fn order_status_request_candidate(
     {
         return false;
     }
-    context.selected_account_pubkey.is_none_or(|pubkey| {
-        event.pubkey.to_string() == pubkey || event_matches_tag_value(event, "p", pubkey)
-    })
+    order_status_context_is_network_only(context)
+        || context
+            .buyer_pubkey
+            .is_some_and(|pubkey| event.pubkey.to_string().eq_ignore_ascii_case(pubkey))
+        || context
+            .seller_pubkey
+            .is_some_and(|pubkey| event_matches_tag_value(event, "p", pubkey))
+        || context.selected_account_pubkey.is_some_and(|pubkey| {
+            event.pubkey.to_string().eq_ignore_ascii_case(pubkey)
+                || event_matches_tag_value(event, "p", pubkey)
+        })
+}
+
+fn order_status_context_is_network_only(context: OrderStatusContext<'_>) -> bool {
+    context.buyer_pubkey.is_none()
+        && context.seller_pubkey.is_none()
+        && context.selected_account_pubkey.is_none()
 }
 
 fn order_request_candidate_matches(
@@ -4246,6 +4367,7 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
 
 fn order_event_list_unconfigured(
     seller_pubkey: Option<String>,
+    actor_context_source: &'static str,
     reason: String,
     target_relays: Vec<String>,
     actions: Vec<String>,
@@ -4253,6 +4375,7 @@ fn order_event_list_unconfigured(
     OrderEventListView {
         state: "unconfigured".to_owned(),
         source: ORDER_EVENT_LIST_SOURCE.to_owned(),
+        actor_context_source: actor_context_source.to_owned(),
         seller_pubkey,
         target_relays,
         connected_relays: Vec::new(),
@@ -4269,6 +4392,7 @@ fn order_event_list_unconfigured(
 
 fn order_event_list_unavailable(
     seller_pubkey: String,
+    actor_context_source: &'static str,
     reason: String,
     target_relays: Vec<String>,
     failed_relays: Vec<DirectRelayFailure>,
@@ -4276,6 +4400,7 @@ fn order_event_list_unavailable(
     OrderEventListView {
         state: "unavailable".to_owned(),
         source: ORDER_EVENT_LIST_SOURCE.to_owned(),
+        actor_context_source: actor_context_source.to_owned(),
         seller_pubkey: Some(seller_pubkey),
         target_relays,
         connected_relays: Vec::new(),
@@ -4293,6 +4418,7 @@ fn order_event_list_unavailable(
 fn order_event_list_from_receipt(
     seller_pubkey: String,
     order_id: Option<&str>,
+    actor_context_source: &'static str,
     receipt: DirectRelayFetchReceipt,
 ) -> OrderEventListView {
     let DirectRelayFetchReceipt {
@@ -4339,6 +4465,7 @@ fn order_event_list_from_receipt(
     OrderEventListView {
         state: if orders.is_empty() { "empty" } else { "ready" }.to_owned(),
         source: ORDER_EVENT_LIST_SOURCE.to_owned(),
+        actor_context_source: actor_context_source.to_owned(),
         seller_pubkey: Some(seller_pubkey),
         target_relays,
         connected_relays,
@@ -9456,6 +9583,118 @@ fn buyer_actor_source(document: &OrderDraftDocument) -> Option<String> {
     non_empty_string(document.buyer_actor.source.clone())
 }
 
+fn load_local_order_draft_if_exists(
+    config: &RuntimeConfig,
+    lookup: &str,
+) -> Result<Option<LoadedOrderDraft>, RuntimeError> {
+    let file = draft_lookup_path(config, lookup);
+    if !file.exists() {
+        return Ok(None);
+    }
+    load_draft(file.as_path())
+        .map(Some)
+        .map_err(RuntimeError::Config)
+}
+
+fn order_status_actor_context(
+    config: &RuntimeConfig,
+    order_id: &str,
+) -> Result<OrderDraftStatusActorContext, RuntimeError> {
+    if let Some(loaded) = load_local_order_draft_if_exists(config, order_id)? {
+        return Ok(OrderDraftStatusActorContext {
+            source: ORDER_ACTOR_CONTEXT_ORDER_DRAFT,
+            buyer_pubkey: non_empty_string(loaded.document.buyer_actor.pubkey.clone())
+                .or_else(|| non_empty_string(loaded.document.order.buyer_pubkey.clone())),
+            seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey),
+            selected_account_pubkey: None,
+        });
+    }
+
+    let selected_account = accounts::resolve_account(config)?;
+    let Some(account) = selected_account else {
+        return Ok(OrderDraftStatusActorContext {
+            source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
+            buyer_pubkey: None,
+            seller_pubkey: None,
+            selected_account_pubkey: None,
+        });
+    };
+
+    Ok(OrderDraftStatusActorContext {
+        source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
+        buyer_pubkey: None,
+        seller_pubkey: None,
+        selected_account_pubkey: Some(account.record.public_identity.public_key_hex),
+    })
+}
+
+fn order_event_list_actor_context(
+    config: &RuntimeConfig,
+    order_id: Option<&str>,
+) -> Result<Option<OrderEventListActorContext>, RuntimeError> {
+    if let Some(order_id) = order_id
+        && let Some(loaded) = load_local_order_draft_if_exists(config, order_id)?
+    {
+        let seller_pubkey =
+            non_empty_string(loaded.document.order.seller_pubkey).ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "local order draft `{order_id}` is missing seller_pubkey"
+                ))
+            })?;
+        return Ok(Some(OrderEventListActorContext {
+            source: ORDER_ACTOR_CONTEXT_ORDER_DRAFT,
+            seller_pubkey,
+        }));
+    }
+
+    Ok(
+        accounts::resolve_account(config)?.map(|account| OrderEventListActorContext {
+            source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
+            seller_pubkey: account.record.public_identity.public_key_hex,
+        }),
+    )
+}
+
+fn bound_buyer_write_context_if_exists(
+    config: &RuntimeConfig,
+    order_id: &str,
+) -> Result<Option<OrderBoundBuyerWriteContext>, RuntimeError> {
+    let Some(loaded) = load_local_order_draft_if_exists(config, order_id)? else {
+        return Ok(None);
+    };
+    let account = validate_bound_order_buyer_account(config, &loaded)?;
+    Ok(Some(OrderBoundBuyerWriteContext { loaded, account }))
+}
+
+fn order_buyer_write_actor_context(
+    config: &RuntimeConfig,
+    order_id: &str,
+) -> Result<Option<OrderBuyerWriteActorContext>, RuntimeError> {
+    if let Some(bound) = bound_buyer_write_context_if_exists(config, order_id)? {
+        let selected_pubkey = bound.account.record.public_identity.public_key_hex.clone();
+        let status_seller_pubkey =
+            non_empty_string(bound.loaded.document.order.seller_pubkey.clone());
+        return Ok(Some(OrderBuyerWriteActorContext {
+            bound: Some(bound),
+            selected_pubkey: selected_pubkey.clone(),
+            status_buyer_pubkey: Some(selected_pubkey),
+            status_seller_pubkey,
+            status_context_source: ORDER_ACTOR_CONTEXT_ORDER_DRAFT,
+        }));
+    }
+
+    Ok(accounts::resolve_account(config)?.map(|account| {
+        let selected_pubkey = account.record.public_identity.public_key_hex;
+        OrderBuyerWriteActorContext {
+            bound: None,
+            selected_pubkey: selected_pubkey.clone(),
+            status_buyer_pubkey: None,
+            status_seller_pubkey: None,
+            status_context_source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
+        }
+    }))
+}
+
 fn order_submit_listing_freshness_view(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
@@ -10448,10 +10687,18 @@ fn resolve_local_order_signing_identity(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
 ) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+    resolve_local_order_bound_buyer_signing_identity(config, loaded, "order submit")
+}
+
+fn resolve_local_order_bound_buyer_signing_identity(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    action: &str,
+) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
-        return Err(ActorWriteBindingError::Unconfigured(
-            "order submit requires signer mode `local`".to_owned(),
-        ));
+        return Err(ActorWriteBindingError::Unconfigured(format!(
+            "{action} requires signer mode `local`"
+        )));
     }
     let account_id = loaded.document.buyer_actor.account_id.trim();
     let buyer_pubkey = loaded.document.buyer_actor.pubkey.trim();
@@ -11014,21 +11261,21 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        LoadedOrderDraft, ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT, ORDER_DRAFT_KIND,
-        ORDER_SUBMIT_SOURCE, OrderDraft, OrderDraftBuyerActor, OrderDraftDocument, OrderDraftItem,
-        OrderStatusContext, ResolvedOrderEconomicsProduct, ResolvedOrderListing,
-        ResolvedSellerOrderRequest, SellerOrderRequestResolution,
-        accepted_order_decision_payload_from_request, active_request_record_from_resolved,
-        canonical_order_request_payload_from_loaded, collect_issues,
-        declined_order_decision_payload_from_request, inspect_document, next_order_id,
-        order_accept_inventory_preflight_view_from_projection, order_cancellation_dry_run_view,
-        order_cancellation_event_parts, order_cancellation_payload_from_status,
-        order_cancellation_preflight_view_from_status, order_decision_dry_run_view,
-        order_decision_preflight_view_from_status, order_decision_view_from_resolution,
-        order_economics_from_resolved_listing, order_event_list_entry_from_event,
-        order_event_list_from_receipt, order_fulfillment_dry_run_view,
-        order_fulfillment_preflight_view_from_status, order_payment_dry_run_view,
-        order_payment_event_parts, order_payment_payload_from_status,
+        LoadedOrderDraft, ORDER_ACTOR_CONTEXT_NETWORK_ONLY, ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
+        ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT, ORDER_DRAFT_KIND, ORDER_SUBMIT_SOURCE,
+        OrderDraft, OrderDraftBuyerActor, OrderDraftDocument, OrderDraftItem, OrderStatusContext,
+        ResolvedOrderEconomicsProduct, ResolvedOrderListing, ResolvedSellerOrderRequest,
+        SellerOrderRequestResolution, accepted_order_decision_payload_from_request,
+        active_request_record_from_resolved, canonical_order_request_payload_from_loaded,
+        collect_issues, declined_order_decision_payload_from_request, inspect_document,
+        next_order_id, order_accept_inventory_preflight_view_from_projection,
+        order_cancellation_dry_run_view, order_cancellation_event_parts,
+        order_cancellation_payload_from_status, order_cancellation_preflight_view_from_status,
+        order_decision_dry_run_view, order_decision_preflight_view_from_status,
+        order_decision_view_from_resolution, order_economics_from_resolved_listing,
+        order_event_list_entry_from_event, order_event_list_from_receipt,
+        order_fulfillment_dry_run_view, order_fulfillment_preflight_view_from_status,
+        order_payment_dry_run_view, order_payment_event_parts, order_payment_payload_from_status,
         order_payment_preflight_view_from_status, order_receipt_dry_run_view,
         order_receipt_event_parts, order_receipt_payload_from_status,
         order_receipt_preflight_view_from_status, order_relay_publish_client, order_request_filter,
@@ -12257,8 +12504,12 @@ mod tests {
             ],
         };
 
-        let event_list =
-            order_event_list_from_receipt(seller_pubkey, Some(first_order_id), receipt);
+        let event_list = order_event_list_from_receipt(
+            seller_pubkey,
+            Some(first_order_id),
+            ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
+            receipt,
+        );
 
         assert_eq!(event_list.fetched_count, 3);
         assert_eq!(event_list.decoded_count, 2);
@@ -12639,7 +12890,10 @@ mod tests {
         let view = order_status_from_receipt_with_context(
             OrderStatusContext {
                 order_id: fixture.order_id.as_str(),
+                buyer_pubkey: None,
+                seller_pubkey: None,
                 selected_account_pubkey: Some(fixture.seller_pubkey.as_str()),
+                actor_context_source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
             },
             receipt,
         );
@@ -12686,7 +12940,10 @@ mod tests {
         let view = order_status_from_receipt_with_context(
             OrderStatusContext {
                 order_id: fixture.order_id.as_str(),
+                buyer_pubkey: None,
+                seller_pubkey: None,
                 selected_account_pubkey: Some(fixture.seller_pubkey.as_str()),
+                actor_context_source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
             },
             receipt,
         );
@@ -12731,7 +12988,10 @@ mod tests {
         let unscoped_reduction = order_status_reduction_from_receipt_with_context(
             OrderStatusContext {
                 order_id: fixture.order_id.as_str(),
+                buyer_pubkey: None,
+                seller_pubkey: None,
                 selected_account_pubkey: None,
+                actor_context_source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
             },
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -12747,7 +13007,10 @@ mod tests {
         let scoped_reduction = order_status_reduction_from_receipt_with_context(
             OrderStatusContext {
                 order_id: fixture.order_id.as_str(),
+                buyer_pubkey: None,
+                seller_pubkey: None,
                 selected_account_pubkey: Some(fixture.seller_pubkey.as_str()),
+                actor_context_source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
             },
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],
@@ -15402,7 +15665,10 @@ mod tests {
         let reduction = order_status_reduction_from_receipt_with_context(
             OrderStatusContext {
                 order_id: fixture.order_id.as_str(),
+                buyer_pubkey: None,
+                seller_pubkey: None,
                 selected_account_pubkey: None,
+                actor_context_source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
             },
             DirectRelayFetchReceipt {
                 target_relays: vec!["ws://relay.test".to_owned()],

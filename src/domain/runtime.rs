@@ -1968,6 +1968,7 @@ pub struct OrderStatusView {
     pub state: String,
     pub source: String,
     pub order_id: String,
+    pub actor_context_source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2200,6 +2201,7 @@ pub struct OrderWorkflowView {
 pub struct OrderEventListView {
     pub state: String,
     pub source: String,
+    pub actor_context_source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

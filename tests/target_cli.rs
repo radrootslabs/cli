@@ -30,7 +30,7 @@ use support::{
     assert_no_removed_command_reference, create_listing_draft, identity_public, identity_secret,
     make_listing_publishable, make_listing_publishable_with_seller, ndjson_from_stdout, radroots,
     remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing, toml_string,
-    write_public_identity_profile,
+    write_public_identity_profile, write_secret_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -4543,6 +4543,285 @@ fn order_rebind_refuses_visible_published_request() {
             .len(),
         1
     );
+}
+
+#[test]
+fn order_status_and_event_list_use_draft_context_after_account_override_drift() {
+    let sandbox = RadrootsCliSandbox::new();
+    let buyer = identity_secret(95);
+    let buyer_public_file =
+        write_public_identity_profile(&sandbox, "status-draft-buyer", &buyer.to_public());
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        buyer_public_file.to_string_lossy().as_ref(),
+    ]);
+    let listing_event_id = seed_orderable_listing(&sandbox, LISTING_ADDR);
+    sandbox.json_success(&["--format", "json", "basket", "create", "draft_status"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "draft_status",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "draft_status",
+    ]);
+    let order_id = quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id");
+    let economics: RadrootsTradeOrderEconomics =
+        serde_json::from_value(quote["result"]["quote"]["economics"].clone())
+            .expect("quote economics");
+    let event = signed_order_request_event_for_quote(
+        &buyer,
+        order_id,
+        listing_event_id.as_str(),
+        economics,
+    );
+    let drift_account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let drift_account_id = drift_account["result"]["account"]["id"]
+        .as_str()
+        .expect("drift account id");
+
+    let status_relay = RelayFetchServer::with_events(vec![event.clone()]);
+    let status = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--account-id",
+        drift_account_id,
+        "--relay",
+        status_relay.endpoint(),
+        "order",
+        "status",
+        "get",
+        order_id,
+    ]);
+    status_relay.join();
+
+    assert_eq!(status["operation_id"], "order.status.get");
+    assert_eq!(status["result"]["actor_context_source"], "order_draft");
+    assert_eq!(status["result"]["state"], "requested");
+    assert_eq!(status["result"]["request_event_id"], event.id.to_string());
+    assert_eq!(status["result"]["buyer_pubkey"], buyer.public_key_hex());
+
+    let event_list_relay = RelayFetchServer::with_events(vec![event]);
+    let events = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--account-id",
+        drift_account_id,
+        "--relay",
+        event_list_relay.endpoint(),
+        "order",
+        "event",
+        "list",
+        order_id,
+    ]);
+    event_list_relay.join();
+
+    assert_eq!(events["operation_id"], "order.event.list");
+    assert_eq!(events["result"]["actor_context_source"], "order_draft");
+    assert_eq!(events["result"]["seller_pubkey"], "1".repeat(64));
+    assert_eq!(events["result"]["count"], 1);
+    assert_eq!(events["result"]["orders"][0]["id"], order_id);
+}
+
+#[test]
+fn order_cancel_uses_bound_buyer_after_default_account_drift() {
+    let sandbox = RadrootsCliSandbox::new();
+    let buyer = identity_secret(96);
+    let buyer_public_file =
+        write_public_identity_profile(&sandbox, "cancel-bound-buyer", &buyer.to_public());
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        buyer_public_file.to_string_lossy().as_ref(),
+    ]);
+    let buyer_account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("buyer account id");
+    let buyer_secret_file = write_secret_identity_profile(&sandbox, "cancel-bound-secret", &buyer);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "attach-secret",
+        buyer_account_id,
+        buyer_secret_file.to_string_lossy().as_ref(),
+        "--default",
+    ]);
+    let listing_event_id = seed_orderable_listing(&sandbox, LISTING_ADDR);
+    sandbox.json_success(&["--format", "json", "basket", "create", "bound_cancel"]);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "bound_cancel",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "bound_cancel",
+    ]);
+    let order_id = quote["result"]["quote"]["order_id"]
+        .as_str()
+        .expect("order id");
+    let economics: RadrootsTradeOrderEconomics =
+        serde_json::from_value(quote["result"]["quote"]["economics"].clone())
+            .expect("quote economics");
+    let event = signed_order_request_event_for_quote(
+        &buyer,
+        order_id,
+        listing_event_id.as_str(),
+        economics,
+    );
+    let drift_account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let drift_account_id = drift_account["result"]["account"]["id"]
+        .as_str()
+        .expect("drift account id");
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "account",
+        "selection",
+        "update",
+        drift_account_id,
+    ]);
+    let relay = RelayFetchServer::with_events(vec![event]);
+
+    let cancel = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "--relay",
+        relay.endpoint(),
+        "order",
+        "cancel",
+        order_id,
+        "--reason",
+        "changed plans",
+    ]);
+    relay.join();
+
+    assert_eq!(cancel["operation_id"], "order.cancel");
+    assert_eq!(cancel["result"]["state"], "dry_run");
+    assert_eq!(cancel["result"]["buyer_pubkey"], buyer.public_key_hex());
+    assert_eq!(cancel["result"]["signer_mode"], "local");
+}
+
+#[test]
+fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "buyer_write_drift");
+    let drift_account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let drift_account_id = drift_account["result"]["account"]["id"]
+        .as_str()
+        .expect("drift account id");
+
+    for (operation_id, command) in [
+        (
+            "order.revision.accept",
+            vec![
+                "--format",
+                "json",
+                "--dry-run",
+                "--account-id",
+                drift_account_id,
+                "--relay",
+                "ws://127.0.0.1:9",
+                "order",
+                "revision",
+                "accept",
+                order_id.as_str(),
+                "--revision-id",
+                "rev_pending",
+            ],
+        ),
+        (
+            "order.cancel",
+            vec![
+                "--format",
+                "json",
+                "--dry-run",
+                "--account-id",
+                drift_account_id,
+                "--relay",
+                "ws://127.0.0.1:9",
+                "order",
+                "cancel",
+                order_id.as_str(),
+                "--reason",
+                "changed plans",
+            ],
+        ),
+        (
+            "order.receipt.record",
+            vec![
+                "--format",
+                "json",
+                "--dry-run",
+                "--account-id",
+                drift_account_id,
+                "--relay",
+                "ws://127.0.0.1:9",
+                "order",
+                "receipt",
+                "record",
+                order_id.as_str(),
+                "--received",
+            ],
+        ),
+    ] {
+        let (output, value) = sandbox.json_output(command.as_slice());
+
+        assert!(!output.status.success(), "{operation_id} should fail");
+        assert_eq!(output.status.code(), Some(5));
+        assert_eq!(value["operation_id"], operation_id);
+        assert_eq!(value["result"], Value::Null);
+        assert_eq!(value["errors"][0]["code"], "account_mismatch");
+        assert_eq!(value["errors"][0]["detail"]["order_id"], order_id);
+        assert_eq!(
+            value["errors"][0]["detail"]["attempted_buyer_account_id"],
+            drift_account_id
+        );
+    }
 }
 
 #[test]
