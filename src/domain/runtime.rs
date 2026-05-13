@@ -3282,6 +3282,8 @@ pub struct SyncActionView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publish_plan: Option<SyncPublishPlanView>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,

@@ -232,6 +232,7 @@ where
         view.skipped_count = Some(0);
         view.unsupported_count = Some(0);
         view.failed_count = Some(0);
+        view.reason_code = Some("dry_run".to_owned());
         view.actions = vec![scope.ready_action().to_owned()];
         return Ok(view);
     }
@@ -262,6 +263,7 @@ where
             let mut view = empty_action_from_snapshot(snapshot, "pull");
             view.state = "unavailable".to_owned();
             view.reason = Some(failure_reason);
+            view.reason_code = Some("relay_fetch_failed".to_owned());
             view.target_relays = target_relays;
             view.failed_relays = failed_relays;
             view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
@@ -285,6 +287,7 @@ where
             let mut view = empty_action_from_snapshot(snapshot, "pull");
             view.state = "unavailable".to_owned();
             view.reason = Some(failure_reason);
+            view.reason_code = Some("relay_fetch_failed".to_owned());
             view.target_relays = config.relay.urls.clone();
             view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
             return Ok(view);
@@ -326,6 +329,7 @@ where
         unsupported_count: Some(ingest.unsupported_count),
         failed_count: Some(ingest.failed_count),
         publish_plan: None,
+        reason_code: ingest.reason_code().map(str::to_owned),
         reason: ingest.reason(),
         actions: vec![scope.ready_action().to_owned()],
     })
@@ -546,6 +550,7 @@ fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncAc
         unsupported_count: None,
         failed_count: None,
         publish_plan: None,
+        reason_code: None,
         reason: snapshot.reason,
         actions: snapshot.actions,
     }
@@ -583,6 +588,7 @@ fn push_radrootsd_unavailable_view(config: &RuntimeConfig) -> SyncActionView {
         unsupported_count: None,
         failed_count: None,
         publish_plan: None,
+        reason_code: Some("not_implemented".to_owned()),
         reason: Some(RADROOTSD_SYNC_PUSH_UNAVAILABLE_REASON.to_owned()),
         actions: vec!["radroots --publish-mode nostr_relay sync push".to_owned()],
     }
@@ -631,6 +637,7 @@ fn push_view(
         unsupported_count: Some(counts.unsupported_count),
         failed_count: Some(counts.failed_count),
         publish_plan,
+        reason_code: counts.reason_code().map(str::to_owned),
         reason,
         actions,
     }
@@ -803,6 +810,16 @@ impl SyncPushCounts {
             );
         }
         None
+    }
+
+    fn reason_code(&self) -> Option<&'static str> {
+        if self.failed_count > 0 {
+            Some("sync_publish_failed")
+        } else if self.skipped_count > 0 {
+            Some("sync_publish_skipped_other_author")
+        } else {
+            None
+        }
     }
 }
 
@@ -1307,14 +1324,33 @@ struct RelayIngestCounts {
 }
 
 impl RelayIngestCounts {
+    fn reason_code(&self) -> Option<&'static str> {
+        if self.failed_count > 0 {
+            Some("sync_ingest_failed")
+        } else if self.skipped_count > 0 {
+            Some("sync_no_overwrite")
+        } else {
+            None
+        }
+    }
+
     fn reason(&self) -> Option<String> {
-        (self.failed_count > 0).then(|| match &self.first_failure_reason {
-            Some(reason) => format!(
-                "{} fetched event(s) failed ingest: {}",
-                self.failed_count, reason
-            ),
-            None => format!("{} fetched event(s) failed ingest", self.failed_count),
-        })
+        if self.failed_count > 0 {
+            return Some(match &self.first_failure_reason {
+                Some(reason) => format!(
+                    "{} fetched event(s) failed ingest: {}",
+                    self.failed_count, reason
+                ),
+                None => format!("{} fetched event(s) failed ingest", self.failed_count),
+            });
+        }
+        if self.skipped_count > 0 {
+            return Some(format!(
+                "{} fetched event(s) skipped because the local replica already has current or newer state",
+                self.skipped_count
+            ));
+        }
+        None
     }
 }
 
@@ -1490,7 +1526,7 @@ mod tests {
     use radroots_events_codec::wire::WireEventParts;
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{
-        RadrootsNostrEvent, RadrootsNostrFilter, radroots_nostr_build_event,
+        RadrootsNostrEvent, RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_nostr_build_event,
     };
     use radroots_replica_db::{farm, farm_member_claim, migrations};
     use radroots_replica_db_schema::farm::IFarmFields;
@@ -1975,6 +2011,43 @@ mod tests {
     }
 
     #[test]
+    fn sync_pull_reports_no_overwrite_skips_without_replacing_projection() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        crate::runtime::local::init(&config).expect("store init");
+        let seller = identity(12);
+
+        let first = listing_event_with_title_at(&seller, "Pasture Eggs", 200);
+        let stale = listing_event_with_title_at(&seller, "Older Eggs", 199);
+        pull_with_fetcher(&config, fake_fetcher(vec![first])).expect("initial sync pull");
+        let view = pull_with_fetcher(&config, fake_fetcher(vec![stale])).expect("stale sync pull");
+
+        assert_eq!(view.state, "ready");
+        assert_eq!(view.fetched_count, Some(1));
+        assert_eq!(view.ingested_count, Some(0));
+        assert_eq!(view.skipped_count, Some(1));
+        assert_eq!(view.reason_code.as_deref(), Some("sync_no_overwrite"));
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("skip reason")
+                .contains("current or newer state")
+        );
+        let run = view.freshness.run.as_ref().expect("run freshness");
+        assert_eq!(run.last_state, "success");
+        assert_eq!(run.skipped_count, Some(1));
+
+        let search = crate::runtime::find::search(
+            &config,
+            &FindQueryArgs {
+                query: vec!["eggs".to_owned()],
+            },
+        )
+        .expect("market search");
+        assert_eq!(search.results[0].title, "Pasture Eggs");
+    }
+
+    #[test]
     fn sync_status_reports_relay_set_changed_freshness() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay-a.example.com".to_owned()]);
@@ -2125,51 +2198,63 @@ mod tests {
     }
 
     fn listing_event(identity: &RadrootsIdentity) -> RadrootsNostrEvent {
-        signed_event(
-            identity,
-            WireEventParts {
-                kind: KIND_LISTING,
-                tags: vec![
-                    vec!["d".to_owned(), LISTING_D_TAG.to_owned()],
-                    vec![
-                        "a".to_owned(),
-                        format!("{}:{}:{}", KIND_FARM, identity.public_key_hex(), FARM_D_TAG),
-                    ],
-                    vec!["p".to_owned(), identity.public_key_hex()],
-                    vec!["key".to_owned(), "pasture-eggs".to_owned()],
-                    vec!["title".to_owned(), "Pasture Eggs".to_owned()],
-                    vec!["category".to_owned(), "eggs".to_owned()],
-                    vec!["summary".to_owned(), "Pasture-raised eggs".to_owned()],
-                    vec!["process".to_owned(), "washed".to_owned()],
-                    vec!["lot".to_owned(), "lot-a".to_owned()],
-                    vec!["profile".to_owned(), "dozen".to_owned()],
-                    vec!["year".to_owned(), "2026".to_owned()],
-                    vec!["radroots:primary_bin".to_owned(), "bin-a".to_owned()],
-                    vec![
-                        "radroots:bin".to_owned(),
-                        "bin-a".to_owned(),
-                        "12".to_owned(),
-                        "each".to_owned(),
-                        "12".to_owned(),
-                        "each".to_owned(),
-                        "dozen".to_owned(),
-                    ],
-                    vec![
-                        "radroots:price".to_owned(),
-                        "bin-a".to_owned(),
-                        "6".to_owned(),
-                        "USD".to_owned(),
-                        "1".to_owned(),
-                        "each".to_owned(),
-                        "6".to_owned(),
-                        "each".to_owned(),
-                    ],
-                    vec!["inventory".to_owned(), "5".to_owned()],
-                    vec!["status".to_owned(), "active".to_owned()],
+        listing_event_with_title_at(identity, "Pasture Eggs", 0)
+    }
+
+    fn listing_event_with_title_at(
+        identity: &RadrootsIdentity,
+        title: &str,
+        created_at: u64,
+    ) -> RadrootsNostrEvent {
+        let mut builder = radroots_nostr_build_event(
+            KIND_LISTING,
+            "# Pasture Eggs",
+            vec![
+                vec!["d".to_owned(), LISTING_D_TAG.to_owned()],
+                vec![
+                    "a".to_owned(),
+                    format!("{}:{}:{}", KIND_FARM, identity.public_key_hex(), FARM_D_TAG),
                 ],
-                content: "# Pasture Eggs".to_owned(),
-            },
+                vec!["p".to_owned(), identity.public_key_hex()],
+                vec!["key".to_owned(), "pasture-eggs".to_owned()],
+                vec!["title".to_owned(), title.to_owned()],
+                vec!["category".to_owned(), "eggs".to_owned()],
+                vec!["summary".to_owned(), "Pasture-raised eggs".to_owned()],
+                vec!["process".to_owned(), "washed".to_owned()],
+                vec!["lot".to_owned(), "lot-a".to_owned()],
+                vec!["profile".to_owned(), "dozen".to_owned()],
+                vec!["year".to_owned(), "2026".to_owned()],
+                vec!["radroots:primary_bin".to_owned(), "bin-a".to_owned()],
+                vec![
+                    "radroots:bin".to_owned(),
+                    "bin-a".to_owned(),
+                    "12".to_owned(),
+                    "each".to_owned(),
+                    "12".to_owned(),
+                    "each".to_owned(),
+                    "dozen".to_owned(),
+                ],
+                vec![
+                    "radroots:price".to_owned(),
+                    "bin-a".to_owned(),
+                    "6".to_owned(),
+                    "USD".to_owned(),
+                    "1".to_owned(),
+                    "each".to_owned(),
+                    "6".to_owned(),
+                    "each".to_owned(),
+                ],
+                vec!["inventory".to_owned(), "5".to_owned()],
+                vec!["status".to_owned(), "active".to_owned()],
+            ],
         )
+        .expect("listing parts");
+        if created_at > 0 {
+            builder = builder.custom_created_at(RadrootsNostrTimestamp::from(created_at));
+        }
+        builder
+            .sign_with_keys(identity.keys())
+            .expect("signed event")
     }
 
     fn signed_event(identity: &RadrootsIdentity, parts: WireEventParts) -> RadrootsNostrEvent {
