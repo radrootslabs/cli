@@ -33,7 +33,7 @@ use crate::domain::runtime::{
     FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
     ListingMutationEventView, ListingMutationLocalReplicaView, ListingMutationView, ListingNewView,
     ListingRebindView, ListingSummaryView, ListingValidateView, ListingValidationIssueView,
-    RelayFailureView,
+    MarketReadinessView, RelayFailureView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -943,6 +943,7 @@ pub fn get(
             state: "unconfigured".to_owned(),
             source: LISTING_READ_SOURCE.to_owned(),
             lookup: args.key.clone(),
+            readiness: MarketReadinessView::unavailable("local_replica_not_initialized"),
             listing_id: None,
             product_key: None,
             listing_addr: None,
@@ -965,6 +966,7 @@ pub fn get(
             state: "missing".to_owned(),
             source: LISTING_READ_SOURCE.to_owned(),
             lookup: args.key.clone(),
+            readiness: MarketReadinessView::unavailable("market_listing_missing"),
             listing_id: None,
             product_key: None,
             listing_addr: None,
@@ -986,13 +988,29 @@ pub fn get(
         });
     };
 
+    let listing_addr = row.listing_addr.and_then(non_empty);
+    let available_amount = row.qty_avail;
+    let price_amount = row.price_amt;
+    let price_currency = row.price_currency;
+    let price_per_amount = row.price_qty_amt;
+    let readiness = MarketReadinessView::from_market_projection(
+        listing_addr.as_deref(),
+        Some(row.title.as_str()),
+        Some(row.category.as_str()),
+        available_amount,
+        price_amount,
+        price_currency.as_str(),
+        price_per_amount,
+    );
+
     Ok(ListingGetView {
         state: "ready".to_owned(),
         source: LISTING_READ_SOURCE.to_owned(),
         lookup: args.key.clone(),
+        readiness,
         listing_id: Some(row.id),
         product_key: Some(row.key),
-        listing_addr: row.listing_addr.and_then(non_empty),
+        listing_addr,
         title: Some(row.title),
         category: Some(row.category),
         description: non_empty(row.summary),
@@ -1001,12 +1019,12 @@ pub fn get(
             total_amount: row.qty_amt,
             total_unit: row.qty_unit,
             label: row.qty_label.and_then(non_empty),
-            available_amount: row.qty_avail,
+            available_amount,
         }),
         price: Some(FindPriceView {
-            amount: row.price_amt,
-            currency: row.price_currency,
-            per_amount: row.price_qty_amt,
+            amount: price_amount,
+            currency: price_currency,
+            per_amount: price_per_amount,
             per_unit: row.price_qty_unit,
         }),
         provenance,

@@ -3,7 +3,7 @@ use radroots_sql_core::SqliteExecutor;
 
 use crate::domain::runtime::{
     FindHyfView, FindPriceView, FindQuantityView, FindResultHyfView, FindResultProvenanceView,
-    FindResultView, FindView,
+    FindResultView, FindView, MarketReadinessView,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -79,30 +79,47 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
     };
     let results = rows
         .into_iter()
-        .map(|row| FindResultView {
-            id: row.id,
-            product_key: row.key,
-            listing_addr: row.listing_addr.and_then(non_empty),
-            title: row.title,
-            category: row.category,
-            summary: non_empty(row.summary),
-            location_primary: row.location_primary.and_then(non_empty),
-            available: FindQuantityView {
-                total_amount: row.qty_amt,
-                total_unit: row.qty_unit,
-                label: row.qty_label.and_then(non_empty),
-                available_amount: row.qty_avail,
-            },
-            price: FindPriceView {
-                amount: row.price_amt,
-                currency: row.price_currency,
-                per_amount: row.price_qty_amt,
-                per_unit: row.price_qty_unit,
-            },
-            provenance: result_provenance.clone(),
-            hyf: applied_query_rewrite
-                .as_ref()
-                .map(AppliedQueryRewrite::to_result_view),
+        .map(|row| {
+            let listing_addr = row.listing_addr.and_then(non_empty);
+            let available_amount = row.qty_avail;
+            let price_amount = row.price_amt;
+            let price_currency = row.price_currency;
+            let price_per_amount = row.price_qty_amt;
+            let readiness = MarketReadinessView::from_market_projection(
+                listing_addr.as_deref(),
+                Some(row.title.as_str()),
+                Some(row.category.as_str()),
+                available_amount,
+                price_amount,
+                price_currency.as_str(),
+                price_per_amount,
+            );
+            FindResultView {
+                id: row.id,
+                product_key: row.key,
+                readiness,
+                listing_addr,
+                title: row.title,
+                category: row.category,
+                summary: non_empty(row.summary),
+                location_primary: row.location_primary.and_then(non_empty),
+                available: FindQuantityView {
+                    total_amount: row.qty_amt,
+                    total_unit: row.qty_unit,
+                    label: row.qty_label.and_then(non_empty),
+                    available_amount,
+                },
+                price: FindPriceView {
+                    amount: price_amount,
+                    currency: price_currency,
+                    per_amount: price_per_amount,
+                    per_unit: row.price_qty_unit,
+                },
+                provenance: result_provenance.clone(),
+                hyf: applied_query_rewrite
+                    .as_ref()
+                    .map(AppliedQueryRewrite::to_result_view),
+            }
         })
         .collect::<Vec<_>>();
 

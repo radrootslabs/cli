@@ -28,8 +28,8 @@ use support::{
     assert_no_removed_command_reference, create_listing_draft, identity_public, identity_secret,
     json_from_stdout, make_listing_publishable, make_listing_publishable_with_seller,
     ndjson_from_stdout, radroots, remove_orderable_listing, replace_latest_listing_event_id,
-    seed_orderable_listing, toml_string, write_public_identity_profile,
-    write_secret_identity_profile,
+    seed_orderable_listing, toml_string, update_orderable_listing_available_amount,
+    write_public_identity_profile, write_secret_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -3440,6 +3440,93 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     let basket_after_quote =
         sandbox.json_success(&["--format", "json", "basket", "get", "basket_probe"]);
     assert_eq!(basket_after_quote["result"]["quote"], Value::Null);
+}
+
+#[test]
+fn market_checkout_readiness_gates_buyer_intent_actions() {
+    let sandbox = RadrootsCliSandbox::new();
+    seed_orderable_listing(&sandbox, LISTING_ADDR);
+
+    let search = sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
+    assert_eq!(search["operation_id"], "market.product.search");
+    let result = &search["result"]["results"][0];
+    assert_eq!(result["protocol_valid"], true);
+    assert_eq!(result["marketplace_eligible"], true);
+    assert_eq!(result["checkout_enabled"], true);
+    assert!(result.get("reason_codes").is_none());
+    assert!(
+        search["result"]["actions"]
+            .as_array()
+            .expect("search actions")
+            .iter()
+            .any(|action| action == "radroots basket create")
+    );
+
+    let listing = sandbox.json_success(&[
+        "--format",
+        "json",
+        "market",
+        "listing",
+        "get",
+        "pasture-eggs",
+    ]);
+    assert_eq!(listing["operation_id"], "market.listing.get");
+    assert_eq!(listing["result"]["protocol_valid"], true);
+    assert_eq!(listing["result"]["marketplace_eligible"], true);
+    assert_eq!(listing["result"]["checkout_enabled"], true);
+    assert!(
+        listing["result"]["actions"]
+            .as_array()
+            .expect("listing actions")
+            .iter()
+            .any(|action| action == "radroots basket create")
+    );
+
+    update_orderable_listing_available_amount(&sandbox, LISTING_ADDR, 0);
+
+    let disabled_search =
+        sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
+    let disabled_result = &disabled_search["result"]["results"][0];
+    assert_eq!(disabled_result["protocol_valid"], true);
+    assert_eq!(disabled_result["marketplace_eligible"], true);
+    assert_eq!(disabled_result["checkout_enabled"], false);
+    assert_eq!(
+        disabled_result["reason_codes"][0],
+        "listing_checkout_disabled"
+    );
+    assert_eq!(
+        disabled_result["reason_codes"][1],
+        "listing_inventory_unavailable"
+    );
+    assert!(
+        disabled_search["result"]["actions"]
+            .as_array()
+            .expect("disabled search actions")
+            .iter()
+            .all(|action| action != "radroots basket create")
+    );
+
+    let disabled_listing = sandbox.json_success(&[
+        "--format",
+        "json",
+        "market",
+        "listing",
+        "get",
+        "pasture-eggs",
+    ]);
+    assert_eq!(disabled_listing["result"]["protocol_valid"], true);
+    assert_eq!(disabled_listing["result"]["marketplace_eligible"], true);
+    assert_eq!(disabled_listing["result"]["checkout_enabled"], false);
+    assert_eq!(
+        disabled_listing["result"]["reason_codes"][0],
+        "listing_checkout_disabled"
+    );
+    assert!(
+        disabled_listing["result"]
+            .get("actions")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    );
 }
 
 #[test]

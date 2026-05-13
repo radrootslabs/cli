@@ -287,6 +287,22 @@ pub fn remove_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str
         .expect("delete listing row");
 }
 
+pub fn update_orderable_listing_available_amount(
+    sandbox: &RadrootsCliSandbox,
+    listing_addr: &str,
+    available_amount: i64,
+) {
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica db");
+    let params = serde_json::to_string(&serde_json::json!([available_amount, listing_addr]))
+        .expect("update listing params");
+    executor
+        .exec(
+            "UPDATE trade_product SET qty_avail = ? WHERE listing_addr = ?;",
+            params.as_str(),
+        )
+        .expect("update listing available amount");
+}
+
 pub fn replace_latest_listing_event_id(
     sandbox: &RadrootsCliSandbox,
     listing_addr: &str,

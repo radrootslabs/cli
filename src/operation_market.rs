@@ -1,5 +1,3 @@
-use radroots_events::kinds::KIND_LISTING;
-use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -106,7 +104,7 @@ fn market_product_search_view(mut view: FindView) -> FindView {
                     "radroots market listing get {}",
                     result.product_key
                 )];
-                if listing_addr_can_back_basket(result.listing_addr.as_deref()) {
+                if result.readiness.checkout_enabled {
                     actions.push("radroots basket create".to_owned());
                 }
                 actions
@@ -128,7 +126,7 @@ fn market_product_search_view(mut view: FindView) -> FindView {
 fn market_listing_get_view(mut view: ListingGetView) -> ListingGetView {
     view.actions = match view.state.as_str() {
         "ready" => {
-            if listing_addr_can_back_basket(view.listing_addr.as_deref()) {
+            if view.readiness.checkout_enabled {
                 vec!["radroots basket create".to_owned()]
             } else {
                 Vec::new()
@@ -145,13 +143,6 @@ fn market_listing_get_view(mut view: ListingGetView) -> ListingGetView {
         _ => std::mem::take(&mut view.actions),
     };
     view
-}
-
-fn listing_addr_can_back_basket(listing_addr: Option<&str>) -> bool {
-    let Some(listing_addr) = listing_addr else {
-        return false;
-    };
-    RadrootsTradeListingAddress::parse(listing_addr).is_ok_and(|parsed| parsed.kind == KIND_LISTING)
 }
 
 fn required_query_terms<P>(
@@ -260,7 +251,7 @@ mod tests {
     use super::{MarketOperationService, market_listing_get_view, market_product_search_view};
     use crate::domain::runtime::{
         FindPriceView, FindQuantityView, FindResultProvenanceView, FindResultView, FindView,
-        ListingGetView, SyncFreshnessView,
+        ListingGetView, MarketReadinessView, SyncFreshnessView,
     };
     use crate::operation_adapter::{
         MarketListingGetRequest, MarketProductSearchRequest, MarketRefreshRequest,
@@ -447,6 +438,7 @@ mod tests {
             results: vec![FindResultView {
                 id: "listing_eggs".to_owned(),
                 product_key: "eggs".to_owned(),
+                readiness: readiness_enabled(),
                 listing_addr: Some(LISTING_ADDR.to_owned()),
                 title: "Eggs".to_owned(),
                 category: "eggs".to_owned(),
@@ -474,6 +466,7 @@ mod tests {
             state: "ready".to_owned(),
             source: "test".to_owned(),
             lookup: "eggs".to_owned(),
+            readiness: readiness_enabled(),
             listing_id: Some("listing_eggs".to_owned()),
             product_key: Some("eggs".to_owned()),
             listing_addr: Some(LISTING_ADDR.to_owned()),
@@ -496,6 +489,62 @@ mod tests {
                 .chain(listing.actions.iter())
                 .all(|action| !action.starts_with("radroots basket item add "))
         );
+    }
+
+    #[test]
+    fn market_ready_actions_require_checkout_enabled() {
+        let disabled_search = market_product_search_view(FindView {
+            state: "ready".to_owned(),
+            source: "test".to_owned(),
+            query: "eggs".to_owned(),
+            count: 1,
+            relay_count: 1,
+            replica_db: "ready".to_owned(),
+            freshness: freshness(),
+            results: vec![FindResultView {
+                id: "listing_eggs".to_owned(),
+                product_key: "eggs".to_owned(),
+                readiness: readiness_disabled(),
+                listing_addr: Some(LISTING_ADDR.to_owned()),
+                title: "Eggs".to_owned(),
+                category: "eggs".to_owned(),
+                summary: None,
+                location_primary: None,
+                available: quantity(),
+                price: price(),
+                provenance: provenance(),
+                hyf: None,
+            }],
+            hyf: None,
+            reason: None,
+            actions: Vec::new(),
+        });
+
+        assert_eq!(
+            disabled_search.actions,
+            vec!["radroots market listing get eggs".to_owned()]
+        );
+
+        let disabled_listing = market_listing_get_view(ListingGetView {
+            state: "ready".to_owned(),
+            source: "test".to_owned(),
+            lookup: "eggs".to_owned(),
+            readiness: readiness_disabled(),
+            listing_id: Some("listing_eggs".to_owned()),
+            product_key: Some("eggs".to_owned()),
+            listing_addr: Some(LISTING_ADDR.to_owned()),
+            title: Some("Eggs".to_owned()),
+            category: Some("eggs".to_owned()),
+            description: None,
+            location_primary: None,
+            available: Some(quantity()),
+            price: Some(price()),
+            provenance: provenance(),
+            reason: None,
+            actions: Vec::new(),
+        });
+
+        assert!(disabled_listing.actions.is_empty());
     }
 
     fn freshness() -> SyncFreshnessView {
@@ -531,6 +580,27 @@ mod tests {
             currency: "USD".to_owned(),
             per_amount: 1.0,
             per_unit: "each".to_owned(),
+        }
+    }
+
+    fn readiness_enabled() -> MarketReadinessView {
+        MarketReadinessView {
+            protocol_valid: true,
+            marketplace_eligible: true,
+            checkout_enabled: true,
+            reason_codes: Vec::new(),
+        }
+    }
+
+    fn readiness_disabled() -> MarketReadinessView {
+        MarketReadinessView {
+            protocol_valid: true,
+            marketplace_eligible: true,
+            checkout_enabled: false,
+            reason_codes: vec![
+                "listing_checkout_disabled".to_owned(),
+                "listing_inventory_unavailable".to_owned(),
+            ],
         }
     }
 
