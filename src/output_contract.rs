@@ -10,6 +10,7 @@ pub struct EnvelopeContext {
     pub request_id: String,
     pub correlation_id: Option<String>,
     pub idempotency_key: Option<String>,
+    pub output_format: OutputFormat,
     pub dry_run: bool,
     pub actor: Option<EnvelopeActor>,
 }
@@ -20,6 +21,7 @@ impl EnvelopeContext {
             request_id: request_id.into(),
             correlation_id: None,
             idempotency_key: None,
+            output_format: OutputFormat::Human,
             dry_run,
             actor: None,
         }
@@ -37,12 +39,16 @@ pub struct OutputEnvelope {
     pub schema_version: &'static str,
     pub operation_id: String,
     pub kind: String,
+    pub status: OutputStatus,
+    pub output_format: OutputFormat,
     pub request_id: String,
     pub correlation_id: Option<String>,
     pub idempotency_key: Option<String>,
     pub dry_run: bool,
     pub actor: Option<EnvelopeActor>,
+    pub resource: Option<OutputResource>,
     pub result: Value,
+    pub reason_code: Option<String>,
     pub warnings: Vec<OutputWarning>,
     pub errors: Vec<OutputError>,
     pub next_actions: Vec<NextAction>,
@@ -55,16 +61,22 @@ impl OutputEnvelope {
         context: EnvelopeContext,
     ) -> Self {
         let operation_id = operation_id.into();
+        let resource = output_resource_from_value(&result);
+        let reason_code = output_reason_code_from_value(&result);
         Self {
             schema_version: OUTPUT_SCHEMA_VERSION,
             kind: operation_id.clone(),
             operation_id,
+            status: OutputStatus::Ok,
+            output_format: context.output_format,
             request_id: context.request_id,
             correlation_id: context.correlation_id,
             idempotency_key: context.idempotency_key,
             dry_run: context.dry_run,
             actor: context.actor,
+            resource,
             result,
+            reason_code,
             warnings: Vec::new(),
             errors: Vec::new(),
             next_actions: Vec::new(),
@@ -78,16 +90,22 @@ impl OutputEnvelope {
     ) -> Self {
         let operation_id = operation_id.into();
         let next_actions = next_actions_from_error_detail(&error);
+        let resource = error.detail.as_ref().and_then(output_resource_from_value);
+        let reason_code = Some(error.reason_code.clone());
         Self {
             schema_version: OUTPUT_SCHEMA_VERSION,
             kind: operation_id.clone(),
             operation_id,
+            status: OutputStatus::Error,
+            output_format: context.output_format,
             request_id: context.request_id,
             correlation_id: context.correlation_id,
             idempotency_key: context.idempotency_key,
             dry_run: context.dry_run,
             actor: context.actor,
+            resource,
             result: Value::Null,
+            reason_code,
             warnings: Vec::new(),
             errors: vec![error],
             next_actions,
@@ -102,10 +120,13 @@ impl OutputEnvelope {
             NdjsonFrameType::Started,
             json!({
                 "state": "started",
+                "status": self.status,
+                "output_format": self.output_format,
                 "dry_run": self.dry_run,
                 "correlation_id": &self.correlation_id,
                 "idempotency_key": &self.idempotency_key,
                 "actor": &self.actor,
+                "resource": &self.resource,
             }),
         );
         let mut terminal = NdjsonFrame::new(
@@ -118,6 +139,10 @@ impl OutputEnvelope {
                 NdjsonFrameType::Error
             },
             json!({
+                "status": self.status,
+                "reason_code": &self.reason_code,
+                "output_format": self.output_format,
+                "resource": &self.resource,
                 "result": &self.result,
                 "next_actions": &self.next_actions,
                 "dry_run": self.dry_run,
@@ -130,6 +155,100 @@ impl OutputEnvelope {
         terminal.errors = self.errors.clone();
         vec![started, terminal]
     }
+}
+
+fn output_reason_code_from_value(value: &Value) -> Option<String> {
+    value
+        .get("reason_code")
+        .and_then(Value::as_str)
+        .filter(|reason_code| !reason_code.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn output_resource_from_value(value: &Value) -> Option<OutputResource> {
+    let object = value.as_object()?;
+    if let Some(resource) = object.get("resource").and_then(declared_output_resource) {
+        return Some(resource);
+    }
+    output_resource_from_fields(object).or_else(|| {
+        let nested_fields = [
+            "account",
+            "resolved_account",
+            "default_account",
+            "bound_account",
+            "farm",
+            "listing",
+            "basket",
+            "quote",
+            "order",
+            "payment",
+            "settlement",
+        ];
+        nested_fields
+            .into_iter()
+            .filter_map(|field| {
+                object
+                    .get(field)
+                    .and_then(|value| nested_output_resource(field, value))
+            })
+            .next()
+    })
+}
+
+fn nested_output_resource(field: &str, value: &Value) -> Option<OutputResource> {
+    let mut resource = output_resource_from_value(value)?;
+    if resource.kind == "resource" {
+        resource.kind = match field {
+            "resolved_account" | "default_account" | "bound_account" => "account",
+            other => other,
+        }
+        .to_owned();
+    }
+    Some(resource)
+}
+
+fn declared_output_resource(value: &Value) -> Option<OutputResource> {
+    let object = value.as_object()?;
+    let kind = object
+        .get("kind")
+        .and_then(Value::as_str)
+        .filter(|kind| !kind.trim().is_empty())?;
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())?;
+    Some(OutputResource {
+        kind: kind.to_owned(),
+        id: id.to_owned(),
+    })
+}
+
+fn output_resource_from_fields(object: &serde_json::Map<String, Value>) -> Option<OutputResource> {
+    [
+        ("account_id", "account"),
+        ("id", "resource"),
+        ("farm_id", "farm"),
+        ("seller_account_id", "account"),
+        ("buyer_account_id", "account"),
+        ("listing_id", "listing"),
+        ("listing_address", "listing"),
+        ("listing_addr", "listing"),
+        ("basket_id", "basket"),
+        ("order_id", "order"),
+        ("payment_event_id", "payment"),
+        ("settlement_event_id", "settlement"),
+    ]
+    .into_iter()
+    .find_map(|(field, kind)| {
+        object
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| OutputResource {
+                kind: kind.to_owned(),
+                id: id.to_owned(),
+            })
+    })
 }
 
 pub fn next_actions_from_result_value(result: &Value) -> Vec<NextAction> {
@@ -235,9 +354,31 @@ pub struct OutputWarning {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputStatus {
+    Ok,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputFormat {
+    Human,
+    Json,
+    Ndjson,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OutputResource {
+    pub kind: String,
+    pub id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OutputError {
     pub code: String,
+    pub reason_code: String,
     pub message: String,
     pub exit_code: u8,
     pub detail: Option<Value>,
@@ -249,8 +390,10 @@ impl OutputError {
         message: impl Into<String>,
         exit_code: CliExitCode,
     ) -> Self {
+        let code = code.into();
         Self {
-            code: code.into(),
+            reason_code: code.clone(),
+            code,
             message: message.into(),
             exit_code: exit_code.code(),
             detail: None,
@@ -386,11 +529,16 @@ mod tests {
         assert_eq!(value["schema_version"], OUTPUT_SCHEMA_VERSION);
         assert_eq!(value["operation_id"], "listing.publish");
         assert_eq!(value["kind"], "listing.publish");
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["output_format"], "human");
         assert_eq!(value["request_id"], "req_test");
         assert_eq!(value["correlation_id"], "corr_test");
         assert_eq!(value["idempotency_key"], "idem_test");
         assert_eq!(value["dry_run"], true);
+        assert_eq!(value["resource"]["kind"], "listing");
+        assert_eq!(value["resource"]["id"], "listing_test");
         assert_eq!(value["result"]["listing_id"], "listing_test");
+        assert_eq!(value["reason_code"], Value::Null);
         assert_eq!(value["warnings"].as_array().unwrap().len(), 0);
         assert_eq!(value["errors"].as_array().unwrap().len(), 0);
         assert_eq!(value["next_actions"].as_array().unwrap().len(), 0);
@@ -412,8 +560,11 @@ mod tests {
 
         assert_eq!(value["schema_version"], OUTPUT_SCHEMA_VERSION);
         assert_eq!(value["operation_id"], "order.submit");
+        assert_eq!(value["status"], "error");
+        assert_eq!(value["reason_code"], "approval_required");
         assert_eq!(value["result"], Value::Null);
         assert_eq!(value["errors"][0]["code"], "approval_required");
+        assert_eq!(value["errors"][0]["reason_code"], "approval_required");
         assert_eq!(value["errors"][0]["exit_code"], 6);
     }
 
@@ -539,6 +690,32 @@ mod tests {
             assert_eq!(value["operation_id"], "sync.watch");
             assert!(value["frame_type"].is_string());
         }
+    }
+
+    #[test]
+    fn ndjson_terminal_frame_carries_status_reason_and_resource() {
+        let mut error = OutputError::new(
+            "not_implemented",
+            "payments are deferred",
+            CliExitCode::RuntimeUnavailable,
+        );
+        error.detail = Some(json!({
+            "order_id": "ord_test",
+        }));
+        let envelope = OutputEnvelope::failure(
+            "order.payment.record",
+            error,
+            EnvelopeContext::new("req_payment", false),
+        );
+        let frames = envelope.to_ndjson_frames();
+
+        assert_eq!(frames[0].payload["status"], "error");
+        assert_eq!(frames[0].payload["output_format"], "human");
+        assert_eq!(frames[1].payload["status"], "error");
+        assert_eq!(frames[1].payload["reason_code"], "not_implemented");
+        assert_eq!(frames[1].payload["resource"]["kind"], "order");
+        assert_eq!(frames[1].payload["resource"]["id"], "ord_test");
+        assert_eq!(frames[1].errors[0].reason_code, "not_implemented");
     }
 
     #[test]

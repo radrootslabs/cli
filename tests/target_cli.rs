@@ -26,9 +26,10 @@ use serde_json::json;
 use support::{
     RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
     assert_no_removed_command_reference, create_listing_draft, identity_public, identity_secret,
-    make_listing_publishable, make_listing_publishable_with_seller, ndjson_from_stdout, radroots,
-    remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing, toml_string,
-    write_public_identity_profile, write_secret_identity_profile,
+    json_from_stdout, make_listing_publishable, make_listing_publishable_with_seller,
+    ndjson_from_stdout, radroots, remove_orderable_listing, replace_latest_listing_event_id,
+    seed_orderable_listing, toml_string, write_public_identity_profile,
+    write_secret_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -2196,6 +2197,67 @@ fn unsupported_ndjson_returns_structured_invalid_input() {
     assert_eq!(watch_frames[1]["frame_type"], "error");
     assert_eq!(watch_frames[1]["errors"][0]["code"], "invalid_input");
     assert_eq!(watch_frames[1]["errors"][0]["exit_code"], 2);
+}
+
+#[test]
+fn machine_output_exposes_status_format_resource_and_reason_code() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    assert_eq!(account["status"], "ok");
+    assert_eq!(account["output_format"], "json");
+    assert_eq!(account["reason_code"], Value::Null);
+    assert_eq!(account["resource"]["kind"], "account");
+    assert_eq!(
+        account["resource"]["id"],
+        account["result"]["account"]["id"]
+    );
+
+    let (deferred_output, deferred) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "payment",
+        "record",
+        "ord_pending",
+    ]);
+    assert_eq!(deferred_output.status.code(), Some(3));
+    assert_eq!(deferred["status"], "error");
+    assert_eq!(deferred["output_format"], "json");
+    assert_eq!(deferred["reason_code"], "not_implemented");
+    assert_eq!(deferred["errors"][0]["reason_code"], "not_implemented");
+
+    let output = sandbox
+        .command()
+        .args(["--format", "json", "--dry-run", "workspace", "get"])
+        .output()
+        .expect("run invalid dry-run");
+    assert_eq!(output.status.code(), Some(2));
+    let invalid = json_from_stdout(&output);
+    assert_eq!(invalid["status"], "error");
+    assert_eq!(invalid["reason_code"], "invalid_input");
+    assert_eq!(invalid["errors"][0]["reason_code"], "invalid_input");
+
+    let ndjson_output = sandbox
+        .command()
+        .args([
+            "--format",
+            "ndjson",
+            "order",
+            "payment",
+            "record",
+            "ord_pending",
+        ])
+        .output()
+        .expect("run deferred ndjson");
+    assert_eq!(ndjson_output.status.code(), Some(3));
+    let frames = ndjson_from_stdout(&ndjson_output);
+    assert_eq!(frames[0]["payload"]["status"], "error");
+    assert_eq!(frames[0]["payload"]["output_format"], "ndjson");
+    assert_eq!(frames[1]["payload"]["status"], "error");
+    assert_eq!(frames[1]["payload"]["output_format"], "ndjson");
+    assert_eq!(frames[1]["payload"]["reason_code"], "not_implemented");
+    assert_eq!(frames[1]["errors"][0]["reason_code"], "not_implemented");
 }
 
 #[test]

@@ -9,8 +9,8 @@ use serde_json::{Map, Value, json};
 use crate::domain::runtime::CommandDisposition;
 use crate::operation_registry::{OPERATION_REGISTRY, OperationSpec, get_operation};
 use crate::output_contract::{
-    CliExitCode, EnvelopeActor, EnvelopeContext, NextAction, OUTPUT_SCHEMA_VERSION, OutputEnvelope,
-    OutputError, OutputWarning, next_actions_from_result_value,
+    CliExitCode, EnvelopeActor, EnvelopeContext, NextAction, OutputEnvelope, OutputError,
+    OutputFormat, OutputWarning, next_actions_from_result_value,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::AccountRuntimeFailure;
@@ -112,6 +112,11 @@ impl OperationContext {
 
     pub fn envelope_context(&self, request_id: impl Into<String>) -> EnvelopeContext {
         let mut context = EnvelopeContext::new(request_id, self.dry_run);
+        context.output_format = match self.output_format {
+            OperationOutputFormat::Human => OutputFormat::Human,
+            OperationOutputFormat::Json => OutputFormat::Json,
+            OperationOutputFormat::Ndjson => OutputFormat::Ndjson,
+        };
         context.correlation_id = self.correlation_id.clone();
         context.idempotency_key = self.idempotency_key.clone();
         context.actor = self.account_id.as_ref().map(|account_id| EnvelopeActor {
@@ -242,20 +247,10 @@ impl<P: OperationResultPayload> OperationResult<P> {
         } else {
             self.next_actions.clone()
         };
-        Ok(OutputEnvelope {
-            schema_version: OUTPUT_SCHEMA_VERSION,
-            operation_id: self.operation_id().to_owned(),
-            kind: self.operation_id().to_owned(),
-            request_id: context.request_id,
-            correlation_id: context.correlation_id,
-            idempotency_key: context.idempotency_key,
-            dry_run: context.dry_run,
-            actor: context.actor,
-            result,
-            warnings: self.warnings.clone(),
-            errors: Vec::new(),
-            next_actions,
-        })
+        let mut envelope = OutputEnvelope::success(self.operation_id(), result, context);
+        envelope.warnings = self.warnings.clone();
+        envelope.next_actions = next_actions;
+        Ok(envelope)
     }
 }
 
