@@ -1642,7 +1642,9 @@ impl OrderFulfillmentView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "missing" => CommandDisposition::NotFound,
-            "invalid" | "requested" | "declined" | "forked" => CommandDisposition::ValidationFailed,
+            "invalid" | "requested" | "declined" | "terminal" | "forked" => {
+                CommandDisposition::ValidationFailed
+            }
             "unconfigured" => CommandDisposition::Unconfigured,
             "unavailable" => CommandDisposition::ExternalUnavailable,
             "error" => CommandDisposition::InternalError,

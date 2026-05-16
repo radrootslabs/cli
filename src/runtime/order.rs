@@ -5608,6 +5608,7 @@ fn order_fulfillment_preflight_view_from_status(
         "missing" | "requested" | "declined" | "invalid" | "unavailable" | "unconfigured" => {
             status.state.as_str()
         }
+        "cancelled" | "completed" | "disputed" => "terminal",
         _ => return None,
     };
     let mut view = order_fulfillment_base_view(config, args, state, config.output.dry_run);
@@ -5657,6 +5658,12 @@ fn order_fulfillment_preflight_view_from_status(
                 args.key
             )
         }),
+        "terminal" => {
+            format!(
+                "order fulfillment update refused because order `{}` is already terminal",
+                args.key
+            )
+        }
         _ => status.reason.clone().unwrap_or_else(|| {
             format!(
                 "order fulfillment update status preflight failed with state `{}`",
@@ -15708,6 +15715,101 @@ mod tests {
         assert_eq!(view.issues[0].code, "fulfillment_unsupported_transition");
         assert_eq!(view.issues[0].event_ids, vec![fulfillment_event_id]);
         assert!(view.event_id.is_none());
+    }
+
+    #[test]
+    fn order_fulfillment_preflight_rejects_completed_order_as_terminal() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::Delivered,
+        );
+        let receipt_event = signed_buyer_receipt_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &fulfillment_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            true,
+            None,
+        );
+        let receipt_event_id = receipt_event.id.to_string();
+        let reduction = order_status_reduction_from_receipt_with_context(
+            OrderStatusContext {
+                order_id: fixture.order_id.as_str(),
+                buyer_pubkey: None,
+                seller_pubkey: None,
+                selected_account_pubkey: None,
+                actor_context_source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
+            },
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event,
+                    fulfillment_event,
+                    receipt_event,
+                ],
+            },
+        );
+        let args = OrderFulfillmentArgs {
+            key: fixture.order_id.clone(),
+            state: "ready_for_pickup".to_owned(),
+            idempotency_key: None,
+        };
+
+        let view = order_fulfillment_preflight_view_from_status(
+            &config,
+            &args,
+            &reduction.view,
+            reduction.fulfillment_status,
+            reduction.fulfillment_event_id.as_deref(),
+        )
+        .expect("completed fulfillment preflight");
+
+        assert_eq!(view.state, "terminal");
+        assert_eq!(
+            view.disposition(),
+            crate::domain::runtime::CommandDisposition::ValidationFailed
+        );
+        assert_eq!(
+            view.prev_event_id.as_deref(),
+            Some(receipt_event_id.as_str())
+        );
+        assert!(view.event_id.is_none());
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("already terminal")
+        );
     }
 
     #[test]
