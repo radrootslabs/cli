@@ -1577,7 +1577,7 @@ impl OrderDecisionView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "missing" => CommandDisposition::NotFound,
-            "invalid" | "already_decided" => CommandDisposition::ValidationFailed,
+            "invalid" | "already_decided" | "terminal" => CommandDisposition::ValidationFailed,
             "unconfigured" => CommandDisposition::Unconfigured,
             "unavailable" => CommandDisposition::ExternalUnavailable,
             "error" => CommandDisposition::InternalError,
@@ -1857,9 +1857,8 @@ impl OrderRevisionProposalView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "missing" => CommandDisposition::NotFound,
-            "invalid" | "requested" | "order_declined" | "fulfilled" | "terminal" | "forked" => {
-                CommandDisposition::ValidationFailed
-            }
+            "invalid" | "requested" | "declined" | "order_declined" | "fulfilled" | "terminal"
+            | "forked" => CommandDisposition::ValidationFailed,
             "unconfigured" => CommandDisposition::Unconfigured,
             "unavailable" => CommandDisposition::ExternalUnavailable,
             "error" => CommandDisposition::InternalError,

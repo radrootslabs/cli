@@ -5834,6 +5834,7 @@ fn order_decision_preflight_view_from_status(
 ) -> Option<OrderDecisionView> {
     let state = match status.state.as_str() {
         "accepted" | "declined" => "already_decided",
+        "cancelled" | "completed" | "disputed" => "terminal",
         "invalid" => "invalid",
         "unavailable" => "unavailable",
         "unconfigured" => "unconfigured",
@@ -5853,6 +5854,11 @@ fn order_decision_preflight_view_from_status(
             args.decision.command(),
             request.order_id,
             status.state
+        ),
+        "cancelled" | "completed" | "disputed" => format!(
+            "order {} refused because order `{}` is already terminal",
+            args.decision.command(),
+            request.order_id
         ),
         "invalid" => status.reason.clone().unwrap_or_else(|| {
             format!(
@@ -12152,6 +12158,63 @@ mod tests {
     }
 
     #[test]
+    fn order_revision_preflight_rejects_declined_order() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Declined {
+                reason: "out of stock".to_owned(),
+            },
+        );
+        let decision_event_id = decision_event.id.to_string();
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![fixture.request_event.clone(), decision_event],
+            },
+        );
+        let args = revision_args_for_fixture(&fixture, 3);
+        let candidates = order_revision_proposals_from_events(fixture.order_id.as_str(), &[]);
+
+        let view = order_revision_preflight_view_from_status(
+            &config,
+            &args,
+            &status_view,
+            fixture.seller_pubkey.as_str(),
+            &candidates,
+        )
+        .expect("declined revision proposal preflight");
+
+        assert_eq!(view.state, "declined");
+        assert_eq!(
+            view.disposition(),
+            crate::domain::runtime::CommandDisposition::ValidationFailed
+        );
+        assert_eq!(
+            view.decision_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert!(view.event_id.is_none());
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("was declined")
+        );
+    }
+
+    #[test]
     fn order_revision_preflight_rejects_pending_revision_candidate() {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
@@ -16115,6 +16178,95 @@ mod tests {
                 .as_deref()
                 .expect("reason")
                 .contains("already has a visible `accepted` seller decision")
+        );
+    }
+
+    #[test]
+    fn order_decision_preflight_rejects_completed_order_as_terminal() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+        let fixture = order_status_fixture();
+        let resolution = request_resolution_for_fixture(&fixture);
+        let request = resolution.requests[0].clone();
+        let decision_event = signed_order_decision_event(
+            &fixture.seller,
+            &fixture.request_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsTradeOrderDecision::Accepted {
+                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+            },
+        );
+        let decision_event_id = decision_event.id.to_string();
+        let fulfillment_event = signed_fulfillment_update_event(
+            &fixture.seller,
+            &fixture.request_event,
+            &decision_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            RadrootsActiveTradeFulfillmentState::Delivered,
+        );
+        let receipt_event = signed_buyer_receipt_event(
+            &fixture.buyer,
+            &fixture.request_event,
+            &fulfillment_event,
+            fixture.order_id.as_str(),
+            fixture.listing_addr.as_str(),
+            fixture.buyer_pubkey.as_str(),
+            fixture.seller_pubkey.as_str(),
+            true,
+            None,
+        );
+        let status_view = order_status_from_receipt(
+            fixture.order_id.as_str(),
+            DirectRelayFetchReceipt {
+                target_relays: vec!["ws://relay.test".to_owned()],
+                connected_relays: vec!["ws://relay.test".to_owned()],
+                failed_relays: Vec::new(),
+                events: vec![
+                    fixture.request_event.clone(),
+                    decision_event,
+                    fulfillment_event,
+                    receipt_event,
+                ],
+            },
+        );
+        let args = OrderDecisionArgs {
+            key: fixture.order_id.clone(),
+            decision: OrderDecisionArg::Decline,
+            reason: Some("out of stock".to_owned()),
+            idempotency_key: None,
+        };
+
+        let view = order_decision_preflight_view_from_status(
+            &config,
+            &args,
+            &request,
+            &resolution,
+            &status_view,
+        )
+        .expect("terminal decision preflight view");
+
+        assert_eq!(view.state, "terminal");
+        assert_eq!(
+            view.disposition(),
+            crate::domain::runtime::CommandDisposition::ValidationFailed
+        );
+        assert_eq!(view.event_id.as_deref(), Some(decision_event_id.as_str()));
+        assert_eq!(view.event_kind, Some(KIND_TRADE_ORDER_DECISION));
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reason")
+                .contains("already terminal")
         );
     }
 
