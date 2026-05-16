@@ -301,6 +301,10 @@ where
         &executor,
         &sync_record_from_ingest(scope, &config.relay.urls, &receipt, &ingest, started_at)?,
     )?;
+    let failed_relays = relay_failures(receipt.failed_relays);
+    let failed_count = ingest.failed_count + failed_relays.len();
+    let reason_code = relay_ingest_reason_code(&ingest, &failed_relays).map(str::to_owned);
+    let reason = relay_ingest_reason(&ingest, &failed_relays);
     let freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
     let queue = radroots_replica_sync_status(&executor)?;
 
@@ -320,17 +324,17 @@ where
         target_relays: receipt.target_relays,
         connected_relays: receipt.connected_relays,
         acknowledged_relays: Vec::new(),
-        failed_relays: relay_failures(receipt.failed_relays),
+        failed_relays,
         fetched_count: Some(ingest.fetched_count),
         ingested_count: Some(ingest.ingested_count),
         publishable_count: None,
         published_count: None,
         skipped_count: Some(ingest.skipped_count),
         unsupported_count: Some(ingest.unsupported_count),
-        failed_count: Some(ingest.failed_count),
+        failed_count: Some(failed_count),
         publish_plan: None,
-        reason_code: ingest.reason_code().map(str::to_owned),
-        reason: ingest.reason(),
+        reason_code,
+        reason,
         actions: vec![scope.ready_action().to_owned()],
     })
 }
@@ -1354,6 +1358,46 @@ impl RelayIngestCounts {
     }
 }
 
+fn relay_ingest_reason_code(
+    ingest: &RelayIngestCounts,
+    failed_relays: &[RelayFailureView],
+) -> Option<&'static str> {
+    ingest
+        .reason_code()
+        .or_else(|| (!failed_relays.is_empty()).then_some("relay_fetch_partial"))
+}
+
+fn relay_ingest_reason(
+    ingest: &RelayIngestCounts,
+    failed_relays: &[RelayFailureView],
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(reason) = ingest.reason() {
+        parts.push(reason);
+    }
+    if !failed_relays.is_empty() {
+        parts.push(format!(
+            "{} relay(s) failed during fetch: {}",
+            failed_relays.len(),
+            relay_failure_reason(failed_relays)
+        ));
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("; "))
+    }
+}
+
+fn relay_failure_reason(failed_relays: &[RelayFailureView]) -> String {
+    failed_relays
+        .iter()
+        .map(|failure| format!("{}: {}", failure.relay, failure.reason))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RelayIngestScope {
     SyncPull,
@@ -2008,6 +2052,48 @@ mod tests {
         assert_eq!(run.relay_set_current, true);
         assert_eq!(run.fetched_count, Some(1));
         assert_eq!(run.ingested_count, Some(1));
+    }
+
+    #[test]
+    fn sync_pull_reports_partial_relay_fetch_reason_code() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(
+            dir.path(),
+            vec![
+                "wss://relay-a.example.com".to_owned(),
+                "wss://relay-b.example.com".to_owned(),
+            ],
+        );
+        crate::runtime::local::init(&config).expect("store init");
+        let seller = identity(13);
+
+        let view = pull_with_fetcher(&config, |relays, _| {
+            Ok(DirectRelayFetchReceipt {
+                target_relays: relays.to_vec(),
+                connected_relays: vec![relays[0].clone()],
+                failed_relays: vec![DirectRelayFailure {
+                    relay: relays[1].clone(),
+                    reason: "connection refused".to_owned(),
+                }],
+                events: vec![listing_event(&seller)],
+            })
+        })
+        .expect("sync pull partial relay fetch");
+
+        assert_eq!(view.state, "ready");
+        assert_eq!(view.connected_relays, vec!["wss://relay-a.example.com"]);
+        assert_eq!(view.failed_relays.len(), 1);
+        assert_eq!(view.failed_count, Some(1));
+        assert_eq!(view.reason_code.as_deref(), Some("relay_fetch_partial"));
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("partial relay reason")
+                .contains("relay(s) failed during fetch")
+        );
+        let run = view.freshness.run.as_ref().expect("run freshness");
+        assert_eq!(run.last_state, "partial");
+        assert_eq!(run.failed_count, Some(1));
     }
 
     #[test]
