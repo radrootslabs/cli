@@ -11,6 +11,7 @@ mod operation_market;
 mod operation_order;
 mod operation_registry;
 mod operation_runtime;
+mod operation_validation;
 mod output_contract;
 mod runtime;
 mod runtime_args;
@@ -41,6 +42,7 @@ use crate::operation_registry::{
     requires_nostr_relay_publish_mode,
 };
 use crate::operation_runtime::RuntimeOperationService;
+use crate::operation_validation::ValidationOperationService;
 use crate::output_contract::OutputEnvelope;
 use crate::runtime::config::{
     PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
@@ -334,6 +336,15 @@ fn execute_request(
         }
         TargetOperationRequest::OrderEventWatch(request) => {
             execute_with(OrderOperationService::new(config), request)
+        }
+        TargetOperationRequest::ValidationReceiptGet(request) => {
+            execute_with(ValidationOperationService::new(config), request)
+        }
+        TargetOperationRequest::ValidationReceiptList(request) => {
+            execute_with(ValidationOperationService::new(config), request)
+        }
+        TargetOperationRequest::ValidationReceiptVerify(request) => {
+            execute_with(ValidationOperationService::new(config), request)
         }
     }
 }

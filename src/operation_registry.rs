@@ -1147,6 +1147,51 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false,
         false
     ),
+    operation!(
+        "validation.receipt.get",
+        "radroots validation receipt get",
+        "validation",
+        "validation_receipt_get",
+        "ValidationReceiptGetRequest",
+        "ValidationReceiptGetResult",
+        "Fetch and inspect one validation receipt event.",
+        Any,
+        false,
+        None,
+        Low,
+        false,
+        false
+    ),
+    operation!(
+        "validation.receipt.list",
+        "radroots validation receipt list",
+        "validation",
+        "validation_receipt_list",
+        "ValidationReceiptListRequest",
+        "ValidationReceiptListResult",
+        "List validation receipts for one order.",
+        Any,
+        false,
+        None,
+        Low,
+        true,
+        false
+    ),
+    operation!(
+        "validation.receipt.verify",
+        "radroots validation receipt verify",
+        "validation",
+        "validation_receipt_verify",
+        "ValidationReceiptVerifyRequest",
+        "ValidationReceiptVerifyResult",
+        "Verify validation receipt tags, payload, and proof binding.",
+        Any,
+        false,
+        None,
+        Low,
+        false,
+        false
+    ),
 ];
 
 pub fn get_operation(operation_id: &str) -> Option<&'static OperationSpec> {
@@ -1157,9 +1202,20 @@ pub fn get_operation(operation_id: &str) -> Option<&'static OperationSpec> {
 
 pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
     match operation_id {
-        "sync.pull" | "sync.push" | "sync.watch" | "market.refresh" | "farm.publish"
-        | "listing.publish" | "listing.update" | "listing.archive" | "order.submit"
-        | "order.status.get" | "order.event.list" => NetworkRequirement::External {
+        "sync.pull"
+        | "sync.push"
+        | "sync.watch"
+        | "market.refresh"
+        | "farm.publish"
+        | "listing.publish"
+        | "listing.update"
+        | "listing.archive"
+        | "order.submit"
+        | "order.status.get"
+        | "order.event.list"
+        | "validation.receipt.get"
+        | "validation.receipt.list"
+        | "validation.receipt.verify" => NetworkRequirement::External {
             dry_run_requires_network: false,
         },
         "order.accept"
@@ -1308,6 +1364,9 @@ mod tests {
         "order.status.get",
         "order.event.list",
         "order.event.watch",
+        "validation.receipt.get",
+        "validation.receipt.list",
+        "validation.receipt.verify",
     ];
 
     const SUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[
@@ -1363,7 +1422,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 71);
+        assert_eq!(OPERATION_REGISTRY.len(), 74);
     }
 
     #[test]
@@ -1491,6 +1550,7 @@ mod tests {
             "basket.list",
             "order.list",
             "order.event.list",
+            "validation.receipt.list",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -1530,6 +1590,9 @@ mod tests {
             "order.receipt.record",
             "order.status.get",
             "order.event.list",
+            "validation.receipt.get",
+            "validation.receipt.list",
+            "validation.receipt.verify",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

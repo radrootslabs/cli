@@ -14,6 +14,7 @@ pub mod paths;
 pub mod provider;
 pub mod signer;
 pub mod sync;
+pub mod validation_receipt;
 
 use std::process::ExitCode;
 

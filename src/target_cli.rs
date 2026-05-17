@@ -102,6 +102,8 @@ pub enum TargetCommand {
     Basket(BasketArgs),
     #[command(about = "Coordinate order lifecycle events without payments.")]
     Order(OrderArgs),
+    #[command(about = "Inspect validation receipts and proof state.")]
+    Validation(ValidationArgs),
 }
 
 impl TargetCommand {
@@ -248,6 +250,13 @@ impl TargetCommand {
                 OrderCommand::Event(event) => match &event.command {
                     OrderEventCommand::List(_) => "order.event.list",
                     OrderEventCommand::Watch(_) => "order.event.watch",
+                },
+            },
+            Self::Validation(args) => match &args.command {
+                ValidationCommand::Receipt(receipt) => match &receipt.command {
+                    ValidationReceiptCommand::Get(_) => "validation.receipt.get",
+                    ValidationReceiptCommand::List(_) => "validation.receipt.list",
+                    ValidationReceiptCommand::Verify(_) => "validation.receipt.verify",
                 },
             },
         }
@@ -1053,6 +1062,41 @@ pub enum OrderEventCommand {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct ValidationArgs {
+    #[command(subcommand)]
+    pub command: ValidationCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ValidationCommand {
+    Receipt(ValidationReceiptArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ValidationReceiptArgs {
+    #[command(subcommand)]
+    pub command: ValidationReceiptCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ValidationReceiptCommand {
+    Get(ValidationReceiptEventArgs),
+    List(ValidationReceiptListArgs),
+    Verify(ValidationReceiptEventArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ValidationReceiptEventArgs {
+    pub receipt_event_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ValidationReceiptListArgs {
+    #[arg(long)]
+    pub order_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct PathOutputArgs {
     #[arg(long)]
     pub output: Option<PathBuf>,
@@ -1067,7 +1111,8 @@ mod tests {
     use super::{
         AccountCommand, FarmCommand, ListingCommand, OrderCommand, OrderFulfillmentCommand,
         OrderFulfillmentStateArg, OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand,
-        OrderSettlementCommand, TargetCliArgs, TargetOutputFormat,
+        OrderSettlementCommand, TargetCliArgs, TargetOutputFormat, ValidationCommand,
+        ValidationReceiptCommand,
     };
     use crate::operation_registry::OPERATION_REGISTRY;
 
@@ -1102,6 +1147,7 @@ mod tests {
             "market",
             "basket",
             "order",
+            "validation",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -1423,6 +1469,59 @@ mod tests {
         ])
         .expect("target args parse");
         assert_eq!(issue.command.operation_id(), "order.receipt.record");
+    }
+
+    #[test]
+    fn target_parser_accepts_validation_receipt_commands() {
+        let get = TargetCliArgs::try_parse_from([
+            "radroots",
+            "validation",
+            "receipt",
+            "get",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ])
+        .expect("target args parse");
+        assert_eq!(get.command.operation_id(), "validation.receipt.get");
+        let crate::target_cli::TargetCommand::Validation(validation) = get.command else {
+            panic!("expected validation command")
+        };
+        let ValidationCommand::Receipt(receipt) = validation.command;
+        let ValidationReceiptCommand::Get(args) = receipt.command else {
+            panic!("expected validation receipt get command")
+        };
+        assert_eq!(
+            args.receipt_event_id.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+
+        let list = TargetCliArgs::try_parse_from([
+            "radroots",
+            "validation",
+            "receipt",
+            "list",
+            "--order-id",
+            "ord_1",
+        ])
+        .expect("target args parse");
+        assert_eq!(list.command.operation_id(), "validation.receipt.list");
+        let crate::target_cli::TargetCommand::Validation(validation) = list.command else {
+            panic!("expected validation command")
+        };
+        let ValidationCommand::Receipt(receipt) = validation.command;
+        let ValidationReceiptCommand::List(args) = receipt.command else {
+            panic!("expected validation receipt list command")
+        };
+        assert_eq!(args.order_id.as_deref(), Some("ord_1"));
+
+        let verify = TargetCliArgs::try_parse_from([
+            "radroots",
+            "validation",
+            "receipt",
+            "verify",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ])
+        .expect("target args parse");
+        assert_eq!(verify.command.operation_id(), "validation.receipt.verify");
     }
 
     #[test]

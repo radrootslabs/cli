@@ -1287,7 +1287,8 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
         FarmLocationCommand, FarmProfileCommand, ListingCommand, MarketCommand,
         MarketListingCommand, MarketProductCommand, OrderCommand, OrderEventCommand,
         OrderFulfillmentCommand, OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand,
-        OrderSettlementCommand, OrderStatusCommand, TargetCommand,
+        OrderSettlementCommand, OrderStatusCommand, TargetCommand, ValidationCommand,
+        ValidationReceiptCommand,
     };
 
     let mut input = OperationData::new();
@@ -1548,6 +1549,16 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
             },
             OrderCommand::List => {}
         },
+        TargetCommand::Validation(args) => match &args.command {
+            ValidationCommand::Receipt(receipt) => match &receipt.command {
+                ValidationReceiptCommand::Get(args) | ValidationReceiptCommand::Verify(args) => {
+                    insert_string(&mut input, "receipt_event_id", &args.receipt_event_id);
+                }
+                ValidationReceiptCommand::List(args) => {
+                    insert_string(&mut input, "order_id", &args.order_id);
+                }
+            },
+        },
         _ => {}
     }
     input
@@ -1657,6 +1668,9 @@ target_operation_contracts! {
     OrderStatusGet => (OrderStatusGetRequest, OrderStatusGetResult, "order.status.get"),
     OrderEventList => (OrderEventListRequest, OrderEventListResult, "order.event.list"),
     OrderEventWatch => (OrderEventWatchRequest, OrderEventWatchResult, "order.event.watch"),
+    ValidationReceiptGet => (ValidationReceiptGetRequest, ValidationReceiptGetResult, "validation.receipt.get"),
+    ValidationReceiptList => (ValidationReceiptListRequest, ValidationReceiptListResult, "validation.receipt.list"),
+    ValidationReceiptVerify => (ValidationReceiptVerifyRequest, ValidationReceiptVerifyResult, "validation.receipt.verify"),
 }
 
 pub fn adapter_registry_linkage_is_valid() -> bool {
