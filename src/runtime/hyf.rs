@@ -906,9 +906,10 @@ mod tests {
             None,
             &HyfEmptyInput::default(),
         );
-        let response = HyfClient::new(executable)
-            .capabilities()
-            .expect("capabilities");
+        let response =
+            HyfClient::with_timeouts(executable, Duration::from_secs(5), Duration::from_secs(5))
+                .capabilities()
+                .expect("capabilities");
 
         assert_eq!(request["capability"], "sys.capabilities");
         assert_eq!(request["input"], serde_json::json!({}));

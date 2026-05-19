@@ -652,11 +652,23 @@ fn validation_receipt_invalid_reason_code(
         RadrootsValidationReceiptError::InvalidProofMetadata("proof.material") => {
             "sp1_proof_material_missing"
         }
+        RadrootsValidationReceiptError::InvalidProofMetadata("proof.inline_proof_base64") => {
+            "sp1_inline_proof_invalid"
+        }
+        RadrootsValidationReceiptError::InvalidProofMetadata("proof.proof_reference") => {
+            "sp1_proof_reference_invalid"
+        }
         RadrootsValidationReceiptError::TagMismatch("public_values_hash") => {
             "public_values_hash_mismatch"
         }
         RadrootsValidationReceiptError::ExpectedBindingMismatch("public_values_hash") => {
             "public_values_hash_mismatch"
+        }
+        RadrootsValidationReceiptError::ExpectedBindingMismatch("program_hash") => {
+            "sp1_program_hash_mismatch"
+        }
+        RadrootsValidationReceiptError::ExpectedBindingMismatch("verifying_key_hash") => {
+            "sp1_verifying_key_hash_mismatch"
         }
         _ => "validation_receipt_invalid",
     }
@@ -767,6 +779,30 @@ mod tests {
                 "public_values_hash"
             )),
             "public_values_hash_mismatch"
+        );
+        assert_eq!(
+            validation_receipt_invalid_reason_code(
+                &RadrootsValidationReceiptError::InvalidProofMetadata("proof.inline_proof_base64")
+            ),
+            "sp1_inline_proof_invalid"
+        );
+        assert_eq!(
+            validation_receipt_invalid_reason_code(
+                &RadrootsValidationReceiptError::InvalidProofMetadata("proof.proof_reference")
+            ),
+            "sp1_proof_reference_invalid"
+        );
+        assert_eq!(
+            validation_receipt_invalid_reason_code(
+                &RadrootsValidationReceiptError::ExpectedBindingMismatch("program_hash")
+            ),
+            "sp1_program_hash_mismatch"
+        );
+        assert_eq!(
+            validation_receipt_invalid_reason_code(
+                &RadrootsValidationReceiptError::ExpectedBindingMismatch("verifying_key_hash")
+            ),
+            "sp1_verifying_key_hash_mismatch"
         );
     }
 }
