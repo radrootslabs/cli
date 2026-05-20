@@ -31,6 +31,7 @@
             basePackages =
               [
                 pkgs.git
+                pkgs.rustup
                 rustToolchain
                 pkgs.clang
                 pkgs.llvmPackages.libclang

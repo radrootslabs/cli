@@ -634,6 +634,15 @@ fn render_human_envelope(
     if let Some(state) = human_publish_state(display) {
         writeln!(handle, "publish_state: {state}")?;
     }
+    if let Some(state) = human_proof_state(display) {
+        writeln!(handle, "proof_state: {state}")?;
+    }
+    if let Some(system) = human_proof_system(display) {
+        writeln!(handle, "proof_system: {system}")?;
+    }
+    if let Some(verified) = human_cryptographic_proof_verified(display) {
+        writeln!(handle, "cryptographic_proof_verified: {verified}")?;
+    }
     if let Some(reason) = human_reason(display) {
         writeln!(handle, "reason: {reason}")?;
     }
@@ -672,6 +681,24 @@ fn human_publish_state(result: &Value) -> Option<&str> {
     human_string_path(result, &["publish", "state"])
         .or_else(|| human_string_path(result, &["checks", "publish", "state"]))
         .or_else(|| human_string_path(result, &["publish_state"]))
+}
+
+fn human_proof_state(result: &Value) -> Option<&str> {
+    human_string_path(result, &["proof_verification", "state"])
+        .or_else(|| human_string_path(result, &["proof_verification_state"]))
+}
+
+fn human_proof_system(result: &Value) -> Option<&str> {
+    human_string_path(result, &["proof_verification", "proof_system"])
+        .or_else(|| human_string_path(result, &["receipt", "proof", "system"]))
+        .or_else(|| human_string_path(result, &["proof_system"]))
+}
+
+fn human_cryptographic_proof_verified(result: &Value) -> Option<bool> {
+    human_bool_path(
+        result,
+        &["proof_verification", "cryptographic_proof_verified"],
+    )
 }
 
 fn human_reason(result: &Value) -> Option<&str> {
@@ -719,6 +746,14 @@ fn human_string_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
         current = current.get(*segment)?;
     }
     current.as_str().filter(|value| !value.trim().is_empty())
+}
+
+fn human_bool_path(value: &Value, path: &[&str]) -> Option<bool> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    current.as_bool()
 }
 
 fn human_envelope_status(envelope: &OutputEnvelope) -> &str {

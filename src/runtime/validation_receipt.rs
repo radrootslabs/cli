@@ -1,15 +1,20 @@
-use radroots_events::kinds::KIND_TRADE_VALIDATION_RECEIPT;
+use radroots_events::kinds::{
+    KIND_TRADE_VALIDATION_RECEIPT, KIND_WORKER_TRADE_TRANSITION_PROOF_RES,
+};
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrEventId, RadrootsNostrFilter, RadrootsNostrKind,
     radroots_event_from_nostr, radroots_nostr_filter_tag,
 };
+use radroots_sp1_host_trade::{
+    RadrootsSp1TradeHostError, verify_order_acceptance_validation_receipt_inline_sp1_proof,
+};
 use radroots_trade::validation_receipt::{
-    RadrootsTradeValidationReceipt, RadrootsValidationReceiptExpectedBinding,
-    RadrootsValidationReceiptProof, RadrootsValidationReceiptProofSystem,
+    RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
+    RadrootsValidationReceiptExpectedBinding, RadrootsValidationReceiptProofSystem,
     RadrootsValidationReceiptResult, RadrootsValidationReceiptTags, RadrootsValidationReceiptType,
     verify_validation_receipt_event,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::runtime::{CommandDisposition, RelayFailureView};
 use crate::runtime::config::RuntimeConfig;
@@ -131,6 +136,23 @@ pub struct ValidationReceiptProofVerificationView {
     pub verifying_key_hash: Option<String>,
     pub proof_reference: Option<String>,
     pub inline_proof_present: bool,
+    pub worker_evidence: Option<ValidationReceiptWorkerEvidenceView>,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ValidationReceiptWorkerEvidenceView {
+    pub result_event_id: String,
+    pub status: String,
+    pub prover_backend: String,
+    pub proof_mode: String,
+    pub proof_system: String,
+    pub proof_generated: bool,
+    pub sp1_execute_checked: bool,
+    pub sp1_execute_public_values_hash: Option<String>,
+    pub cryptographic_proof_verified: bool,
+    pub public_values_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,21 +175,53 @@ pub struct ValidationReceiptSummaryView {
 pub struct ValidationReceiptInvalidCandidateView {
     pub receipt_event_id: String,
     pub kind: u32,
+    pub reason_code: String,
     pub reason: String,
+    pub proof_verification: Option<ValidationReceiptProofVerificationView>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidationReceiptCommandIntent {
+    Inspect,
+    Verify,
+}
+
+#[derive(Debug, Deserialize)]
+struct ValidationReceiptWorkerResultPayload {
+    cryptographic_proof_verified: bool,
+    proof_generated: bool,
+    proof_mode: String,
+    proof_system: String,
+    public_values_hash: String,
+    prover_backend: String,
+    receipt_event_id: String,
+    sp1_execute_checked: bool,
+    sp1_execute_public_values_hash: Option<String>,
+    status: String,
 }
 
 pub fn get(
     config: &RuntimeConfig,
     args: &ValidationReceiptEventArgs,
 ) -> ValidationReceiptInspectionView {
-    inspect_event(config, &args.receipt_event_id, "valid")
+    inspect_event(
+        config,
+        &args.receipt_event_id,
+        "valid",
+        ValidationReceiptCommandIntent::Inspect,
+    )
 }
 
 pub fn verify(
     config: &RuntimeConfig,
     args: &ValidationReceiptEventArgs,
 ) -> ValidationReceiptInspectionView {
-    inspect_event(config, &args.receipt_event_id, "verified")
+    inspect_event(
+        config,
+        &args.receipt_event_id,
+        "verified",
+        ValidationReceiptCommandIntent::Verify,
+    )
 }
 
 pub fn list(config: &RuntimeConfig, args: &ValidationReceiptListArgs) -> ValidationReceiptListView {
@@ -187,13 +241,14 @@ pub fn list(config: &RuntimeConfig, args: &ValidationReceiptListArgs) -> Validat
         Ok(receipt) => receipt,
         Err(error) => return list_fetch_error_view(order_id, error),
     };
-    list_from_fetch_receipt(order_id, receipt)
+    list_from_fetch_receipt(config, order_id, receipt)
 }
 
 fn inspect_event(
     config: &RuntimeConfig,
     receipt_event_id: &str,
     success_state: &str,
+    intent: ValidationReceiptCommandIntent,
 ) -> ValidationReceiptInspectionView {
     let receipt_event_id = receipt_event_id.trim();
     if receipt_event_id.is_empty() {
@@ -218,7 +273,7 @@ fn inspect_event(
         Ok(receipt) => receipt,
         Err(error) => return inspection_fetch_error_view(receipt_event_id, error),
     };
-    inspection_from_fetch_receipt(receipt_event_id, success_state, receipt)
+    inspection_from_fetch_receipt(config, receipt_event_id, success_state, intent, receipt)
 }
 
 fn validation_receipt_order_filter(order_id: &str) -> Result<RadrootsNostrFilter, String> {
@@ -230,8 +285,10 @@ fn validation_receipt_order_filter(order_id: &str) -> Result<RadrootsNostrFilter
 }
 
 fn inspection_from_fetch_receipt(
+    config: &RuntimeConfig,
     receipt_event_id: &str,
     success_state: &str,
+    intent: ValidationReceiptCommandIntent,
     fetch_receipt: DirectRelayFetchReceipt,
 ) -> ValidationReceiptInspectionView {
     let DirectRelayFetchReceipt {
@@ -263,7 +320,9 @@ fn inspection_from_fetch_receipt(
         };
     };
     inspected_event_view(
+        config,
         success_state,
+        intent,
         event,
         target_relays,
         connected_relays,
@@ -272,7 +331,9 @@ fn inspection_from_fetch_receipt(
 }
 
 fn inspected_event_view(
+    config: &RuntimeConfig,
     success_state: &str,
+    intent: ValidationReceiptCommandIntent,
     event: RadrootsNostrEvent,
     target_relays: Vec<String>,
     connected_relays: Vec<String>,
@@ -286,9 +347,36 @@ fn inspected_event_view(
         Ok(verified) => {
             let event_id = converted.id.clone();
             let order_id = verified.tags.order_id.clone();
-            let proof_verification = proof_verification_view(&verified.receipt.proof);
+            let proof_verification = proof_verification_view(config, &event_id, &verified.receipt);
             let reason_code =
                 (!failed_relays.is_empty()).then_some("relay_fetch_partial".to_owned());
+            let accepted = match intent {
+                ValidationReceiptCommandIntent::Inspect => {
+                    !proof_state_is_invalid(proof_verification.state.as_str())
+                }
+                ValidationReceiptCommandIntent::Verify => {
+                    proof_state_is_verification_success(proof_verification.state.as_str())
+                }
+            };
+            if !accepted {
+                return ValidationReceiptInspectionView {
+                    state: "invalid".to_owned(),
+                    resource: Some(validation_receipt_resource(&event_id)),
+                    receipt_event_id: Some(event_id),
+                    order_id: Some(order_id),
+                    validation_state: "invalid".to_owned(),
+                    proof_verification: Some(proof_verification.clone()),
+                    receipt: Some(verified.receipt),
+                    receipt_tags: Some(tags_view(&verified.tags)),
+                    event: Some(event_view(converted)),
+                    target_relays,
+                    connected_relays,
+                    failed_relays: relay_failures(failed_relays),
+                    reason_code: proof_verification.reason_code.clone(),
+                    reason: proof_verification.reason.clone(),
+                    actions: Vec::new(),
+                };
+            }
             ValidationReceiptInspectionView {
                 state: success_state.to_owned(),
                 resource: Some(validation_receipt_resource(&event_id)),
@@ -309,13 +397,14 @@ fn inspected_event_view(
         }
         Err(error) => {
             let reason_code = validation_receipt_invalid_reason_code(&error);
+            let proof_verification = invalid_proof_verification_view(&error);
             ValidationReceiptInspectionView {
                 state: "invalid".to_owned(),
                 resource: Some(validation_receipt_resource(&converted.id)),
                 receipt_event_id: Some(converted.id.clone()),
                 order_id: None,
                 validation_state: "invalid".to_owned(),
-                proof_verification: None,
+                proof_verification,
                 receipt: None,
                 receipt_tags: None,
                 event: Some(event_view(converted)),
@@ -331,6 +420,7 @@ fn inspected_event_view(
 }
 
 fn list_from_fetch_receipt(
+    config: &RuntimeConfig,
     order_id: &str,
     fetch_receipt: DirectRelayFetchReceipt,
 ) -> ValidationReceiptListView {
@@ -359,13 +449,40 @@ fn list_from_fetch_receipt(
             },
         ) {
             Ok(verified) => {
-                receipts.push(summary_view(&converted, &verified.receipt, &verified.tags))
+                let proof_verification =
+                    proof_verification_view(config, &converted.id, &verified.receipt);
+                if proof_state_is_invalid(proof_verification.state.as_str()) {
+                    invalid_receipts.push(ValidationReceiptInvalidCandidateView {
+                        receipt_event_id: converted.id,
+                        kind: converted.kind,
+                        reason_code: proof_verification
+                            .reason_code
+                            .clone()
+                            .unwrap_or_else(|| proof_verification.state.clone()),
+                        reason: proof_verification.reason.clone().unwrap_or_else(|| {
+                            "validation receipt proof material did not verify".to_owned()
+                        }),
+                        proof_verification: Some(proof_verification),
+                    });
+                } else {
+                    receipts.push(summary_view(
+                        &converted,
+                        &verified.receipt,
+                        &verified.tags,
+                        &proof_verification,
+                    ));
+                }
             }
-            Err(error) => invalid_receipts.push(ValidationReceiptInvalidCandidateView {
-                receipt_event_id: converted.id,
-                kind: converted.kind,
-                reason: error.to_string(),
-            }),
+            Err(error) => {
+                let reason_code = validation_receipt_invalid_reason_code(&error);
+                invalid_receipts.push(ValidationReceiptInvalidCandidateView {
+                    receipt_event_id: converted.id,
+                    kind: converted.kind,
+                    reason_code: reason_code.to_owned(),
+                    reason: error.to_string(),
+                    proof_verification: invalid_proof_verification_view(&error),
+                });
+            }
         }
     }
 
@@ -401,7 +518,7 @@ fn list_from_fetch_receipt(
     ValidationReceiptListView {
         state: state.to_owned(),
         order_id: order_id.to_owned(),
-        count: receipts.len(),
+        count: valid_count + invalid_count,
         valid_count,
         invalid_count,
         receipts,
@@ -612,40 +729,145 @@ fn tags_view(tags: &RadrootsValidationReceiptTags) -> ValidationReceiptTagsView 
 }
 
 fn proof_verification_view(
-    proof: &RadrootsValidationReceiptProof,
+    config: &RuntimeConfig,
+    receipt_event_id: &str,
+    receipt: &RadrootsTradeValidationReceipt,
 ) -> ValidationReceiptProofVerificationView {
+    let worker_evidence = worker_evidence_for_receipt(config, receipt_event_id, receipt);
+    proof_verification_view_for_receipt(receipt, worker_evidence)
+}
+
+fn proof_verification_view_for_receipt(
+    receipt: &RadrootsTradeValidationReceipt,
+    worker_evidence: Option<ValidationReceiptWorkerEvidenceView>,
+) -> ValidationReceiptProofVerificationView {
+    let proof = &receipt.proof;
     let cryptographic_proof_required = proof.system != RadrootsValidationReceiptProofSystem::None;
-    let proof_material_present =
-        proof.inline_proof_base64.is_some() || proof.proof_reference.is_some();
-    let state = match proof.system {
-        RadrootsValidationReceiptProofSystem::None => "deterministic_receipt_verified",
-        _ if proof_material_present => "sp1_metadata_consistent",
-        _ => "sp1_proof_material_missing",
-    };
-    let proof_metadata_binding = match proof.system {
-        RadrootsValidationReceiptProofSystem::None => "not_required",
-        _ if proof_material_present => "metadata_consistent",
-        _ => "missing_proof_material",
-    };
+    if proof.system == RadrootsValidationReceiptProofSystem::None {
+        let state = if worker_evidence
+            .as_ref()
+            .is_some_and(|evidence| evidence.sp1_execute_checked)
+        {
+            "sp1_execute_checked"
+        } else {
+            "deterministic_receipt_verified"
+        };
+        return ValidationReceiptProofVerificationView {
+            state: state.to_owned(),
+            verifier: "radroots_cli_validation_receipt_v1".to_owned(),
+            proof_system: proof.system.as_str().to_owned(),
+            public_values_hash_binding: "verified".to_owned(),
+            proof_metadata_binding: "not_required".to_owned(),
+            cryptographic_proof_required,
+            cryptographic_proof_verified: false,
+            mode: proof.mode.clone(),
+            program_hash: proof.program_hash.clone(),
+            verifying_key_hash: proof.verifying_key_hash.clone(),
+            proof_reference: proof.proof_reference.clone(),
+            inline_proof_present: proof.inline_proof_base64.is_some(),
+            worker_evidence,
+            reason_code: None,
+            reason: None,
+        };
+    }
+    if proof.proof_reference.is_some() {
+        return sp1_unverified_proof_view(
+            receipt,
+            worker_evidence,
+            "sp1_reference_unresolved",
+            "unverified",
+            "reference_unresolved",
+            Some("sp1_reference_unresolved"),
+            Some("SP1 proof reference resolution is not implemented by this CLI"),
+        );
+    }
+    if proof.inline_proof_base64.is_none() {
+        return sp1_unverified_proof_view(
+            receipt,
+            worker_evidence,
+            "sp1_proof_material_missing",
+            "unverified",
+            "missing_proof_material",
+            Some("sp1_proof_material_missing"),
+            Some("SP1 proof material is missing"),
+        );
+    }
+    if proof.system != RadrootsValidationReceiptProofSystem::Sp1Core {
+        return sp1_unverified_proof_view(
+            receipt,
+            worker_evidence,
+            "sp1_metadata_consistent_unverified",
+            "unverified",
+            "metadata_consistent_unverified",
+            Some("sp1_inline_proof_verification_unsupported"),
+            Some("only inline sp1_core proof verification is active in this CLI"),
+        );
+    }
+
+    match verify_inline_sp1_receipt(receipt) {
+        Ok(()) => ValidationReceiptProofVerificationView {
+            state: "sp1_inline_proof_verified".to_owned(),
+            verifier: "radroots_cli_validation_receipt_v1".to_owned(),
+            proof_system: proof.system.as_str().to_owned(),
+            public_values_hash_binding: "verified".to_owned(),
+            proof_metadata_binding: "verified".to_owned(),
+            cryptographic_proof_required,
+            cryptographic_proof_verified: true,
+            mode: proof.mode.clone(),
+            program_hash: proof.program_hash.clone(),
+            verifying_key_hash: proof.verifying_key_hash.clone(),
+            proof_reference: proof.proof_reference.clone(),
+            inline_proof_present: proof.inline_proof_base64.is_some(),
+            worker_evidence,
+            reason_code: None,
+            reason: None,
+        },
+        Err(error) => {
+            let mapped = proof_state_from_sp1_error(&error);
+            let reason = error.to_string();
+            sp1_unverified_proof_view(
+                receipt,
+                worker_evidence,
+                mapped.state,
+                mapped.public_values_hash_binding,
+                mapped.proof_metadata_binding,
+                Some(mapped.reason_code),
+                Some(reason.as_str()),
+            )
+        }
+    }
+}
+
+fn sp1_unverified_proof_view(
+    receipt: &RadrootsTradeValidationReceipt,
+    worker_evidence: Option<ValidationReceiptWorkerEvidenceView>,
+    state: &str,
+    public_values_hash_binding: &str,
+    proof_metadata_binding: &str,
+    reason_code: Option<&str>,
+    reason: Option<&str>,
+) -> ValidationReceiptProofVerificationView {
+    let proof = &receipt.proof;
     ValidationReceiptProofVerificationView {
         state: state.to_owned(),
         verifier: "radroots_cli_validation_receipt_v1".to_owned(),
         proof_system: proof.system.as_str().to_owned(),
-        public_values_hash_binding: "verified".to_owned(),
+        public_values_hash_binding: public_values_hash_binding.to_owned(),
         proof_metadata_binding: proof_metadata_binding.to_owned(),
-        cryptographic_proof_required,
+        cryptographic_proof_required: proof.system != RadrootsValidationReceiptProofSystem::None,
         cryptographic_proof_verified: false,
         mode: proof.mode.clone(),
         program_hash: proof.program_hash.clone(),
         verifying_key_hash: proof.verifying_key_hash.clone(),
         proof_reference: proof.proof_reference.clone(),
         inline_proof_present: proof.inline_proof_base64.is_some(),
+        worker_evidence,
+        reason_code: reason_code.map(str::to_owned),
+        reason: reason.map(str::to_owned),
     }
 }
 
-fn validation_receipt_invalid_reason_code(
-    error: &radroots_trade::validation_receipt::RadrootsValidationReceiptError,
-) -> &'static str {
+fn validation_receipt_invalid_reason_code(error: &RadrootsValidationReceiptError) -> &'static str {
     use radroots_trade::validation_receipt::RadrootsValidationReceiptError;
 
     match error {
@@ -674,12 +896,202 @@ fn validation_receipt_invalid_reason_code(
     }
 }
 
+fn invalid_proof_verification_view(
+    error: &RadrootsValidationReceiptError,
+) -> Option<ValidationReceiptProofVerificationView> {
+    let reason_code = validation_receipt_invalid_reason_code(error);
+    let (state, public_values_hash_binding, proof_metadata_binding) = match error {
+        RadrootsValidationReceiptError::InvalidProofMetadata("proof.material") => (
+            "sp1_proof_material_missing",
+            "unverified",
+            "missing_proof_material",
+        ),
+        RadrootsValidationReceiptError::InvalidProofMetadata("proof.inline_proof_base64")
+        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.proof_reference")
+        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.mode")
+        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.program_hash")
+        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.verifying_key_hash")
+        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.system")
+        | RadrootsValidationReceiptError::TagMismatch("proof_system")
+        | RadrootsValidationReceiptError::ExpectedBindingMismatch("proof_system") => {
+            ("sp1_proof_invalid", "unverified", "invalid")
+        }
+        RadrootsValidationReceiptError::TagMismatch("public_values_hash")
+        | RadrootsValidationReceiptError::ExpectedBindingMismatch("public_values_hash") => (
+            "sp1_public_values_mismatch",
+            "mismatch",
+            "metadata_consistent",
+        ),
+        RadrootsValidationReceiptError::ExpectedBindingMismatch("program_hash") => {
+            ("sp1_program_hash_mismatch", "unverified", "mismatch")
+        }
+        RadrootsValidationReceiptError::ExpectedBindingMismatch("verifying_key_hash") => {
+            ("sp1_verifying_key_hash_mismatch", "unverified", "mismatch")
+        }
+        _ => return None,
+    };
+
+    Some(ValidationReceiptProofVerificationView {
+        state: state.to_owned(),
+        verifier: "radroots_cli_validation_receipt_v1".to_owned(),
+        proof_system: "unknown".to_owned(),
+        public_values_hash_binding: public_values_hash_binding.to_owned(),
+        proof_metadata_binding: proof_metadata_binding.to_owned(),
+        cryptographic_proof_required: true,
+        cryptographic_proof_verified: false,
+        mode: None,
+        program_hash: None,
+        verifying_key_hash: None,
+        proof_reference: None,
+        inline_proof_present: false,
+        worker_evidence: None,
+        reason_code: Some(reason_code.to_owned()),
+        reason: Some(error.to_string()),
+    })
+}
+
+struct MappedSp1ProofError {
+    state: &'static str,
+    public_values_hash_binding: &'static str,
+    proof_metadata_binding: &'static str,
+    reason_code: &'static str,
+}
+
+fn proof_state_from_sp1_error(error: &RadrootsSp1TradeHostError) -> MappedSp1ProofError {
+    match error {
+        RadrootsSp1TradeHostError::Sp1ProofReferenceUnresolved => MappedSp1ProofError {
+            state: "sp1_reference_unresolved",
+            public_values_hash_binding: "unverified",
+            proof_metadata_binding: "reference_unresolved",
+            reason_code: "sp1_reference_unresolved",
+        },
+        RadrootsSp1TradeHostError::MissingProofMaterial => MappedSp1ProofError {
+            state: "sp1_proof_material_missing",
+            public_values_hash_binding: "unverified",
+            proof_metadata_binding: "missing_proof_material",
+            reason_code: "sp1_proof_material_missing",
+        },
+        RadrootsSp1TradeHostError::PublicValuesHashMismatch
+        | RadrootsSp1TradeHostError::Sp1PublicValuesMismatch
+        | RadrootsSp1TradeHostError::ValidationReceiptBindingMismatch(_) => MappedSp1ProofError {
+            state: "sp1_public_values_mismatch",
+            public_values_hash_binding: "mismatch",
+            proof_metadata_binding: "verified",
+            reason_code: "sp1_public_values_mismatch",
+        },
+        RadrootsSp1TradeHostError::Sp1ProgramHashMismatch
+        | RadrootsSp1TradeHostError::MissingSp1ProgramHash => MappedSp1ProofError {
+            state: "sp1_program_hash_mismatch",
+            public_values_hash_binding: "unverified",
+            proof_metadata_binding: "mismatch",
+            reason_code: "sp1_program_hash_mismatch",
+        },
+        RadrootsSp1TradeHostError::Sp1VerifyingKeyHashMismatch
+        | RadrootsSp1TradeHostError::MissingVerifyingKeyHash => MappedSp1ProofError {
+            state: "sp1_verifying_key_hash_mismatch",
+            public_values_hash_binding: "unverified",
+            proof_metadata_binding: "mismatch",
+            reason_code: "sp1_verifying_key_hash_mismatch",
+        },
+        _ => MappedSp1ProofError {
+            state: "sp1_proof_invalid",
+            public_values_hash_binding: "unverified",
+            proof_metadata_binding: "invalid",
+            reason_code: "sp1_proof_invalid",
+        },
+    }
+}
+
+fn verify_inline_sp1_receipt(
+    receipt: &RadrootsTradeValidationReceipt,
+) -> Result<(), RadrootsSp1TradeHostError> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| RadrootsSp1TradeHostError::Sp1SetupFailed(error.to_string()))?;
+    runtime
+        .block_on(verify_order_acceptance_validation_receipt_inline_sp1_proof(
+            receipt,
+        ))
+        .map(|_| ())
+}
+
+fn proof_state_is_invalid(state: &str) -> bool {
+    matches!(
+        state,
+        "sp1_proof_material_missing"
+            | "sp1_public_values_mismatch"
+            | "sp1_program_hash_mismatch"
+            | "sp1_verifying_key_hash_mismatch"
+            | "sp1_proof_invalid"
+    )
+}
+
+fn proof_state_is_verification_success(state: &str) -> bool {
+    matches!(
+        state,
+        "deterministic_receipt_verified" | "sp1_execute_checked" | "sp1_inline_proof_verified"
+    )
+}
+
+fn validation_receipt_worker_result_filter(
+    receipt_event_id: &str,
+) -> Result<RadrootsNostrFilter, String> {
+    let filter = RadrootsNostrFilter::new().kind(RadrootsNostrKind::Custom(
+        KIND_WORKER_TRADE_TRANSITION_PROOF_RES as u16,
+    ));
+    radroots_nostr_filter_tag(filter, "e", vec![receipt_event_id.to_owned()])
+        .map_err(|error| format!("build validation receipt worker result filter: {error}"))
+}
+
+fn worker_evidence_for_receipt(
+    config: &RuntimeConfig,
+    receipt_event_id: &str,
+    receipt: &RadrootsTradeValidationReceipt,
+) -> Option<ValidationReceiptWorkerEvidenceView> {
+    let filter = validation_receipt_worker_result_filter(receipt_event_id).ok()?;
+    let fetch_receipt = fetch_events_from_relays(&config.relay.urls, filter).ok()?;
+    let mut evidence = fetch_receipt
+        .events
+        .into_iter()
+        .filter_map(|event| {
+            let payload =
+                serde_json::from_str::<ValidationReceiptWorkerResultPayload>(&event.content)
+                    .ok()?;
+            if payload.receipt_event_id != receipt_event_id
+                || payload.public_values_hash != receipt.public_values_hash
+                || payload.proof_system != receipt.proof.system.as_str()
+            {
+                return None;
+            }
+            Some((
+                event.created_at.as_secs(),
+                event.id.to_hex(),
+                ValidationReceiptWorkerEvidenceView {
+                    result_event_id: event.id.to_hex(),
+                    status: payload.status,
+                    prover_backend: payload.prover_backend,
+                    proof_mode: payload.proof_mode,
+                    proof_system: payload.proof_system,
+                    proof_generated: payload.proof_generated,
+                    sp1_execute_checked: payload.sp1_execute_checked,
+                    sp1_execute_public_values_hash: payload.sp1_execute_public_values_hash,
+                    cryptographic_proof_verified: payload.cryptographic_proof_verified,
+                    public_values_hash: payload.public_values_hash,
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    evidence.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    evidence.pop().map(|(_, _, view)| view)
+}
+
 fn summary_view(
     event: &radroots_events::RadrootsNostrEvent,
     receipt: &RadrootsTradeValidationReceipt,
     tags: &RadrootsValidationReceiptTags,
+    proof_verification: &ValidationReceiptProofVerificationView,
 ) -> ValidationReceiptSummaryView {
-    let proof_verification = proof_verification_view(&receipt.proof);
     ValidationReceiptSummaryView {
         resource: validation_receipt_resource(&event.id),
         receipt_event_id: event.id.clone(),
@@ -689,7 +1101,7 @@ fn summary_view(
         receipt_type: receipt_type_label(receipt.receipt_type).to_owned(),
         result: receipt_result_label(receipt.result).to_owned(),
         proof_system: receipt.proof.system.as_str().to_owned(),
-        proof_verification_state: proof_verification.state,
+        proof_verification_state: proof_verification.state.clone(),
         event_set_root: receipt.event_set_root.clone(),
         reducer_output_root: receipt.new_state_root.clone(),
         public_values_hash: receipt.public_values_hash.clone(),
@@ -720,10 +1132,15 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
 #[cfg(test)]
 mod tests {
     use super::{
-        RadrootsValidationReceiptProof, RadrootsValidationReceiptProofSystem,
-        proof_verification_view, validation_receipt_invalid_reason_code,
+        ValidationReceiptWorkerEvidenceView, proof_verification_view_for_receipt,
+        validation_receipt_invalid_reason_code,
     };
-    use radroots_trade::validation_receipt::RadrootsValidationReceiptError;
+    use radroots_trade::validation_receipt::{
+        RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
+        RadrootsValidationReceiptProof, RadrootsValidationReceiptProofSystem,
+        RadrootsValidationReceiptResult, RadrootsValidationReceiptStatement,
+        RadrootsValidationReceiptType, VALIDATION_RECEIPT_DOMAIN, VALIDATION_RECEIPT_VERSION,
+    };
 
     fn sp1_proof_with_material() -> RadrootsValidationReceiptProof {
         RadrootsValidationReceiptProof {
@@ -740,16 +1157,48 @@ mod tests {
         }
     }
 
-    #[test]
-    fn none_receipts_report_deterministic_verification_without_crypto_claim() {
-        let view = proof_verification_view(&RadrootsValidationReceiptProof {
+    fn receipt_with_proof(proof: RadrootsValidationReceiptProof) -> RadrootsTradeValidationReceipt {
+        RadrootsTradeValidationReceipt {
+            changed_records_root:
+                "0x1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
+            domain: VALIDATION_RECEIPT_DOMAIN.to_owned(),
+            error_bitmap: "0x00000000000000000000000000000000".to_owned(),
+            event_set_root: "0x2222222222222222222222222222222222222222222222222222222222222222"
+                .to_owned(),
+            new_state_root: "0x3333333333333333333333333333333333333333333333333333333333333333"
+                .to_owned(),
+            previous_state_root:
+                "0x4444444444444444444444444444444444444444444444444444444444444444".to_owned(),
+            proof,
+            public_values_hash:
+                "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
+            receipt_type: RadrootsValidationReceiptType::TradeTransition,
+            result: RadrootsValidationReceiptResult::Valid,
+            statement: RadrootsValidationReceiptStatement {
+                root_event_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned(),
+                target_event_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_owned(),
+                statement_type: RadrootsValidationReceiptType::TradeTransition,
+            },
+            version: VALIDATION_RECEIPT_VERSION,
+        }
+    }
+
+    fn deterministic_receipt() -> RadrootsTradeValidationReceipt {
+        receipt_with_proof(RadrootsValidationReceiptProof {
             inline_proof_base64: None,
             mode: None,
             program_hash: None,
             proof_reference: None,
             system: RadrootsValidationReceiptProofSystem::None,
             verifying_key_hash: None,
-        });
+        })
+    }
+
+    #[test]
+    fn none_receipts_report_deterministic_verification_without_crypto_claim() {
+        let view = proof_verification_view_for_receipt(&deterministic_receipt(), None);
 
         assert_eq!(view.state, "deterministic_receipt_verified");
         assert!(!view.cryptographic_proof_required);
@@ -757,13 +1206,56 @@ mod tests {
     }
 
     #[test]
-    fn sp1_receipts_report_metadata_consistency_without_crypto_claim() {
-        let view = proof_verification_view(&sp1_proof_with_material());
+    fn none_receipts_surface_advisory_sp1_execute_evidence() {
+        let view = proof_verification_view_for_receipt(
+            &deterministic_receipt(),
+            Some(ValidationReceiptWorkerEvidenceView {
+                result_event_id: "result-1".to_owned(),
+                status: "succeeded".to_owned(),
+                prover_backend: "local_execute".to_owned(),
+                proof_mode: "none".to_owned(),
+                proof_system: "none".to_owned(),
+                proof_generated: false,
+                sp1_execute_checked: true,
+                sp1_execute_public_values_hash: Some(
+                    "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
+                ),
+                cryptographic_proof_verified: false,
+                public_values_hash:
+                    "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
+            }),
+        );
 
-        assert_eq!(view.state, "sp1_metadata_consistent");
+        assert_eq!(view.state, "sp1_execute_checked");
+        assert!(!view.cryptographic_proof_required);
+        assert!(!view.cryptographic_proof_verified);
+    }
+
+    #[test]
+    fn sp1_receipts_with_references_report_unresolved_without_crypto_claim() {
+        let mut receipt = receipt_with_proof(sp1_proof_with_material());
+        receipt.proof.inline_proof_base64 = None;
+        receipt.proof.proof_reference = Some(format!("radroots-proof://sha256/{}", "1".repeat(64)));
+
+        let view = proof_verification_view_for_receipt(&receipt, None);
+
+        assert_eq!(view.state, "sp1_reference_unresolved");
         assert!(view.cryptographic_proof_required);
         assert!(!view.cryptographic_proof_verified);
-        assert_eq!(view.proof_metadata_binding, "metadata_consistent");
+        assert_eq!(view.proof_metadata_binding, "reference_unresolved");
+    }
+
+    #[test]
+    fn invalid_inline_sp1_material_reports_invalid_proof_state() {
+        let view = proof_verification_view_for_receipt(
+            &receipt_with_proof(sp1_proof_with_material()),
+            None,
+        );
+
+        assert_eq!(view.state, "sp1_proof_invalid");
+        assert!(view.cryptographic_proof_required);
+        assert!(!view.cryptographic_proof_verified);
+        assert_eq!(view.reason_code.as_deref(), Some("sp1_proof_invalid"));
     }
 
     #[test]
