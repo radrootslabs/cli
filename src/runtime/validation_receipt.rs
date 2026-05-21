@@ -116,6 +116,7 @@ pub struct ValidationReceiptEventView {
 pub struct ValidationReceiptTagsView {
     pub order_id: String,
     pub event_set_root: String,
+    pub listing_event_id: String,
     pub reducer_output_root: String,
     pub public_values_hash: String,
     pub proof_system: String,
@@ -751,6 +752,7 @@ fn tags_view(tags: &RadrootsValidationReceiptTags) -> ValidationReceiptTagsView 
     ValidationReceiptTagsView {
         order_id: tags.order_id.clone(),
         event_set_root: tags.event_set_root.clone(),
+        listing_event_id: tags.listing_event_id.clone(),
         reducer_output_root: tags.reducer_output_root.clone(),
         public_values_hash: tags.public_values_hash.clone(),
         proof_system: tags.proof_system.as_str().to_owned(),
@@ -1226,7 +1228,7 @@ fn worker_payload_binds_receipt(
         && payload.receipt_kind == Some(KIND_TRADE_VALIDATION_RECEIPT)
         && payload.receipt_event_id == binding.receipt_event_id
         && payload.order_id.as_deref() == Some(tags.order_id.as_str())
-        && payload.listing_event_id.as_deref() == Some(tags.root_event_id.as_str())
+        && payload.listing_event_id.as_deref() == Some(tags.listing_event_id.as_str())
         && payload.event_set_root.as_deref() == Some(tags.event_set_root.as_str())
         && payload.reducer_output_root.as_deref() == Some(tags.reducer_output_root.as_str())
         && payload.request_event_id.as_deref() == Some(tags.root_event_id.as_str())
@@ -1290,13 +1292,17 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
 mod tests {
     use super::{
         ValidationReceiptWorkerEvidenceSelection, ValidationReceiptWorkerEvidenceView,
+        ValidationReceiptWorkerResultPayload, WorkerEvidenceReceiptBinding,
         proof_verification_view_for_receipt, validation_receipt_invalid_reason_code,
+        worker_payload_binds_receipt,
     };
+    use radroots_events::kinds::KIND_TRADE_VALIDATION_RECEIPT;
     use radroots_trade::validation_receipt::{
         RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
         RadrootsValidationReceiptProof, RadrootsValidationReceiptProofSystem,
         RadrootsValidationReceiptResult, RadrootsValidationReceiptStatement,
-        RadrootsValidationReceiptType, VALIDATION_RECEIPT_DOMAIN, VALIDATION_RECEIPT_VERSION,
+        RadrootsValidationReceiptTags, RadrootsValidationReceiptType, VALIDATION_RECEIPT_DOMAIN,
+        VALIDATION_RECEIPT_VERSION,
     };
 
     fn sp1_proof_with_material() -> RadrootsValidationReceiptProof {
@@ -1332,9 +1338,11 @@ mod tests {
             receipt_type: RadrootsValidationReceiptType::TradeTransition,
             result: RadrootsValidationReceiptResult::Valid,
             statement: RadrootsValidationReceiptStatement {
-                root_event_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                listing_event_id:
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                root_event_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                     .to_owned(),
-                target_event_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                target_event_id: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                     .to_owned(),
                 statement_type: RadrootsValidationReceiptType::TradeTransition,
             },
@@ -1351,6 +1359,96 @@ mod tests {
             system: RadrootsValidationReceiptProofSystem::None,
             verifying_key_hash: None,
         })
+    }
+
+    fn receipt_tags() -> RadrootsValidationReceiptTags {
+        RadrootsValidationReceiptTags {
+            event_set_root: "0x2222222222222222222222222222222222222222222222222222222222222222"
+                .to_owned(),
+            listing_event_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_owned(),
+            order_id: "order-1".to_owned(),
+            proof_system: RadrootsValidationReceiptProofSystem::None,
+            public_values_hash:
+                "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
+            receipt_type: RadrootsValidationReceiptType::TradeTransition,
+            reducer_output_root:
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+            root_event_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_owned(),
+            target_event_id: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                .to_owned(),
+        }
+    }
+
+    fn worker_result_payload(listing_event_id: &str) -> ValidationReceiptWorkerResultPayload {
+        ValidationReceiptWorkerResultPayload {
+            cryptographic_proof_verified: false,
+            decision_event_id: Some(
+                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
+            ),
+            event_set_root: Some(
+                "0x2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
+            ),
+            listing_event_id: Some(listing_event_id.to_owned()),
+            order_id: Some("order-1".to_owned()),
+            proof_generated: false,
+            proof_mode: "none".to_owned(),
+            proof_system: "none".to_owned(),
+            public_values_hash:
+                "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
+            prover_backend: "local_execute".to_owned(),
+            receipt_kind: Some(KIND_TRADE_VALIDATION_RECEIPT),
+            receipt_event_id: "receipt-1".to_owned(),
+            reducer_output_root: Some(
+                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
+            ),
+            request_event_id: Some(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+            ),
+            sp1_execute_checked: true,
+            sp1_execute_public_values_hash: Some(
+                "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
+            ),
+            status: "succeeded".to_owned(),
+            worker_role: Some("non_authoritative_prover".to_owned()),
+        }
+    }
+
+    #[test]
+    fn worker_evidence_binds_distinct_listing_request_and_decision_ids() {
+        let receipt = deterministic_receipt();
+        let tags = receipt_tags();
+        let binding = WorkerEvidenceReceiptBinding {
+            receipt_event_id: "receipt-1",
+            receipt: &receipt,
+            tags: &tags,
+        };
+
+        assert!(worker_payload_binds_receipt(
+            &worker_result_payload(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ),
+            &binding
+        ));
+    }
+
+    #[test]
+    fn worker_evidence_rejects_listing_id_mismatch() {
+        let receipt = deterministic_receipt();
+        let tags = receipt_tags();
+        let binding = WorkerEvidenceReceiptBinding {
+            receipt_event_id: "receipt-1",
+            receipt: &receipt,
+            tags: &tags,
+        };
+
+        assert!(!worker_payload_binds_receipt(
+            &worker_result_payload(
+                "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            ),
+            &binding
+        ));
     }
 
     #[test]
