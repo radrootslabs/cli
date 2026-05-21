@@ -697,6 +697,9 @@ mod tests {
                 url: "http://127.0.0.1:7070".into(),
                 bridge_bearer_token: None,
             },
+            rhi: crate::runtime::config::RhiConfig {
+                trusted_worker_pubkeys: Vec::new(),
+            },
             capability_bindings: Vec::new(),
         }
     }

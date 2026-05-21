@@ -53,6 +53,7 @@ const ENV_HYF_ENABLED: &str = "RADROOTS_HYF_ENABLED";
 const ENV_HYF_EXECUTABLE: &str = "RADROOTS_HYF_EXECUTABLE";
 const ENV_RPC_URL: &str = "RADROOTS_RPC_URL";
 const ENV_RPC_BEARER_TOKEN: &str = "RADROOTS_RPC_BEARER_TOKEN";
+const ENV_TRUSTED_RHI_WORKER_PUBKEYS: &str = "RADROOTS_TRUSTED_RHI_WORKER_PUBKEYS";
 const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_OUTPUT,
     ENV_CLI_LOG_FILTER,
@@ -76,6 +77,7 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_HYF_EXECUTABLE,
     ENV_RPC_URL,
     ENV_RPC_BEARER_TOKEN,
+    ENV_TRUSTED_RHI_WORKER_PUBKEYS,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,6 +367,11 @@ pub struct RpcConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RhiConfig {
+    pub trusted_worker_pubkeys: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeConfig {
     pub output: OutputConfig,
     pub interaction: InteractionConfig,
@@ -381,6 +388,7 @@ pub struct RuntimeConfig {
     pub myc: MycConfig,
     pub hyf: HyfConfig,
     pub rpc: RpcConfig,
+    pub rhi: RhiConfig,
     pub capability_bindings: Vec<CapabilityBindingConfig>,
 }
 
@@ -406,6 +414,7 @@ struct CliConfigFile {
     myc: Option<MycFileConfig>,
     hyf: Option<HyfFileConfig>,
     rpc: Option<RpcFileConfig>,
+    rhi: Option<RhiFileConfig>,
     capability_binding: Option<Vec<CapabilityBindingFileConfig>>,
 }
 
@@ -423,6 +432,11 @@ struct PublishFileConfig {
 #[derive(Debug, Default, Deserialize)]
 struct RpcFileConfig {
     url: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RhiFileConfig {
+    trusted_worker_pubkeys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -674,6 +688,12 @@ impl RuntimeConfig {
                 app_config.as_ref(),
                 workspace_config.as_ref(),
             )?,
+            rhi: resolve_rhi_config(
+                env,
+                env_file,
+                app_config.as_ref(),
+                workspace_config.as_ref(),
+            )?,
         })
     }
 
@@ -824,6 +844,65 @@ fn resolve_rpc_config(
         url: validate_rpc_url(url.as_str())?,
         bridge_bearer_token: env_value(env, env_file, &[ENV_RPC_BEARER_TOKEN]),
     })
+}
+
+fn resolve_rhi_config(
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<RhiConfig, RuntimeError> {
+    let trusted_worker_pubkeys =
+        if let Some(value) = env_value(env, env_file, &[ENV_TRUSTED_RHI_WORKER_PUBKEYS]) {
+            parse_pubkey_env_value(value.as_str(), ENV_TRUSTED_RHI_WORKER_PUBKEYS)?
+        } else if let Some(values) = user_config
+            .and_then(|config| config.rhi.as_ref())
+            .and_then(|rhi| rhi.trusted_worker_pubkeys.clone())
+        {
+            normalize_pubkeys(values, "user config [rhi].trusted_worker_pubkeys")?
+        } else if let Some(values) = workspace_config
+            .and_then(|config| config.rhi.as_ref())
+            .and_then(|rhi| rhi.trusted_worker_pubkeys.clone())
+        {
+            normalize_pubkeys(values, "workspace config [rhi].trusted_worker_pubkeys")?
+        } else {
+            Vec::new()
+        };
+
+    Ok(RhiConfig {
+        trusted_worker_pubkeys,
+    })
+}
+
+fn parse_pubkey_env_value(value: &str, key: &str) -> Result<Vec<String>, RuntimeError> {
+    let entries = value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    normalize_pubkeys(entries, key)
+}
+
+fn normalize_pubkeys(values: Vec<String>, source: &str) -> Result<Vec<String>, RuntimeError> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let pubkey = validate_pubkey(value.as_str(), source)?;
+        if !normalized.iter().any(|existing| existing == &pubkey) {
+            normalized.push(pubkey);
+        }
+    }
+    Ok(normalized)
+}
+
+fn validate_pubkey(value: &str, source: &str) -> Result<String, RuntimeError> {
+    let trimmed = value.trim();
+    if trimmed.len() != 64 || !trimmed.chars().all(|char| char.is_ascii_hexdigit()) {
+        return Err(RuntimeError::Config(format!(
+            "{source} must contain 64-character hex Nostr public keys"
+        )));
+    }
+    Ok(trimmed.to_ascii_lowercase())
 }
 
 fn resolve_capability_bindings(
