@@ -8,7 +8,9 @@ use radroots_nostr::prelude::{
     radroots_event_from_nostr, radroots_nostr_filter_tag,
 };
 use radroots_sp1_host_trade::{
-    RadrootsSp1TradeHostError, verify_order_acceptance_validation_receipt_inline_sp1_proof,
+    RadrootsSp1TradeHostError, RadrootsSp1TradeProofMode, RadrootsSp1TradeProverBackend,
+    RadrootsSp1TradeWorkerResultPayload, RadrootsSp1TradeWorkerResultStatus,
+    RadrootsSp1TradeWorkerRole, verify_order_acceptance_validation_receipt_inline_sp1_proof,
 };
 use radroots_trade::validation_receipt::{
     RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
@@ -198,7 +200,7 @@ enum ValidationReceiptCommandIntent {
 }
 
 #[derive(Debug, Deserialize)]
-struct ValidationReceiptWorkerResultPayload {
+struct RawValidationReceiptWorkerResultPayload {
     cryptographic_proof_verified: bool,
     decision_event_id: Option<String>,
     event_set_root: Option<String>,
@@ -217,6 +219,44 @@ struct ValidationReceiptWorkerResultPayload {
     sp1_execute_public_values_hash: Option<String>,
     status: String,
     worker_role: Option<String>,
+}
+
+impl RawValidationReceiptWorkerResultPayload {
+    fn typed(&self) -> Option<RadrootsSp1TradeWorkerResultPayload> {
+        Some(RadrootsSp1TradeWorkerResultPayload {
+            cryptographic_proof_verified: self.cryptographic_proof_verified,
+            decision_event_id: self.decision_event_id.clone(),
+            event_set_root: self.event_set_root.clone(),
+            listing_event_id: self.listing_event_id.clone(),
+            order_id: self.order_id.clone(),
+            proof_generated: self.proof_generated,
+            proof_mode: RadrootsSp1TradeProofMode::from_label(self.proof_mode.as_str())?,
+            proof_system: RadrootsValidationReceiptProofSystem::from_label(
+                self.proof_system.as_str(),
+            )?,
+            public_values_hash: self.public_values_hash.clone(),
+            prover_backend: RadrootsSp1TradeProverBackend::from_label(
+                self.prover_backend.as_str(),
+            )?,
+            receipt_event_id: self.receipt_event_id.clone(),
+            receipt_kind: self.receipt_kind,
+            reducer_output_root: self.reducer_output_root.clone(),
+            request_event_id: self.request_event_id.clone(),
+            sp1_execute_checked: self.sp1_execute_checked,
+            sp1_execute_public_values_hash: self.sp1_execute_public_values_hash.clone(),
+            status: match self.status.as_str() {
+                "succeeded" => RadrootsSp1TradeWorkerResultStatus::Succeeded,
+                _ => return None,
+            },
+            worker_role: match self.worker_role.as_deref() {
+                Some("non_authoritative_prover") => {
+                    Some(RadrootsSp1TradeWorkerRole::NonAuthoritativeProver)
+                }
+                Some(_) => return None,
+                None => None,
+            },
+        })
+    }
 }
 
 pub fn get(
@@ -1157,7 +1197,7 @@ fn worker_evidence_for_receipts(
 
     for event in fetch_receipt.events {
         let payload =
-            match serde_json::from_str::<ValidationReceiptWorkerResultPayload>(&event.content) {
+            match serde_json::from_str::<RawValidationReceiptWorkerResultPayload>(&event.content) {
                 Ok(payload) => payload,
                 Err(_) => continue,
             };
@@ -1167,7 +1207,10 @@ fn worker_evidence_for_receipts(
         let converted = radroots_event_from_nostr(&event);
         let author = converted.author.to_ascii_lowercase();
         let trusted_author = trusted_pubkeys.contains(author.as_str());
-        let bound = worker_payload_binds_receipt(&payload, binding);
+        let typed_payload = payload.typed();
+        let bound = typed_payload
+            .as_ref()
+            .is_some_and(|payload| worker_payload_binds_receipt(payload, binding));
         let trusted = trusted_author && bound;
         let receipt_event_id = payload.receipt_event_id.clone();
         let result_event_id = event.id.to_hex();
@@ -1218,13 +1261,13 @@ fn worker_evidence_for_receipts(
 }
 
 fn worker_payload_binds_receipt(
-    payload: &ValidationReceiptWorkerResultPayload,
+    payload: &RadrootsSp1TradeWorkerResultPayload,
     binding: &WorkerEvidenceReceiptBinding<'_>,
 ) -> bool {
     let receipt = binding.receipt;
     let tags = binding.tags;
-    payload.status == "succeeded"
-        && payload.worker_role.as_deref() == Some("non_authoritative_prover")
+    payload.status == RadrootsSp1TradeWorkerResultStatus::Succeeded
+        && payload.worker_role == Some(RadrootsSp1TradeWorkerRole::NonAuthoritativeProver)
         && payload.receipt_kind == Some(KIND_TRADE_VALIDATION_RECEIPT)
         && payload.receipt_event_id == binding.receipt_event_id
         && payload.order_id.as_deref() == Some(tags.order_id.as_str())
@@ -1234,12 +1277,12 @@ fn worker_payload_binds_receipt(
         && payload.request_event_id.as_deref() == Some(tags.root_event_id.as_str())
         && payload.decision_event_id.as_deref() == Some(tags.target_event_id.as_str())
         && payload.public_values_hash == receipt.public_values_hash
-        && payload.proof_system == receipt.proof.system.as_str()
-        && payload.proof_mode == receipt.proof.mode.as_deref().unwrap_or("none")
+        && payload.proof_system == receipt.proof.system
+        && payload.proof_mode.mode_label().unwrap_or("none")
+            == receipt.proof.mode.as_deref().unwrap_or("none")
         && payload.proof_generated
             == (receipt.proof.system != RadrootsValidationReceiptProofSystem::None)
         && payload.cryptographic_proof_verified == payload.proof_generated
-        && !payload.prover_backend.trim().is_empty()
         && payload.sp1_execute_checked
         && payload.sp1_execute_public_values_hash.as_deref()
             == Some(receipt.public_values_hash.as_str())
@@ -1291,8 +1334,8 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ValidationReceiptWorkerEvidenceSelection, ValidationReceiptWorkerEvidenceView,
-        ValidationReceiptWorkerResultPayload, WorkerEvidenceReceiptBinding,
+        RawValidationReceiptWorkerResultPayload, ValidationReceiptWorkerEvidenceSelection,
+        ValidationReceiptWorkerEvidenceView, WorkerEvidenceReceiptBinding,
         proof_verification_view_for_receipt, validation_receipt_invalid_reason_code,
         worker_payload_binds_receipt,
     };
@@ -1381,8 +1424,8 @@ mod tests {
         }
     }
 
-    fn worker_result_payload(listing_event_id: &str) -> ValidationReceiptWorkerResultPayload {
-        ValidationReceiptWorkerResultPayload {
+    fn worker_result_payload(listing_event_id: &str) -> RawValidationReceiptWorkerResultPayload {
+        RawValidationReceiptWorkerResultPayload {
             cryptographic_proof_verified: false,
             decision_event_id: Some(
                 "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
@@ -1428,7 +1471,9 @@ mod tests {
         assert!(worker_payload_binds_receipt(
             &worker_result_payload(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            ),
+            )
+            .typed()
+            .expect("typed payload"),
             &binding
         ));
     }
@@ -1446,9 +1491,20 @@ mod tests {
         assert!(!worker_payload_binds_receipt(
             &worker_result_payload(
                 "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-            ),
+            )
+            .typed()
+            .expect("typed payload"),
             &binding
         ));
+    }
+
+    #[test]
+    fn worker_evidence_unknown_typed_values_are_not_trusted() {
+        let mut payload = worker_result_payload(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        payload.prover_backend = "future_backend".to_owned();
+        assert!(payload.typed().is_none());
     }
 
     #[test]
