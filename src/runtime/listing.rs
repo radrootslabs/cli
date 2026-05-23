@@ -1217,6 +1217,7 @@ fn app_listing_draft_from_record(
         draft.listing.farm_d_tag = farm_id.clone();
     }
     normalize_app_listing_availability(&mut draft)?;
+    normalize_app_listing_units(&mut draft);
     Ok(draft)
 }
 
@@ -1244,6 +1245,30 @@ fn normalize_app_listing_availability(draft: &mut ListingDraftDocument) -> Resul
         other => return Err(format!("unsupported app listing status `{other}`")),
     };
     Ok(())
+}
+
+fn normalize_app_listing_units(draft: &mut ListingDraftDocument) {
+    let quantity_unit = draft.primary_bin.quantity_unit.trim().to_owned();
+    let price_per_unit = draft.primary_bin.price_per_unit.trim().to_owned();
+    let quantity_unit_supported = quantity_unit.parse::<RadrootsCoreUnit>().is_ok();
+    let price_per_unit_supported = price_per_unit.parse::<RadrootsCoreUnit>().is_ok();
+    if quantity_unit_supported && price_per_unit_supported {
+        return;
+    }
+
+    if draft.primary_bin.label.trim().is_empty() {
+        draft.primary_bin.label = if !quantity_unit_supported && !quantity_unit.is_empty() {
+            quantity_unit.clone()
+        } else {
+            price_per_unit.clone()
+        };
+    }
+    if !quantity_unit_supported {
+        draft.primary_bin.quantity_unit = "each".to_owned();
+    }
+    if !price_per_unit_supported {
+        draft.primary_bin.price_per_unit = "each".to_owned();
+    }
 }
 
 fn app_listing_export_issues(

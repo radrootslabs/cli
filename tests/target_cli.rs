@@ -324,11 +324,11 @@ fn seed_app_listing_record(
                     "primary_bin": {
                         "bin_id": "bin-1",
                         "quantity_amount": "1",
-                        "quantity_unit": "each",
+                        "quantity_unit": "dozen",
                         "price_amount": "7.50",
                         "price_currency": "USD",
                         "price_per_amount": "1",
-                        "price_per_unit": "each",
+                        "price_per_unit": "dozen",
                     },
                     "inventory": {
                         "available": "12",
@@ -3601,6 +3601,10 @@ fn listing_app_records_list_and_export_to_valid_cli_draft() {
     assert_eq!(export["result"]["listing_id"], listing_d_tag);
     assert_eq!(export["result"]["seller_account_id"], account_id);
     assert!(export_path.exists());
+    let exported_contents = fs::read_to_string(&export_path).expect("exported listing draft");
+    assert!(exported_contents.contains("quantity_unit = \"each\""));
+    assert!(exported_contents.contains("price_per_unit = \"each\""));
+    assert!(exported_contents.contains("label = \"dozen\""));
 
     let validate = sandbox.json_success(&[
         "--format",
