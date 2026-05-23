@@ -175,7 +175,7 @@ pub fn list_shared_records(
     }
     let executor = SqliteExecutor::open(database_path)?;
     let store = LocalEventsStore::new(executor);
-    Ok(store.list_records_after(0, limit)?)
+    Ok(store.list_records_changed_after(0, limit)?)
 }
 
 pub fn get_shared_record(

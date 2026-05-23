@@ -2591,6 +2591,8 @@ impl ListingAppRecordListView {
 pub struct ListingAppRecordSummaryView {
     pub record_id: String,
     pub seq: i64,
+    pub change_seq: i64,
+    pub superseded_count: usize,
     pub record_kind: String,
     pub status: String,
     pub source_runtime: String,
@@ -2645,7 +2647,7 @@ impl ListingAppRecordExportView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "missing" => CommandDisposition::NotFound,
-            "invalid" | "unsupported" => CommandDisposition::ValidationFailed,
+            "invalid" | "stale" | "unsupported" => CommandDisposition::ValidationFailed,
             "error" => CommandDisposition::InternalError,
             _ => CommandDisposition::Success,
         }

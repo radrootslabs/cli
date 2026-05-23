@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -668,17 +669,9 @@ pub fn list(config: &RuntimeConfig) -> Result<ListingListView, RuntimeError> {
 
 pub fn app_record_list(config: &RuntimeConfig) -> Result<ListingAppRecordListView, RuntimeError> {
     let database_path = shared_local_events_db_path(config)?;
-    let records = list_shared_records(config, APP_RECORD_LIST_LIMIT)?
+    let records = current_app_record_entries(app_local_records(config)?)
         .into_iter()
-        .filter(|record| {
-            record.source_runtime == SourceRuntime::App
-                && record.family == LocalRecordFamily::LocalWork
-                && matches!(
-                    local_record_kind(record).as_deref(),
-                    Some("farm_config_v1" | DRAFT_KIND)
-                )
-        })
-        .map(|record| app_record_summary(&record))
+        .map(|entry| app_record_summary(&entry.record, entry.superseded_count))
         .collect::<Vec<_>>();
     let state = if records.is_empty() { "empty" } else { "ready" };
     let actions = if records.is_empty() {
@@ -727,6 +720,49 @@ pub fn app_record_export(
             actions: vec!["radroots listing app list".to_owned()],
         });
     };
+
+    if let Some(current_record) = current_app_record_for(config, &record)?
+        && current_record.record_id != record.record_id
+    {
+        let (listing_id, title, farm_d_tag) = app_listing_display_parts(&record);
+        let current_action = format!("radroots listing app export {}", current_record.record_id);
+        return Ok(ListingAppRecordExportView {
+            state: "stale".to_owned(),
+            source: LISTING_APP_RECORD_SOURCE.to_owned(),
+            record_id: args.record_id.clone(),
+            dry_run: config.output.dry_run,
+            file: args
+                .output
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            valid: false,
+            listing_id,
+            listing_addr: record.listing_addr.clone(),
+            seller_account_id: record.owner_account_id.clone(),
+            seller_pubkey: record.owner_pubkey.clone(),
+            seller_actor_source: None,
+            farm_d_tag: farm_d_tag.or(record.farm_id.clone()),
+            issues: vec![ListingValidationIssueView {
+                field: "record_id".to_owned(),
+                message: format!(
+                    "app-authored local record `{}` was superseded by `{}`",
+                    record.record_id, current_record.record_id
+                ),
+                line: None,
+            }],
+            reason: Some(format!(
+                "app-authored local record `{}` was superseded by current record `{}`{}",
+                record.record_id,
+                current_record.record_id,
+                title
+                    .as_deref()
+                    .map(|value| format!(" for `{value}`"))
+                    .unwrap_or_default()
+            )),
+            actions: vec![current_action, "radroots listing app list".to_owned()],
+        });
+    }
 
     let draft = match app_listing_draft_from_record(&record) {
         Ok(draft) => draft,
@@ -1120,18 +1156,93 @@ fn summary_for_invalid_file(path: &Path, issue: ListingValidationIssueView) -> L
     }
 }
 
-fn app_record_summary(record: &LocalEventRecord) -> ListingAppRecordSummaryView {
+#[derive(Debug, Clone)]
+struct AppRecordListEntry {
+    record: LocalEventRecord,
+    superseded_count: usize,
+}
+
+fn app_local_records(config: &RuntimeConfig) -> Result<Vec<LocalEventRecord>, RuntimeError> {
+    Ok(list_shared_records(config, APP_RECORD_LIST_LIMIT)?
+        .into_iter()
+        .filter(|record| {
+            record.source_runtime == SourceRuntime::App
+                && record.family == LocalRecordFamily::LocalWork
+                && matches!(
+                    local_record_kind(record).as_deref(),
+                    Some("farm_config_v1" | DRAFT_KIND)
+                )
+        })
+        .collect())
+}
+
+fn current_app_record_entries(mut records: Vec<LocalEventRecord>) -> Vec<AppRecordListEntry> {
+    records.sort_by(|left, right| {
+        right
+            .change_seq
+            .cmp(&left.change_seq)
+            .then_with(|| right.seq.cmp(&left.seq))
+            .then_with(|| left.record_id.cmp(&right.record_id))
+    });
+
+    let mut entries: Vec<AppRecordListEntry> = Vec::new();
+    let mut seen = HashMap::<String, usize>::new();
+    for record in records {
+        let key = app_record_current_key(&record);
+        if let Some(index) = seen.get(&key).copied() {
+            entries[index].superseded_count += 1;
+        } else {
+            seen.insert(key, entries.len());
+            entries.push(AppRecordListEntry {
+                record,
+                superseded_count: 0,
+            });
+        }
+    }
+    entries
+}
+
+fn current_app_record_for(
+    config: &RuntimeConfig,
+    record: &LocalEventRecord,
+) -> Result<Option<LocalEventRecord>, RuntimeError> {
+    let key = app_record_current_key(record);
+    Ok(app_local_records(config)?
+        .into_iter()
+        .filter(|candidate| app_record_current_key(candidate) == key)
+        .max_by(|left, right| {
+            left.change_seq
+                .cmp(&right.change_seq)
+                .then_with(|| left.seq.cmp(&right.seq))
+        }))
+}
+
+fn app_record_summary(
+    record: &LocalEventRecord,
+    superseded_count: usize,
+) -> ListingAppRecordSummaryView {
     let record_kind = local_record_kind(record).unwrap_or_else(|| "unknown".to_owned());
-    let parsed_listing = app_listing_draft_from_record(record);
-    let (listing_id, title, exportable, reason) = match (record_kind.as_str(), parsed_listing) {
-        (DRAFT_KIND, Ok(draft)) => (
-            non_empty(draft.listing.d_tag),
-            non_empty(draft.product.title),
-            true,
-            None,
-        ),
-        (DRAFT_KIND, Err(reason)) => (None, None, false, Some(reason)),
-        ("farm_config_v1", _) => (
+    let (listing_id, title, exportable, reason) = match record_kind.as_str() {
+        DRAFT_KIND => {
+            if let Some(reason) = app_record_exportability_reason(record) {
+                let (listing_id, title, _) = app_listing_display_parts(record);
+                (listing_id, title, false, Some(reason))
+            } else {
+                match app_listing_draft_from_record(record) {
+                    Ok(draft) => (
+                        non_empty(draft.listing.d_tag),
+                        non_empty(draft.product.title),
+                        true,
+                        None,
+                    ),
+                    Err(reason) => {
+                        let (listing_id, title, _) = app_listing_display_parts(record);
+                        (listing_id, title, false, Some(reason))
+                    }
+                }
+            }
+        }
+        "farm_config_v1" => (
             None,
             record
                 .local_work_json
@@ -1157,6 +1268,8 @@ fn app_record_summary(record: &LocalEventRecord) -> ListingAppRecordSummaryView 
     ListingAppRecordSummaryView {
         record_id: record.record_id.clone(),
         seq: record.seq,
+        change_seq: record.change_seq,
+        superseded_count,
         record_kind,
         status: record.status.as_str().to_owned(),
         source_runtime: record.source_runtime.as_str().to_owned(),
@@ -1170,6 +1283,98 @@ fn app_record_summary(record: &LocalEventRecord) -> ListingAppRecordSummaryView 
         reason,
         actions,
     }
+}
+
+fn app_record_current_key(record: &LocalEventRecord) -> String {
+    match local_record_kind(record).as_deref() {
+        Some(DRAFT_KIND) => {
+            if let Some(listing_addr) = record
+                .listing_addr
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return format!("listing_addr:{listing_addr}");
+            }
+            let (listing_id, _, farm_d_tag) = app_listing_display_parts(record);
+            if let Some(listing_id) = listing_id {
+                let farm_key = farm_d_tag.or(record.farm_id.clone()).unwrap_or_default();
+                return format!("listing:{farm_key}:{listing_id}");
+            }
+        }
+        Some("farm_config_v1") => {
+            if let Some(farm_id) = record
+                .farm_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return format!("farm:{farm_id}");
+            }
+            if let Some(farm_id) = record
+                .local_work_json
+                .as_ref()
+                .and_then(|payload| payload["document"]["farm"]["d_tag"].as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                return format!("farm:{farm_id}");
+            }
+        }
+        _ => {}
+    }
+    format!("record:{}", record.record_id)
+}
+
+fn app_listing_display_parts(
+    record: &LocalEventRecord,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let document = record
+        .local_work_json
+        .as_ref()
+        .and_then(|payload| payload.get("document"));
+    let listing_id = document
+        .and_then(|document| document["listing"]["d_tag"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let title = document
+        .and_then(|document| document["product"]["title"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let farm_d_tag = document
+        .and_then(|document| document["listing"]["farm_d_tag"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    (listing_id, title, farm_d_tag)
+}
+
+fn app_record_exportability_reason(record: &LocalEventRecord) -> Option<String> {
+    let exportability = record
+        .local_work_json
+        .as_ref()
+        .and_then(|payload| payload.get("exportability"))?;
+    let state = exportability
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if state.is_empty() || state == "exportable" {
+        return None;
+    }
+    let reason = exportability
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Some(match (state, reason) {
+        ("identity_unresolved", "canonical_hex_pubkey_required") => {
+            "canonical hex pubkey required before export".to_owned()
+        }
+        ("identity_unresolved", _) => "app record identity is unresolved".to_owned(),
+        (_, "") => format!("app record exportability state `{state}` is not exportable"),
+        (_, reason) => format!("app record exportability state `{state}`: {reason}"),
+    })
 }
 
 fn app_listing_draft_from_record(
@@ -1194,6 +1399,9 @@ fn app_listing_draft_from_record(
     let record_kind = local_record_kind(record).unwrap_or_else(|| "unknown".to_owned());
     if record_kind != DRAFT_KIND {
         return Err(format!("record kind `{record_kind}` is not {DRAFT_KIND}"));
+    }
+    if let Some(reason) = app_record_exportability_reason(record) {
+        return Err(reason);
     }
     let document = payload
         .get("document")

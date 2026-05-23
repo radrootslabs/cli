@@ -288,7 +288,79 @@ fn seed_app_listing_record(
     farm_d_tag: &str,
     listing_d_tag: &str,
 ) -> String {
-    let record_id = format!("app:local_work:listing:{listing_d_tag}:test");
+    seed_app_listing_record_variant(
+        sandbox,
+        account_id,
+        Some(seller_pubkey),
+        farm_d_tag,
+        listing_d_tag,
+        "test",
+        "App Eggs",
+        None,
+    )
+}
+
+fn seed_app_listing_record_variant(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    seller_pubkey: Option<&str>,
+    farm_d_tag: &str,
+    listing_d_tag: &str,
+    record_suffix: &str,
+    title: &str,
+    exportability: Option<serde_json::Value>,
+) -> String {
+    let record_id = format!("app:local_work:listing:{listing_d_tag}:{record_suffix}");
+    let seller_pubkey_json = seller_pubkey
+        .map(|value| json!(value))
+        .unwrap_or_else(|| json!(null));
+    let mut payload = json!({
+        "record_kind": "listing_draft_v1",
+        "document": {
+            "version": 1,
+            "kind": "listing_draft_v1",
+            "listing": {
+                "d_tag": listing_d_tag,
+                "farm_d_tag": farm_d_tag,
+            },
+            "seller_actor": {
+                "account_id": account_id,
+                "pubkey": seller_pubkey_json,
+                "source": "farm_config",
+            },
+            "product": {
+                "key": listing_d_tag,
+                "title": title,
+                "category": "eggs",
+                "summary": "Fresh app eggs",
+            },
+            "primary_bin": {
+                "bin_id": "bin-1",
+                "quantity_amount": "1",
+                "quantity_unit": "dozen",
+                "price_amount": "7.50",
+                "price_currency": "USD",
+                "price_per_amount": "1",
+                "price_per_unit": "dozen",
+            },
+            "inventory": {
+                "available": "12",
+            },
+            "availability": {
+                "kind": "local",
+                "status": "draft",
+            },
+            "delivery": {
+                "method": "pickup",
+            },
+            "location": {
+                "primary": "farmstand",
+            },
+        },
+    });
+    if let Some(exportability) = exportability {
+        payload["exportability"] = exportability;
+    }
     append_app_local_record(
         LocalEventRecordInput {
             record_id: record_id.clone(),
@@ -298,53 +370,11 @@ fn seed_app_listing_record(
             created_at_ms: 1_779_000_002_000,
             inserted_at_ms: 1_779_000_002_000,
             owner_account_id: Some(account_id.to_owned()),
-            owner_pubkey: Some(seller_pubkey.to_owned()),
+            owner_pubkey: seller_pubkey.map(str::to_owned),
             farm_id: Some(farm_d_tag.to_owned()),
-            listing_addr: Some(format!("30402:{seller_pubkey}:{listing_d_tag}")),
-            local_work_json: Some(json!({
-                "record_kind": "listing_draft_v1",
-                "document": {
-                    "version": 1,
-                    "kind": "listing_draft_v1",
-                    "listing": {
-                        "d_tag": listing_d_tag,
-                        "farm_d_tag": farm_d_tag,
-                    },
-                    "seller_actor": {
-                        "account_id": account_id,
-                        "pubkey": seller_pubkey,
-                        "source": "farm_config",
-                    },
-                    "product": {
-                        "key": listing_d_tag,
-                        "title": "App Eggs",
-                        "category": "eggs",
-                        "summary": "Fresh app eggs",
-                    },
-                    "primary_bin": {
-                        "bin_id": "bin-1",
-                        "quantity_amount": "1",
-                        "quantity_unit": "dozen",
-                        "price_amount": "7.50",
-                        "price_currency": "USD",
-                        "price_per_amount": "1",
-                        "price_per_unit": "dozen",
-                    },
-                    "inventory": {
-                        "available": "12",
-                    },
-                    "availability": {
-                        "kind": "local",
-                        "status": "draft",
-                    },
-                    "delivery": {
-                        "method": "pickup",
-                    },
-                    "location": {
-                        "primary": "farmstand",
-                    },
-                },
-            })),
+            listing_addr: seller_pubkey
+                .map(|seller_pubkey| format!("30402:{seller_pubkey}:{listing_d_tag}")),
+            local_work_json: Some(payload),
             event_id: None,
             event_kind: None,
             event_pubkey: None,
@@ -3617,6 +3647,142 @@ fn listing_app_records_list_and_export_to_valid_cli_draft() {
     assert_eq!(validate["result"]["valid"], true);
     assert_eq!(validate["result"]["listing_id"], listing_d_tag);
     assert_eq!(validate["result"]["seller_account_id"], account_id);
+}
+
+#[test]
+fn listing_app_records_list_current_records_and_blocks_stale_export() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let seller_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey");
+    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    seed_app_farm_record(&sandbox, account_id, seller_pubkey, farm_d_tag);
+    let stale_record_id = seed_app_listing_record_variant(
+        &sandbox,
+        account_id,
+        Some(seller_pubkey),
+        farm_d_tag,
+        listing_d_tag,
+        "stale",
+        "Old App Eggs",
+        None,
+    );
+    let current_record_id = seed_app_listing_record_variant(
+        &sandbox,
+        account_id,
+        Some(seller_pubkey),
+        farm_d_tag,
+        listing_d_tag,
+        "current",
+        "Current App Eggs",
+        None,
+    );
+
+    let list = sandbox.json_success(&["--format", "json", "listing", "app", "list"]);
+    assert_eq!(list["result"]["count"], 2);
+    let records = list["result"]["records"].as_array().expect("records");
+    assert!(
+        records
+            .iter()
+            .all(|record| record["record_id"] != stale_record_id)
+    );
+    let listing_row = records
+        .iter()
+        .find(|record| record["record_id"] == current_record_id)
+        .expect("current listing row");
+    assert_eq!(listing_row["title"], "Current App Eggs");
+    assert_eq!(listing_row["superseded_count"], 1);
+    assert_eq!(listing_row["exportable"], true);
+    assert!(
+        listing_row["change_seq"]
+            .as_i64()
+            .expect("listing change seq")
+            > records[1]["change_seq"].as_i64().expect("farm change seq")
+    );
+
+    let export_path = sandbox.root().join("stale-app-eggs.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (output, stale_export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "listing",
+        "app",
+        "export",
+        stale_record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!output.status.success());
+    assert_eq!(stale_export["result"], Value::Null);
+    assert_eq!(stale_export["errors"][0]["detail"]["state"], "stale");
+    assert_eq!(stale_export["errors"][0]["detail"]["valid"], false);
+    assert!(
+        stale_export["errors"][0]["message"]
+            .as_str()
+            .expect("stale reason")
+            .contains(current_record_id.as_str())
+    );
+    assert!(!export_path.exists());
+}
+
+#[test]
+fn listing_app_records_mark_unresolved_pubkey_records_non_exportable() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account_id = "acct_unresolved";
+    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    let record_id = seed_app_listing_record_variant(
+        &sandbox,
+        account_id,
+        None,
+        farm_d_tag,
+        listing_d_tag,
+        "unresolved",
+        "Unresolved App Eggs",
+        Some(json!({
+            "state": "identity_unresolved",
+            "reason": "canonical_hex_pubkey_required"
+        })),
+    );
+
+    let list = sandbox.json_success(&["--format", "json", "listing", "app", "list"]);
+    assert_eq!(list["result"]["count"], 1);
+    let listing_row = &list["result"]["records"][0];
+    assert_eq!(listing_row["record_id"], record_id);
+    assert_eq!(listing_row["title"], "Unresolved App Eggs");
+    assert_eq!(listing_row["exportable"], false);
+    assert_eq!(
+        listing_row["reason"],
+        "canonical hex pubkey required before export"
+    );
+    assert!(listing_row.get("listing_addr").is_none());
+
+    let export_path = sandbox.root().join("unresolved-app-eggs.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (output, export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "listing",
+        "app",
+        "export",
+        record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!output.status.success());
+    assert_eq!(export["result"], Value::Null);
+    assert_eq!(export["errors"][0]["detail"]["state"], "unsupported");
+    assert_eq!(
+        export["errors"][0]["message"],
+        "canonical hex pubkey required before export"
+    );
+    assert!(!export_path.exists());
 }
 
 #[test]

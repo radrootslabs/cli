@@ -127,7 +127,7 @@ impl RadrootsCliSandbox {
         let store = LocalEventsStore::new(executor);
         store.migrate_up().expect("migrate local events db");
         store
-            .list_records_after(0, 200)
+            .list_records_after_seq(0, 200)
             .expect("list local event records")
     }
 
