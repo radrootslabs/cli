@@ -10,6 +10,7 @@ use radroots_events::RadrootsNostrEvent;
 use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
+use radroots_local_events::{LocalEventRecord, LocalEventsStore};
 use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::Value;
@@ -109,6 +110,25 @@ impl RadrootsCliSandbox {
         self.root
             .path()
             .join("data/apps/cli/replica/replica.sqlite")
+    }
+
+    pub fn local_events_db_path(&self) -> PathBuf {
+        self.root
+            .path()
+            .join("data/shared/local_events/local_events.sqlite")
+    }
+
+    pub fn local_event_records(&self) -> Vec<LocalEventRecord> {
+        let path = self.local_events_db_path();
+        if !path.exists() {
+            return Vec::new();
+        }
+        let executor = SqliteExecutor::open(path).expect("open local events db");
+        let store = LocalEventsStore::new(executor);
+        store.migrate_up().expect("migrate local events db");
+        store
+            .list_records_after(0, 200)
+            .expect("list local event records")
     }
 
     #[cfg(unix)]

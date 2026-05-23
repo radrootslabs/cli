@@ -12,6 +12,9 @@ use radroots_events::trade::{
     RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
 };
 use radroots_events_codec::trade::active_trade_order_request_event_build;
+use radroots_local_events::{
+    LocalRecordFamily, LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
+};
 use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
 use radroots_replica_db::{farm, farm_member_claim, migrations};
 use radroots_replica_db_schema::farm::IFarmFields;
@@ -3145,6 +3148,227 @@ fn seller_dry_runs_preflight_without_mutating_farm_or_listing_files() {
     assert_eq!(
         fs::read_to_string(&listing_file).expect("listing after dry-run"),
         listing_before
+    );
+}
+
+#[test]
+fn seller_dry_runs_do_not_write_shared_local_work_records() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "farm",
+        "create",
+        "--name",
+        "Dry Run Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    assert!(sandbox.local_event_records().is_empty());
+
+    let listing_path = sandbox.root().join("dry-run-local-work.toml");
+    let listing_path_arg = listing_path.to_string_lossy();
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "create",
+        "--output",
+        listing_path_arg.as_ref(),
+        "--key",
+        "dry-run-eggs",
+        "--title",
+        "Eggs",
+        "--category",
+        "eggs",
+        "--summary",
+        "Fresh eggs",
+        "--bin-id",
+        "bin-1",
+        "--quantity-amount",
+        "1",
+        "--quantity-unit",
+        "each",
+        "--price-amount",
+        "6",
+        "--price-currency",
+        "USD",
+        "--price-per-amount",
+        "1",
+        "--price-per-unit",
+        "each",
+        "--available",
+        "10",
+    ]);
+    assert!(sandbox.local_event_records().is_empty());
+}
+
+#[test]
+fn seller_local_writes_append_shared_local_work_records() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_config = &farm["result"]["config"];
+    let farm_d_tag = farm_config["farm_d_tag"].as_str().expect("farm d tag");
+    let seller_pubkey = farm_config["seller_pubkey"]
+        .as_str()
+        .expect("seller pubkey");
+    let listing_file = create_listing_draft(&sandbox, "shared-local-eggs");
+
+    let records = sandbox.local_event_records();
+    assert_eq!(records.len(), 2);
+
+    let farm_record = records
+        .iter()
+        .find(|record| {
+            record
+                .local_work_json
+                .as_ref()
+                .and_then(|payload| payload["record_kind"].as_str())
+                == Some("farm_config_v1")
+        })
+        .expect("farm local work record");
+    assert_eq!(farm_record.family, LocalRecordFamily::LocalWork);
+    assert_eq!(farm_record.status, LocalRecordStatus::LocalSaved);
+    assert_eq!(farm_record.source_runtime, SourceRuntime::Cli);
+    assert_eq!(farm_record.outbox_status, PublishOutboxStatus::None);
+    assert_eq!(farm_record.owner_account_id.as_deref(), Some(account_id));
+    assert_eq!(farm_record.owner_pubkey.as_deref(), Some(seller_pubkey));
+    assert_eq!(farm_record.farm_id.as_deref(), Some(farm_d_tag));
+    assert_eq!(farm_record.listing_addr, None);
+    let farm_payload = farm_record
+        .local_work_json
+        .as_ref()
+        .expect("farm local work payload");
+    assert_eq!(farm_payload["scope"], "workspace");
+    assert_eq!(farm_payload["document"]["farm"]["d_tag"], farm_d_tag);
+
+    let listing_record = records
+        .iter()
+        .find(|record| {
+            record
+                .local_work_json
+                .as_ref()
+                .and_then(|payload| payload["record_kind"].as_str())
+                == Some("listing_draft_v1")
+        })
+        .expect("listing local work record");
+    assert_eq!(listing_record.family, LocalRecordFamily::LocalWork);
+    assert_eq!(listing_record.status, LocalRecordStatus::LocalSaved);
+    assert_eq!(listing_record.source_runtime, SourceRuntime::Cli);
+    assert_eq!(listing_record.outbox_status, PublishOutboxStatus::None);
+    assert_eq!(listing_record.owner_account_id.as_deref(), Some(account_id));
+    assert_eq!(listing_record.owner_pubkey.as_deref(), Some(seller_pubkey));
+    assert_eq!(listing_record.farm_id.as_deref(), Some(farm_d_tag));
+    assert!(
+        listing_record
+            .listing_addr
+            .as_deref()
+            .expect("listing addr")
+            .starts_with(format!("30402:{seller_pubkey}:").as_str())
+    );
+    let listing_payload = listing_record
+        .local_work_json
+        .as_ref()
+        .expect("listing local work payload");
+    assert_eq!(listing_payload["path"], listing_file.display().to_string());
+    assert_eq!(
+        listing_payload["document"]["product"]["key"],
+        "shared-local-eggs"
+    );
+
+    let farm_update = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "profile",
+        "update",
+        "--value",
+        "Green Farm Updated",
+    ]);
+    assert_eq!(farm_update["operation_id"], "farm.profile.update");
+    assert_eq!(farm_update["result"]["state"], "updated");
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "listing",
+        "rebind",
+        listing_file.to_string_lossy().as_ref(),
+        second_account_id,
+        "--farm-d-tag",
+        farm_d_tag,
+    ]);
+
+    let updated_records = sandbox.local_event_records();
+    assert_eq!(updated_records.len(), 4);
+    let latest_farm_payload = updated_records
+        .iter()
+        .filter(|record| {
+            record
+                .local_work_json
+                .as_ref()
+                .and_then(|payload| payload["record_kind"].as_str())
+                == Some("farm_config_v1")
+        })
+        .max_by_key(|record| record.seq)
+        .and_then(|record| record.local_work_json.as_ref())
+        .expect("latest farm payload");
+    assert_eq!(
+        latest_farm_payload["document"]["profile"]["name"],
+        "Green Farm Updated"
+    );
+    let latest_listing = updated_records
+        .iter()
+        .filter(|record| {
+            record
+                .local_work_json
+                .as_ref()
+                .and_then(|payload| payload["record_kind"].as_str())
+                == Some("listing_draft_v1")
+        })
+        .max_by_key(|record| record.seq)
+        .expect("latest listing record");
+    assert_eq!(
+        latest_listing.owner_account_id.as_deref(),
+        Some(second_account_id)
+    );
+    let latest_listing_payload = latest_listing
+        .local_work_json
+        .as_ref()
+        .expect("latest listing payload");
+    assert_eq!(
+        latest_listing_payload["document"]["seller_actor"]["account_id"],
+        second_account_id
     );
 }
 

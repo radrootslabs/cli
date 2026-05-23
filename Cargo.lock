@@ -3526,6 +3526,7 @@ dependencies = [
  "radroots_events",
  "radroots_events_codec",
  "radroots_identity",
+ "radroots_local_events",
  "radroots_log",
  "radroots_nostr",
  "radroots_nostr_accounts",
@@ -3597,6 +3598,16 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tracing",
+]
+
+[[package]]
+name = "radroots_local_events"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "radroots_sql_core",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

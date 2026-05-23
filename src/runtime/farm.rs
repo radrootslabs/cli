@@ -34,6 +34,7 @@ use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
     FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
 };
+use crate::runtime::local_events::append_local_work;
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime_args::{
     FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
@@ -166,7 +167,15 @@ fn rebind_inner(
     let written_path = if dry_run {
         resolved.path.clone()
     } else {
-        farm_config::write(&config.paths, resolved.scope, &document)?
+        let written_path = farm_config::write(&config.paths, resolved.scope, &document)?;
+        append_farm_local_work(
+            config,
+            resolved.scope,
+            written_path.display().to_string(),
+            &document,
+            Some(to_seller_pubkey.as_str()),
+        )?;
+        written_path
     };
     let state = if dry_run { "dry_run" } else { "rebound" };
 
@@ -247,6 +256,13 @@ pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView,
     let account_pubkey = configured_account
         .as_ref()
         .map(|account| account.record.public_identity.public_key_hex.as_str());
+    append_farm_local_work(
+        config,
+        resolved.scope,
+        written_path.display().to_string(),
+        &resolved.document,
+        account_pubkey,
+    )?;
     let reason = if configured_account.is_none() {
         Some(missing_farm_bound_seller_reason(
             resolved.document.selection.account.as_str(),
@@ -1622,6 +1638,13 @@ fn save_draft_view(
     config: &RuntimeConfig,
 ) -> Result<FarmSetupView, RuntimeError> {
     let written_path = farm_config::write(&config.paths, scope, document)?;
+    append_farm_local_work(
+        config,
+        scope,
+        written_path.display().to_string(),
+        document,
+        Some(account.record.public_identity.public_key_hex.as_str()),
+    )?;
     Ok(FarmSetupView {
         state: state.to_owned(),
         source: FARM_CONFIG_SOURCE.to_owned(),
@@ -1634,6 +1657,32 @@ fn save_draft_view(
         reason,
         actions,
     })
+}
+
+fn append_farm_local_work(
+    config: &RuntimeConfig,
+    scope: FarmConfigScope,
+    path: String,
+    document: &FarmConfigDocument,
+    owner_pubkey: Option<&str>,
+) -> Result<(), RuntimeError> {
+    let payload = json!({
+        "record_kind": "farm_config_v1",
+        "scope": scope.as_str(),
+        "path": path,
+        "document": document,
+    });
+    let subject = format!("farm:{}", document.selection.farm_d_tag);
+    append_local_work(
+        config,
+        subject.as_str(),
+        Some(document.selection.account.clone()),
+        owner_pubkey.map(str::to_owned),
+        Some(document.selection.farm_d_tag.clone()),
+        None,
+        payload,
+    )?;
+    Ok(())
 }
 
 fn farm_update_actions(

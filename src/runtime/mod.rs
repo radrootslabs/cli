@@ -7,6 +7,7 @@ pub mod find;
 pub mod hyf;
 pub mod listing;
 pub mod local;
+pub mod local_events;
 pub mod logging;
 pub mod network;
 pub mod order;
@@ -32,6 +33,8 @@ pub enum RuntimeError {
     Sql(#[from] radroots_replica_db::SqlError),
     #[error("replica sync error: {0}")]
     ReplicaSync(#[from] radroots_replica_sync::RadrootsReplicaEventsError),
+    #[error("local events error: {0}")]
+    LocalEvents(#[from] radroots_local_events::LocalEventsError),
     #[error("network error: {0}")]
     Network(String),
     #[error("failed to serialize json output: {0}")]
@@ -48,6 +51,7 @@ impl RuntimeError {
             | Self::Accounts(_)
             | Self::Sql(_)
             | Self::ReplicaSync(_)
+            | Self::LocalEvents(_)
             | Self::Network(_)
             | Self::Json(_)
             | Self::Io(_) => ExitCode::from(1),

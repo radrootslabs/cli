@@ -45,6 +45,7 @@ use crate::runtime::direct_relay::{
     publish_parts_with_identity,
 };
 use crate::runtime::farm_config;
+use crate::runtime::local_events::append_local_work;
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
@@ -264,6 +265,7 @@ pub fn scaffold(
     let (draft, defaults) = build_listing_draft(config, args)?;
     let output_path = listing_output_path(config, args.output.as_ref(), &draft.listing.d_tag)?;
     write_listing_draft(&output_path, &draft, false)?;
+    append_listing_local_work(config, output_path.as_path(), &draft)?;
 
     let mut actions = vec![format!(
         "radroots listing validate {}",
@@ -450,6 +452,36 @@ fn write_listing_draft(
         fs::create_dir_all(parent)?;
     }
     fs::write(output_path, scaffold_contents(draft)?)?;
+    Ok(())
+}
+
+fn append_listing_local_work(
+    config: &RuntimeConfig,
+    path: &Path,
+    draft: &ListingDraftDocument,
+) -> Result<(), RuntimeError> {
+    let listing_id = draft.listing.d_tag.trim();
+    let seller_pubkey = draft.seller_actor.pubkey.trim();
+    let listing_addr = if seller_pubkey.is_empty() || listing_id.is_empty() {
+        None
+    } else {
+        Some(listing_addr(seller_pubkey, listing_id))
+    };
+    let payload = json!({
+        "record_kind": DRAFT_KIND,
+        "path": path.display().to_string(),
+        "document": draft,
+    });
+    let subject = format!("listing:{}", draft.listing.d_tag);
+    append_local_work(
+        config,
+        subject.as_str(),
+        non_empty(draft.seller_actor.account_id.clone()),
+        non_empty(draft.seller_actor.pubkey.clone()),
+        non_empty(draft.listing.farm_d_tag.clone()),
+        listing_addr,
+        payload,
+    )?;
     Ok(())
 }
 
@@ -695,6 +727,7 @@ fn rebind_inner(
 
     if !dry_run {
         write_listing_draft(args.file.as_path(), &draft, true)?;
+        append_listing_local_work(config, args.file.as_path(), &draft)?;
     }
 
     Ok(ListingRebindView {

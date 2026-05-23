@@ -28,6 +28,7 @@ radroots_core = { path = "../lib/crates/core", features = ["std", "serde"] }
 radroots_events = { path = "../lib/crates/events" }
 radroots_events_codec = { path = "../lib/crates/events_codec", features = ["nostr", "serde_json"] }
 radroots_identity = { path = "../lib/crates/identity" }
+radroots_local_events = { path = "../lib/crates/local_events" }
 radroots_log = { path = "../lib/crates/log" }
 radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts", features = ["os-keyring"] }
 radroots_nostr = { path = "../lib/crates/nostr", features = ["client", "events"] }
