@@ -42,10 +42,13 @@ use crate::runtime::config::{
 };
 use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayPublishError, DirectRelayPublishReceipt,
-    publish_parts_with_identity,
+    publish_signed_event_with_identity, sign_parts_with_identity,
 };
 use crate::runtime::farm_config;
-use crate::runtime::local_events::append_local_work;
+use crate::runtime::local_events::{
+    append_local_work, append_signed_event, mark_signed_event_acknowledged,
+    mark_signed_event_failed_for_publish_error,
+};
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
@@ -1271,28 +1274,72 @@ fn mutate_via_direct_relay(
         }
     };
 
-    let receipt =
-        match publish_parts_with_identity(&signing.identity, &config.relay.urls, event_draft.parts)
-        {
-            Ok(receipt) => receipt,
-            Err(
-                error @ (DirectRelayPublishError::MissingRelays
-                | DirectRelayPublishError::RelayConfig { .. }
-                | DirectRelayPublishError::Connect { .. }
-                | DirectRelayPublishError::Publish { .. }),
-            ) => {
-                return Ok(direct_relay_error_view(
-                    config,
-                    args,
-                    operation,
-                    canonical,
-                    listing_addr,
-                    event_draft.event,
-                    error,
-                ));
-            }
-            Err(error) => return Err(RuntimeError::Network(error.to_string())),
-        };
+    if config.relay.urls.is_empty() {
+        return Ok(direct_relay_error_view(
+            config,
+            args,
+            operation,
+            canonical,
+            listing_addr,
+            event_draft.event,
+            DirectRelayPublishError::MissingRelays,
+        ));
+    }
+
+    let signed_event = sign_parts_with_identity(&signing.identity, event_draft.parts)
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let record = append_signed_event(
+        config,
+        format!("listing:{}", canonical.listing_id).as_str(),
+        Some(canonical.seller_account_id.clone()),
+        Some(canonical.seller_pubkey.clone()),
+        Some(canonical.farm_d_tag.clone()),
+        Some(listing_addr.clone()),
+        &signed_event,
+    )?;
+    let receipt = match publish_signed_event_with_identity(
+        &signing.identity,
+        &config.relay.urls,
+        signed_event,
+    ) {
+        Ok(receipt) => {
+            mark_signed_event_acknowledged(
+                config,
+                record.record_id.as_str(),
+                receipt.target_relays.clone(),
+                receipt.connected_relays.clone(),
+                receipt.acknowledged_relays.clone(),
+                receipt.failed_relays.clone(),
+            )?;
+            receipt
+        }
+        Err(
+            error @ (DirectRelayPublishError::RelayConfig { .. }
+            | DirectRelayPublishError::Connect { .. }
+            | DirectRelayPublishError::Publish { .. }),
+        ) => {
+            mark_signed_event_failed_for_publish_error(config, record.record_id.as_str(), &error)?;
+            let mut event = event_draft.event;
+            event.event_id = record.event_id.clone();
+            event.created_at = record
+                .event_created_at
+                .and_then(|created_at| u32::try_from(created_at).ok());
+            event.signature = record.event_sig.clone();
+            return Ok(direct_relay_error_view(
+                config,
+                args,
+                operation,
+                canonical,
+                listing_addr,
+                event,
+                error,
+            ));
+        }
+        Err(error) => {
+            mark_signed_event_failed_for_publish_error(config, record.record_id.as_str(), &error)?;
+            return Err(RuntimeError::Network(error.to_string()));
+        }
+    };
 
     Ok(published_mutation_view(
         config,
@@ -1982,9 +2029,8 @@ fn direct_relay_error_view(
     error: DirectRelayPublishError,
 ) -> ListingMutationView {
     let parts = direct_relay_error_view_parts(config.relay.urls.as_slice(), error);
-    if let Some(event_id) = parts.event_id.as_ref() {
-        event_preview.event_id = Some(event_id.clone());
-    }
+    let event_id = parts.event_id.or_else(|| event_preview.event_id.clone());
+    event_preview.event_id = event_id.clone();
 
     ListingMutationView {
         state: "unavailable".to_owned(),
@@ -2006,7 +2052,7 @@ fn direct_relay_error_view(
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        event_id: parts.event_id,
+        event_id,
         event_addr: Some(listing_addr),
         idempotency_key: args.idempotency_key.clone(),
         signer_session_id: None,

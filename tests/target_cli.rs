@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use radroots_events::RadrootsNostrEventPtr;
+use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
 use radroots_events::trade::{
     RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
 };
@@ -3369,6 +3370,163 @@ fn seller_local_writes_append_shared_local_work_records() {
     assert_eq!(
         latest_listing_payload["document"]["seller_actor"]["account_id"],
         second_account_id
+    );
+}
+
+#[test]
+fn farm_publish_writes_acknowledged_signed_outbox_records() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_config = &farm["result"]["config"];
+    let farm_d_tag = farm_config["farm_d_tag"].as_str().expect("farm d tag");
+    let account_id = farm_config["seller_account_id"]
+        .as_str()
+        .expect("seller account id");
+    let seller_pubkey = farm_config["seller_pubkey"]
+        .as_str()
+        .expect("seller pubkey");
+    let relay = RelayPublishServer::with_publish_outcomes(vec![(true, ""), (true, "")]);
+    let relay_url = relay.endpoint().to_owned();
+
+    let publish = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        relay_url.as_str(),
+        "--approval-token",
+        "approve",
+        "farm",
+        "publish",
+    ]);
+
+    assert_eq!(publish["operation_id"], "farm.publish");
+    assert_eq!(publish["result"]["state"], "published");
+    let profile_event_id = publish["result"]["profile"]["event_id"]
+        .as_str()
+        .expect("profile event id");
+    let farm_event_id = publish["result"]["farm"]["event_id"]
+        .as_str()
+        .expect("farm event id");
+    let requests = relay.take_requests(2);
+    assert_eq!(requests.len(), 2);
+
+    let records = sandbox.local_event_records();
+    let signed_records = records
+        .iter()
+        .filter(|record| record.family == LocalRecordFamily::SignedEvent)
+        .collect::<Vec<_>>();
+    assert_eq!(signed_records.len(), 2);
+    for record in &signed_records {
+        assert_eq!(record.status, LocalRecordStatus::Published);
+        assert_eq!(record.outbox_status, PublishOutboxStatus::Acknowledged);
+        assert_eq!(record.source_runtime, SourceRuntime::Cli);
+        assert_eq!(record.owner_account_id.as_deref(), Some(account_id));
+        assert_eq!(record.owner_pubkey.as_deref(), Some(seller_pubkey));
+        assert_eq!(record.farm_id.as_deref(), Some(farm_d_tag));
+        assert_eq!(
+            record.relay_delivery_json.as_ref().unwrap()["state"],
+            "acknowledged"
+        );
+        assert_eq!(
+            record.relay_delivery_json.as_ref().unwrap()["acknowledged_relays"][0],
+            relay_url
+        );
+        assert_eq!(
+            record.raw_event_json.as_ref().unwrap()["id"],
+            record.event_id.as_deref().expect("event id")
+        );
+    }
+    assert!(signed_records.iter().any(|record| {
+        record.event_id.as_deref() == Some(profile_event_id)
+            && record.event_kind == Some(i64::from(KIND_PROFILE))
+    }));
+    assert!(signed_records.iter().any(|record| {
+        record.event_id.as_deref() == Some(farm_event_id)
+            && record.event_kind == Some(i64::from(KIND_FARM))
+    }));
+}
+
+#[test]
+fn listing_publish_failure_writes_failed_signed_outbox_record() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_d_tag = farm["result"]["config"]["farm_d_tag"]
+        .as_str()
+        .expect("farm d tag");
+    let listing_file = create_listing_draft(&sandbox, "failed-outbox-eggs");
+    make_listing_publishable(&listing_file, farm_d_tag);
+    let relay = RelayPublishServer::with_publish_outcomes(vec![(false, "rejected by test relay")]);
+    let relay_url = relay.endpoint().to_owned();
+
+    let (output, publish) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--relay",
+        relay_url.as_str(),
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(publish["operation_id"], "listing.publish");
+    assert_eq!(publish["errors"][0]["code"], "network_unavailable");
+    let requests = relay.take_requests(1);
+    assert_eq!(requests.len(), 1);
+
+    let records = sandbox.local_event_records();
+    let signed_records = records
+        .iter()
+        .filter(|record| record.family == LocalRecordFamily::SignedEvent)
+        .collect::<Vec<_>>();
+    assert_eq!(signed_records.len(), 1);
+    let record = signed_records[0];
+    assert_eq!(record.status, LocalRecordStatus::Failed);
+    assert_eq!(record.outbox_status, PublishOutboxStatus::Failed);
+    assert_eq!(record.source_runtime, SourceRuntime::Cli);
+    assert_eq!(record.farm_id.as_deref(), Some(farm_d_tag));
+    assert_eq!(record.event_kind, Some(30402));
+    assert_eq!(
+        record.relay_delivery_json.as_ref().unwrap()["state"],
+        "failed"
+    );
+    assert_eq!(
+        record.relay_delivery_json.as_ref().unwrap()["failed_relays"][0]["relay"],
+        relay_url
+    );
+    assert_eq!(
+        record.raw_event_json.as_ref().unwrap()["id"],
+        record.event_id.as_deref().expect("event id")
     );
 }
 

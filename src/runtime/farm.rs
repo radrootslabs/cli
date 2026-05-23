@@ -28,13 +28,16 @@ use crate::runtime::config::{
 };
 use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayPublishError, DirectRelayPublishReceipt,
-    publish_parts_with_identity,
+    publish_signed_event_with_identity, sign_parts_with_identity,
 };
 use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
     FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
 };
-use crate::runtime::local_events::append_local_work;
+use crate::runtime::local_events::{
+    append_local_work, append_signed_event, mark_signed_event_acknowledged,
+    mark_signed_event_failed_for_publish_error,
+};
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime_args::{
     FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
@@ -746,7 +749,7 @@ fn publish_via_direct_relay(
     args: &FarmPublishArgs,
     mut resolved: ResolvedFarmConfig,
     account_pubkey: String,
-    previews: FarmPublishPreviews,
+    mut previews: FarmPublishPreviews,
     profile_idempotency_key: Option<String>,
     farm_idempotency_key: Option<String>,
 ) -> Result<FarmPublishView, RuntimeError> {
@@ -771,37 +774,99 @@ fn publish_via_direct_relay(
         }
     };
 
-    let profile_receipt = publish_parts_with_identity(
+    if config.relay.urls.is_empty() {
+        return Err(RuntimeError::Network(
+            DirectRelayPublishError::MissingRelays.to_string(),
+        ));
+    }
+
+    let profile_event = sign_parts_with_identity(&signing.identity, previews.profile.parts.clone())
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    previews.profile.event.event_id = Some(profile_event.id.to_hex());
+    let profile_record = append_signed_event(
+        config,
+        format!("farm_profile:{}", resolved.document.selection.farm_d_tag).as_str(),
+        Some(resolved.document.selection.account.clone()),
+        Some(account_pubkey.clone()),
+        Some(resolved.document.selection.farm_d_tag.clone()),
+        None,
+        &profile_event,
+    )?;
+    let profile_receipt = match publish_signed_event_with_identity(
         &signing.identity,
         &config.relay.urls,
-        previews.profile.parts.clone(),
-    )
-    .map_err(|error| RuntimeError::Network(error.to_string()))?;
+        profile_event,
+    ) {
+        Ok(receipt) => {
+            mark_signed_event_acknowledged(
+                config,
+                profile_record.record_id.as_str(),
+                receipt.target_relays.clone(),
+                receipt.connected_relays.clone(),
+                receipt.acknowledged_relays.clone(),
+                receipt.failed_relays.clone(),
+            )?;
+            receipt
+        }
+        Err(error) => {
+            mark_signed_event_failed_for_publish_error(
+                config,
+                profile_record.record_id.as_str(),
+                &error,
+            )?;
+            return Err(RuntimeError::Network(error.to_string()));
+        }
+    };
     let profile_local_replica =
         farm_local_replica_ingest_view(config, "profile", &profile_receipt, None);
     persist_profile_publication(config, &mut resolved, profile_receipt.event_id.clone())?;
 
-    let farm_receipt = match publish_parts_with_identity(
-        &signing.identity,
-        &config.relay.urls,
-        previews.farm.parts.clone(),
-    ) {
-        Ok(receipt) => receipt,
-        Err(error) => {
-            return Ok(partial_publish_view(
-                config,
-                args,
-                &resolved,
-                &account_pubkey,
-                previews,
-                profile_idempotency_key,
-                farm_idempotency_key,
-                profile_receipt,
-                profile_local_replica,
-                error,
-            ));
-        }
-    };
+    let farm_event = sign_parts_with_identity(&signing.identity, previews.farm.parts.clone())
+        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    previews.farm.event.event_id = Some(farm_event.id.to_hex());
+    let farm_record = append_signed_event(
+        config,
+        format!("farm:{}", resolved.document.selection.farm_d_tag).as_str(),
+        Some(resolved.document.selection.account.clone()),
+        Some(account_pubkey.clone()),
+        Some(resolved.document.selection.farm_d_tag.clone()),
+        None,
+        &farm_event,
+    )?;
+    let farm_receipt =
+        match publish_signed_event_with_identity(&signing.identity, &config.relay.urls, farm_event)
+        {
+            Ok(receipt) => {
+                mark_signed_event_acknowledged(
+                    config,
+                    farm_record.record_id.as_str(),
+                    receipt.target_relays.clone(),
+                    receipt.connected_relays.clone(),
+                    receipt.acknowledged_relays.clone(),
+                    receipt.failed_relays.clone(),
+                )?;
+                receipt
+            }
+            Err(error) => {
+                mark_signed_event_failed_for_publish_error(
+                    config,
+                    farm_record.record_id.as_str(),
+                    &error,
+                )?;
+                return Ok(partial_publish_view(
+                    config,
+                    args,
+                    &resolved,
+                    &account_pubkey,
+                    previews,
+                    profile_idempotency_key,
+                    farm_idempotency_key,
+                    profile_receipt,
+                    profile_local_replica,
+                    error,
+                ));
+            }
+        };
     let farm_local_replica = farm_local_replica_ingest_view(
         config,
         "farm",
@@ -1277,7 +1342,8 @@ fn failed_component(
     error: DirectRelayPublishError,
 ) -> FarmPublishComponentView {
     let reason = error.to_string();
-    let failure = publish_failure_details(error, relay_urls);
+    let failure = publish_failure_details(&error, relay_urls);
+    let event_id = failure.event_id.or_else(|| event.event_id.clone());
     FarmPublishComponentView {
         state: "failed".to_owned(),
         rpc_method: rpc_method.to_owned(),
@@ -1291,7 +1357,7 @@ fn failed_component(
         job_status: None,
         signer_mode: Some("local".to_owned()),
         signer_session_id: None,
-        event_id: failure.event_id,
+        event_id,
         event_addr: event.event_addr.clone(),
         idempotency_key,
         reason: Some(reason),
@@ -1431,7 +1497,7 @@ struct FarmPublishFailureDetails {
 }
 
 fn publish_failure_details(
-    error: DirectRelayPublishError,
+    error: &DirectRelayPublishError,
     relay_urls: &[String],
 ) -> FarmPublishFailureDetails {
     match error {
@@ -1449,7 +1515,7 @@ fn publish_failure_details(
             target_relays: relay_urls.to_vec(),
             connected_relays: Vec::new(),
             failed_relays: vec![RelayFailureView {
-                relay,
+                relay: relay.clone(),
                 reason: source.to_string(),
             }],
         },
@@ -1460,9 +1526,9 @@ fn publish_failure_details(
             ..
         } => FarmPublishFailureDetails {
             event_id: None,
-            target_relays,
-            connected_relays,
-            failed_relays: relay_failures(failed_relays),
+            target_relays: target_relays.clone(),
+            connected_relays: connected_relays.clone(),
+            failed_relays: relay_failures(failed_relays.clone()),
         },
         DirectRelayPublishError::Publish {
             event_id,
@@ -1471,10 +1537,10 @@ fn publish_failure_details(
             failed_relays,
             ..
         } => FarmPublishFailureDetails {
-            event_id: Some(event_id),
-            target_relays,
-            connected_relays,
-            failed_relays: relay_failures(failed_relays),
+            event_id: Some(event_id.clone()),
+            target_relays: target_relays.clone(),
+            connected_relays: connected_relays.clone(),
+            failed_relays: relay_failures(failed_relays.clone()),
         },
     }
 }

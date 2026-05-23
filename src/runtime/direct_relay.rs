@@ -100,13 +100,26 @@ pub fn publish_parts_with_identity(
         return Err(DirectRelayPublishError::MissingRelays);
     }
 
+    let event = sign_parts_with_identity(identity, parts)?;
+    publish_signed_event_with_identity(identity, relay_urls, event)
+}
+
+pub fn publish_signed_event_with_identity(
+    identity: &RadrootsIdentity,
+    relay_urls: &[String],
+    event: RadrootsNostrEvent,
+) -> Result<DirectRelayPublishReceipt, DirectRelayPublishError> {
+    if relay_urls.is_empty() {
+        return Err(DirectRelayPublishError::MissingRelays);
+    }
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| DirectRelayPublishError::Runtime(error.to_string()))?;
 
-    runtime.block_on(publish_parts_with_identity_async(
-        identity, relay_urls, parts,
+    runtime.block_on(publish_signed_event_with_identity_async(
+        identity, relay_urls, event,
     ))
 }
 
@@ -183,12 +196,11 @@ async fn fetch_events_from_relays_async(
     })
 }
 
-async fn publish_parts_with_identity_async(
+async fn publish_signed_event_with_identity_async(
     identity: &RadrootsIdentity,
     relay_urls: &[String],
-    parts: WireEventParts,
+    event: RadrootsNostrEvent,
 ) -> Result<DirectRelayPublishReceipt, DirectRelayPublishError> {
-    let event = sign_parts_with_identity(identity, parts)?;
     let event_id = event.id.to_hex();
     let created_at = event_created_at_u32(&event);
     let signature = event.sig.to_string();
@@ -257,7 +269,7 @@ async fn publish_parts_with_identity_async(
     })
 }
 
-fn sign_parts_with_identity(
+pub fn sign_parts_with_identity(
     identity: &RadrootsIdentity,
     parts: WireEventParts,
 ) -> Result<RadrootsNostrEvent, DirectRelayPublishError> {
