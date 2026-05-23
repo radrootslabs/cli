@@ -165,7 +165,7 @@ pub fn shared_local_events_db_path(config: &RuntimeConfig) -> Result<PathBuf, Ru
     Ok(shared_local_events_root(config)?.join(SHARED_LOCAL_EVENTS_DB_FILE))
 }
 
-pub fn list_shared_records(
+pub fn list_shared_records_latest(
     config: &RuntimeConfig,
     limit: u32,
 ) -> Result<Vec<LocalEventRecord>, RuntimeError> {
@@ -175,7 +175,22 @@ pub fn list_shared_records(
     }
     let executor = SqliteExecutor::open(database_path)?;
     let store = LocalEventsStore::new(executor);
-    Ok(store.list_records_changed_after(0, limit)?)
+    Ok(store.list_records_changed_latest(limit)?)
+}
+
+pub fn list_shared_records_before(
+    config: &RuntimeConfig,
+    before_change_seq: i64,
+    before_seq: i64,
+    limit: u32,
+) -> Result<Vec<LocalEventRecord>, RuntimeError> {
+    let database_path = shared_local_events_db_path(config)?;
+    if !database_path.exists() {
+        return Ok(Vec::new());
+    }
+    let executor = SqliteExecutor::open(database_path)?;
+    let store = LocalEventsStore::new(executor);
+    Ok(store.list_records_changed_before(before_change_seq, before_seq, limit)?)
 }
 
 pub fn get_shared_record(

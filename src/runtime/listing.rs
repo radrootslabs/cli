@@ -49,9 +49,9 @@ use crate::runtime::direct_relay::{
 };
 use crate::runtime::farm_config;
 use crate::runtime::local_events::{
-    append_local_work, append_signed_event, get_shared_record, list_shared_records,
-    mark_signed_event_acknowledged, mark_signed_event_failed_for_publish_error,
-    shared_local_events_db_path,
+    append_local_work, append_signed_event, get_shared_record, list_shared_records_before,
+    list_shared_records_latest, mark_signed_event_acknowledged,
+    mark_signed_event_failed_for_publish_error, shared_local_events_db_path,
 };
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::{
@@ -669,8 +669,20 @@ pub fn list(config: &RuntimeConfig) -> Result<ListingListView, RuntimeError> {
 
 pub fn app_record_list(config: &RuntimeConfig) -> Result<ListingAppRecordListView, RuntimeError> {
     let database_path = shared_local_events_db_path(config)?;
-    let records = current_app_record_entries(app_local_records(config)?)
-        .into_iter()
+    let mut entries = current_app_record_entries(app_local_records(config)?);
+    let has_more = entries.len() > APP_RECORD_LIST_LIMIT as usize;
+    if has_more {
+        entries.truncate(APP_RECORD_LIST_LIMIT as usize);
+    }
+    let next_cursor = if has_more {
+        entries
+            .last()
+            .map(|entry| (entry.record.change_seq, entry.record.seq))
+    } else {
+        None
+    };
+    let records = entries
+        .iter()
         .map(|entry| app_record_summary(&entry.record, entry.superseded_count))
         .collect::<Vec<_>>();
     let state = if records.is_empty() { "empty" } else { "ready" };
@@ -684,6 +696,10 @@ pub fn app_record_list(config: &RuntimeConfig) -> Result<ListingAppRecordListVie
         state: state.to_owned(),
         source: LISTING_APP_RECORD_SOURCE.to_owned(),
         count: records.len(),
+        limit: APP_RECORD_LIST_LIMIT,
+        has_more,
+        next_before_change_seq: next_cursor.map(|(change_seq, _)| change_seq),
+        next_before_seq: next_cursor.map(|(_, seq)| seq),
         local_events_db: database_path.display().to_string(),
         records,
         actions,
@@ -1163,17 +1179,46 @@ struct AppRecordListEntry {
 }
 
 fn app_local_records(config: &RuntimeConfig) -> Result<Vec<LocalEventRecord>, RuntimeError> {
-    Ok(list_shared_records(config, APP_RECORD_LIST_LIMIT)?
-        .into_iter()
-        .filter(|record| {
-            record.source_runtime == SourceRuntime::App
-                && record.family == LocalRecordFamily::LocalWork
-                && matches!(
-                    local_record_kind(record).as_deref(),
-                    Some("farm_config_v1" | DRAFT_KIND)
-                )
-        })
-        .collect())
+    let mut app_records = Vec::new();
+    let mut before_cursor = None::<(i64, i64)>;
+    loop {
+        let shared_records = if let Some((before_change_seq, before_seq)) = before_cursor {
+            list_shared_records_before(
+                config,
+                before_change_seq,
+                before_seq,
+                APP_RECORD_LIST_LIMIT,
+            )?
+        } else {
+            list_shared_records_latest(config, APP_RECORD_LIST_LIMIT)?
+        };
+        let Some(next_cursor) = shared_records
+            .last()
+            .map(|record| (record.change_seq, record.seq))
+        else {
+            break;
+        };
+        let has_more = shared_records.len() == APP_RECORD_LIST_LIMIT as usize;
+        app_records.extend(
+            shared_records
+                .into_iter()
+                .filter(is_supported_app_local_record),
+        );
+        if !has_more {
+            break;
+        }
+        before_cursor = Some(next_cursor);
+    }
+    Ok(app_records)
+}
+
+fn is_supported_app_local_record(record: &LocalEventRecord) -> bool {
+    record.source_runtime == SourceRuntime::App
+        && record.family == LocalRecordFamily::LocalWork
+        && matches!(
+            local_record_kind(record).as_deref(),
+            Some("farm_config_v1" | DRAFT_KIND)
+        )
 }
 
 fn current_app_record_entries(mut records: Vec<LocalEventRecord>) -> Vec<AppRecordListEntry> {
@@ -1296,10 +1341,15 @@ fn app_record_current_key(record: &LocalEventRecord) -> String {
             {
                 return format!("listing_addr:{listing_addr}");
             }
-            let (listing_id, _, farm_d_tag) = app_listing_display_parts(record);
-            if let Some(listing_id) = listing_id {
-                let farm_key = farm_d_tag.or(record.farm_id.clone()).unwrap_or_default();
-                return format!("listing:{farm_key}:{listing_id}");
+            let (listing_id, _, _) = app_listing_display_parts(record);
+            if let (Some(owner_pubkey), Some(listing_id)) = (
+                record
+                    .owner_pubkey
+                    .as_deref()
+                    .and_then(canonical_hex_pubkey),
+                listing_id.filter(|value| is_d_tag_base64url(value)),
+            ) {
+                return format!("listing_owner:{owner_pubkey}:{listing_id}");
             }
         }
         Some("farm_config_v1") => {
@@ -1324,6 +1374,15 @@ fn app_record_current_key(record: &LocalEventRecord) -> String {
         _ => {}
     }
     format!("record:{}", record.record_id)
+}
+
+fn canonical_hex_pubkey(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.len() == 64 && trimmed.chars().all(|char| char.is_ascii_hexdigit()) {
+        Some(trimmed.to_ascii_lowercase())
+    } else {
+        None
+    }
 }
 
 fn app_listing_display_parts(

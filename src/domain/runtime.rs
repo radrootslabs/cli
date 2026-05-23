@@ -2572,6 +2572,12 @@ pub struct ListingAppRecordListView {
     pub state: String,
     pub source: String,
     pub count: usize,
+    pub limit: u32,
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_before_change_seq: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_before_seq: Option<i64>,
     pub local_events_db: String,
     pub records: Vec<ListingAppRecordSummaryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

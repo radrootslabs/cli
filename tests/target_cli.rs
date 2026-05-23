@@ -3686,6 +3686,8 @@ fn listing_app_records_list_current_records_and_blocks_stale_export() {
 
     let list = sandbox.json_success(&["--format", "json", "listing", "app", "list"]);
     assert_eq!(list["result"]["count"], 2);
+    assert_eq!(list["result"]["limit"], 500);
+    assert_eq!(list["result"]["has_more"], false);
     let records = list["result"]["records"].as_array().expect("records");
     assert!(
         records
@@ -3729,6 +3731,48 @@ fn listing_app_records_list_current_records_and_blocks_stale_export() {
             .contains(current_record_id.as_str())
     );
     assert!(!export_path.exists());
+}
+
+#[test]
+fn listing_app_records_list_includes_new_records_after_older_volume() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let seller_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey");
+    for index in 0..505 {
+        let farm_d_tag = format!("F{index:021}");
+        seed_app_farm_record(&sandbox, account_id, seller_pubkey, farm_d_tag.as_str());
+    }
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    let current_record_id = seed_app_listing_record_variant(
+        &sandbox,
+        account_id,
+        Some(seller_pubkey),
+        "AAAAAAAAAAAAAAAAAAAAAw",
+        listing_d_tag,
+        "current",
+        "Newest App Eggs",
+        None,
+    );
+
+    let list = sandbox.json_success(&["--format", "json", "listing", "app", "list"]);
+    assert_eq!(list["result"]["limit"], 500);
+    assert_eq!(list["result"]["count"], 500);
+    assert_eq!(list["result"]["has_more"], true);
+    assert!(list["result"]["next_before_change_seq"].as_i64().is_some());
+    assert!(list["result"]["next_before_seq"].as_i64().is_some());
+    let records = list["result"]["records"].as_array().expect("records");
+    assert_eq!(records[0]["record_id"], current_record_id);
+    assert!(
+        records
+            .iter()
+            .any(|record| record["record_id"] == current_record_id)
+    );
 }
 
 #[test]
