@@ -20,6 +20,7 @@ use radroots_events::trade::RadrootsTradeListingValidationError;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_events_codec::wire::WireEventParts;
+use radroots_local_events::{LocalEventRecord, LocalRecordFamily, SourceRuntime};
 use radroots_nostr::prelude::{RadrootsNostrEvent as SignedNostrEvent, radroots_event_from_nostr};
 use radroots_replica_db::{ReplicaSql, migrations};
 use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
@@ -27,10 +28,11 @@ use radroots_sql_core::SqliteExecutor;
 use radroots_trade::listing::publish::validate_listing_for_seller;
 use radroots_trade::listing::validation::validate_listing_event;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::domain::runtime::{
-    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingGetView, ListingListView,
+    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingAppRecordExportView,
+    ListingAppRecordListView, ListingAppRecordSummaryView, ListingGetView, ListingListView,
     ListingMutationEventView, ListingMutationLocalReplicaView, ListingMutationView, ListingNewView,
     ListingRebindView, ListingSummaryView, ListingValidateView, ListingValidationIssueView,
     MarketReadinessView, RelayFailureView,
@@ -46,26 +48,30 @@ use crate::runtime::direct_relay::{
 };
 use crate::runtime::farm_config;
 use crate::runtime::local_events::{
-    append_local_work, append_signed_event, mark_signed_event_acknowledged,
-    mark_signed_event_failed_for_publish_error,
+    append_local_work, append_signed_event, get_shared_record, list_shared_records,
+    mark_signed_event_acknowledged, mark_signed_event_failed_for_publish_error,
+    shared_local_events_db_path,
 };
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
 };
 use crate::runtime_args::{
-    ListingCreateArgs, ListingFileArgs, ListingMutationArgs, ListingRebindArgs, RecordLookupArgs,
+    ListingAppRecordExportArgs, ListingCreateArgs, ListingFileArgs, ListingMutationArgs,
+    ListingRebindArgs, RecordLookupArgs,
 };
 
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
+const LISTING_APP_RECORD_SOURCE: &str = "shared local events · app";
 const RELAY_LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
 const RADROOTSD_LISTING_WRITE_SOURCE: &str = "radrootsd publish transport · deferred";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 const LISTING_SELLER_ACTOR_SOURCE_FARM_CONFIG: &str = "farm_config";
 const LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
 const LISTING_SELLER_ACTOR_SOURCE_REBIND: &str = "listing_rebind";
+const APP_RECORD_LIST_LIMIT: u32 = 500;
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -660,6 +666,163 @@ pub fn list(config: &RuntimeConfig) -> Result<ListingListView, RuntimeError> {
     })
 }
 
+pub fn app_record_list(config: &RuntimeConfig) -> Result<ListingAppRecordListView, RuntimeError> {
+    let database_path = shared_local_events_db_path(config)?;
+    let records = list_shared_records(config, APP_RECORD_LIST_LIMIT)?
+        .into_iter()
+        .filter(|record| {
+            record.source_runtime == SourceRuntime::App
+                && record.family == LocalRecordFamily::LocalWork
+                && matches!(
+                    local_record_kind(record).as_deref(),
+                    Some("farm_config_v1" | DRAFT_KIND)
+                )
+        })
+        .map(|record| app_record_summary(&record))
+        .collect::<Vec<_>>();
+    let state = if records.is_empty() { "empty" } else { "ready" };
+    let actions = if records.is_empty() {
+        vec!["create or save a farm listing in radroots_studio_app".to_owned()]
+    } else {
+        Vec::new()
+    };
+
+    Ok(ListingAppRecordListView {
+        state: state.to_owned(),
+        source: LISTING_APP_RECORD_SOURCE.to_owned(),
+        count: records.len(),
+        local_events_db: database_path.display().to_string(),
+        records,
+        actions,
+    })
+}
+
+pub fn app_record_export(
+    config: &RuntimeConfig,
+    args: &ListingAppRecordExportArgs,
+) -> Result<ListingAppRecordExportView, RuntimeError> {
+    let Some(record) = get_shared_record(config, args.record_id.as_str())? else {
+        return Ok(ListingAppRecordExportView {
+            state: "missing".to_owned(),
+            source: LISTING_APP_RECORD_SOURCE.to_owned(),
+            record_id: args.record_id.clone(),
+            dry_run: config.output.dry_run,
+            file: args
+                .output
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            valid: false,
+            listing_id: None,
+            listing_addr: None,
+            seller_account_id: None,
+            seller_pubkey: None,
+            seller_actor_source: None,
+            farm_d_tag: None,
+            issues: Vec::new(),
+            reason: Some(format!(
+                "app-authored local record `{}` was not found",
+                args.record_id
+            )),
+            actions: vec!["radroots listing app list".to_owned()],
+        });
+    };
+
+    let draft = match app_listing_draft_from_record(&record) {
+        Ok(draft) => draft,
+        Err(reason) => {
+            return Ok(ListingAppRecordExportView {
+                state: "unsupported".to_owned(),
+                source: LISTING_APP_RECORD_SOURCE.to_owned(),
+                record_id: args.record_id.clone(),
+                dry_run: config.output.dry_run,
+                file: args
+                    .output
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+                valid: false,
+                listing_id: None,
+                listing_addr: record.listing_addr.clone(),
+                seller_account_id: record.owner_account_id.clone(),
+                seller_pubkey: record.owner_pubkey.clone(),
+                seller_actor_source: None,
+                farm_d_tag: record.farm_id.clone(),
+                issues: vec![ListingValidationIssueView {
+                    field: "local_work_json".to_owned(),
+                    message: reason.clone(),
+                    line: None,
+                }],
+                reason: Some(reason),
+                actions: vec!["radroots listing app list".to_owned()],
+            });
+        }
+    };
+    let output_path = listing_output_path(config, args.output.as_ref(), &draft.listing.d_tag)?;
+    validate_listing_output_target(output_path.as_path())?;
+    let contents = scaffold_contents(&draft)?;
+    let context = validation_context(config)?;
+    let issues = app_listing_export_issues(config, &draft, contents.as_str(), &context)?;
+    let listing_addr_value = app_record_listing_addr(&draft);
+
+    if !issues.is_empty() {
+        return Ok(ListingAppRecordExportView {
+            state: "invalid".to_owned(),
+            source: LISTING_APP_RECORD_SOURCE.to_owned(),
+            record_id: args.record_id.clone(),
+            dry_run: config.output.dry_run,
+            file: output_path.display().to_string(),
+            valid: false,
+            listing_id: non_empty(draft.listing.d_tag.clone()),
+            listing_addr: listing_addr_value,
+            seller_account_id: non_empty(draft.seller_actor.account_id.clone()),
+            seller_pubkey: non_empty(draft.seller_actor.pubkey.clone()),
+            seller_actor_source: non_empty(draft.seller_actor.source.clone()),
+            farm_d_tag: non_empty(draft.listing.farm_d_tag.clone()),
+            issues,
+            reason: Some(format!(
+                "app-authored local record `{}` does not validate as a CLI listing draft",
+                args.record_id
+            )),
+            actions: vec!["radroots listing app list".to_owned()],
+        });
+    }
+
+    if !config.output.dry_run {
+        write_listing_draft(output_path.as_path(), &draft, false)?;
+    }
+
+    Ok(ListingAppRecordExportView {
+        state: if config.output.dry_run {
+            "dry_run"
+        } else {
+            "exported"
+        }
+        .to_owned(),
+        source: LISTING_APP_RECORD_SOURCE.to_owned(),
+        record_id: args.record_id.clone(),
+        dry_run: config.output.dry_run,
+        file: output_path.display().to_string(),
+        valid: true,
+        listing_id: Some(draft.listing.d_tag.clone()),
+        listing_addr: app_record_listing_addr(&draft),
+        seller_account_id: Some(draft.seller_actor.account_id.clone()),
+        seller_pubkey: Some(draft.seller_actor.pubkey.clone()),
+        seller_actor_source: Some(draft.seller_actor.source.clone()),
+        farm_d_tag: Some(draft.listing.farm_d_tag.clone()),
+        issues: Vec::new(),
+        reason: Some(if config.output.dry_run {
+            "dry run requested; listing draft was not written".to_owned()
+        } else {
+            "app-authored listing record exported as a CLI listing draft".to_owned()
+        }),
+        actions: vec![
+            format!("radroots listing validate {}", output_path.display()),
+            format!("radroots listing publish {}", output_path.display()),
+        ],
+    })
+}
+
 pub fn rebind(
     config: &RuntimeConfig,
     args: &ListingRebindArgs,
@@ -955,6 +1118,168 @@ fn summary_for_invalid_file(path: &Path, issue: ListingValidationIssueView) -> L
         updated_at_unix: modified_unix(path).unwrap_or_default(),
         issues: vec![issue],
     }
+}
+
+fn app_record_summary(record: &LocalEventRecord) -> ListingAppRecordSummaryView {
+    let record_kind = local_record_kind(record).unwrap_or_else(|| "unknown".to_owned());
+    let parsed_listing = app_listing_draft_from_record(record);
+    let (listing_id, title, exportable, reason) = match (record_kind.as_str(), parsed_listing) {
+        (DRAFT_KIND, Ok(draft)) => (
+            non_empty(draft.listing.d_tag),
+            non_empty(draft.product.title),
+            true,
+            None,
+        ),
+        (DRAFT_KIND, Err(reason)) => (None, None, false, Some(reason)),
+        ("farm_config_v1", _) => (
+            None,
+            record
+                .local_work_json
+                .as_ref()
+                .and_then(|payload| payload["document"]["farm"]["name"].as_str())
+                .map(str::to_owned),
+            false,
+            Some("farm records provide defaults; export selects listing records".to_owned()),
+        ),
+        _ => (
+            None,
+            None,
+            false,
+            Some(format!("unsupported app record kind `{record_kind}`")),
+        ),
+    };
+    let actions = if exportable {
+        vec![format!("radroots listing app export {}", record.record_id)]
+    } else {
+        Vec::new()
+    };
+
+    ListingAppRecordSummaryView {
+        record_id: record.record_id.clone(),
+        seq: record.seq,
+        record_kind,
+        status: record.status.as_str().to_owned(),
+        source_runtime: record.source_runtime.as_str().to_owned(),
+        owner_account_id: record.owner_account_id.clone(),
+        owner_pubkey: record.owner_pubkey.clone(),
+        farm_id: record.farm_id.clone(),
+        listing_addr: record.listing_addr.clone(),
+        listing_id,
+        title,
+        exportable,
+        reason,
+        actions,
+    }
+}
+
+fn app_listing_draft_from_record(
+    record: &LocalEventRecord,
+) -> Result<ListingDraftDocument, String> {
+    if record.source_runtime != SourceRuntime::App {
+        return Err(format!(
+            "record source_runtime `{}` is not app",
+            record.source_runtime.as_str()
+        ));
+    }
+    if record.family != LocalRecordFamily::LocalWork {
+        return Err(format!(
+            "record family `{}` is not local_work",
+            record.family.as_str()
+        ));
+    }
+    let payload = record
+        .local_work_json
+        .as_ref()
+        .ok_or_else(|| "record has no local_work_json payload".to_owned())?;
+    let record_kind = local_record_kind(record).unwrap_or_else(|| "unknown".to_owned());
+    if record_kind != DRAFT_KIND {
+        return Err(format!("record kind `{record_kind}` is not {DRAFT_KIND}"));
+    }
+    let document = payload
+        .get("document")
+        .cloned()
+        .ok_or_else(|| "record local_work_json.document is missing".to_owned())?;
+    let mut draft = serde_json::from_value::<ListingDraftDocument>(document)
+        .map_err(|error| format!("record listing document is invalid: {error}"))?;
+    if draft.seller_actor.account_id.trim().is_empty()
+        && let Some(account_id) = record.owner_account_id.as_ref()
+    {
+        draft.seller_actor.account_id = account_id.clone();
+    }
+    if draft.seller_actor.pubkey.trim().is_empty()
+        && let Some(pubkey) = record.owner_pubkey.as_ref()
+    {
+        draft.seller_actor.pubkey = pubkey.clone();
+    }
+    if draft.listing.farm_d_tag.trim().is_empty()
+        && let Some(farm_id) = record.farm_id.as_ref()
+    {
+        draft.listing.farm_d_tag = farm_id.clone();
+    }
+    normalize_app_listing_availability(&mut draft)?;
+    Ok(draft)
+}
+
+fn normalize_app_listing_availability(draft: &mut ListingDraftDocument) -> Result<(), String> {
+    let kind = draft.availability.kind.trim();
+    if kind.is_empty() || kind == "local" {
+        draft.availability.kind = "status".to_owned();
+    } else if !matches!(kind, "status" | "window") {
+        return Err(format!(
+            "unsupported app listing availability kind `{kind}`"
+        ));
+    }
+    if draft.availability.kind == "window" {
+        return Ok(());
+    }
+
+    let status = draft.availability.status.trim();
+    draft.availability.status = match status {
+        "" | "active" | "draft" | "published" => "active".to_owned(),
+        "archived" | "paused" | "sold" => {
+            return Err(format!(
+                "app listing status `{status}` is not exportable as a publishable CLI draft"
+            ));
+        }
+        other => return Err(format!("unsupported app listing status `{other}`")),
+    };
+    Ok(())
+}
+
+fn app_listing_export_issues(
+    config: &RuntimeConfig,
+    draft: &ListingDraftDocument,
+    contents: &str,
+    context: &ListingValidationContext,
+) -> Result<Vec<ListingValidationIssueView>, RuntimeError> {
+    let canonical = match canonicalize_draft(draft, contents, context) {
+        Ok(canonical) => canonical,
+        Err(error) => return Ok(vec![error.into_issue()]),
+    };
+    let mut issues = listing_ready_issues(&canonical, contents);
+    if let Some(issue) = listing_bound_account_issue(config, &canonical, contents)? {
+        issues.push(issue);
+    }
+    Ok(issues)
+}
+
+fn app_record_listing_addr(draft: &ListingDraftDocument) -> Option<String> {
+    let seller_pubkey = draft.seller_actor.pubkey.trim();
+    let listing_id = draft.listing.d_tag.trim();
+    if seller_pubkey.is_empty() || listing_id.is_empty() {
+        None
+    } else {
+        Some(listing_addr(seller_pubkey, listing_id))
+    }
+}
+
+fn local_record_kind(record: &LocalEventRecord) -> Option<String> {
+    record
+        .local_work_json
+        .as_ref()
+        .and_then(|payload| payload.get("record_kind"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 pub fn get(

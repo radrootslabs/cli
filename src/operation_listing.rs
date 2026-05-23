@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::domain::runtime::{CommandDisposition, ListingMutationView};
+use crate::domain::runtime::{CommandDisposition, ListingAppRecordExportView, ListingMutationView};
 use crate::operation_adapter::{
+    ListingAppExportRequest, ListingAppExportResult, ListingAppListRequest, ListingAppListResult,
     ListingArchiveRequest, ListingArchiveResult, ListingCreateRequest, ListingCreateResult,
     ListingGetRequest, ListingGetResult, ListingListRequest, ListingListResult,
     ListingPublishRequest, ListingPublishResult, ListingRebindRequest, ListingRebindResult,
@@ -15,7 +16,8 @@ use crate::operation_adapter::{
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime_args::{
-    ListingCreateArgs, ListingFileArgs, ListingMutationArgs, ListingRebindArgs, RecordLookupArgs,
+    ListingAppRecordExportArgs, ListingCreateArgs, ListingFileArgs, ListingMutationArgs,
+    ListingRebindArgs, RecordLookupArgs,
 };
 
 pub struct ListingOperationService<'a> {
@@ -103,6 +105,44 @@ impl OperationService<ListingListRequest> for ListingOperationService<'_> {
             crate::runtime::listing::list(self.config),
         )?;
         serialized_operation_result::<ListingListResult, _>(&view)
+    }
+}
+
+impl OperationService<ListingAppListRequest> for ListingOperationService<'_> {
+    type Result = ListingAppListResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<ListingAppListRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let view = map_runtime(
+            request.operation_id(),
+            crate::runtime::listing::app_record_list(self.config),
+        )?;
+        serialized_operation_result::<ListingAppListResult, _>(&view)
+    }
+}
+
+impl OperationService<ListingAppExportRequest> for ListingOperationService<'_> {
+    type Result = ListingAppExportResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<ListingAppExportRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = ListingAppRecordExportArgs {
+            record_id: required_string(&request, "record_id")?,
+            output: optional_path(&request, "output"),
+        };
+        let mut config = self.config.clone();
+        if request.context.dry_run {
+            config.output.dry_run = true;
+        }
+        let view = map_runtime(
+            request.operation_id(),
+            crate::runtime::listing::app_record_export(&config, &args),
+        )?;
+        listing_app_record_export_result::<ListingAppExportResult>(request.operation_id(), &view)
     }
 }
 
@@ -301,6 +341,50 @@ fn listing_relay_unavailable(view: &ListingMutationView) -> bool {
         }) || !view.target_relays.is_empty()
             || !view.connected_relays.is_empty()
             || !view.failed_relays.is_empty())
+}
+
+fn listing_app_record_export_result<R>(
+    operation_id: &str,
+    view: &ListingAppRecordExportView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_operation_result::<R, _>(view),
+        CommandDisposition::NotFound => Err(OperationAdapterError::not_found_with_detail(
+            operation_id,
+            view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "app-authored local record `{}` was not found",
+                    view.record_id
+                )
+            }),
+            serde_json::to_value(view).unwrap_or(Value::Null),
+        )),
+        CommandDisposition::ValidationFailed => {
+            Err(OperationAdapterError::validation_failed_with_detail(
+                operation_id,
+                view.reason.clone().unwrap_or_else(|| {
+                    format!(
+                        "app-authored local record `{}` cannot be exported",
+                        view.record_id
+                    )
+                }),
+                serde_json::to_value(view).unwrap_or(Value::Null),
+            ))
+        }
+        disposition => Err(OperationAdapterError::from_command_disposition(
+            operation_id,
+            disposition,
+            view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "app-authored local record export finished with state `{}`",
+                    view.state
+                )
+            }),
+        )),
+    }
 }
 
 fn map_runtime<T>(

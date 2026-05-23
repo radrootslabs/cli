@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -158,6 +159,36 @@ pub fn mark_signed_event_failed_for_publish_error(
         connected_relays,
         failed_relays,
     )
+}
+
+pub fn shared_local_events_db_path(config: &RuntimeConfig) -> Result<PathBuf, RuntimeError> {
+    Ok(shared_local_events_root(config)?.join(SHARED_LOCAL_EVENTS_DB_FILE))
+}
+
+pub fn list_shared_records(
+    config: &RuntimeConfig,
+    limit: u32,
+) -> Result<Vec<LocalEventRecord>, RuntimeError> {
+    let database_path = shared_local_events_db_path(config)?;
+    if !database_path.exists() {
+        return Ok(Vec::new());
+    }
+    let executor = SqliteExecutor::open(database_path)?;
+    let store = LocalEventsStore::new(executor);
+    Ok(store.list_records_after(0, limit)?)
+}
+
+pub fn get_shared_record(
+    config: &RuntimeConfig,
+    record_id: &str,
+) -> Result<Option<LocalEventRecord>, RuntimeError> {
+    let database_path = shared_local_events_db_path(config)?;
+    if !database_path.exists() {
+        return Ok(None);
+    }
+    let executor = SqliteExecutor::open(database_path)?;
+    let store = LocalEventsStore::new(executor);
+    Ok(store.get_record(record_id)?)
 }
 
 fn update_signed_event_outbox(

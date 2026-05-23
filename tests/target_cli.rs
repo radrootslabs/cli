@@ -14,7 +14,8 @@ use radroots_events::trade::{
 };
 use radroots_events_codec::trade::active_trade_order_request_event_build;
 use radroots_local_events::{
-    LocalRecordFamily, LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
+    LocalEventRecordInput, LocalEventsStore, LocalRecordFamily, LocalRecordStatus,
+    PublishOutboxStatus, SourceRuntime,
 };
 use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
 use radroots_replica_db::{farm, farm_member_claim, migrations};
@@ -215,6 +216,162 @@ fn seed_sync_push_member_claim(
 fn sync_push_pending_batch(sandbox: &RadrootsCliSandbox) -> RadrootsReplicaPendingPublishBatch {
     let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
     radroots_replica_pending_publish_batch(&executor).expect("sync push pending batch")
+}
+
+fn seed_app_farm_record(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    seller_pubkey: &str,
+    farm_d_tag: &str,
+) {
+    append_app_local_record(
+        LocalEventRecordInput {
+            record_id: format!("app:local_work:farm:{farm_d_tag}:test"),
+            family: LocalRecordFamily::LocalWork,
+            status: LocalRecordStatus::LocalSaved,
+            source_runtime: SourceRuntime::App,
+            created_at_ms: 1_779_000_001_000,
+            inserted_at_ms: 1_779_000_001_000,
+            owner_account_id: Some(account_id.to_owned()),
+            owner_pubkey: Some(seller_pubkey.to_owned()),
+            farm_id: Some(farm_d_tag.to_owned()),
+            listing_addr: None,
+            local_work_json: Some(json!({
+                "record_kind": "farm_config_v1",
+                "scope": "app",
+                "document": {
+                    "version": 1,
+                    "selection": {
+                        "scope": "app",
+                        "account": account_id,
+                        "farm_d_tag": farm_d_tag,
+                    },
+                    "profile": {
+                        "name": "App Farm",
+                        "display_name": "App Farm",
+                    },
+                    "farm": {
+                        "d_tag": farm_d_tag,
+                        "name": "App Farm",
+                        "location": {
+                            "primary": "farmstand",
+                        },
+                    },
+                    "listing_defaults": {
+                        "delivery_method": "pickup",
+                        "location": {
+                            "primary": "farmstand",
+                        },
+                    },
+                },
+            })),
+            event_id: None,
+            event_kind: None,
+            event_pubkey: None,
+            event_created_at: None,
+            event_tags_json: None,
+            event_content: None,
+            event_sig: None,
+            raw_event_json: None,
+            outbox_status: PublishOutboxStatus::None,
+            relay_set_fingerprint: None,
+            relay_delivery_json: None,
+        },
+        sandbox,
+    );
+}
+
+fn seed_app_listing_record(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    seller_pubkey: &str,
+    farm_d_tag: &str,
+    listing_d_tag: &str,
+) -> String {
+    let record_id = format!("app:local_work:listing:{listing_d_tag}:test");
+    append_app_local_record(
+        LocalEventRecordInput {
+            record_id: record_id.clone(),
+            family: LocalRecordFamily::LocalWork,
+            status: LocalRecordStatus::LocalSaved,
+            source_runtime: SourceRuntime::App,
+            created_at_ms: 1_779_000_002_000,
+            inserted_at_ms: 1_779_000_002_000,
+            owner_account_id: Some(account_id.to_owned()),
+            owner_pubkey: Some(seller_pubkey.to_owned()),
+            farm_id: Some(farm_d_tag.to_owned()),
+            listing_addr: Some(format!("30402:{seller_pubkey}:{listing_d_tag}")),
+            local_work_json: Some(json!({
+                "record_kind": "listing_draft_v1",
+                "document": {
+                    "version": 1,
+                    "kind": "listing_draft_v1",
+                    "listing": {
+                        "d_tag": listing_d_tag,
+                        "farm_d_tag": farm_d_tag,
+                    },
+                    "seller_actor": {
+                        "account_id": account_id,
+                        "pubkey": seller_pubkey,
+                        "source": "farm_config",
+                    },
+                    "product": {
+                        "key": listing_d_tag,
+                        "title": "App Eggs",
+                        "category": "eggs",
+                        "summary": "Fresh app eggs",
+                    },
+                    "primary_bin": {
+                        "bin_id": "bin-1",
+                        "quantity_amount": "1",
+                        "quantity_unit": "each",
+                        "price_amount": "7.50",
+                        "price_currency": "USD",
+                        "price_per_amount": "1",
+                        "price_per_unit": "each",
+                    },
+                    "inventory": {
+                        "available": "12",
+                    },
+                    "availability": {
+                        "kind": "local",
+                        "status": "draft",
+                    },
+                    "delivery": {
+                        "method": "pickup",
+                    },
+                    "location": {
+                        "primary": "farmstand",
+                    },
+                },
+            })),
+            event_id: None,
+            event_kind: None,
+            event_pubkey: None,
+            event_created_at: None,
+            event_tags_json: None,
+            event_content: None,
+            event_sig: None,
+            raw_event_json: None,
+            outbox_status: PublishOutboxStatus::None,
+            relay_set_fingerprint: None,
+            relay_delivery_json: None,
+        },
+        sandbox,
+    );
+    record_id
+}
+
+fn append_app_local_record(input: LocalEventRecordInput, sandbox: &RadrootsCliSandbox) {
+    let database_path = sandbox.local_events_db_path();
+    fs::create_dir_all(database_path.parent().expect("local events parent"))
+        .expect("local events parent");
+    let executor = SqliteExecutor::open(database_path).expect("open local events");
+    let store = LocalEventsStore::new(executor);
+    store.migrate_up().expect("migrate local events");
+    store
+        .append_record(&input)
+        .expect("append app local event record");
 }
 
 #[test]
@@ -3371,6 +3528,91 @@ fn seller_local_writes_append_shared_local_work_records() {
         latest_listing_payload["document"]["seller_actor"]["account_id"],
         second_account_id
     );
+}
+
+#[test]
+fn listing_app_records_list_and_export_to_valid_cli_draft() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let seller_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey");
+    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    seed_app_farm_record(&sandbox, account_id, seller_pubkey, farm_d_tag);
+    let listing_record_id = seed_app_listing_record(
+        &sandbox,
+        account_id,
+        seller_pubkey,
+        farm_d_tag,
+        listing_d_tag,
+    );
+
+    let list = sandbox.json_success(&["--format", "json", "listing", "app", "list"]);
+    assert_eq!(list["operation_id"], "listing.app.list");
+    assert_eq!(list["result"]["state"], "ready");
+    assert_eq!(list["result"]["count"], 2);
+    let listing_row = list["result"]["records"]
+        .as_array()
+        .expect("records")
+        .iter()
+        .find(|record| record["record_id"] == listing_record_id)
+        .expect("listing row");
+    assert_eq!(listing_row["record_kind"], "listing_draft_v1");
+    assert_eq!(listing_row["source_runtime"], "app");
+    assert_eq!(listing_row["exportable"], true);
+    assert_eq!(listing_row["listing_id"], listing_d_tag);
+    assert_eq!(listing_row["title"], "App Eggs");
+
+    let export_path = sandbox.root().join("app-eggs.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "listing",
+        "app",
+        "export",
+        listing_record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert_eq!(dry_run["operation_id"], "listing.app.export");
+    assert_eq!(dry_run["result"]["state"], "dry_run");
+    assert_eq!(dry_run["result"]["valid"], true);
+    assert!(!export_path.exists());
+
+    let export = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "app",
+        "export",
+        listing_record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert_eq!(export["operation_id"], "listing.app.export");
+    assert_eq!(export["result"]["state"], "exported");
+    assert_eq!(export["result"]["listing_id"], listing_d_tag);
+    assert_eq!(export["result"]["seller_account_id"], account_id);
+    assert!(export_path.exists());
+
+    let validate = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "validate",
+        export_path_arg.as_ref(),
+    ]);
+    assert_eq!(validate["operation_id"], "listing.validate");
+    assert_eq!(validate["result"]["valid"], true);
+    assert_eq!(validate["result"]["listing_id"], listing_d_tag);
+    assert_eq!(validate["result"]["seller_account_id"], account_id);
 }
 
 #[test]

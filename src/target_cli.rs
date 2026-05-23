@@ -185,6 +185,10 @@ impl TargetCommand {
                 ListingCommand::Create(_) => "listing.create",
                 ListingCommand::Get(_) => "listing.get",
                 ListingCommand::List => "listing.list",
+                ListingCommand::App(app) => match &app.command {
+                    ListingAppCommand::List => "listing.app.list",
+                    ListingAppCommand::Export(_) => "listing.app.export",
+                },
                 ListingCommand::Update(_) => "listing.update",
                 ListingCommand::Validate(_) => "listing.validate",
                 ListingCommand::Rebind(_) => "listing.rebind",
@@ -597,6 +601,7 @@ pub enum ListingCommand {
     Create(ListingCreateArgs),
     Get(LookupArgs),
     List,
+    App(ListingAppArgs),
     Update(FileArgs),
     Validate(FileArgs),
     Rebind(ListingRebindArgs),
@@ -651,6 +656,25 @@ pub struct ListingCreateArgs {
 #[derive(Debug, Clone, Args)]
 pub struct FileArgs {
     pub file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListingAppArgs {
+    #[command(subcommand)]
+    pub command: ListingAppCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ListingAppCommand {
+    List,
+    Export(ListingAppExportArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListingAppExportArgs {
+    pub record_id: Option<String>,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]

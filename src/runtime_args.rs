@@ -168,6 +168,12 @@ pub struct ListingFileArgs {
 }
 
 #[derive(Debug, Clone)]
+pub struct ListingAppRecordExportArgs {
+    pub record_id: String,
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ListingRebindArgs {
     pub file: PathBuf,
     pub selector: String,

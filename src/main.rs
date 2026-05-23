@@ -229,6 +229,12 @@ fn execute_request(
         TargetOperationRequest::ListingList(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
+        TargetOperationRequest::ListingAppList(request) => {
+            execute_with(ListingOperationService::new(config), request)
+        }
+        TargetOperationRequest::ListingAppExport(request) => {
+            execute_with(ListingOperationService::new(config), request)
+        }
         TargetOperationRequest::ListingUpdate(request) => {
             execute_with(ListingOperationService::new(config), request)
         }

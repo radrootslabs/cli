@@ -608,6 +608,36 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false
     ),
     operation!(
+        "listing.app.list",
+        "radroots listing app list",
+        "listing",
+        "listing_app_list",
+        "ListingAppListRequest",
+        "ListingAppListResult",
+        "List app-authored shared local listing records.",
+        Seller,
+        false,
+        None,
+        Low,
+        false,
+        false
+    ),
+    operation!(
+        "listing.app.export",
+        "radroots listing app export",
+        "listing",
+        "listing_app_export",
+        "ListingAppExportRequest",
+        "ListingAppExportResult",
+        "Export an app-authored shared listing record as a CLI draft.",
+        Seller,
+        true,
+        None,
+        Medium,
+        false,
+        true
+    ),
+    operation!(
         "listing.update",
         "radroots listing update",
         "listing",
@@ -1328,6 +1358,8 @@ mod tests {
         "listing.create",
         "listing.get",
         "listing.list",
+        "listing.app.list",
+        "listing.app.export",
         "listing.update",
         "listing.validate",
         "listing.rebind",
@@ -1388,6 +1420,7 @@ mod tests {
         "farm.fulfillment.update",
         "farm.publish",
         "listing.create",
+        "listing.app.export",
         "listing.update",
         "listing.rebind",
         "listing.publish",
@@ -1422,7 +1455,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 74);
+        assert_eq!(OPERATION_REGISTRY.len(), 76);
     }
 
     #[test]

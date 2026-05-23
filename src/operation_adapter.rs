@@ -1284,7 +1284,7 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
     use crate::target_cli::{
         AccountCommand, AccountSelectionCommand, BasketAdjustmentCommand, BasketCommand,
         BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
-        FarmLocationCommand, FarmProfileCommand, ListingCommand, MarketCommand,
+        FarmLocationCommand, FarmProfileCommand, ListingAppCommand, ListingCommand, MarketCommand,
         MarketListingCommand, MarketProductCommand, OrderCommand, OrderEventCommand,
         OrderFulfillmentCommand, OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand,
         OrderSettlementCommand, OrderStatusCommand, TargetCommand, ValidationCommand,
@@ -1378,6 +1378,13 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 insert_string(&mut input, "discount_currency", &args.discount_currency);
             }
             ListingCommand::Get(args) => insert_string(&mut input, "key", &args.key),
+            ListingCommand::App(args) => match &args.command {
+                ListingAppCommand::Export(args) => {
+                    insert_string(&mut input, "record_id", &args.record_id);
+                    insert_path(&mut input, "output", &args.output);
+                }
+                ListingAppCommand::List => {}
+            },
             ListingCommand::Update(args)
             | ListingCommand::Validate(args)
             | ListingCommand::Publish(args)
@@ -1632,6 +1639,8 @@ target_operation_contracts! {
     ListingCreate => (ListingCreateRequest, ListingCreateResult, "listing.create"),
     ListingGet => (ListingGetRequest, ListingGetResult, "listing.get"),
     ListingList => (ListingListRequest, ListingListResult, "listing.list"),
+    ListingAppList => (ListingAppListRequest, ListingAppListResult, "listing.app.list"),
+    ListingAppExport => (ListingAppExportRequest, ListingAppExportResult, "listing.app.export"),
     ListingUpdate => (ListingUpdateRequest, ListingUpdateResult, "listing.update"),
     ListingValidate => (ListingValidateRequest, ListingValidateResult, "listing.validate"),
     ListingRebind => (ListingRebindRequest, ListingRebindResult, "listing.rebind"),
