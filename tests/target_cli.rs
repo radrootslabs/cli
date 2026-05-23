@@ -356,8 +356,34 @@ fn seed_app_listing_record_variant_with_listing_addr(
     exportability: Option<serde_json::Value>,
     include_listing_addr: bool,
 ) -> String {
+    seed_app_listing_record_identity_variant(
+        sandbox,
+        account_id,
+        seller_pubkey,
+        seller_pubkey,
+        farm_d_tag,
+        listing_d_tag,
+        record_suffix,
+        title,
+        exportability,
+        include_listing_addr,
+    )
+}
+
+fn seed_app_listing_record_identity_variant(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    document_seller_pubkey: Option<&str>,
+    owner_pubkey: Option<&str>,
+    farm_d_tag: &str,
+    listing_d_tag: &str,
+    record_suffix: &str,
+    title: &str,
+    exportability: Option<serde_json::Value>,
+    include_listing_addr: bool,
+) -> String {
     let record_id = format!("app:local_work:listing:{listing_d_tag}:{record_suffix}");
-    let seller_pubkey_json = seller_pubkey
+    let seller_pubkey_json = document_seller_pubkey
         .map(|value| json!(value))
         .unwrap_or_else(|| json!(null));
     let mut payload = json!({
@@ -416,12 +442,12 @@ fn seed_app_listing_record_variant_with_listing_addr(
             created_at_ms: 1_779_000_002_000,
             inserted_at_ms: 1_779_000_002_000,
             owner_account_id: Some(account_id.to_owned()),
-            owner_pubkey: seller_pubkey.map(str::to_owned),
+            owner_pubkey: owner_pubkey.map(str::to_owned),
             farm_id: Some(farm_d_tag.to_owned()),
             listing_addr: include_listing_addr
-                .then_some(seller_pubkey)
+                .then_some(owner_pubkey)
                 .flatten()
-                .map(|seller_pubkey| format!("30402:{seller_pubkey}:{listing_d_tag}")),
+                .map(|owner_pubkey| format!("30402:{owner_pubkey}:{listing_d_tag}")),
             local_work_json: Some(payload),
             event_id: None,
             event_kind: None,
@@ -3999,6 +4025,112 @@ fn listing_app_records_mark_unresolved_pubkey_records_non_exportable() {
         "canonical hex pubkey required before export"
     );
     assert!(!export_path.exists());
+}
+
+#[test]
+fn listing_app_records_ignore_body_pubkey_without_owner_metadata() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account_id = "acct_body_only";
+    let body_pubkey = identity_public(91).public_key_hex;
+    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    let record_id = seed_app_listing_record_identity_variant(
+        &sandbox,
+        account_id,
+        Some(body_pubkey.as_str()),
+        None,
+        farm_d_tag,
+        listing_d_tag,
+        "body-only",
+        "Body Only App Eggs",
+        Some(json!({ "state": "exportable" })),
+        false,
+    );
+
+    let list = sandbox.json_success(&["--format", "json", "listing", "app", "list"]);
+    assert_eq!(list["result"]["count"], 1);
+    let listing_row = &list["result"]["records"][0];
+    assert_eq!(listing_row["record_id"], record_id);
+    assert_eq!(listing_row["title"], "Body Only App Eggs");
+    assert_eq!(listing_row["exportable"], false);
+    assert_eq!(
+        listing_row["reason"],
+        "canonical hex pubkey required before export"
+    );
+    assert!(
+        listing_row
+            .get("actions")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    );
+
+    let export_path = sandbox.root().join("body-only-app-eggs.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (output, export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "listing",
+        "app",
+        "export",
+        record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!output.status.success());
+    assert_eq!(export["result"], Value::Null);
+    assert_eq!(export["errors"][0]["detail"]["state"], "unsupported");
+    assert_eq!(
+        export["errors"][0]["message"],
+        "canonical hex pubkey required before export"
+    );
+    assert!(!export_path.exists());
+}
+
+#[test]
+fn listing_app_records_export_uses_record_owner_over_body_pubkey() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let owner_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey");
+    let body_pubkey = identity_public(92).public_key_hex;
+    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    let record_id = seed_app_listing_record_identity_variant(
+        &sandbox,
+        account_id,
+        Some(body_pubkey.as_str()),
+        Some(owner_pubkey),
+        farm_d_tag,
+        listing_d_tag,
+        "owner-wins",
+        "Owner Wins App Eggs",
+        None,
+        true,
+    );
+
+    let export_path = sandbox.root().join("owner-wins-app-eggs.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let export = sandbox.json_success(&[
+        "--format",
+        "json",
+        "listing",
+        "app",
+        "export",
+        record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert_eq!(export["operation_id"], "listing.app.export");
+    assert_eq!(export["result"]["state"], "exported");
+    assert_eq!(export["result"]["seller_pubkey"], owner_pubkey);
+    let exported_contents = fs::read_to_string(&export_path).expect("exported listing draft");
+    assert!(exported_contents.contains(format!("pubkey = \"{owner_pubkey}\"").as_str()));
+    assert!(!exported_contents.contains(body_pubkey.as_str()));
 }
 
 #[test]

@@ -72,6 +72,7 @@ const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 const LISTING_SELLER_ACTOR_SOURCE_FARM_CONFIG: &str = "farm_config";
 const LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
 const LISTING_SELLER_ACTOR_SOURCE_REBIND: &str = "listing_rebind";
+const CANONICAL_OWNER_PUBKEY_REQUIRED_REASON: &str = "canonical hex pubkey required before export";
 const APP_RECORD_LIST_LIMIT: u32 = 500;
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1343,10 +1344,7 @@ fn app_record_current_key(record: &LocalEventRecord) -> String {
             }
             let (listing_id, _, _) = app_listing_display_parts(record);
             if let (Some(owner_pubkey), Some(listing_id)) = (
-                record
-                    .owner_pubkey
-                    .as_deref()
-                    .and_then(canonical_hex_pubkey),
+                app_record_canonical_owner_pubkey(record),
                 listing_id.filter(|value| is_d_tag_base64url(value)),
             ) {
                 return format!("listing_owner:{owner_pubkey}:{listing_id}");
@@ -1385,6 +1383,13 @@ fn canonical_hex_pubkey(value: &str) -> Option<String> {
     }
 }
 
+fn app_record_canonical_owner_pubkey(record: &LocalEventRecord) -> Option<String> {
+    record
+        .owner_pubkey
+        .as_deref()
+        .and_then(canonical_hex_pubkey)
+}
+
 fn app_listing_display_parts(
     record: &LocalEventRecord,
 ) -> (Option<String>, Option<String>, Option<String>) {
@@ -1411,6 +1416,11 @@ fn app_listing_display_parts(
 }
 
 fn app_record_exportability_reason(record: &LocalEventRecord) -> Option<String> {
+    if local_record_kind(record).as_deref() == Some(DRAFT_KIND)
+        && app_record_canonical_owner_pubkey(record).is_none()
+    {
+        return Some(CANONICAL_OWNER_PUBKEY_REQUIRED_REASON.to_owned());
+    }
     let exportability = record
         .local_work_json
         .as_ref()
@@ -1428,7 +1438,7 @@ fn app_record_exportability_reason(record: &LocalEventRecord) -> Option<String> 
         .unwrap_or_default();
     Some(match (state, reason) {
         ("identity_unresolved", "canonical_hex_pubkey_required") => {
-            "canonical hex pubkey required before export".to_owned()
+            CANONICAL_OWNER_PUBKEY_REQUIRED_REASON.to_owned()
         }
         ("identity_unresolved", _) => "app record identity is unresolved".to_owned(),
         (_, "") => format!("app record exportability state `{state}` is not exportable"),
@@ -1462,22 +1472,23 @@ fn app_listing_draft_from_record(
     if let Some(reason) = app_record_exportability_reason(record) {
         return Err(reason);
     }
+    let owner_pubkey = app_record_canonical_owner_pubkey(record)
+        .ok_or_else(|| CANONICAL_OWNER_PUBKEY_REQUIRED_REASON.to_owned())?;
     let document = payload
         .get("document")
         .cloned()
         .ok_or_else(|| "record local_work_json.document is missing".to_owned())?;
     let mut draft = serde_json::from_value::<ListingDraftDocument>(document)
         .map_err(|error| format!("record listing document is invalid: {error}"))?;
-    if draft.seller_actor.account_id.trim().is_empty()
-        && let Some(account_id) = record.owner_account_id.as_ref()
+    if let Some(account_id) = record
+        .owner_account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
-        draft.seller_actor.account_id = account_id.clone();
+        draft.seller_actor.account_id = account_id.to_owned();
     }
-    if draft.seller_actor.pubkey.trim().is_empty()
-        && let Some(pubkey) = record.owner_pubkey.as_ref()
-    {
-        draft.seller_actor.pubkey = pubkey.clone();
-    }
+    draft.seller_actor.pubkey = owner_pubkey;
     if draft.listing.farm_d_tag.trim().is_empty()
         && let Some(farm_id) = record.farm_id.as_ref()
     {
