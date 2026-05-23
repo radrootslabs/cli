@@ -310,6 +310,52 @@ fn seed_app_listing_record_variant(
     title: &str,
     exportability: Option<serde_json::Value>,
 ) -> String {
+    seed_app_listing_record_variant_with_listing_addr(
+        sandbox,
+        account_id,
+        seller_pubkey,
+        farm_d_tag,
+        listing_d_tag,
+        record_suffix,
+        title,
+        exportability,
+        true,
+    )
+}
+
+fn seed_app_listing_record_variant_without_listing_addr(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    seller_pubkey: Option<&str>,
+    farm_d_tag: &str,
+    listing_d_tag: &str,
+    record_suffix: &str,
+    title: &str,
+) -> String {
+    seed_app_listing_record_variant_with_listing_addr(
+        sandbox,
+        account_id,
+        seller_pubkey,
+        farm_d_tag,
+        listing_d_tag,
+        record_suffix,
+        title,
+        None,
+        false,
+    )
+}
+
+fn seed_app_listing_record_variant_with_listing_addr(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    seller_pubkey: Option<&str>,
+    farm_d_tag: &str,
+    listing_d_tag: &str,
+    record_suffix: &str,
+    title: &str,
+    exportability: Option<serde_json::Value>,
+    include_listing_addr: bool,
+) -> String {
     let record_id = format!("app:local_work:listing:{listing_d_tag}:{record_suffix}");
     let seller_pubkey_json = seller_pubkey
         .map(|value| json!(value))
@@ -372,7 +418,9 @@ fn seed_app_listing_record_variant(
             owner_account_id: Some(account_id.to_owned()),
             owner_pubkey: seller_pubkey.map(str::to_owned),
             farm_id: Some(farm_d_tag.to_owned()),
-            listing_addr: seller_pubkey
+            listing_addr: include_listing_addr
+                .then_some(seller_pubkey)
+                .flatten()
                 .map(|seller_pubkey| format!("30402:{seller_pubkey}:{listing_d_tag}")),
             local_work_json: Some(payload),
             event_id: None,
@@ -3773,6 +3821,130 @@ fn listing_app_records_list_includes_new_records_after_older_volume() {
             .iter()
             .any(|record| record["record_id"] == current_record_id)
     );
+}
+
+#[test]
+fn listing_app_records_keep_same_listing_id_separate_by_owner_pubkey() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let seller_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey");
+    let other_pubkey = identity_public(83).public_key_hex;
+    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    let first_record_id = seed_app_listing_record_variant_without_listing_addr(
+        &sandbox,
+        account_id,
+        Some(seller_pubkey),
+        farm_d_tag,
+        listing_d_tag,
+        "owner-one",
+        "First Owner Eggs",
+    );
+    let second_record_id = seed_app_listing_record_variant_without_listing_addr(
+        &sandbox,
+        "acct_owner_two",
+        Some(other_pubkey.as_str()),
+        farm_d_tag,
+        listing_d_tag,
+        "owner-two",
+        "Second Owner Eggs",
+    );
+
+    let list = sandbox.json_success(&["--format", "json", "listing", "app", "list"]);
+    assert_eq!(list["result"]["count"], 2);
+    let records = list["result"]["records"].as_array().expect("records");
+    let first_row = records
+        .iter()
+        .find(|record| record["record_id"] == first_record_id)
+        .expect("first owner row");
+    let second_row = records
+        .iter()
+        .find(|record| record["record_id"] == second_record_id)
+        .expect("second owner row");
+    assert_eq!(first_row["title"], "First Owner Eggs");
+    assert_eq!(second_row["title"], "Second Owner Eggs");
+    assert_eq!(first_row["superseded_count"], 0);
+    assert_eq!(second_row["superseded_count"], 0);
+    assert_eq!(first_row["exportable"], true);
+    assert_eq!(second_row["exportable"], true);
+}
+
+#[test]
+fn listing_app_records_export_blocks_stale_when_current_is_beyond_first_page() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let seller_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("seller pubkey");
+    let farm_d_tag = "AAAAAAAAAAAAAAAAAAAAAw";
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    let stale_record_id = seed_app_listing_record_variant(
+        &sandbox,
+        account_id,
+        Some(seller_pubkey),
+        farm_d_tag,
+        listing_d_tag,
+        "paged-stale",
+        "Paged Old Eggs",
+        None,
+    );
+    let current_record_id = seed_app_listing_record_variant(
+        &sandbox,
+        account_id,
+        Some(seller_pubkey),
+        farm_d_tag,
+        listing_d_tag,
+        "paged-current",
+        "Paged Current Eggs",
+        None,
+    );
+    for index in 0..505 {
+        let farm_d_tag = format!("G{index:021}");
+        seed_app_farm_record(&sandbox, account_id, seller_pubkey, farm_d_tag.as_str());
+    }
+
+    let list = sandbox.json_success(&["--format", "json", "listing", "app", "list"]);
+    assert_eq!(list["result"]["count"], 500);
+    assert_eq!(list["result"]["has_more"], true);
+    let records = list["result"]["records"].as_array().expect("records");
+    assert!(
+        records
+            .iter()
+            .all(|record| record["record_id"] != current_record_id)
+    );
+
+    let export_path = sandbox.root().join("paged-stale-app-eggs.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (output, stale_export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "listing",
+        "app",
+        "export",
+        stale_record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!output.status.success());
+    assert_eq!(stale_export["result"], Value::Null);
+    assert_eq!(stale_export["errors"][0]["detail"]["state"], "stale");
+    assert!(
+        stale_export["errors"][0]["message"]
+            .as_str()
+            .expect("stale reason")
+            .contains(current_record_id.as_str())
+    );
+    assert!(!export_path.exists());
 }
 
 #[test]
