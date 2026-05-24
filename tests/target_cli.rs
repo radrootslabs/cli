@@ -514,6 +514,34 @@ fn seed_app_order_record_variant(
     support_issues: Vec<&str>,
 ) -> String {
     let record_id = format!("app:local_work:order_request:{order_id}");
+    seed_app_order_record_variant_with_record_id(
+        sandbox,
+        account_id,
+        buyer_pubkey,
+        seller_pubkey,
+        order_id,
+        listing_addr,
+        listing_event_id,
+        record_id,
+        current,
+        support_state,
+        support_issues,
+    )
+}
+
+fn seed_app_order_record_variant_with_record_id(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    buyer_pubkey: &str,
+    seller_pubkey: &str,
+    order_id: &str,
+    listing_addr: &str,
+    listing_event_id: &str,
+    record_id: String,
+    current: bool,
+    support_state: &str,
+    support_issues: Vec<&str>,
+) -> String {
     let support_issues = support_issues
         .into_iter()
         .map(|issue| Value::String(issue.to_owned()))
@@ -4504,6 +4532,229 @@ fn order_app_records_fail_closed_when_not_current_or_supported() {
     assert_eq!(
         submit["errors"][0]["detail"]["issues"][0]["code"],
         "app_order_stale"
+    );
+}
+
+#[test]
+fn order_app_records_fail_closed_when_unsupported() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let buyer_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("buyer pubkey");
+    let seller_pubkey = identity_public(75).public_key_hex;
+    let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAQ");
+    let listing_event_id = "3".repeat(64);
+    let order_id = "018f47a8-7b2c-7000-8000-000000000013";
+    let record_id = seed_app_order_record_variant(
+        &sandbox,
+        account_id,
+        buyer_pubkey,
+        seller_pubkey.as_str(),
+        order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+        true,
+        "unsupported",
+        vec!["seller_pubkey_required"],
+    );
+
+    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    assert_eq!(app_list["result"]["records"][0]["record_id"], record_id);
+    assert_eq!(app_list["result"]["records"][0]["ready_for_submit"], false);
+    assert_eq!(app_list["result"]["records"][0]["exportable"], false);
+    assert!(
+        app_list["result"]["records"][0]["reason"]
+            .as_str()
+            .expect("unsupported reason")
+            .contains("not marked supported")
+    );
+
+    let export_path = sandbox.root().join("unsupported-app-order.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (export_output, export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "app",
+        "export",
+        record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!export_output.status.success());
+    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["errors"][0]["detail"]["state"], "unsupported");
+    assert_eq!(
+        export["errors"][0]["detail"]["issues"][0]["code"],
+        "app_order_unsupported"
+    );
+    assert!(!export_path.exists());
+
+    let (submit_output, submit) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+    assert!(!submit_output.status.success());
+    assert_eq!(
+        submit["errors"][0]["detail"]["issues"][0]["code"],
+        "app_order_unsupported"
+    );
+}
+
+#[test]
+fn order_app_records_fail_closed_when_supported_record_is_malformed() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let buyer_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("buyer pubkey");
+    let seller_pubkey = identity_public(75).public_key_hex;
+    let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAQ");
+    let listing_event_id = "3".repeat(64);
+    let order_id = "018f47a8-7b2c-7000-8000-000000000014";
+    let record_id = seed_app_order_record_variant(
+        &sandbox,
+        account_id,
+        buyer_pubkey,
+        seller_pubkey.as_str(),
+        order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+        true,
+        "supported",
+        vec!["unit_price_required"],
+    );
+
+    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    assert_eq!(app_list["result"]["records"][0]["record_id"], record_id);
+    assert_eq!(app_list["result"]["records"][0]["ready_for_submit"], false);
+    assert_eq!(app_list["result"]["records"][0]["exportable"], false);
+    assert!(
+        app_list["result"]["records"][0]["reason"]
+            .as_str()
+            .expect("malformed reason")
+            .contains("support_status.issues")
+    );
+
+    let export_path = sandbox.root().join("malformed-app-order.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (export_output, export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "app",
+        "export",
+        record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!export_output.status.success());
+    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["errors"][0]["detail"]["state"], "invalid");
+    assert_eq!(
+        export["errors"][0]["detail"]["issues"][0]["code"],
+        "invalid_app_order_record"
+    );
+    assert!(!export_path.exists());
+
+    let (submit_output, submit) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+    assert!(!submit_output.status.success());
+    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(
+        submit["errors"][0]["detail"]["issues"][0]["code"],
+        "invalid_app_order_record"
+    );
+}
+
+#[test]
+fn order_app_records_fail_closed_when_order_id_conflicts() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let buyer_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("buyer pubkey");
+    let seller_pubkey = identity_public(76).public_key_hex;
+    let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAQ");
+    let listing_event_id = "4".repeat(64);
+    let order_id = "018f47a8-7b2c-7000-8000-000000000015";
+    let first_record_id = seed_app_order_record(
+        &sandbox,
+        account_id,
+        buyer_pubkey,
+        seller_pubkey.as_str(),
+        order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+    );
+    let conflicting_record_id = format!("app:local_work:order_request:{order_id}:conflict");
+    seed_app_order_record_variant_with_record_id(
+        &sandbox,
+        account_id,
+        buyer_pubkey,
+        seller_pubkey.as_str(),
+        order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+        conflicting_record_id.clone(),
+        true,
+        "supported",
+        Vec::new(),
+    );
+
+    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    assert_eq!(app_list["result"]["count"], 1);
+    assert_eq!(
+        app_list["result"]["records"][0]["record_id"],
+        conflicting_record_id
+    );
+    assert_eq!(app_list["result"]["records"][0]["ready_for_submit"], false);
+    assert_eq!(app_list["result"]["records"][0]["exportable"], false);
+    assert!(
+        app_list["result"]["records"][0]["reason"]
+            .as_str()
+            .expect("conflict reason")
+            .contains(first_record_id.as_str())
+    );
+
+    let export_path = sandbox.root().join("conflicting-app-order.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (export_output, export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "app",
+        "export",
+        conflicting_record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!export_output.status.success());
+    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["errors"][0]["detail"]["state"], "conflict");
+    assert_eq!(
+        export["errors"][0]["detail"]["issues"][0]["code"],
+        "app_order_conflict"
+    );
+    assert!(!export_path.exists());
+
+    let (submit_output, submit) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+    assert!(!submit_output.status.success());
+    assert_eq!(
+        submit["errors"][0]["detail"]["issues"][0]["code"],
+        "app_order_conflict"
     );
 }
 

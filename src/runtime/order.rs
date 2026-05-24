@@ -49,7 +49,7 @@ use radroots_events_codec::trade::{
 use radroots_events_codec::wire::WireEventParts;
 use radroots_local_events::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecord, LocalRecordFamily,
-    LocalRecordStatus, SourceRuntime, validate_buyer_order_request_local_work_payload,
+    LocalRecordStatus, SourceRuntime, validate_supported_buyer_order_request_local_work_payload,
 };
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
@@ -713,47 +713,6 @@ pub fn app_record_export(
             actions: vec!["radroots order app list".to_owned()],
         });
     };
-
-    if let Some(current_record) = current_app_order_record_for(config, &record)?
-        && current_record.record_id != record.record_id
-    {
-        let order_id = app_order_record_order_id(&record);
-        return Ok(OrderAppRecordExportView {
-            state: "stale".to_owned(),
-            source: ORDER_APP_RECORD_SOURCE.to_owned(),
-            record_id: args.record_id.clone(),
-            dry_run: config.output.dry_run,
-            file: args
-                .output
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default(),
-            valid: false,
-            order_id: order_id.clone(),
-            listing_addr: record.listing_addr.clone(),
-            listing_event_id: None,
-            buyer_account_id: record.owner_account_id.clone(),
-            buyer_pubkey: record.owner_pubkey.clone(),
-            buyer_actor_source: None,
-            seller_pubkey: None,
-            issues: vec![issue_with_code(
-                "app_order_stale",
-                "record_id",
-                format!(
-                    "app-authored local order record `{}` was superseded by `{}`",
-                    record.record_id, current_record.record_id
-                ),
-            )],
-            reason: Some(format!(
-                "app-authored local order record `{}` was superseded by current record `{}`",
-                record.record_id, current_record.record_id
-            )),
-            actions: vec![
-                format!("radroots order app export {}", current_record.record_id),
-                "radroots order app list".to_owned(),
-            ],
-        });
-    }
 
     let app_order = load_app_order_record_from_record(config, record)?;
     let mut issues = source_and_document_issues(config, &app_order)?;
@@ -9499,6 +9458,25 @@ fn current_app_order_record_for(
         }))
 }
 
+fn app_order_conflicting_record_ids_for(
+    config: &RuntimeConfig,
+    record: &LocalEventRecord,
+) -> Result<Vec<String>, RuntimeError> {
+    if app_order_record_order_id(record).is_none() {
+        return Ok(Vec::new());
+    }
+    let key = app_order_record_current_key(record);
+    let mut record_ids = app_order_local_records(config)?
+        .into_iter()
+        .filter(|candidate| candidate.record_id != record.record_id)
+        .filter(|candidate| app_order_record_current_key(candidate) == key)
+        .map(|candidate| candidate.record_id)
+        .collect::<Vec<_>>();
+    record_ids.sort();
+    record_ids.dedup();
+    Ok(record_ids)
+}
+
 fn load_app_order_record_for_lookup(
     config: &RuntimeConfig,
     lookup: &str,
@@ -9599,28 +9577,44 @@ fn app_order_record_source_issues(
             "app-authored order record is not marked current",
         ));
     }
-    if current && let Err(error) = validate_buyer_order_request_local_work_payload(payload) {
+    if payload["currentness"]["record_id"].as_str() != Some(record.record_id.as_str()) {
         issues.push(issue_with_code(
             "invalid_app_order_record",
-            "local_work_json",
-            error.to_string(),
+            "currentness.record_id",
+            "app-authored order record currentness id does not match the shared record id",
         ));
     }
-    if payload["support_status"]["state"].as_str() != Some("supported") {
-        issues.push(issue_with_code(
-            "app_order_unsupported",
-            "support_status.state",
-            "app-authored order record is not marked supported",
-        ));
-    }
-    if let Some(support_issues) = payload["support_status"]["issues"].as_array() {
-        for support_issue in support_issues {
-            if let Some(support_issue) = support_issue.as_str() {
-                issues.push(issue_with_code(
-                    "app_order_unsupported",
-                    "support_status.issues",
-                    format!("app order support issue: {support_issue}"),
-                ));
+    if current {
+        match validate_supported_buyer_order_request_local_work_payload(payload) {
+            Ok(_) => {}
+            Err(error) => {
+                let support_state = payload["support_status"]["state"].as_str();
+                let support_issues = payload["support_status"]["issues"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                if support_state == Some("unsupported") {
+                    issues.push(issue_with_code(
+                        "app_order_unsupported",
+                        "support_status.state",
+                        "app-authored order record is not marked supported",
+                    ));
+                    for support_issue in support_issues {
+                        if let Some(support_issue) = support_issue.as_str() {
+                            issues.push(issue_with_code(
+                                "app_order_unsupported",
+                                "support_status.issues",
+                                format!("app order support issue: {support_issue}"),
+                            ));
+                        }
+                    }
+                } else {
+                    issues.push(issue_with_code(
+                        "invalid_app_order_record",
+                        "local_work_json",
+                        error.to_string(),
+                    ));
+                }
             }
         }
     }
@@ -9633,6 +9627,17 @@ fn app_order_record_source_issues(
             format!(
                 "app-authored local order record `{}` was superseded by `{}`",
                 record.record_id, current_record.record_id
+            ),
+        ));
+    }
+    let conflicting_record_ids = app_order_conflicting_record_ids_for(config, record)?;
+    if !conflicting_record_ids.is_empty() {
+        issues.push(issue_with_code(
+            "app_order_conflict",
+            "order_id",
+            format!(
+                "app-authored order id conflicts with other shared records: {}",
+                conflicting_record_ids.join(", ")
             ),
         ));
     }
@@ -9738,11 +9743,22 @@ fn placeholder_app_order_document(record: &LocalEventRecord) -> OrderDraftDocume
 }
 
 fn app_order_export_failure_state(issues: &[OrderIssueView]) -> &'static str {
-    if issues.iter().any(|issue| issue.code == "app_order_stale") {
+    if issues
+        .iter()
+        .any(|issue| issue.code == "app_order_conflict")
+    {
+        "conflict"
+    } else if issues.iter().any(|issue| issue.code == "app_order_stale") {
         "stale"
-    } else if issues.iter().any(|issue| {
-        issue.code == "app_order_unsupported" || issue.code == "invalid_app_order_record"
-    }) {
+    } else if issues
+        .iter()
+        .any(|issue| issue.code == "invalid_app_order_record")
+    {
+        "invalid"
+    } else if issues
+        .iter()
+        .any(|issue| issue.code == "app_order_unsupported")
+    {
         "unsupported"
     } else {
         "invalid"
