@@ -7,15 +7,16 @@ use radroots_local_events::{
     LocalEventRecord, LocalEventRecordInput, LocalEventsStore, LocalRecordFamily,
     LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
 };
+use radroots_runtime_paths::{
+    default_shared_local_events_database_path_from_shared_accounts_data_root,
+    default_shared_local_events_root_from_shared_accounts_data_root,
+};
 use radroots_sql_core::SqliteExecutor;
 use serde_json::{Value, json};
 
 use crate::runtime::RuntimeError;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{PathsConfig, RuntimeConfig};
 use crate::runtime::direct_relay::{DirectRelayFailure, DirectRelayPublishError};
-
-const SHARED_LOCAL_EVENTS_DIR: &str = "local_events";
-const SHARED_LOCAL_EVENTS_DB_FILE: &str = "local_events.sqlite";
 
 static RECORD_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -162,7 +163,16 @@ pub fn mark_signed_event_failed_for_publish_error(
 }
 
 pub fn shared_local_events_db_path(config: &RuntimeConfig) -> Result<PathBuf, RuntimeError> {
-    Ok(shared_local_events_root(config)?.join(SHARED_LOCAL_EVENTS_DB_FILE))
+    shared_local_events_db_path_from_paths(&config.paths)
+}
+
+fn shared_local_events_db_path_from_paths(paths: &PathsConfig) -> Result<PathBuf, RuntimeError> {
+    default_shared_local_events_database_path_from_shared_accounts_data_root(
+        &paths.shared_accounts_data_root,
+    )
+    .map_err(|err| {
+        RuntimeError::Config(format!("resolve shared local-events database path: {err}"))
+    })
 }
 
 pub fn list_shared_records_latest(
@@ -227,22 +237,71 @@ fn update_signed_event_outbox(
 }
 
 fn open_store(config: &RuntimeConfig) -> Result<LocalEventsStore<SqliteExecutor>, RuntimeError> {
-    let root = shared_local_events_root(config)?;
+    let root = shared_local_events_root_from_paths(&config.paths)?;
     fs::create_dir_all(&root)?;
-    let executor = SqliteExecutor::open(root.join(SHARED_LOCAL_EVENTS_DB_FILE))?;
+    let executor = SqliteExecutor::open(shared_local_events_db_path_from_paths(&config.paths)?)?;
     let store = LocalEventsStore::new(executor);
     store.migrate_up()?;
     Ok(store)
 }
 
-fn shared_local_events_root(config: &RuntimeConfig) -> Result<std::path::PathBuf, RuntimeError> {
-    let Some(shared_data_root) = config.paths.shared_accounts_data_root.parent() else {
-        return Err(RuntimeError::Config(format!(
-            "shared accounts data root {} has no parent directory",
-            config.paths.shared_accounts_data_root.display()
-        )));
-    };
-    Ok(shared_data_root.join(SHARED_LOCAL_EVENTS_DIR))
+fn shared_local_events_root_from_paths(paths: &PathsConfig) -> Result<PathBuf, RuntimeError> {
+    default_shared_local_events_root_from_shared_accounts_data_root(
+        &paths.shared_accounts_data_root,
+    )
+    .map_err(|err| RuntimeError::Config(format!("resolve shared local-events root: {err}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{shared_local_events_db_path_from_paths, shared_local_events_root_from_paths};
+    use crate::runtime::config::PathsConfig;
+
+    #[test]
+    fn shared_local_events_paths_use_shared_runtime_contract() {
+        let paths = paths_config("/repo/infra/local/runtime/radroots/data/shared/accounts");
+
+        assert_eq!(
+            shared_local_events_root_from_paths(&paths).expect("shared local-events root"),
+            PathBuf::from("/repo/infra/local/runtime/radroots/data/shared/local_events")
+        );
+        assert_eq!(
+            shared_local_events_db_path_from_paths(&paths).expect("shared local-events database"),
+            PathBuf::from(
+                "/repo/infra/local/runtime/radroots/data/shared/local_events/local_events.sqlite"
+            )
+        );
+    }
+
+    fn paths_config(shared_accounts_data_root: &str) -> PathsConfig {
+        PathsConfig {
+            profile: "repo_local".to_owned(),
+            profile_source: "test".to_owned(),
+            allowed_profiles: vec!["repo_local".to_owned()],
+            root_source: "repo_local_root".to_owned(),
+            repo_local_root: Some(PathBuf::from("/repo/infra/local/runtime/radroots")),
+            repo_local_root_source: Some("test".to_owned()),
+            subordinate_path_override_source: "runtime_config".to_owned(),
+            app_namespace: "apps/cli".to_owned(),
+            shared_accounts_namespace: "shared/accounts".to_owned(),
+            shared_identities_namespace: "shared/identities".to_owned(),
+            app_config_path: PathBuf::from(
+                "/repo/infra/local/runtime/radroots/config/apps/cli/config.toml",
+            ),
+            workspace_config_path: None,
+            app_data_root: PathBuf::from("/repo/infra/local/runtime/radroots/data/apps/cli"),
+            app_logs_root: PathBuf::from("/repo/infra/local/runtime/radroots/logs/apps/cli"),
+            shared_accounts_data_root: PathBuf::from(shared_accounts_data_root),
+            shared_accounts_secrets_root: PathBuf::from(
+                "/repo/infra/local/runtime/radroots/secrets/shared/accounts",
+            ),
+            default_identity_path: PathBuf::from(
+                "/repo/infra/local/runtime/radroots/secrets/shared/identities/default.json",
+            ),
+        }
+    }
 }
 
 fn current_time_ms() -> Result<i64, RuntimeError> {
