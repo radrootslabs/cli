@@ -9412,6 +9412,7 @@ fn app_order_local_records(config: &RuntimeConfig) -> Result<Vec<LocalEventRecor
 fn is_app_order_local_record(record: &LocalEventRecord) -> bool {
     record.source_runtime == SourceRuntime::App
         && record.family == LocalRecordFamily::LocalWork
+        && record.status == LocalRecordStatus::LocalSaved
         && local_record_kind(record).as_deref() == Some(BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND)
 }
 
