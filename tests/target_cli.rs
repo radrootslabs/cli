@@ -533,7 +533,7 @@ fn seed_app_order_record_variant(
             "source": "app_sqlite_order",
             "record_id": record_id,
             "order_id": order_id,
-            "order_updated_at": 1_779_000_010,
+            "order_updated_at": "2026-05-24T12:00:10Z",
             "created_at_ms": 1_779_000_010_000_i64,
         },
         "no_payment": {
