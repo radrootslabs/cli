@@ -953,6 +953,36 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
         false
     ),
     operation!(
+        "order.app.list",
+        "radroots order app list",
+        "order",
+        "order_app_list",
+        "OrderAppListRequest",
+        "OrderAppListResult",
+        "List app-authored shared local order records.",
+        Buyer,
+        false,
+        None,
+        Low,
+        false,
+        false
+    ),
+    operation!(
+        "order.app.export",
+        "radroots order app export",
+        "order",
+        "order_app_export",
+        "OrderAppExportRequest",
+        "OrderAppExportResult",
+        "Export an app-authored shared order record as a CLI draft.",
+        Buyer,
+        true,
+        None,
+        Medium,
+        false,
+        true
+    ),
+    operation!(
         "order.rebind",
         "radroots order rebind",
         "order",
@@ -1381,6 +1411,8 @@ mod tests {
         "order.submit",
         "order.get",
         "order.list",
+        "order.app.list",
+        "order.app.export",
         "order.rebind",
         "order.accept",
         "order.decline",
@@ -1434,6 +1466,7 @@ mod tests {
         "basket.adjustment.remove",
         "basket.quote.create",
         "order.submit",
+        "order.app.export",
         "order.rebind",
         "order.accept",
         "order.decline",
@@ -1455,7 +1488,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 76);
+        assert_eq!(OPERATION_REGISTRY.len(), 78);
     }
 
     #[test]

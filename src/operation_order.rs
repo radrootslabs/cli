@@ -1,15 +1,18 @@
+use std::path::PathBuf;
+
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::deferred_payment::deferred_payment_message;
 use crate::domain::runtime::{
-    CommandDisposition, OrderCancellationView, OrderDecisionView, OrderFulfillmentView,
-    OrderRebindView, OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView,
-    OrderStatusView, OrderSubmitView,
+    CommandDisposition, OrderAppRecordExportView, OrderCancellationView, OrderDecisionView,
+    OrderFulfillmentView, OrderRebindView, OrderReceiptView, OrderRevisionDecisionView,
+    OrderRevisionProposalView, OrderStatusView, OrderSubmitView,
 };
 use crate::operation_adapter::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, OrderAcceptRequest, OrderAcceptResult,
+    OrderAppExportRequest, OrderAppExportResult, OrderAppListRequest, OrderAppListResult,
     OrderCancelRequest, OrderCancelResult, OrderDeclineRequest, OrderDeclineResult,
     OrderEventListRequest, OrderEventListResult, OrderEventWatchRequest, OrderEventWatchResult,
     OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, OrderGetRequest, OrderGetResult,
@@ -24,9 +27,10 @@ use crate::operation_adapter::{
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime_args::{
-    OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderFulfillmentArgs, OrderRebindArgs,
-    OrderReceiptArgs, OrderRevisionDecisionArg, OrderRevisionDecisionArgs,
-    OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs, RecordLookupArgs,
+    OrderAppRecordExportArgs, OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs,
+    OrderFulfillmentArgs, OrderRebindArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
+    OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs,
+    RecordLookupArgs,
 };
 
 const ORDER_EVENT_WATCH_DEFERRED_REASON: &str = "relay-backed order event watch is not implemented";
@@ -98,6 +102,40 @@ impl OperationService<OrderListRequest> for OrderOperationService<'_> {
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let view = map_runtime(crate::runtime::order::list(self.config))?;
         serialized_target_result::<OrderListResult, _>(&view)
+    }
+}
+
+impl OperationService<OrderAppListRequest> for OrderOperationService<'_> {
+    type Result = OrderAppListResult;
+
+    fn execute(
+        &self,
+        _request: OperationRequest<OrderAppListRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let view = map_runtime(crate::runtime::order::app_record_list(self.config))?;
+        serialized_target_result::<OrderAppListResult, _>(&view)
+    }
+}
+
+impl OperationService<OrderAppExportRequest> for OrderOperationService<'_> {
+    type Result = OrderAppExportResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<OrderAppExportRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = OrderAppRecordExportArgs {
+            record_id: required_string_input(&request, "record_id")?,
+            output: optional_path_input(&request, "output"),
+        };
+        let mut config = self.config.clone();
+        if request.context.dry_run {
+            config.output.dry_run = true;
+        }
+        let view = crate::runtime::order::app_record_export(&config, &args).map_err(|error| {
+            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        })?;
+        order_app_record_export_result::<OrderAppExportResult>(request.operation_id(), &view)
     }
 }
 
@@ -1250,6 +1288,50 @@ where
     }
 }
 
+fn order_app_record_export_result<R>(
+    operation_id: &str,
+    view: &OrderAppRecordExportView,
+) -> Result<OperationResult<R>, OperationAdapterError>
+where
+    R: OperationResultData,
+{
+    match view.disposition() {
+        CommandDisposition::Success => serialized_target_result::<R, _>(view),
+        CommandDisposition::NotFound => Err(OperationAdapterError::not_found_with_detail(
+            operation_id,
+            view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "app-authored local order record `{}` was not found",
+                    view.record_id
+                )
+            }),
+            serde_json::to_value(view).unwrap_or(Value::Null),
+        )),
+        CommandDisposition::ValidationFailed => {
+            Err(OperationAdapterError::validation_failed_with_detail(
+                operation_id,
+                view.reason.clone().unwrap_or_else(|| {
+                    format!(
+                        "app-authored local order record `{}` cannot be exported",
+                        view.record_id
+                    )
+                }),
+                serde_json::to_value(view).unwrap_or(Value::Null),
+            ))
+        }
+        disposition => Err(OperationAdapterError::from_command_disposition(
+            operation_id,
+            disposition,
+            view.reason.clone().unwrap_or_else(|| {
+                format!(
+                    "app-authored local order record export finished with state `{}`",
+                    view.state
+                )
+            }),
+        )),
+    }
+}
+
 fn order_rebind_result<R>(
     operation_id: &str,
     view: &OrderRebindView,
@@ -1429,6 +1511,13 @@ where
         .get(key)
         .and_then(Value::as_str)
         .map(str::to_owned)
+}
+
+fn optional_path_input<P>(request: &OperationRequest<P>, key: &str) -> Option<PathBuf>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    string_input(request, key).map(PathBuf::from)
 }
 
 fn bool_input<P>(request: &OperationRequest<P>, key: &str) -> Option<bool>

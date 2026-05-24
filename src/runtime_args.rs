@@ -213,6 +213,12 @@ pub struct OrderSubmitArgs {
 }
 
 #[derive(Debug, Clone)]
+pub struct OrderAppRecordExportArgs {
+    pub record_id: String,
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
 pub struct OrderRebindArgs {
     pub key: String,
     pub selector: String,

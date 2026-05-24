@@ -14,8 +14,8 @@ use radroots_events::trade::{
 };
 use radroots_events_codec::trade::active_trade_order_request_event_build;
 use radroots_local_events::{
-    LocalEventRecordInput, LocalEventsStore, LocalRecordFamily, LocalRecordStatus,
-    PublishOutboxStatus, SourceRuntime,
+    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecordInput, LocalEventsStore,
+    LocalRecordFamily, LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
 };
 use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
 use radroots_replica_db::{farm, farm_member_claim, migrations};
@@ -476,6 +476,179 @@ fn append_app_local_record(input: LocalEventRecordInput, sandbox: &RadrootsCliSa
     store
         .append_record(&input)
         .expect("append app local event record");
+}
+
+fn seed_app_order_record(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    buyer_pubkey: &str,
+    seller_pubkey: &str,
+    order_id: &str,
+    listing_addr: &str,
+    listing_event_id: &str,
+) -> String {
+    seed_app_order_record_variant(
+        sandbox,
+        account_id,
+        buyer_pubkey,
+        seller_pubkey,
+        order_id,
+        listing_addr,
+        listing_event_id,
+        true,
+        "supported",
+        Vec::new(),
+    )
+}
+
+fn seed_app_order_record_variant(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    buyer_pubkey: &str,
+    seller_pubkey: &str,
+    order_id: &str,
+    listing_addr: &str,
+    listing_event_id: &str,
+    current: bool,
+    support_state: &str,
+    support_issues: Vec<&str>,
+) -> String {
+    let record_id = format!("app:local_work:order_request:{order_id}");
+    let support_issues = support_issues
+        .into_iter()
+        .map(|issue| Value::String(issue.to_owned()))
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "record_kind": BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND,
+        "scope": "app",
+        "exportability": {
+            "state": "exportable",
+        },
+        "support_status": {
+            "state": support_state,
+            "issues": support_issues,
+        },
+        "currentness": {
+            "current": current,
+            "source": "app_sqlite_order",
+            "record_id": record_id,
+            "order_id": order_id,
+            "order_updated_at": 1_779_000_010,
+            "created_at_ms": 1_779_000_010_000_i64,
+        },
+        "no_payment": {
+            "payment_required": false,
+            "settlement_deferred": true,
+            "payment_state": "not_applicable",
+        },
+        "document": {
+            "version": 1,
+            "kind": "order_draft_v1",
+            "order": {
+                "order_id": order_id,
+                "listing_addr": listing_addr,
+                "listing_event_id": listing_event_id,
+                "buyer_pubkey": buyer_pubkey,
+                "seller_pubkey": seller_pubkey,
+                "items": [
+                    {
+                        "bin_id": "bin-1",
+                        "bin_count": 2,
+                    }
+                ],
+                "economics": {
+                    "quote_id": format!("app-order:{order_id}"),
+                    "quote_version": 1,
+                    "pricing_basis": "listing_event",
+                    "currency": "USD",
+                    "items": [
+                        {
+                            "bin_id": "bin-1",
+                            "bin_count": 2,
+                            "quantity_amount": "1",
+                            "quantity_unit": "each",
+                            "unit_price_amount": "6",
+                            "unit_price_currency": "USD",
+                            "line_subtotal": {
+                                "amount": "12",
+                                "currency": "USD",
+                            },
+                        }
+                    ],
+                    "discounts": [],
+                    "adjustments": [],
+                    "subtotal": {
+                        "amount": "12",
+                        "currency": "USD",
+                    },
+                    "discount_total": {
+                        "amount": "0",
+                        "currency": "USD",
+                    },
+                    "adjustment_total": {
+                        "amount": "0",
+                        "currency": "USD",
+                    },
+                    "total": {
+                        "amount": "12",
+                        "currency": "USD",
+                    },
+                },
+            },
+            "buyer_actor": {
+                "account_id": account_id,
+                "pubkey": buyer_pubkey,
+                "source": "resolved_account",
+            },
+            "listing_lookup": listing_addr,
+        },
+        "app_order": {
+            "order_id": order_id,
+            "order_number": 1,
+            "farm_id": "018f47a8-7b2c-7000-8000-0000000000f1",
+            "farm_display_name": "CLI Interop Farm",
+            "farm_key": "pasture-eggs",
+            "status": "placed",
+            "buyer_context_key": "buyer_context",
+            "lines": [
+                {
+                    "line_id": format!("{order_id}:product-eggs"),
+                    "product_id": "product-eggs",
+                    "listing_addr": listing_addr,
+                    "listing_event_id": listing_event_id,
+                    "seller_pubkey": seller_pubkey,
+                }
+            ],
+        },
+    });
+    append_app_local_record(
+        LocalEventRecordInput {
+            record_id: record_id.clone(),
+            family: LocalRecordFamily::LocalWork,
+            status: LocalRecordStatus::LocalSaved,
+            source_runtime: SourceRuntime::App,
+            created_at_ms: 1_779_000_010_000,
+            inserted_at_ms: 1_779_000_010_000,
+            owner_account_id: Some(account_id.to_owned()),
+            owner_pubkey: Some(buyer_pubkey.to_owned()),
+            farm_id: Some("018f47a8-7b2c-7000-8000-0000000000f1".to_owned()),
+            listing_addr: Some(listing_addr.to_owned()),
+            local_work_json: Some(payload),
+            event_id: None,
+            event_kind: None,
+            event_pubkey: None,
+            event_created_at: None,
+            event_tags_json: None,
+            event_content: None,
+            event_sig: None,
+            raw_event_json: None,
+            outbox_status: PublishOutboxStatus::None,
+            relay_set_fingerprint: None,
+            relay_delivery_json: None,
+        },
+        sandbox,
+    );
+    record_id
 }
 
 #[test]
@@ -4131,6 +4304,207 @@ fn listing_app_records_export_uses_record_owner_over_body_pubkey() {
     let exported_contents = fs::read_to_string(&export_path).expect("exported listing draft");
     assert!(exported_contents.contains(format!("pubkey = \"{owner_pubkey}\"").as_str()));
     assert!(!exported_contents.contains(body_pubkey.as_str()));
+}
+
+#[test]
+fn order_app_records_list_export_get_and_submit_supported_app_order() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let buyer_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("buyer pubkey");
+    let seller_pubkey = identity_public(73).public_key_hex;
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    let listing_addr = format!("30402:{seller_pubkey}:{listing_d_tag}");
+    let listing_event_id = seed_orderable_listing(&sandbox, listing_addr.as_str());
+    let order_id = "018f47a8-7b2c-7000-8000-000000000011";
+    let record_id = seed_app_order_record(
+        &sandbox,
+        account_id,
+        buyer_pubkey,
+        seller_pubkey.as_str(),
+        order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+    );
+
+    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    assert_eq!(app_list["operation_id"], "order.app.list");
+    assert_eq!(app_list["result"]["state"], "ready");
+    assert_eq!(app_list["result"]["count"], 1);
+    assert_eq!(app_list["result"]["records"][0]["record_id"], record_id);
+    assert_eq!(app_list["result"]["records"][0]["order_id"], order_id);
+    assert_eq!(app_list["result"]["records"][0]["ready_for_submit"], true);
+    assert_eq!(app_list["result"]["records"][0]["exportable"], true);
+    assert_no_removed_command_reference(&app_list, &["order", "app", "list"]);
+    assert_no_daemon_runtime_reference(&app_list, &["order", "app", "list"]);
+
+    let orders = sandbox.json_success(&["--format", "json", "order", "list"]);
+    assert_eq!(orders["operation_id"], "order.list");
+    assert_eq!(orders["result"]["state"], "ready");
+    assert_eq!(orders["result"]["count"], 1);
+    assert_eq!(orders["result"]["orders"][0]["id"], order_id);
+    assert_eq!(orders["result"]["orders"][0]["ready_for_submit"], true);
+    assert_eq!(
+        orders["result"]["orders"][0]["listing_event_id"],
+        listing_event_id
+    );
+    assert_eq!(
+        orders["result"]["orders"][0]["buyer_account_id"],
+        account_id
+    );
+    assert_eq!(
+        orders["result"]["orders"][0]["file"],
+        format!("shared-local-events/{record_id}")
+    );
+    assert_no_removed_command_reference(&orders, &["order", "list"]);
+    assert_no_daemon_runtime_reference(&orders, &["order", "list"]);
+
+    let get_by_record =
+        sandbox.json_success(&["--format", "json", "order", "get", record_id.as_str()]);
+    assert_eq!(get_by_record["operation_id"], "order.get");
+    assert_eq!(get_by_record["result"]["state"], "ready");
+    assert_eq!(get_by_record["result"]["order_id"], order_id);
+    assert_eq!(get_by_record["result"]["ready_for_submit"], true);
+
+    let export_path = sandbox.root().join("app-order.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "order",
+        "app",
+        "export",
+        record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert_eq!(dry_run["operation_id"], "order.app.export");
+    assert_eq!(dry_run["result"]["state"], "dry_run");
+    assert_eq!(dry_run["result"]["valid"], true);
+    assert!(!export_path.exists());
+
+    let export = sandbox.json_success(&[
+        "--format",
+        "json",
+        "order",
+        "app",
+        "export",
+        record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["result"]["state"], "exported");
+    assert_eq!(export["result"]["order_id"], order_id);
+    assert!(export_path.exists());
+    let exported_contents = fs::read_to_string(&export_path).expect("exported order draft");
+    assert!(exported_contents.contains("kind = \"order_draft_v1\""));
+    assert!(exported_contents.contains(format!("order_id = \"{order_id}\"").as_str()));
+    assert!(exported_contents.contains("source = \"resolved_account\""));
+
+    let (dry_output, submit) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "order",
+        "submit",
+        record_id.as_str(),
+    ]);
+    assert!(!dry_output.status.success());
+    assert_eq!(dry_output.status.code(), Some(8));
+    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["errors"][0]["code"], "network_unavailable");
+    assert!(
+        submit["errors"][0]["message"]
+            .as_str()
+            .expect("submit message")
+            .contains("order submit requires at least one configured relay")
+    );
+}
+
+#[test]
+fn order_app_records_fail_closed_when_not_current_or_supported() {
+    let sandbox = RadrootsCliSandbox::new();
+    let account = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = account["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let buyer_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("buyer pubkey");
+    let seller_pubkey = identity_public(74).public_key_hex;
+    let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAQ");
+    let listing_event_id = "2".repeat(64);
+    let stale_order_id = "018f47a8-7b2c-7000-8000-000000000012";
+    let stale_record_id = seed_app_order_record_variant(
+        &sandbox,
+        account_id,
+        buyer_pubkey,
+        seller_pubkey.as_str(),
+        stale_order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+        false,
+        "supported",
+        Vec::new(),
+    );
+
+    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    assert_eq!(
+        app_list["result"]["records"][0]["record_id"],
+        stale_record_id
+    );
+    assert_eq!(app_list["result"]["records"][0]["ready_for_submit"], false);
+    assert_eq!(app_list["result"]["records"][0]["exportable"], false);
+    assert!(
+        app_list["result"]["records"][0]["reason"]
+            .as_str()
+            .expect("stale reason")
+            .contains("not marked current")
+    );
+
+    let export_path = sandbox.root().join("stale-app-order.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (output, stale_export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "app",
+        "export",
+        stale_record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!output.status.success());
+    assert_eq!(stale_export["operation_id"], "order.app.export");
+    assert_eq!(stale_export["result"], Value::Null);
+    assert_eq!(stale_export["errors"][0]["detail"]["state"], "stale");
+    assert_eq!(stale_export["errors"][0]["detail"]["valid"], false);
+    assert!(!export_path.exists());
+
+    let (submit_output, submit) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "order",
+        "submit",
+        stale_record_id.as_str(),
+    ]);
+    assert!(!submit_output.status.success());
+    assert_eq!(submit_output.status.code(), Some(3));
+    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(
+        submit["errors"][0]["detail"]["issues"][0]["code"],
+        "app_order_stale"
+    );
 }
 
 #[test]

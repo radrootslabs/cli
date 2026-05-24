@@ -1285,10 +1285,10 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
         AccountCommand, AccountSelectionCommand, BasketAdjustmentCommand, BasketCommand,
         BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
         FarmLocationCommand, FarmProfileCommand, ListingAppCommand, ListingCommand, MarketCommand,
-        MarketListingCommand, MarketProductCommand, OrderCommand, OrderEventCommand,
-        OrderFulfillmentCommand, OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand,
-        OrderSettlementCommand, OrderStatusCommand, TargetCommand, ValidationCommand,
-        ValidationReceiptCommand,
+        MarketListingCommand, MarketProductCommand, OrderAppCommand, OrderCommand,
+        OrderEventCommand, OrderFulfillmentCommand, OrderPaymentCommand, OrderReceiptCommand,
+        OrderRevisionCommand, OrderSettlementCommand, OrderStatusCommand, TargetCommand,
+        ValidationCommand, ValidationReceiptCommand,
     };
 
     let mut input = OperationData::new();
@@ -1458,6 +1458,13 @@ fn target_operation_input(command: &crate::target_cli::TargetCommand) -> Operati
                 insert_string(&mut input, "order_id", &args.order_id);
             }
             OrderCommand::Get(args) => insert_string(&mut input, "order_id", &args.order_id),
+            OrderCommand::App(args) => match &args.command {
+                OrderAppCommand::Export(args) => {
+                    insert_string(&mut input, "record_id", &args.record_id);
+                    insert_path(&mut input, "output", &args.output);
+                }
+                OrderAppCommand::List => {}
+            },
             OrderCommand::Rebind(args) => {
                 insert_string(&mut input, "order_id", &args.order_id);
                 insert_string(&mut input, "selector", &args.selector);
@@ -1662,6 +1669,8 @@ target_operation_contracts! {
     OrderSubmit => (OrderSubmitRequest, OrderSubmitResult, "order.submit"),
     OrderGet => (OrderGetRequest, OrderGetResult, "order.get"),
     OrderList => (OrderListRequest, OrderListResult, "order.list"),
+    OrderAppList => (OrderAppListRequest, OrderAppListResult, "order.app.list"),
+    OrderAppExport => (OrderAppExportRequest, OrderAppExportResult, "order.app.export"),
     OrderRebind => (OrderRebindRequest, OrderRebindResult, "order.rebind"),
     OrderAccept => (OrderAcceptRequest, OrderAcceptResult, "order.accept"),
     OrderDecline => (OrderDeclineRequest, OrderDeclineResult, "order.decline"),

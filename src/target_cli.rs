@@ -226,6 +226,10 @@ impl TargetCommand {
                 OrderCommand::Submit(_) => "order.submit",
                 OrderCommand::Get(_) => "order.get",
                 OrderCommand::List => "order.list",
+                OrderCommand::App(app) => match &app.command {
+                    OrderAppCommand::List => "order.app.list",
+                    OrderAppCommand::Export(_) => "order.app.export",
+                },
                 OrderCommand::Rebind(_) => "order.rebind",
                 OrderCommand::Accept(_) => "order.accept",
                 OrderCommand::Decline(_) => "order.decline",
@@ -855,6 +859,7 @@ pub enum OrderCommand {
     Submit(OrderSubmitArgs),
     Get(OrderKeyArgs),
     List,
+    App(OrderAppArgs),
     Rebind(OrderRebindArgs),
     Accept(OrderKeyArgs),
     Decline(OrderDeclineArgs),
@@ -876,6 +881,25 @@ pub struct OrderSubmitArgs {
 #[derive(Debug, Clone, Args)]
 pub struct OrderKeyArgs {
     pub order_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderAppArgs {
+    #[command(subcommand)]
+    pub command: OrderAppCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum OrderAppCommand {
+    List,
+    Export(OrderAppExportArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OrderAppExportArgs {
+    pub record_id: Option<String>,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]

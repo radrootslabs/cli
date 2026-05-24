@@ -298,6 +298,12 @@ fn execute_request(
         TargetOperationRequest::OrderList(request) => {
             execute_with(OrderOperationService::new(config), request)
         }
+        TargetOperationRequest::OrderAppList(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
+        TargetOperationRequest::OrderAppExport(request) => {
+            execute_with(OrderOperationService::new(config), request)
+        }
         TargetOperationRequest::OrderRebind(request) => {
             execute_with(OrderOperationService::new(config), request)
         }

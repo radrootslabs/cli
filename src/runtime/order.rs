@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +47,10 @@ use radroots_events_codec::trade::{
     active_trade_settlement_decision_from_event,
 };
 use radroots_events_codec::wire::WireEventParts;
+use radroots_local_events::{
+    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecord, LocalRecordFamily,
+    LocalRecordStatus, SourceRuntime, validate_buyer_order_request_local_work_payload,
+};
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
     radroots_nostr_kind,
@@ -78,9 +83,10 @@ use radroots_trade::order::{
     reduce_active_order_events, reduce_listing_inventory_accounting,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::domain::runtime::{
+    OrderAppRecordExportView, OrderAppRecordListView, OrderAppRecordSummaryView,
     OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
     OrderEventListView, OrderFulfillmentView, OrderGetView, OrderInventoryBinView,
     OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderPaymentView,
@@ -96,20 +102,25 @@ use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, DirectRelayPublishReceipt,
     fetch_events_from_relays, publish_parts_with_identity,
 };
+use crate::runtime::local_events::{
+    get_shared_record, list_shared_records_before, list_shared_records_latest,
+    shared_local_events_db_path,
+};
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope, freshness_requires_refresh, market_refresh,
 };
 use crate::runtime_args::{
-    OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftCreateArgs,
-    OrderFulfillmentArgs, OrderPaymentArgs, OrderRebindArgs, OrderReceiptArgs,
-    OrderRevisionDecisionArg, OrderRevisionDecisionArgs, OrderRevisionProposeArgs,
-    OrderSettlementArgs, OrderSettlementDecisionArg, OrderStatusArgs, OrderSubmitArgs,
-    RecordLookupArgs,
+    OrderAppRecordExportArgs, OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs,
+    OrderDraftCreateArgs, OrderFulfillmentArgs, OrderPaymentArgs, OrderRebindArgs,
+    OrderReceiptArgs, OrderRevisionDecisionArg, OrderRevisionDecisionArgs,
+    OrderRevisionProposeArgs, OrderSettlementArgs, OrderSettlementDecisionArg, OrderStatusArgs,
+    OrderSubmitArgs, RecordLookupArgs,
 };
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local order drafts · local first";
+const ORDER_APP_RECORD_SOURCE: &str = "app-authored shared local order records";
 const ORDER_SUBMIT_SOURCE: &str = "direct Nostr relay publish · local key";
 const ORDER_DECISION_SOURCE: &str = "direct Nostr relay decision publish · local key";
 const ORDER_REVISION_PROPOSAL_SOURCE: &str =
@@ -127,6 +138,7 @@ const ORDER_EVENT_LIST_RELAY_ACTION: &str =
     "radroots --relay wss://relay.example.com order event list";
 const ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
 const ORDER_BUYER_ACTOR_SOURCE_REBIND: &str = "order_rebind";
+const ORDER_APP_RECORD_LIST_LIMIT: u32 = 500;
 const ORDER_ACTOR_CONTEXT_ORDER_DRAFT: &str = "order_draft";
 const ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT: &str = "resolved_account";
 const ORDER_ACTOR_CONTEXT_NETWORK_ONLY: &str = "network_only";
@@ -183,6 +195,19 @@ struct LoadedOrderDraft {
     file: PathBuf,
     updated_at_unix: u64,
     document: OrderDraftDocument,
+}
+
+#[derive(Debug, Clone)]
+struct LoadedAppOrderRecord {
+    record: LocalEventRecord,
+    loaded: LoadedOrderDraft,
+    source_issues: Vec<OrderIssueView>,
+}
+
+#[derive(Debug, Clone)]
+struct AppOrderRecordListEntry {
+    record: LocalEventRecord,
+    superseded_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -487,6 +512,13 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
     let lookup = args.key.clone();
     let file = draft_lookup_path(config, lookup.as_str());
     if !file.exists() {
+        if let Some(app_order) = load_app_order_record_for_lookup(config, lookup.as_str())? {
+            return view_from_loaded_with_source_issues(
+                config,
+                app_order.loaded,
+                app_order.source_issues.as_slice(),
+            );
+        }
         return Ok(OrderGetView {
             state: "missing".to_owned(),
             source: ORDER_SOURCE.to_owned(),
@@ -549,27 +581,34 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
 
 pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
     let dir = drafts_dir(config);
-    if !dir.exists() {
-        return Ok(OrderListView {
-            state: "empty".to_owned(),
-            source: ORDER_SOURCE.to_owned(),
-            count: 0,
-            orders: Vec::new(),
-            actions: vec!["radroots basket create".to_owned()],
-        });
-    }
-
     let mut orders = Vec::new();
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+    let mut local_order_ids = HashSet::new();
+    if dir.exists() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+                continue;
+            }
+            match load_draft(path.as_path()) {
+                Ok(loaded) => {
+                    local_order_ids.insert(loaded.document.order.order_id.clone());
+                    orders.push(summary_from_loaded(config, &loaded)?);
+                }
+                Err(reason) => orders.push(summary_for_invalid_file(path.as_path(), reason)),
+            }
+        }
+    }
+    for entry in current_app_order_record_entries(app_order_local_records(config)?) {
+        let app_order = load_app_order_record_from_record(config, entry.record.clone())?;
+        if local_order_ids.contains(&app_order.loaded.document.order.order_id) {
             continue;
         }
-        match load_draft(path.as_path()) {
-            Ok(loaded) => orders.push(summary_from_loaded(config, &loaded)?),
-            Err(reason) => orders.push(summary_for_invalid_file(path.as_path(), reason)),
-        }
+        orders.push(summary_from_loaded_with_source_issues(
+            config,
+            &app_order.loaded,
+            app_order.source_issues.as_slice(),
+        )?);
     }
 
     orders.sort_by(|left, right| {
@@ -604,12 +643,247 @@ pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
     })
 }
 
+pub fn app_record_list(config: &RuntimeConfig) -> Result<OrderAppRecordListView, RuntimeError> {
+    let database_path = shared_local_events_db_path(config)?;
+    let mut entries = current_app_order_record_entries(app_order_local_records(config)?);
+    let has_more = entries.len() > ORDER_APP_RECORD_LIST_LIMIT as usize;
+    if has_more {
+        entries.truncate(ORDER_APP_RECORD_LIST_LIMIT as usize);
+    }
+    let next_cursor = if has_more {
+        entries
+            .last()
+            .map(|entry| (entry.record.change_seq, entry.record.seq))
+    } else {
+        None
+    };
+    let records = entries
+        .iter()
+        .map(|entry| app_order_record_summary(config, &entry.record, entry.superseded_count))
+        .collect::<Result<Vec<_>, _>>()?;
+    let state = if records.is_empty() { "empty" } else { "ready" };
+    let actions = if records.is_empty() {
+        vec!["place a buyer order in radroots_studio_app".to_owned()]
+    } else {
+        Vec::new()
+    };
+
+    Ok(OrderAppRecordListView {
+        state: state.to_owned(),
+        source: ORDER_APP_RECORD_SOURCE.to_owned(),
+        count: records.len(),
+        limit: ORDER_APP_RECORD_LIST_LIMIT,
+        has_more,
+        next_before_change_seq: next_cursor.map(|(change_seq, _)| change_seq),
+        next_before_seq: next_cursor.map(|(_, seq)| seq),
+        local_events_db: database_path.display().to_string(),
+        records,
+        actions,
+    })
+}
+
+pub fn app_record_export(
+    config: &RuntimeConfig,
+    args: &OrderAppRecordExportArgs,
+) -> Result<OrderAppRecordExportView, RuntimeError> {
+    let Some(record) = get_shared_record(config, args.record_id.as_str())? else {
+        return Ok(OrderAppRecordExportView {
+            state: "missing".to_owned(),
+            source: ORDER_APP_RECORD_SOURCE.to_owned(),
+            record_id: args.record_id.clone(),
+            dry_run: config.output.dry_run,
+            file: args
+                .output
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            valid: false,
+            order_id: None,
+            listing_addr: None,
+            listing_event_id: None,
+            buyer_account_id: None,
+            buyer_pubkey: None,
+            buyer_actor_source: None,
+            seller_pubkey: None,
+            issues: Vec::new(),
+            reason: Some(format!(
+                "app-authored local order record `{}` was not found",
+                args.record_id
+            )),
+            actions: vec!["radroots order app list".to_owned()],
+        });
+    };
+
+    if let Some(current_record) = current_app_order_record_for(config, &record)?
+        && current_record.record_id != record.record_id
+    {
+        let order_id = app_order_record_order_id(&record);
+        return Ok(OrderAppRecordExportView {
+            state: "stale".to_owned(),
+            source: ORDER_APP_RECORD_SOURCE.to_owned(),
+            record_id: args.record_id.clone(),
+            dry_run: config.output.dry_run,
+            file: args
+                .output
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            valid: false,
+            order_id: order_id.clone(),
+            listing_addr: record.listing_addr.clone(),
+            listing_event_id: None,
+            buyer_account_id: record.owner_account_id.clone(),
+            buyer_pubkey: record.owner_pubkey.clone(),
+            buyer_actor_source: None,
+            seller_pubkey: None,
+            issues: vec![issue_with_code(
+                "app_order_stale",
+                "record_id",
+                format!(
+                    "app-authored local order record `{}` was superseded by `{}`",
+                    record.record_id, current_record.record_id
+                ),
+            )],
+            reason: Some(format!(
+                "app-authored local order record `{}` was superseded by current record `{}`",
+                record.record_id, current_record.record_id
+            )),
+            actions: vec![
+                format!("radroots order app export {}", current_record.record_id),
+                "radroots order app list".to_owned(),
+            ],
+        });
+    }
+
+    let app_order = load_app_order_record_from_record(config, record)?;
+    let mut issues = source_and_document_issues(config, &app_order)?;
+    if !issues.is_empty() {
+        let state = app_order_export_failure_state(issues.as_slice());
+        return Ok(OrderAppRecordExportView {
+            state: state.to_owned(),
+            source: ORDER_APP_RECORD_SOURCE.to_owned(),
+            record_id: args.record_id.clone(),
+            dry_run: config.output.dry_run,
+            file: args
+                .output
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            valid: false,
+            order_id: Some(app_order.loaded.document.order.order_id.clone()),
+            listing_addr: non_empty_string(app_order.loaded.document.order.listing_addr.clone()),
+            listing_event_id: non_empty_string(
+                app_order.loaded.document.order.listing_event_id.clone(),
+            ),
+            buyer_account_id: buyer_account_id(&app_order.loaded.document),
+            buyer_pubkey: non_empty_string(app_order.loaded.document.order.buyer_pubkey.clone()),
+            buyer_actor_source: buyer_actor_source(&app_order.loaded.document),
+            seller_pubkey: non_empty_string(app_order.loaded.document.order.seller_pubkey.clone()),
+            issues,
+            reason: Some(format!(
+                "app-authored local order record `{}` is not ready as a CLI order draft",
+                args.record_id
+            )),
+            actions: vec!["radroots order app list".to_owned()],
+        });
+    }
+
+    let output_path = order_export_output_path(
+        config,
+        args.output.as_ref(),
+        app_order.loaded.document.order.order_id.as_str(),
+    );
+    validate_order_export_output_target(output_path.as_path())?;
+    if !config.output.dry_run {
+        save_draft(output_path.as_path(), &app_order.loaded.document)?;
+    }
+    issues.clear();
+
+    Ok(OrderAppRecordExportView {
+        state: if config.output.dry_run {
+            "dry_run"
+        } else {
+            "exported"
+        }
+        .to_owned(),
+        source: ORDER_APP_RECORD_SOURCE.to_owned(),
+        record_id: args.record_id.clone(),
+        dry_run: config.output.dry_run,
+        file: output_path.display().to_string(),
+        valid: true,
+        order_id: Some(app_order.loaded.document.order.order_id.clone()),
+        listing_addr: non_empty_string(app_order.loaded.document.order.listing_addr.clone()),
+        listing_event_id: non_empty_string(
+            app_order.loaded.document.order.listing_event_id.clone(),
+        ),
+        buyer_account_id: buyer_account_id(&app_order.loaded.document),
+        buyer_pubkey: non_empty_string(app_order.loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&app_order.loaded.document),
+        seller_pubkey: non_empty_string(app_order.loaded.document.order.seller_pubkey.clone()),
+        issues,
+        reason: Some(if config.output.dry_run {
+            "dry run requested; order draft was not written".to_owned()
+        } else {
+            "app-authored local order record exported as a CLI order draft".to_owned()
+        }),
+        actions: vec![
+            format!(
+                "radroots order get {}",
+                app_order.loaded.document.order.order_id
+            ),
+            format!(
+                "radroots --relay wss://relay.example.com order submit {}",
+                app_order.loaded.document.order.order_id
+            ),
+        ],
+    })
+}
+
 pub fn submit(
     config: &RuntimeConfig,
     args: &OrderSubmitArgs,
 ) -> Result<OrderSubmitView, RuntimeError> {
     let file = draft_lookup_path(config, args.key.as_str());
-    if !file.exists() {
+    let (loaded, source_issues) = if file.exists() {
+        match load_draft(file.as_path()) {
+            Ok(loaded) => (loaded, Vec::new()),
+            Err(reason) => {
+                return Ok(OrderSubmitView {
+                    state: "error".to_owned(),
+                    source: ORDER_SOURCE.to_owned(),
+                    order_id: args.key.clone(),
+                    file: file.display().to_string(),
+                    listing_lookup: None,
+                    listing_addr: None,
+                    listing_event_id: None,
+                    buyer_account_id: None,
+                    buyer_pubkey: None,
+                    buyer_actor_source: None,
+                    buyer_custody: None,
+                    buyer_write_capable: None,
+                    seller_pubkey: None,
+                    event_id: None,
+                    event_kind: None,
+                    dry_run: config.output.dry_run,
+                    deduplicated: false,
+                    target_relays: Vec::new(),
+                    connected_relays: Vec::new(),
+                    acknowledged_relays: Vec::new(),
+                    failed_relays: Vec::new(),
+                    idempotency_key: args.idempotency_key.clone(),
+                    signer_mode: None,
+                    signer_session_id: None,
+                    requested_signer_session_id: None,
+                    reason: Some(reason),
+                    job: None,
+                    issues: Vec::new(),
+                    actions: Vec::new(),
+                });
+            }
+        }
+    } else if let Some(app_order) = load_app_order_record_for_lookup(config, args.key.as_str())? {
+        (app_order.loaded, app_order.source_issues)
+    } else {
         return Ok(OrderSubmitView {
             state: "missing".to_owned(),
             source: ORDER_SOURCE.to_owned(),
@@ -644,46 +918,10 @@ pub fn submit(
                 "radroots basket create".to_owned(),
             ],
         });
-    }
-
-    let loaded = match load_draft(file.as_path()) {
-        Ok(loaded) => loaded,
-        Err(reason) => {
-            return Ok(OrderSubmitView {
-                state: "error".to_owned(),
-                source: ORDER_SOURCE.to_owned(),
-                order_id: args.key.clone(),
-                file: file.display().to_string(),
-                listing_lookup: None,
-                listing_addr: None,
-                listing_event_id: None,
-                buyer_account_id: None,
-                buyer_pubkey: None,
-                buyer_actor_source: None,
-                buyer_custody: None,
-                buyer_write_capable: None,
-                seller_pubkey: None,
-                event_id: None,
-                event_kind: None,
-                dry_run: config.output.dry_run,
-                deduplicated: false,
-                target_relays: Vec::new(),
-                connected_relays: Vec::new(),
-                acknowledged_relays: Vec::new(),
-                failed_relays: Vec::new(),
-                idempotency_key: args.idempotency_key.clone(),
-                signer_mode: None,
-                signer_session_id: None,
-                requested_signer_session_id: None,
-                reason: Some(reason),
-                job: None,
-                issues: Vec::new(),
-                actions: Vec::new(),
-            });
-        }
     };
 
-    let issues = collect_issues(&loaded.document);
+    let mut issues = collect_issues(&loaded.document);
+    issues.extend(source_issues.clone());
     if !issues.is_empty() {
         let mut actions = actions_for_document(&loaded.document, loaded.file.as_path(), &issues);
         actions.push(format!(
@@ -9054,6 +9292,14 @@ fn view_from_loaded(
     config: &RuntimeConfig,
     loaded: LoadedOrderDraft,
 ) -> Result<OrderGetView, RuntimeError> {
+    view_from_loaded_with_source_issues(config, loaded, &[])
+}
+
+fn view_from_loaded_with_source_issues(
+    config: &RuntimeConfig,
+    loaded: LoadedOrderDraft,
+    source_issues: &[OrderIssueView],
+) -> Result<OrderGetView, RuntimeError> {
     let OrderInspection {
         state,
         ready_for_submit,
@@ -9063,7 +9309,7 @@ fn view_from_loaded(
         buyer_custody,
         buyer_write_capable,
         issues,
-    } = inspect_document(config, &loaded.document)?;
+    } = inspect_document_with_source_issues(config, &loaded.document, source_issues)?;
 
     let actions = actions_for_document(&loaded.document, loaded.file.as_path(), issues.as_slice());
 
@@ -9107,6 +9353,14 @@ fn summary_from_loaded(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
 ) -> Result<OrderSummaryView, RuntimeError> {
+    summary_from_loaded_with_source_issues(config, loaded, &[])
+}
+
+fn summary_from_loaded_with_source_issues(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    source_issues: &[OrderIssueView],
+) -> Result<OrderSummaryView, RuntimeError> {
     let OrderInspection {
         state,
         ready_for_submit,
@@ -9116,7 +9370,7 @@ fn summary_from_loaded(
         buyer_custody,
         buyer_write_capable,
         issues,
-    } = inspect_document(config, &loaded.document)?;
+    } = inspect_document_with_source_issues(config, &loaded.document, source_issues)?;
 
     Ok(OrderSummaryView {
         id: loaded.document.order.order_id.clone(),
@@ -9166,9 +9420,383 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
     }
 }
 
+fn app_order_local_records(config: &RuntimeConfig) -> Result<Vec<LocalEventRecord>, RuntimeError> {
+    let mut app_records = Vec::new();
+    let mut before_cursor = None::<(i64, i64)>;
+    loop {
+        let shared_records = if let Some((before_change_seq, before_seq)) = before_cursor {
+            list_shared_records_before(
+                config,
+                before_change_seq,
+                before_seq,
+                ORDER_APP_RECORD_LIST_LIMIT,
+            )?
+        } else {
+            list_shared_records_latest(config, ORDER_APP_RECORD_LIST_LIMIT)?
+        };
+        let Some(next_cursor) = shared_records
+            .last()
+            .map(|record| (record.change_seq, record.seq))
+        else {
+            break;
+        };
+        let has_more = shared_records.len() == ORDER_APP_RECORD_LIST_LIMIT as usize;
+        app_records.extend(shared_records.into_iter().filter(is_app_order_local_record));
+        if !has_more {
+            break;
+        }
+        before_cursor = Some(next_cursor);
+    }
+    Ok(app_records)
+}
+
+fn is_app_order_local_record(record: &LocalEventRecord) -> bool {
+    record.source_runtime == SourceRuntime::App
+        && record.family == LocalRecordFamily::LocalWork
+        && local_record_kind(record).as_deref() == Some(BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND)
+}
+
+fn current_app_order_record_entries(
+    mut records: Vec<LocalEventRecord>,
+) -> Vec<AppOrderRecordListEntry> {
+    records.sort_by(|left, right| {
+        right
+            .change_seq
+            .cmp(&left.change_seq)
+            .then_with(|| right.seq.cmp(&left.seq))
+            .then_with(|| left.record_id.cmp(&right.record_id))
+    });
+
+    let mut entries = Vec::<AppOrderRecordListEntry>::new();
+    let mut seen = HashMap::<String, usize>::new();
+    for record in records {
+        let key = app_order_record_current_key(&record);
+        if let Some(index) = seen.get(&key).copied() {
+            entries[index].superseded_count += 1;
+        } else {
+            seen.insert(key, entries.len());
+            entries.push(AppOrderRecordListEntry {
+                record,
+                superseded_count: 0,
+            });
+        }
+    }
+    entries
+}
+
+fn current_app_order_record_for(
+    config: &RuntimeConfig,
+    record: &LocalEventRecord,
+) -> Result<Option<LocalEventRecord>, RuntimeError> {
+    let key = app_order_record_current_key(record);
+    Ok(app_order_local_records(config)?
+        .into_iter()
+        .filter(|candidate| app_order_record_current_key(candidate) == key)
+        .max_by(|left, right| {
+            left.change_seq
+                .cmp(&right.change_seq)
+                .then_with(|| left.seq.cmp(&right.seq))
+        }))
+}
+
+fn load_app_order_record_for_lookup(
+    config: &RuntimeConfig,
+    lookup: &str,
+) -> Result<Option<LoadedAppOrderRecord>, RuntimeError> {
+    if let Some(record) = get_shared_record(config, lookup)?
+        && is_app_order_local_record(&record)
+    {
+        return load_app_order_record_from_record(config, record).map(Some);
+    }
+    for entry in current_app_order_record_entries(app_order_local_records(config)?) {
+        if app_order_record_order_id(&entry.record).as_deref() == Some(lookup) {
+            return load_app_order_record_from_record(config, entry.record).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn load_app_order_record_from_record(
+    config: &RuntimeConfig,
+    record: LocalEventRecord,
+) -> Result<LoadedAppOrderRecord, RuntimeError> {
+    let mut source_issues = app_order_record_source_issues(config, &record)?;
+    let payload = record.local_work_json.clone().unwrap_or(Value::Null);
+    let document = match payload.get("document").cloned() {
+        Some(value) => match serde_json::from_value::<OrderDraftDocument>(value) {
+            Ok(document) => document,
+            Err(error) => {
+                source_issues.push(issue_with_code(
+                    "invalid_app_order_record",
+                    "document",
+                    format!("app-authored order document cannot be decoded: {error}"),
+                ));
+                placeholder_app_order_document(&record)
+            }
+        },
+        None => {
+            source_issues.push(issue_with_code(
+                "invalid_app_order_record",
+                "document",
+                "app-authored order record is missing document",
+            ));
+            placeholder_app_order_document(&record)
+        }
+    };
+    Ok(LoadedAppOrderRecord {
+        loaded: LoadedOrderDraft {
+            file: PathBuf::from(format!("shared-local-events/{}", record.record_id)),
+            updated_at_unix: u64::try_from(record.updated_at_ms / 1000).unwrap_or_default(),
+            document,
+        },
+        record,
+        source_issues,
+    })
+}
+
+fn app_order_record_source_issues(
+    config: &RuntimeConfig,
+    record: &LocalEventRecord,
+) -> Result<Vec<OrderIssueView>, RuntimeError> {
+    let mut issues = Vec::new();
+    if record.source_runtime != SourceRuntime::App {
+        issues.push(issue_with_code(
+            "app_order_unsupported",
+            "source_runtime",
+            "order record must come from radroots_studio_app",
+        ));
+    }
+    if record.family != LocalRecordFamily::LocalWork {
+        issues.push(issue_with_code(
+            "app_order_unsupported",
+            "family",
+            "order record must be shared local work",
+        ));
+    }
+    if record.status != LocalRecordStatus::LocalSaved {
+        issues.push(issue_with_code(
+            "app_order_unsupported",
+            "status",
+            format!(
+                "order record status `{}` is not consumable as local saved work",
+                record.status.as_str()
+            ),
+        ));
+    }
+    let Some(payload) = record.local_work_json.as_ref() else {
+        issues.push(issue_with_code(
+            "invalid_app_order_record",
+            "local_work_json",
+            "app-authored order record is missing local work payload",
+        ));
+        return Ok(issues);
+    };
+    let current = payload["currentness"]["current"].as_bool() == Some(true);
+    if !current {
+        issues.push(issue_with_code(
+            "app_order_stale",
+            "currentness.current",
+            "app-authored order record is not marked current",
+        ));
+    }
+    if current && let Err(error) = validate_buyer_order_request_local_work_payload(payload) {
+        issues.push(issue_with_code(
+            "invalid_app_order_record",
+            "local_work_json",
+            error.to_string(),
+        ));
+    }
+    if payload["support_status"]["state"].as_str() != Some("supported") {
+        issues.push(issue_with_code(
+            "app_order_unsupported",
+            "support_status.state",
+            "app-authored order record is not marked supported",
+        ));
+    }
+    if let Some(support_issues) = payload["support_status"]["issues"].as_array() {
+        for support_issue in support_issues {
+            if let Some(support_issue) = support_issue.as_str() {
+                issues.push(issue_with_code(
+                    "app_order_unsupported",
+                    "support_status.issues",
+                    format!("app order support issue: {support_issue}"),
+                ));
+            }
+        }
+    }
+    if let Some(current_record) = current_app_order_record_for(config, record)?
+        && current_record.record_id != record.record_id
+    {
+        issues.push(issue_with_code(
+            "app_order_stale",
+            "record_id",
+            format!(
+                "app-authored local order record `{}` was superseded by `{}`",
+                record.record_id, current_record.record_id
+            ),
+        ));
+    }
+    Ok(issues)
+}
+
+fn source_and_document_issues(
+    config: &RuntimeConfig,
+    app_order: &LoadedAppOrderRecord,
+) -> Result<Vec<OrderIssueView>, RuntimeError> {
+    Ok(inspect_document_with_source_issues(
+        config,
+        &app_order.loaded.document,
+        app_order.source_issues.as_slice(),
+    )?
+    .issues)
+}
+
+fn app_order_record_summary(
+    config: &RuntimeConfig,
+    record: &LocalEventRecord,
+    superseded_count: usize,
+) -> Result<OrderAppRecordSummaryView, RuntimeError> {
+    let record_kind = local_record_kind(record).unwrap_or_else(|| "unknown".to_owned());
+    let app_order = load_app_order_record_from_record(config, record.clone())?;
+    let issues = source_and_document_issues(config, &app_order)?;
+    let exportable = issues.is_empty();
+    let reason = issues.first().map(|issue| issue.message.clone());
+    let document = &app_order.loaded.document;
+    Ok(OrderAppRecordSummaryView {
+        record_id: record.record_id.clone(),
+        seq: record.seq,
+        change_seq: record.change_seq,
+        superseded_count,
+        record_kind,
+        status: record.status.as_str().to_owned(),
+        source_runtime: record.source_runtime.as_str().to_owned(),
+        owner_account_id: record.owner_account_id.clone(),
+        owner_pubkey: record.owner_pubkey.clone(),
+        farm_id: record.farm_id.clone(),
+        listing_addr: record
+            .listing_addr
+            .clone()
+            .or_else(|| non_empty_string(app_order.loaded.document.order.listing_addr.clone())),
+        order_id: non_empty_string(document.order.order_id.clone()),
+        buyer_account_id: buyer_account_id(document),
+        buyer_pubkey: non_empty_string(document.order.buyer_pubkey.clone()),
+        seller_pubkey: non_empty_string(document.order.seller_pubkey.clone()),
+        ready_for_submit: exportable,
+        exportable,
+        reason,
+        actions: if exportable {
+            vec![
+                format!("radroots order get {}", document.order.order_id),
+                format!("radroots order app export {}", record.record_id),
+                format!(
+                    "radroots --relay wss://relay.example.com order submit {}",
+                    document.order.order_id
+                ),
+            ]
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+fn app_order_record_current_key(record: &LocalEventRecord) -> String {
+    app_order_record_order_id(record)
+        .map(|order_id| format!("order:{order_id}"))
+        .unwrap_or_else(|| format!("record:{}", record.record_id))
+}
+
+fn app_order_record_order_id(record: &LocalEventRecord) -> Option<String> {
+    record
+        .local_work_json
+        .as_ref()
+        .and_then(|payload| payload["document"]["order"]["order_id"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn placeholder_app_order_document(record: &LocalEventRecord) -> OrderDraftDocument {
+    OrderDraftDocument {
+        version: 0,
+        kind: "invalid_app_order_record".to_owned(),
+        order: OrderDraft {
+            order_id: app_order_record_order_id(record).unwrap_or_else(|| record.record_id.clone()),
+            listing_addr: String::new(),
+            listing_event_id: String::new(),
+            buyer_pubkey: String::new(),
+            seller_pubkey: String::new(),
+            items: Vec::new(),
+            economics: None,
+        },
+        buyer_actor: OrderDraftBuyerActor {
+            account_id: String::new(),
+            pubkey: String::new(),
+            source: String::new(),
+        },
+        listing_lookup: None,
+    }
+}
+
+fn app_order_export_failure_state(issues: &[OrderIssueView]) -> &'static str {
+    if issues.iter().any(|issue| issue.code == "app_order_stale") {
+        "stale"
+    } else if issues.iter().any(|issue| {
+        issue.code == "app_order_unsupported" || issue.code == "invalid_app_order_record"
+    }) {
+        "unsupported"
+    } else {
+        "invalid"
+    }
+}
+
+fn order_export_output_path(
+    config: &RuntimeConfig,
+    output: Option<&PathBuf>,
+    order_id: &str,
+) -> PathBuf {
+    output
+        .cloned()
+        .unwrap_or_else(|| drafts_dir(config).join(format!("{order_id}.toml")))
+}
+
+fn validate_order_export_output_target(output_path: &Path) -> Result<(), RuntimeError> {
+    if output_path.exists() {
+        return Err(RuntimeError::Config(format!(
+            "order draft output {} must not already exist",
+            output_path.display()
+        )));
+    }
+    if let Some(parent) = output_path.parent() {
+        if parent.exists() && !parent.is_dir() {
+            return Err(RuntimeError::Config(format!(
+                "order draft parent {} is not a directory",
+                parent.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn local_record_kind(record: &LocalEventRecord) -> Option<String> {
+    record
+        .local_work_json
+        .as_ref()
+        .and_then(|payload| payload.get("record_kind"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
 fn inspect_document(
     config: &RuntimeConfig,
     document: &OrderDraftDocument,
+) -> Result<OrderInspection, RuntimeError> {
+    inspect_document_with_source_issues(config, document, &[])
+}
+
+fn inspect_document_with_source_issues(
+    config: &RuntimeConfig,
+    document: &OrderDraftDocument,
+    source_issues: &[OrderIssueView],
 ) -> Result<OrderInspection, RuntimeError> {
     let listing_addr = non_empty_string(document.order.listing_addr.clone());
     let listing_event_id = non_empty_string(document.order.listing_event_id.clone());
@@ -9183,6 +9811,7 @@ fn inspect_document(
     let mut issues = collect_issues(document);
     let buyer_readiness = inspect_buyer_actor_readiness(config, document)?;
     issues.extend(buyer_readiness.issues);
+    issues.extend(source_issues.iter().cloned());
     let ready_for_submit = issues.is_empty();
     let state = if ready_for_submit {
         "ready".to_owned()
@@ -9283,7 +9912,7 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
     if !is_valid_order_id(document.order.order_id.as_str()) {
         issues.push(issue(
             "order.order_id",
-            "order_id must look like `ord_<base64url>`",
+            "order_id must look like `ord_<base64url>` or a canonical UUID",
         ));
     }
 
@@ -11153,10 +11782,26 @@ fn next_revision_id() -> String {
 }
 
 fn is_valid_order_id(value: &str) -> bool {
-    let Some(encoded) = value.strip_prefix("ord_") else {
+    if let Some(encoded) = value.strip_prefix("ord_") {
+        return encoded.len() == 22 && is_d_tag_base64url(encoded);
+    }
+    is_canonical_uuid(value)
+}
+
+fn is_canonical_uuid(value: &str) -> bool {
+    if value.len() != 36 {
         return false;
-    };
-    encoded.len() == 22 && is_d_tag_base64url(encoded)
+    }
+    for (index, character) in value.chars().enumerate() {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            if character != '-' {
+                return false;
+            }
+        } else if !character.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
 }
 
 fn is_valid_event_id(value: &str) -> bool {

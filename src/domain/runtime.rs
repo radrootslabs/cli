@@ -1409,6 +1409,106 @@ impl OrderListView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OrderAppRecordListView {
+    pub state: String,
+    pub source: String,
+    pub count: usize,
+    pub limit: u32,
+    pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_before_change_seq: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_before_seq: Option<i64>,
+    pub local_events_db: String,
+    pub records: Vec<OrderAppRecordSummaryView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderAppRecordListView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderAppRecordSummaryView {
+    pub record_id: String,
+    pub seq: i64,
+    pub change_seq: i64,
+    pub superseded_count: usize,
+    pub record_kind: String,
+    pub status: String,
+    pub source_runtime: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub farm_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    pub ready_for_submit: bool,
+    pub exportable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderAppRecordExportView {
+    pub state: String,
+    pub source: String,
+    pub record_id: String,
+    pub dry_run: bool,
+    pub file: String,
+    pub valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_actor_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<OrderIssueView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl OrderAppRecordExportView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "missing" => CommandDisposition::NotFound,
+            "invalid" | "stale" | "unsupported" => CommandDisposition::ValidationFailed,
+            "error" => CommandDisposition::InternalError,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct OrderSubmitView {
     pub state: String,
     pub source: String,
