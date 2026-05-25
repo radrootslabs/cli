@@ -5,7 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_local_events::{
     LocalEventRecord, LocalEventRecordInput, LocalEventsStore, LocalRecordFamily,
-    LocalRecordStatus, PublishOutboxStatus, SourceRuntime, canonical_relay_set_fingerprint,
+    LocalRecordStatus, PublishOutboxStatus, RelayDeliveryEvidence, RelayDeliveryFailure,
+    SourceRuntime,
 };
 use radroots_runtime_paths::{
     default_shared_local_events_database_path_from_shared_accounts_data_root,
@@ -69,7 +70,8 @@ pub fn append_signed_event(
     event: &radroots_nostr::prelude::RadrootsNostrEvent,
 ) -> Result<LocalEventRecord, RuntimeError> {
     let timestamp = current_time_ms()?;
-    let relay_set = canonical_relay_set_fingerprint(&config.relay.urls);
+    let delivery_evidence = RelayDeliveryEvidence::pending(&config.relay.urls)?;
+    let relay_set = delivery_evidence.relay_set_fingerprint();
     let input = LocalEventRecordInput {
         record_id: format!("cli:signed_event:{subject}:{}", event.id.to_hex()),
         family: LocalRecordFamily::SignedEvent,
@@ -92,7 +94,7 @@ pub fn append_signed_event(
         raw_event_json: Some(raw_event_json(event)?),
         outbox_status: PublishOutboxStatus::Pending,
         relay_set_fingerprint: relay_set,
-        relay_delivery_json: Some(pending_delivery_json(&config.relay.urls)),
+        relay_delivery_json: Some(delivery_evidence.to_json_value()?),
     };
     let store = open_store(config)?;
     Ok(store.append_record(&input)?)
@@ -106,18 +108,18 @@ pub fn mark_signed_event_acknowledged(
     acknowledged_relays: Vec<String>,
     failed_relays: Vec<DirectRelayFailure>,
 ) -> Result<LocalEventRecord, RuntimeError> {
+    let delivery_evidence = acknowledged_delivery_evidence(
+        target_relays,
+        connected_relays,
+        acknowledged_relays,
+        failed_relays,
+    )?;
     update_signed_event_outbox(
         config,
         record_id,
         LocalRecordStatus::Published,
         PublishOutboxStatus::Acknowledged,
-        json!({
-            "state": "acknowledged",
-            "target_relays": target_relays,
-            "connected_relays": connected_relays,
-            "acknowledged_relays": acknowledged_relays,
-            "failed_relays": relay_failures_json(failed_relays),
-        }),
+        delivery_evidence,
     )
 }
 
@@ -129,19 +131,18 @@ pub fn mark_signed_event_failed(
     connected_relays: Vec<String>,
     failed_relays: Vec<DirectRelayFailure>,
 ) -> Result<LocalEventRecord, RuntimeError> {
+    let delivery_evidence = failed_delivery_evidence(
+        target_relays,
+        connected_relays,
+        failed_relays,
+        reason.as_str(),
+    )?;
     update_signed_event_outbox(
         config,
         record_id,
         LocalRecordStatus::Failed,
         PublishOutboxStatus::Failed,
-        json!({
-            "state": "failed",
-            "reason": reason,
-            "target_relays": target_relays,
-            "connected_relays": connected_relays,
-            "acknowledged_relays": [],
-            "failed_relays": relay_failures_json(failed_relays),
-        }),
+        delivery_evidence,
     )
 }
 
@@ -221,15 +222,17 @@ fn update_signed_event_outbox(
     record_id: &str,
     status: LocalRecordStatus,
     outbox_status: PublishOutboxStatus,
-    relay_delivery_json: Value,
+    delivery_evidence: RelayDeliveryEvidence,
 ) -> Result<LocalEventRecord, RuntimeError> {
+    let relay_set_fingerprint = delivery_evidence.relay_set_fingerprint();
+    let relay_delivery_json = delivery_evidence.to_json_value()?;
     let store = open_store(config)?;
     Ok(
         store.update_outbox(&radroots_local_events::LocalEventRecordUpdate {
             record_id: record_id.to_owned(),
             status,
             outbox_status,
-            relay_set_fingerprint: canonical_relay_set_fingerprint(&config.relay.urls),
+            relay_set_fingerprint,
             relay_delivery_json: Some(relay_delivery_json),
             updated_at_ms: current_time_ms()?,
         })?,
@@ -256,8 +259,14 @@ fn shared_local_events_root_from_paths(paths: &PathsConfig) -> Result<PathBuf, R
 mod tests {
     use std::path::PathBuf;
 
-    use super::{shared_local_events_db_path_from_paths, shared_local_events_root_from_paths};
+    use serde_json::json;
+
+    use super::{
+        acknowledged_delivery_evidence, failed_delivery_evidence,
+        shared_local_events_db_path_from_paths, shared_local_events_root_from_paths,
+    };
     use crate::runtime::config::PathsConfig;
+    use crate::runtime::direct_relay::DirectRelayFailure;
 
     #[test]
     fn shared_local_events_paths_use_shared_runtime_contract() {
@@ -272,6 +281,71 @@ mod tests {
             PathBuf::from(
                 "/repo/infra/local/runtime/radroots/data/shared/local_events/local_events.sqlite"
             )
+        );
+    }
+
+    #[test]
+    fn acknowledged_delivery_evidence_uses_actual_target_relays() {
+        let evidence = acknowledged_delivery_evidence(
+            vec![
+                "wss://actual-a.example".to_owned(),
+                "wss://actual-b.example".to_owned(),
+            ],
+            vec!["wss://actual-a.example".to_owned()],
+            vec!["wss://actual-a.example".to_owned()],
+            vec![DirectRelayFailure {
+                relay: "wss://actual-b.example".to_owned(),
+                reason: "timeout".to_owned(),
+            }],
+        )
+        .expect("acknowledged evidence");
+
+        assert_eq!(
+            evidence.relay_set_fingerprint(),
+            radroots_local_events::canonical_relay_set_fingerprint([
+                "wss://actual-a.example",
+                "wss://actual-b.example"
+            ])
+        );
+        assert_eq!(
+            evidence.to_json_value().expect("delivery json"),
+            json!({
+                "state": "acknowledged",
+                "target_relays": ["wss://actual-a.example", "wss://actual-b.example"],
+                "connected_relays": ["wss://actual-a.example"],
+                "acknowledged_relays": ["wss://actual-a.example"],
+                "failed_relays": [
+                    {"relay_url": "wss://actual-b.example", "error": "timeout"}
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn failed_delivery_evidence_synthesizes_target_failures_when_transport_has_none() {
+        let evidence = failed_delivery_evidence(
+            vec![
+                "wss://actual-a.example".to_owned(),
+                "wss://actual-b.example".to_owned(),
+            ],
+            Vec::new(),
+            Vec::new(),
+            "publish failed",
+        )
+        .expect("failed evidence");
+
+        assert_eq!(
+            evidence.to_json_value().expect("delivery json"),
+            json!({
+                "state": "failed",
+                "target_relays": ["wss://actual-a.example", "wss://actual-b.example"],
+                "connected_relays": [],
+                "acknowledged_relays": [],
+                "failed_relays": [
+                    {"relay_url": "wss://actual-a.example", "error": "publish failed"},
+                    {"relay_url": "wss://actual-b.example", "error": "publish failed"}
+                ]
+            })
         );
     }
 
@@ -314,30 +388,6 @@ fn current_time_ms() -> Result<i64, RuntimeError> {
         .map_err(|_| RuntimeError::Config("current timestamp exceeds i64 milliseconds".to_owned()))
 }
 
-fn pending_delivery_json(relay_urls: &[String]) -> Value {
-    json!({
-        "state": "pending",
-        "target_relays": relay_urls,
-        "connected_relays": [],
-        "acknowledged_relays": [],
-        "failed_relays": [],
-    })
-}
-
-fn relay_failures_json(failures: Vec<DirectRelayFailure>) -> Value {
-    Value::Array(
-        failures
-            .into_iter()
-            .map(|failure| {
-                json!({
-                    "relay": failure.relay,
-                    "reason": failure.reason,
-                })
-            })
-            .collect(),
-    )
-}
-
 fn publish_error_delivery_parts(
     error: &DirectRelayPublishError,
     relay_urls: &[String],
@@ -372,6 +422,56 @@ fn publish_error_delivery_parts(
             failed_relays.clone(),
         ),
     }
+}
+
+fn acknowledged_delivery_evidence(
+    target_relays: Vec<String>,
+    connected_relays: Vec<String>,
+    acknowledged_relays: Vec<String>,
+    failed_relays: Vec<DirectRelayFailure>,
+) -> Result<RelayDeliveryEvidence, RuntimeError> {
+    RelayDeliveryEvidence::acknowledged(
+        target_relays,
+        connected_relays,
+        acknowledged_relays,
+        relay_delivery_failures(failed_relays)?,
+    )
+    .map_err(Into::into)
+}
+
+fn failed_delivery_evidence(
+    target_relays: Vec<String>,
+    connected_relays: Vec<String>,
+    failed_relays: Vec<DirectRelayFailure>,
+    reason: &str,
+) -> Result<RelayDeliveryEvidence, RuntimeError> {
+    let delivery_failures = failed_delivery_failures(failed_relays, &target_relays, reason)?;
+    RelayDeliveryEvidence::failed(target_relays, connected_relays, delivery_failures)
+        .map_err(Into::into)
+}
+
+fn relay_delivery_failures(
+    failures: Vec<DirectRelayFailure>,
+) -> Result<Vec<RelayDeliveryFailure>, RuntimeError> {
+    failures
+        .into_iter()
+        .map(|failure| RelayDeliveryFailure::new(failure.relay, failure.reason).map_err(Into::into))
+        .collect()
+}
+
+fn failed_delivery_failures(
+    failed_relays: Vec<DirectRelayFailure>,
+    target_relays: &[String],
+    reason: &str,
+) -> Result<Vec<RelayDeliveryFailure>, RuntimeError> {
+    let failures = relay_delivery_failures(failed_relays)?;
+    if !failures.is_empty() {
+        return Ok(failures);
+    }
+    target_relays
+        .iter()
+        .map(|relay| RelayDeliveryFailure::new(relay, reason).map_err(Into::into))
+        .collect()
 }
 
 fn event_tags(event: &radroots_nostr::prelude::RadrootsNostrEvent) -> Vec<Vec<String>> {
