@@ -112,6 +112,9 @@ struct SyncRunRecord {
 struct SyncRunRow {
     scope: String,
     relay_set_fingerprint: String,
+    target_relays_json: String,
+    connected_relays_json: String,
+    failed_relays_json: String,
     started_at: i64,
     completed_at: Option<i64>,
     state: String,
@@ -979,6 +982,29 @@ pub(crate) fn freshness_for_scope(
     freshness_for_scope_from_executor(config, &executor, scope)
 }
 
+pub(crate) fn relay_provenance_relays_for_scope(
+    config: &RuntimeConfig,
+    scope: RelayIngestScope,
+) -> Result<Vec<String>, RuntimeError> {
+    if !config.local.replica_db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    migrations::run_all_up(&executor)?;
+    ensure_sync_run_table(&executor)?;
+    let current_fingerprint = relay_set_fingerprint(&config.relay.urls);
+    let Some(run) = latest_sync_run(&executor, scope)? else {
+        return Ok(Vec::new());
+    };
+    if run.relay_set_fingerprint != current_fingerprint || !sync_run_successful(&run) {
+        return Ok(Vec::new());
+    }
+    let mut relays: Vec<String> = serde_json::from_str(run.connected_relays_json.as_str())?;
+    relays.sort();
+    relays.dedup();
+    Ok(relays)
+}
+
 pub(crate) fn freshness_for_scope_from_executor(
     config: &RuntimeConfig,
     executor: &SqliteExecutor,
@@ -1142,6 +1168,9 @@ fn latest_sync_run(
         &format!(
             "SELECT scope,
                     relay_set_fingerprint,
+                    target_relays_json,
+                    connected_relays_json,
+                    failed_relays_json,
                     started_at,
                     completed_at,
                     state,
@@ -1166,9 +1195,9 @@ fn sync_run_record_from_row(row: SyncRunRow) -> SyncRunRecord {
     SyncRunRecord {
         scope: row.scope,
         relay_set_fingerprint: row.relay_set_fingerprint,
-        target_relays_json: String::new(),
-        connected_relays_json: String::new(),
-        failed_relays_json: String::new(),
+        target_relays_json: row.target_relays_json,
+        connected_relays_json: row.connected_relays_json,
+        failed_relays_json: row.failed_relays_json,
         started_at: u64_from_db(row.started_at),
         completed_at: row.completed_at.map(u64_from_db),
         state: row.state,
@@ -1583,8 +1612,8 @@ mod tests {
 
     use super::{
         DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt,
-        DirectRelayPublishReceipt, market_refresh_with_fetcher, pull_with_fetcher,
-        push_with_publisher, status,
+        DirectRelayPublishReceipt, RelayIngestScope, market_refresh_with_fetcher,
+        pull_with_fetcher, push_with_publisher, relay_provenance_relays_for_scope, status,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -2033,6 +2062,33 @@ mod tests {
         assert_eq!(view.ingested_count, Some(1));
         assert_eq!(view.unsupported_count, Some(1));
         assert_eq!(view.failed_count, Some(0));
+    }
+
+    #[test]
+    fn market_refresh_records_relay_provenance_relays_for_order_drafts() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(
+            dir.path(),
+            vec![
+                "wss://relay-a.example.com".to_owned(),
+                "wss://relay-b.example.com".to_owned(),
+            ],
+        );
+        crate::runtime::local::init(&config).expect("store init");
+        let seller = identity(9);
+
+        let _ = market_refresh_with_fetcher(&config, fake_fetcher(vec![listing_event(&seller)]))
+            .expect("market refresh");
+        let relays = relay_provenance_relays_for_scope(&config, RelayIngestScope::MarketRefresh)
+            .expect("relay provenance");
+
+        assert_eq!(
+            relays,
+            vec![
+                "wss://relay-a.example.com".to_owned(),
+                "wss://relay-b.example.com".to_owned()
+            ]
+        );
     }
 
     #[test]

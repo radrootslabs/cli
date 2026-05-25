@@ -49,7 +49,8 @@ use radroots_events_codec::trade::{
 use radroots_events_codec::wire::WireEventParts;
 use radroots_local_events::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecord, LocalRecordFamily,
-    LocalRecordStatus, SourceRuntime, validate_supported_buyer_order_request_local_work_payload,
+    LocalRecordStatus, RelayDeliveryEvidence, RelayDeliveryState, SourceRuntime,
+    normalize_relay_urls, validate_supported_buyer_order_request_local_work_payload,
 };
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
@@ -109,6 +110,7 @@ use crate::runtime::local_events::{
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope, freshness_requires_refresh, market_refresh,
+    relay_provenance_relays_for_scope,
 };
 use crate::runtime_args::{
     OrderAppRecordExportArgs, OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs,
@@ -216,6 +218,7 @@ struct AppOrderRecordListEntry {
 struct ResolvedOrderListing {
     listing_addr: String,
     listing_event_id: String,
+    listing_relays: Vec<String>,
     seller_pubkey: String,
     economics_product: Option<ResolvedOrderEconomicsProduct>,
 }
@@ -380,6 +383,10 @@ pub fn scaffold(
         .as_ref()
         .map(|listing| listing.listing_event_id.clone())
         .unwrap_or_default();
+    let listing_relays = resolved_listing
+        .as_ref()
+        .map(|listing| listing.listing_relays.clone())
+        .unwrap_or_default();
 
     let items = match normalize_optional(args.bin_id.as_deref()) {
         Some(bin_id) => vec![OrderDraftItem {
@@ -407,7 +414,7 @@ pub fn scaffold(
             order_id: order_id.clone(),
             listing_addr,
             listing_event_id,
-            listing_relays: Vec::new(),
+            listing_relays,
             buyer_pubkey,
             seller_pubkey,
             items,
@@ -462,6 +469,10 @@ pub fn scaffold_preflight(
         .as_ref()
         .map(|listing| listing.listing_event_id.clone())
         .unwrap_or_default();
+    let listing_relays = resolved_listing
+        .as_ref()
+        .map(|listing| listing.listing_relays.clone())
+        .unwrap_or_default();
 
     let items = match normalize_optional(args.bin_id.as_deref()) {
         Some(bin_id) => vec![OrderDraftItem {
@@ -486,7 +497,7 @@ pub fn scaffold_preflight(
             order_id: order_id.clone(),
             listing_addr,
             listing_event_id,
-            listing_relays: Vec::new(),
+            listing_relays,
             buyer_pubkey,
             seller_pubkey,
             items,
@@ -532,6 +543,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             listing_lookup: None,
             listing_addr: None,
             listing_event_id: None,
+            listing_relays: Vec::new(),
             buyer_account_id: None,
             buyer_pubkey: None,
             buyer_actor_source: None,
@@ -564,6 +576,7 @@ pub fn get(config: &RuntimeConfig, args: &RecordLookupArgs) -> Result<OrderGetVi
             listing_lookup: None,
             listing_addr: None,
             listing_event_id: None,
+            listing_relays: Vec::new(),
             buyer_account_id: None,
             buyer_pubkey: None,
             buyer_actor_source: None,
@@ -705,6 +718,7 @@ pub fn app_record_export(
             order_id: None,
             listing_addr: None,
             listing_event_id: None,
+            listing_relays: Vec::new(),
             buyer_account_id: None,
             buyer_pubkey: None,
             buyer_actor_source: None,
@@ -738,6 +752,7 @@ pub fn app_record_export(
             listing_event_id: non_empty_string(
                 app_order.loaded.document.order.listing_event_id.clone(),
             ),
+            listing_relays: order_listing_relays(&app_order.loaded.document),
             buyer_account_id: buyer_account_id(&app_order.loaded.document),
             buyer_pubkey: non_empty_string(app_order.loaded.document.order.buyer_pubkey.clone()),
             buyer_actor_source: buyer_actor_source(&app_order.loaded.document),
@@ -779,6 +794,7 @@ pub fn app_record_export(
         listing_event_id: non_empty_string(
             app_order.loaded.document.order.listing_event_id.clone(),
         ),
+        listing_relays: order_listing_relays(&app_order.loaded.document),
         buyer_account_id: buyer_account_id(&app_order.loaded.document),
         buyer_pubkey: non_empty_string(app_order.loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&app_order.loaded.document),
@@ -819,6 +835,7 @@ pub fn submit(
                     listing_lookup: None,
                     listing_addr: None,
                     listing_event_id: None,
+                    listing_relays: Vec::new(),
                     buyer_account_id: None,
                     buyer_pubkey: None,
                     buyer_actor_source: None,
@@ -855,6 +872,7 @@ pub fn submit(
             listing_lookup: None,
             listing_addr: None,
             listing_event_id: None,
+            listing_relays: Vec::new(),
             buyer_account_id: None,
             buyer_pubkey: None,
             buyer_actor_source: None,
@@ -899,6 +917,7 @@ pub fn submit(
             listing_lookup: loaded.document.listing_lookup.clone(),
             listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
             listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+            listing_relays: order_listing_relays(&loaded.document),
             buyer_account_id: buyer_account_id(&loaded.document),
             buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
             buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -933,6 +952,17 @@ pub fn submit(
         return Ok(view);
     }
 
+    if config.relay.urls.is_empty() {
+        return Err(RuntimeError::Network(
+            "order submit requires at least one configured relay before publish preflight"
+                .to_owned(),
+        ));
+    }
+
+    if let Some(view) = order_submit_listing_provenance_preflight_view(config, &loaded, args)? {
+        return Ok(view);
+    }
+
     let signing = match resolve_local_order_signing_identity(config, &loaded) {
         Ok(signing) => signing,
         Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
@@ -947,13 +977,6 @@ pub fn submit(
             .public_key_hex
             .as_str(),
     )?;
-
-    if config.relay.urls.is_empty() {
-        return Err(RuntimeError::Network(
-            "order submit requires at least one configured relay before publish preflight"
-                .to_owned(),
-        ));
-    }
 
     if let Some(view) = order_submit_market_freshness_view(config, &loaded, args)? {
         return Ok(view);
@@ -8781,12 +8804,30 @@ fn resolve_order_listing(
                 "explicit listing_addr must reference a public NIP-99 listing".to_owned(),
             ));
         }
-        let listing_event_id =
-            resolve_active_listing_event_id(config, listing_addr, &parsed)?.unwrap_or_default();
+        let replica_listing_event_id =
+            resolve_active_listing_event_id(config, listing_addr, &parsed)?;
+        let shared_provenance = resolve_shared_signed_listing_provenance(
+            config,
+            listing_addr,
+            replica_listing_event_id.as_deref(),
+        )?;
+        let listing_event_id = replica_listing_event_id
+            .or_else(|| {
+                shared_provenance
+                    .as_ref()
+                    .map(|provenance| provenance.event_id.clone())
+            })
+            .unwrap_or_default();
+        let listing_relays = listing_provenance_relays(
+            config,
+            listing_event_id.as_str(),
+            shared_provenance.as_ref(),
+        )?;
         let economics_product = resolve_trade_product_by_listing_addr(config, listing_addr)?;
         return Ok(Some(ResolvedOrderListing {
             listing_addr: listing_addr.to_owned(),
             listing_event_id,
+            listing_relays,
             seller_pubkey: parsed.seller_pubkey,
             economics_product,
         }));
@@ -8837,10 +8878,21 @@ fn resolve_order_listing(
                     "listing `{listing_lookup}` is missing the latest listing event pointer; run `radroots market refresh` before creating an order from this listing"
                 ))
             })?;
+            let shared_provenance = resolve_shared_signed_listing_provenance(
+                config,
+                listing_addr.as_str(),
+                Some(listing_event_id.as_str()),
+            )?;
+            let listing_relays = listing_provenance_relays(
+                config,
+                listing_event_id.as_str(),
+                shared_provenance.as_ref(),
+            )?;
 
             Ok(Some(ResolvedOrderListing {
                 listing_addr,
                 listing_event_id,
+                listing_relays,
                 seller_pubkey: parsed.seller_pubkey,
                 economics_product: Some(economics_product),
             }))
@@ -8933,6 +8985,72 @@ fn resolve_active_listing_event_id(
     }
 
     Ok(Some(state.last_event_id))
+}
+
+#[derive(Debug, Clone)]
+struct SharedListingProvenance {
+    event_id: String,
+    relays: Vec<String>,
+}
+
+fn listing_provenance_relays(
+    config: &RuntimeConfig,
+    listing_event_id: &str,
+    shared_provenance: Option<&SharedListingProvenance>,
+) -> Result<Vec<String>, RuntimeError> {
+    let mut relays = Vec::<String>::new();
+    if let Some(provenance) = shared_provenance
+        && provenance.event_id == listing_event_id
+    {
+        relays.extend(provenance.relays.iter().cloned());
+    }
+    relays.extend(relay_provenance_relays_for_scope(
+        config,
+        RelayIngestScope::MarketRefresh,
+    )?);
+    normalize_listing_relay_set(relays)
+        .map_err(|error| RuntimeError::Config(format!("listing provenance relays: {error}")))
+}
+
+fn resolve_shared_signed_listing_provenance(
+    config: &RuntimeConfig,
+    listing_addr: &str,
+    listing_event_id: Option<&str>,
+) -> Result<Option<SharedListingProvenance>, RuntimeError> {
+    let mut candidates = list_shared_records_latest(config, ORDER_APP_RECORD_LIST_LIMIT)?
+        .into_iter()
+        .filter(|record| record.family == LocalRecordFamily::SignedEvent)
+        .filter(|record| record.status == LocalRecordStatus::Published)
+        .filter(|record| record.event_kind == Some(i64::from(KIND_LISTING)))
+        .filter(|record| record.listing_addr.as_deref() == Some(listing_addr))
+        .filter(|record| {
+            listing_event_id.is_none() || record.event_id.as_deref() == listing_event_id
+        })
+        .filter_map(|record| {
+            let event_id = record.event_id?;
+            if !is_valid_event_id(event_id.as_str()) {
+                return None;
+            }
+            let delivery = record.relay_delivery_json.as_ref()?;
+            let evidence = RelayDeliveryEvidence::from_json_value(delivery).ok()?;
+            if evidence.state != RelayDeliveryState::Acknowledged {
+                return None;
+            }
+            let relays = normalize_listing_relay_set(evidence.acknowledged_relays).ok()?;
+            if relays.is_empty() {
+                return None;
+            }
+            Some(SharedListingProvenance { event_id, relays })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.event_id.cmp(&right.event_id));
+    candidates.dedup_by(|left, right| left.event_id == right.event_id);
+    if candidates.len() > 1 && listing_event_id.is_none() {
+        return Err(RuntimeError::Config(format!(
+            "listing address `{listing_addr}` has multiple published shared local listing events; run `radroots market refresh` or pass a current listing event id source"
+        )));
+    }
+    Ok(candidates.pop())
 }
 
 fn trade_product_listing_addr_filter(listing_addr: &str) -> ITradeProductFieldsFilter {
@@ -9285,6 +9403,7 @@ fn view_from_loaded_with_source_issues(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr,
         listing_event_id,
+        listing_relays: order_listing_relays(&loaded.document),
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -9343,6 +9462,7 @@ fn summary_from_loaded_with_source_issues(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr,
         listing_event_id,
+        listing_relays: order_listing_relays(&loaded.document),
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -9370,6 +9490,7 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
         listing_lookup: None,
         listing_addr: None,
         listing_event_id: None,
+        listing_relays: Vec::new(),
         buyer_account_id: None,
         buyer_pubkey: None,
         buyer_actor_source: None,
@@ -9687,6 +9808,7 @@ fn app_order_record_summary(
             .listing_addr
             .clone()
             .or_else(|| non_empty_string(app_order.loaded.document.order.listing_addr.clone())),
+        listing_relays: order_listing_relays(document),
         order_id: non_empty_string(document.order.order_id.clone()),
         buyer_account_id: buyer_account_id(document),
         buyer_pubkey: non_empty_string(document.order.buyer_pubkey.clone()),
@@ -9980,6 +10102,20 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
         None => issues.push(issue(
             "order.listing_event_id",
             "latest active listing event id is required before order submit; run `radroots market refresh` and create the order from local market data",
+        )),
+    }
+
+    match normalize_listing_relay_set(document.order.listing_relays.iter()) {
+        Ok(listing_relays) if listing_relays.is_empty() => issues.push(issue_with_code(
+            "listing_provenance_missing",
+            "order.listing_relays",
+            "listing relay provenance is required before order submit; run `radroots market refresh` and create the order from current local market data",
+        )),
+        Ok(_) => {}
+        Err(error) => issues.push(issue_with_code(
+            "listing_provenance_invalid",
+            "order.listing_relays",
+            format!("listing relay provenance is invalid: {error}"),
         )),
     }
 
@@ -10603,6 +10739,7 @@ fn order_submit_unconfigured_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        listing_relays: order_listing_relays(&loaded.document),
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -10643,6 +10780,7 @@ fn order_submit_invalid_quantity_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        listing_relays: order_listing_relays(&loaded.document),
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -10669,6 +10807,82 @@ fn order_submit_invalid_quantity_view(
             format!("radroots order get {}", loaded.document.order.order_id),
         ],
     }
+}
+
+fn order_submit_listing_provenance_preflight_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+) -> Result<Option<OrderSubmitView>, RuntimeError> {
+    let listing_relays =
+        normalize_listing_relay_set(loaded.document.order.listing_relays.iter())
+            .map_err(|error| RuntimeError::Config(format!("listing provenance relays: {error}")))?;
+    let target_relays = normalize_listing_relay_set(config.relay.urls.iter())
+        .map_err(|error| RuntimeError::Config(format!("configured relay target: {error}")))?;
+    let reachable_relays = listing_relays
+        .iter()
+        .filter(|relay| target_relays.contains(relay))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !reachable_relays.is_empty() {
+        return Ok(None);
+    }
+
+    let mut actions = listing_relays
+        .iter()
+        .map(|relay| {
+            format!(
+                "radroots --relay {} order submit {}",
+                relay, loaded.document.order.order_id
+            )
+        })
+        .collect::<Vec<_>>();
+    actions.push(format!(
+        "radroots order get {}",
+        loaded.document.order.order_id
+    ));
+    Ok(Some(OrderSubmitView {
+        state: "unconfigured".to_owned(),
+        source: ORDER_SUBMIT_SOURCE.to_owned(),
+        order_id: loaded.document.order.order_id.clone(),
+        file: loaded.file.display().to_string(),
+        listing_lookup: loaded.document.listing_lookup.clone(),
+        listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+        listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        listing_relays,
+        buyer_account_id: buyer_account_id(&loaded.document),
+        buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+        buyer_actor_source: buyer_actor_source(&loaded.document),
+        buyer_custody: None,
+        buyer_write_capable: None,
+        seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+        event_id: None,
+        event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+        dry_run: config.output.dry_run,
+        deduplicated: false,
+        target_relays,
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        signer_session_id: None,
+        requested_signer_session_id: None,
+        reason: Some(
+            "order submit requires at least one configured relay that is known to carry the listing"
+                .to_owned(),
+        ),
+        job: None,
+        issues: vec![issue_with_code(
+            "listing_relay_target_mismatch",
+            "order.listing_relays",
+            format!(
+                "configured relays must include one of the listing provenance relays: {}",
+                loaded.document.order.listing_relays.join(", ")
+            ),
+        )],
+        actions,
+    }))
 }
 
 fn order_submit_market_freshness_view(
@@ -10916,6 +11130,7 @@ fn order_submit_deduplicated_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        listing_relays: order_listing_relays(&loaded.document),
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -10957,6 +11172,7 @@ fn order_submit_dry_run_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        listing_relays: order_listing_relays(&loaded.document),
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -11004,6 +11220,7 @@ fn order_submit_invalid_existing_request_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        listing_relays: order_listing_relays(&loaded.document),
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -11068,10 +11285,7 @@ fn publish_order_request(
     signing: accounts::AccountSigningIdentity,
     payload: RadrootsTradeOrderRequested,
 ) -> Result<OrderSubmitView, RuntimeError> {
-    let listing_event = RadrootsNostrEventPtr {
-        id: loaded.document.order.listing_event_id.clone(),
-        relays: None,
-    };
+    let listing_event = order_listing_event_ptr(config, loaded)?;
     let client = order_relay_publish_client(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -11088,6 +11302,26 @@ fn publish_order_request(
         .map_err(map_sdk_order_submit_error)?;
 
     published_order_submit_view(config, loaded, args, receipt)
+}
+
+fn order_listing_event_ptr(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+) -> Result<RadrootsNostrEventPtr, RuntimeError> {
+    let listing_relays =
+        normalize_listing_relay_set(loaded.document.order.listing_relays.iter())
+            .map_err(|error| RuntimeError::Config(format!("listing provenance relays: {error}")))?;
+    let target_relays = normalize_listing_relay_set(config.relay.urls.iter())
+        .map_err(|error| RuntimeError::Config(format!("configured relay target: {error}")))?;
+    let selected_relay = listing_relays
+        .iter()
+        .find(|relay| target_relays.contains(relay))
+        .or_else(|| listing_relays.first())
+        .cloned();
+    Ok(RadrootsNostrEventPtr {
+        id: loaded.document.order.listing_event_id.clone(),
+        relays: selected_relay,
+    })
 }
 
 fn order_relay_publish_client(config: &RuntimeConfig) -> Result<RadrootsSdkClient, RuntimeError> {
@@ -11139,6 +11373,7 @@ fn published_order_submit_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        listing_relays: order_listing_relays(&loaded.document),
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -11186,6 +11421,7 @@ fn order_binding_error_view(
         listing_lookup: loaded.document.listing_lookup.clone(),
         listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
         listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+        listing_relays: order_listing_relays(&loaded.document),
         buyer_account_id: buyer_account_id(&loaded.document),
         buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
         buyer_actor_source: buyer_actor_source(&loaded.document),
@@ -11748,6 +11984,19 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
     }
 }
 
+fn normalize_listing_relay_set<I, S>(values: I) -> Result<Vec<String>, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    normalize_relay_urls(values).map_err(|error| error.to_string())
+}
+
+fn order_listing_relays(document: &OrderDraftDocument) -> Vec<String> {
+    normalize_listing_relay_set(document.order.listing_relays.iter())
+        .unwrap_or_else(|_| document.order.listing_relays.clone())
+}
+
 fn non_empty_string(value: String) -> Option<String> {
     if value.trim().is_empty() {
         None
@@ -11880,6 +12129,7 @@ impl From<OrderGetView> for OrderNewView {
             listing_lookup: view.listing_lookup,
             listing_addr: view.listing_addr,
             listing_event_id: view.listing_event_id,
+            listing_relays: view.listing_relays,
             buyer_account_id: view.buyer_account_id,
             buyer_pubkey: view.buyer_pubkey,
             buyer_actor_source: view.buyer_actor_source,
@@ -11955,9 +12205,9 @@ mod tests {
         order_decision_view_from_resolution, order_economics_from_resolved_listing,
         order_event_list_entry_from_event, order_event_list_from_receipt,
         order_fulfillment_dry_run_view, order_fulfillment_preflight_view_from_status,
-        order_payment_dry_run_view, order_payment_event_parts, order_payment_payload_from_status,
-        order_payment_preflight_view_from_status, order_receipt_dry_run_view,
-        order_receipt_event_parts, order_receipt_payload_from_status,
+        order_listing_event_ptr, order_payment_dry_run_view, order_payment_event_parts,
+        order_payment_payload_from_status, order_payment_preflight_view_from_status,
+        order_receipt_dry_run_view, order_receipt_event_parts, order_receipt_payload_from_status,
         order_receipt_preflight_view_from_status, order_relay_publish_client, order_request_filter,
         order_revision_decision_event_parts, order_revision_decision_payload_from_proposal,
         order_revision_decision_preflight_view_from_status, order_revision_event_parts,
@@ -11968,7 +12218,8 @@ mod tests {
         order_status_filter, order_status_from_receipt, order_status_from_receipt_with_context,
         order_status_from_receipt_with_deferred_payment,
         order_status_reduction_from_receipt_with_context, order_submit_dry_run_view,
-        order_submit_existing_request_view_from_receipt, proposed_accept_decision_record,
+        order_submit_existing_request_view_from_receipt,
+        order_submit_listing_provenance_preflight_view, proposed_accept_decision_record,
         resolve_local_order_fulfillment_signing_identity,
         seller_order_request_resolution_from_receipt,
     };
@@ -12058,6 +12309,7 @@ mod tests {
         let listing = ResolvedOrderListing {
             listing_addr: "30402:seller:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
             listing_event_id: "1".repeat(64),
+            listing_relays: vec!["ws://relay.test".to_owned()],
             seller_pubkey: "seller".to_owned(),
             economics_product: Some(ResolvedOrderEconomicsProduct {
                 qty_amt_exact: Some("1".to_owned()),
@@ -12132,6 +12384,7 @@ mod tests {
         let listing = ResolvedOrderListing {
             listing_addr: "30402:seller:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
             listing_event_id: "1".repeat(64),
+            listing_relays: vec!["ws://relay.test".to_owned()],
             seller_pubkey: "seller".to_owned(),
             economics_product: Some(ResolvedOrderEconomicsProduct {
                 qty_amt_exact: Some("0.5".to_owned()),
@@ -12172,6 +12425,7 @@ mod tests {
         let listing = ResolvedOrderListing {
             listing_addr: "30402:seller:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
             listing_event_id: "1".repeat(64),
+            listing_relays: vec!["ws://relay.test".to_owned()],
             seller_pubkey: "seller".to_owned(),
             economics_product: Some(ResolvedOrderEconomicsProduct {
                 qty_amt_exact: None,
@@ -12248,6 +12502,55 @@ mod tests {
             collect_issues(&document)
                 .iter()
                 .any(|issue| issue.field == "order.listing_event_id")
+        );
+    }
+
+    #[test]
+    fn order_draft_requires_listing_relays_for_submit_readiness() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let buyer = accounts::create_or_migrate_default_account(&config)
+            .expect("buyer account")
+            .account;
+        let buyer_account_id = buyer.record.account_id.to_string();
+        let buyer_pubkey = buyer.record.public_identity.public_key_hex;
+        let document = OrderDraftDocument {
+            version: 1,
+            kind: ORDER_DRAFT_KIND.to_owned(),
+            order: OrderDraft {
+                order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
+                listing_event_id: "1".repeat(64),
+                listing_relays: Vec::new(),
+                buyer_pubkey: buyer_pubkey.clone(),
+                seller_pubkey: "deadbeef".to_owned(),
+                items: vec![OrderDraftItem {
+                    bin_id: "bin-1".to_owned(),
+                    bin_count: 2,
+                }],
+                economics: Some(sample_order_economics(
+                    "ord_AAAAAAAAAAAAAAAAAAAAAg",
+                    "bin-1",
+                    2,
+                )),
+            },
+            buyer_actor: OrderDraftBuyerActor {
+                account_id: buyer_account_id,
+                pubkey: buyer_pubkey,
+                source: ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
+            },
+            listing_lookup: Some("fresh-eggs".to_owned()),
+        };
+
+        let inspection = inspect_document(&config, &document).expect("inspect order draft");
+
+        assert_eq!(inspection.state, "draft");
+        assert!(!inspection.ready_for_submit);
+        assert!(
+            collect_issues(&document)
+                .iter()
+                .any(|issue| issue.code == "listing_provenance_missing"
+                    && issue.field == "order.listing_relays")
         );
     }
 
@@ -13060,6 +13363,72 @@ mod tests {
         assert!(view.failed_relays.is_empty());
         assert_eq!(view.signer_mode.as_deref(), Some("local"));
         assert_eq!(view.idempotency_key.as_deref(), Some("idem-dry-submit"));
+        assert_eq!(view.listing_relays, vec!["ws://relay.test"]);
+    }
+
+    #[test]
+    fn order_submit_listing_provenance_preflight_rejects_disjoint_relay_targets() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.output.dry_run = true;
+        config.relay.urls = vec!["ws://relay-b.test".to_owned()];
+        let fixture = order_status_fixture();
+        let mut loaded = loaded_order_draft_for_fixture(&fixture);
+        loaded.document.order.listing_relays = vec!["ws://relay-a.test".to_owned()];
+        let args = OrderSubmitArgs {
+            key: fixture.order_id.clone(),
+            idempotency_key: Some("idem-provenance".to_owned()),
+        };
+
+        let view = order_submit_listing_provenance_preflight_view(&config, &loaded, &args)
+            .expect("provenance preflight")
+            .expect("preflight rejection");
+
+        assert_eq!(view.state, "unconfigured");
+        assert_eq!(view.target_relays, vec!["ws://relay-b.test"]);
+        assert_eq!(view.listing_relays, vec!["ws://relay-a.test"]);
+        assert_eq!(view.event_kind, Some(3422));
+        assert_eq!(view.issues[0].code, "listing_relay_target_mismatch");
+        assert!(view.event_id.is_none());
+        assert!(view.connected_relays.is_empty());
+        assert!(view.acknowledged_relays.is_empty());
+    }
+
+    #[test]
+    fn order_submit_listing_provenance_preflight_accepts_matching_relay_target() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = sample_config(dir.path());
+        config.relay.urls = vec![
+            "ws://relay-b.test".to_owned(),
+            "ws://relay-a.test".to_owned(),
+        ];
+        let fixture = order_status_fixture();
+        let mut loaded = loaded_order_draft_for_fixture(&fixture);
+        loaded.document.order.listing_relays = vec!["ws://relay-a.test".to_owned()];
+        let args = OrderSubmitArgs {
+            key: fixture.order_id.clone(),
+            idempotency_key: None,
+        };
+
+        let view = order_submit_listing_provenance_preflight_view(&config, &loaded, &args)
+            .expect("provenance preflight");
+
+        assert!(view.is_none());
+    }
+
+    #[test]
+    fn order_listing_event_ptr_carries_listing_provenance_relays() {
+        let fixture = order_status_fixture();
+        let mut loaded = loaded_order_draft_for_fixture(&fixture);
+        loaded.document.order.listing_relays = vec!["ws://relay.test".to_owned()];
+
+        let mut config = sample_config(tempdir().expect("tempdir").path());
+        config.relay.urls = vec!["ws://relay.test".to_owned()];
+
+        let ptr = order_listing_event_ptr(&config, &loaded).expect("listing event ptr");
+
+        assert_eq!(ptr.id, fixture.listing_event_id);
+        assert_eq!(ptr.relays, Some("ws://relay.test".to_owned()));
     }
 
     #[test]
@@ -17656,7 +18025,7 @@ mod tests {
                     order_id: fixture.order_id.clone(),
                     listing_addr: fixture.listing_addr.clone(),
                     listing_event_id: fixture.listing_event_id.clone(),
-                    listing_relays: Vec::new(),
+                    listing_relays: vec!["ws://relay.test".to_owned()],
                     buyer_pubkey: fixture.buyer_pubkey.clone(),
                     seller_pubkey: fixture.seller_pubkey.clone(),
                     items: vec![OrderDraftItem {

@@ -1301,6 +1301,8 @@ pub struct OrderNewView {
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listing_relays: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1348,6 +1350,8 @@ pub struct OrderGetView {
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listing_relays: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1451,6 +1455,8 @@ pub struct OrderAppRecordSummaryView {
     pub farm_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listing_relays: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1481,6 +1487,8 @@ pub struct OrderAppRecordExportView {
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listing_relays: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1522,6 +1530,8 @@ pub struct OrderSubmitView {
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listing_relays: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2528,6 +2538,8 @@ pub struct OrderSummaryView {
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listing_relays: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

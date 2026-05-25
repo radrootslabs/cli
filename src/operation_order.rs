@@ -1399,6 +1399,7 @@ fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
         "listing_lookup": &view.listing_lookup,
         "listing_addr": &view.listing_addr,
         "listing_event_id": &view.listing_event_id,
+        "listing_relays": &view.listing_relays,
         "buyer_account_id": &view.buyer_account_id,
         "buyer_pubkey": &view.buyer_pubkey,
         "seller_pubkey": &view.seller_pubkey,

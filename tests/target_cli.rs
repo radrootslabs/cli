@@ -30,12 +30,13 @@ use serde_json::Value;
 use serde_json::json;
 
 use support::{
-    RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
-    assert_no_removed_command_reference, create_listing_draft, identity_public, identity_secret,
-    json_from_stdout, make_listing_publishable, make_listing_publishable_with_seller,
-    ndjson_from_stdout, radroots, remove_orderable_listing, replace_latest_listing_event_id,
-    seed_orderable_listing, toml_string, update_orderable_listing_available_amount,
-    write_public_identity_profile, write_secret_identity_profile,
+    ORDERABLE_LISTING_RELAY, RadrootsCliSandbox, assert_contains,
+    assert_no_daemon_runtime_reference, assert_no_removed_command_reference, create_listing_draft,
+    identity_public, identity_secret, json_from_stdout, make_listing_publishable,
+    make_listing_publishable_with_seller, ndjson_from_stdout, radroots, remove_orderable_listing,
+    replace_latest_listing_event_id, seed_orderable_listing, toml_string,
+    update_orderable_listing_available_amount, write_public_identity_profile,
+    write_secret_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -577,6 +578,7 @@ fn seed_app_order_record_variant_with_record_id(
                 "order_id": order_id,
                 "listing_addr": listing_addr,
                 "listing_event_id": listing_event_id,
+                "listing_relays": [ORDERABLE_LISTING_RELAY],
                 "buyer_pubkey": buyer_pubkey,
                 "seller_pubkey": seller_pubkey,
                 "items": [

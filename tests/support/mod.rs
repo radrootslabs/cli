@@ -10,16 +10,21 @@ use radroots_events::RadrootsNostrEvent;
 use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
 use radroots_events_codec::trade::RadrootsTradeListingAddress;
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
-use radroots_local_events::{LocalEventRecord, LocalEventsStore};
+use radroots_local_events::{
+    LocalEventRecord, LocalEventRecordInput, LocalEventsStore, LocalRecordFamily,
+    LocalRecordStatus, PublishOutboxStatus, RelayDeliveryEvidence, SourceRuntime,
+    canonical_relay_set_fingerprint,
+};
 use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 static COMMAND_LOCK: Mutex<()> = Mutex::new(());
+pub const ORDERABLE_LISTING_RELAY: &str = "ws://127.0.0.1:9";
 
 pub fn radroots() -> Command {
     Command::cargo_bin("radroots").expect("binary")
@@ -293,7 +298,54 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
         radroots_replica_ingest_event(&executor, &event).expect("ingest listing"),
         RadrootsReplicaIngestOutcome::Applied
     );
+    seed_orderable_listing_signed_event(sandbox, &event, listing_addr);
     event_id
+}
+
+fn seed_orderable_listing_signed_event(
+    sandbox: &RadrootsCliSandbox,
+    event: &RadrootsNostrEvent,
+    listing_addr: &str,
+) {
+    let database_path = sandbox.local_events_db_path();
+    fs::create_dir_all(database_path.parent().expect("local events parent"))
+        .expect("local events parent");
+    let executor = SqliteExecutor::open(database_path).expect("open local events");
+    let store = LocalEventsStore::new(executor);
+    store.migrate_up().expect("migrate local events");
+    let delivery = RelayDeliveryEvidence::acknowledged(
+        [ORDERABLE_LISTING_RELAY],
+        [ORDERABLE_LISTING_RELAY],
+        [ORDERABLE_LISTING_RELAY],
+        Vec::new(),
+    )
+    .expect("listing relay delivery evidence");
+    store
+        .append_record(&LocalEventRecordInput {
+            record_id: format!("test:signed_listing:{}", event.id),
+            family: LocalRecordFamily::SignedEvent,
+            status: LocalRecordStatus::Published,
+            source_runtime: SourceRuntime::Cli,
+            created_at_ms: 1_779_000_001_000,
+            inserted_at_ms: 1_779_000_001_000,
+            owner_account_id: None,
+            owner_pubkey: Some(event.author.clone()),
+            farm_id: None,
+            listing_addr: Some(listing_addr.to_owned()),
+            local_work_json: None,
+            event_id: Some(event.id.clone()),
+            event_kind: Some(i64::from(event.kind)),
+            event_pubkey: Some(event.author.clone()),
+            event_created_at: Some(i64::try_from(event.created_at).expect("event created_at")),
+            event_tags_json: Some(json!(event.tags)),
+            event_content: Some(event.content.clone()),
+            event_sig: Some(event.sig.clone()),
+            raw_event_json: Some(json!(event)),
+            outbox_status: PublishOutboxStatus::Acknowledged,
+            relay_set_fingerprint: canonical_relay_set_fingerprint([ORDERABLE_LISTING_RELAY]),
+            relay_delivery_json: Some(delivery.to_json_value().expect("delivery json")),
+        })
+        .expect("append listing signed event record");
 }
 
 pub fn remove_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) {
