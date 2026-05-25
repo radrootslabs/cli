@@ -165,6 +165,8 @@ struct OrderDraft {
     listing_addr: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     listing_event_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    listing_relays: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     buyer_pubkey: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -405,6 +407,7 @@ pub fn scaffold(
             order_id: order_id.clone(),
             listing_addr,
             listing_event_id,
+            listing_relays: Vec::new(),
             buyer_pubkey,
             seller_pubkey,
             items,
@@ -483,6 +486,7 @@ pub fn scaffold_preflight(
             order_id: order_id.clone(),
             listing_addr,
             listing_event_id,
+            listing_relays: Vec::new(),
             buyer_pubkey,
             seller_pubkey,
             items,
@@ -9729,6 +9733,7 @@ fn placeholder_app_order_document(record: &LocalEventRecord) -> OrderDraftDocume
             order_id: app_order_record_order_id(record).unwrap_or_else(|| record.record_id.clone()),
             listing_addr: String::new(),
             listing_event_id: String::new(),
+            listing_relays: Vec::new(),
             buyer_pubkey: String::new(),
             seller_pubkey: String::new(),
             items: Vec::new(),
@@ -11998,6 +12003,7 @@ mod tests {
                 order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
                 listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
                 listing_event_id: "1".repeat(64),
+                listing_relays: Vec::new(),
                 buyer_pubkey: "a".repeat(64),
                 seller_pubkey: "b".repeat(64),
                 items: vec![OrderDraftItem {
@@ -12214,6 +12220,7 @@ mod tests {
                 order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
                 listing_addr: "30402:deadbeef:AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
                 listing_event_id: String::new(),
+                listing_relays: Vec::new(),
                 buyer_pubkey: buyer_pubkey.clone(),
                 seller_pubkey: "deadbeef".to_owned(),
                 items: vec![OrderDraftItem {
@@ -17649,6 +17656,7 @@ mod tests {
                     order_id: fixture.order_id.clone(),
                     listing_addr: fixture.listing_addr.clone(),
                     listing_event_id: fixture.listing_event_id.clone(),
+                    listing_relays: Vec::new(),
                     buyer_pubkey: fixture.buyer_pubkey.clone(),
                     seller_pubkey: fixture.seller_pubkey.clone(),
                     items: vec![OrderDraftItem {

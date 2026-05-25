@@ -4918,8 +4918,12 @@ fn listing_publish_failure_writes_failed_signed_outbox_record() {
         "failed"
     );
     assert_eq!(
-        record.relay_delivery_json.as_ref().unwrap()["failed_relays"][0]["relay"],
+        record.relay_delivery_json.as_ref().unwrap()["failed_relays"][0]["relay_url"],
         relay_url
+    );
+    assert_eq!(
+        record.relay_delivery_json.as_ref().unwrap()["failed_relays"][0]["error"],
+        "rejected by test relay"
     );
     assert_eq!(
         record.raw_event_json.as_ref().unwrap()["id"],
