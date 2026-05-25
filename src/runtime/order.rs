@@ -9038,10 +9038,7 @@ fn resolve_shared_signed_listing_provenance(
             }
             let delivery = record.relay_delivery_json.as_ref()?;
             let evidence = RelayDeliveryEvidence::from_json_value(delivery).ok()?;
-            if evidence.state != RelayDeliveryState::Acknowledged {
-                return None;
-            }
-            let relays = normalize_listing_relay_set(evidence.acknowledged_relays).ok()?;
+            let relays = listing_provenance_relays_from_delivery_evidence(evidence).ok()?;
             if relays.is_empty() {
                 return None;
             }
@@ -9056,6 +9053,17 @@ fn resolve_shared_signed_listing_provenance(
         )));
     }
     Ok(candidates.pop())
+}
+
+fn listing_provenance_relays_from_delivery_evidence(
+    evidence: RelayDeliveryEvidence,
+) -> Result<Vec<String>, String> {
+    let relays = match evidence.state {
+        RelayDeliveryState::Acknowledged => evidence.acknowledged_relays,
+        RelayDeliveryState::Observed => evidence.observed_relays,
+        RelayDeliveryState::Pending | RelayDeliveryState::Failed => Vec::new(),
+    };
+    normalize_listing_relay_set(relays)
 }
 
 fn trade_product_listing_addr_filter(listing_addr: &str) -> ITradeProductFieldsFilter {
@@ -12534,20 +12542,22 @@ mod tests {
         LoadedOrderDraft, ORDER_ACTOR_CONTEXT_NETWORK_ONLY, ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
         ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT, ORDER_DRAFT_KIND, ORDER_SUBMIT_SOURCE,
         OrderDraft, OrderDraftBuyerActor, OrderDraftDocument, OrderDraftItem, OrderStatusContext,
-        ResolvedOrderEconomicsProduct, ResolvedOrderListing, ResolvedSellerOrderRequest,
-        SellerOrderRequestResolution, accepted_order_decision_payload_from_request,
-        active_request_record_from_resolved, canonical_order_request_payload_from_loaded,
-        collect_issues, declined_order_decision_payload_from_request, inspect_document,
-        next_order_id, order_accept_inventory_preflight_view_from_projection,
-        order_cancellation_dry_run_view, order_cancellation_event_parts,
-        order_cancellation_payload_from_status, order_cancellation_preflight_view_from_status,
-        order_decision_dry_run_view, order_decision_preflight_view_from_status,
-        order_decision_view_from_resolution, order_economics_from_resolved_listing,
-        order_event_list_entry_from_event, order_event_list_from_receipt,
-        order_fulfillment_dry_run_view, order_fulfillment_preflight_view_from_status,
-        order_listing_event_ptr, order_payment_dry_run_view, order_payment_event_parts,
-        order_payment_payload_from_status, order_payment_preflight_view_from_status,
-        order_receipt_dry_run_view, order_receipt_event_parts, order_receipt_payload_from_status,
+        RelayDeliveryEvidence, ResolvedOrderEconomicsProduct, ResolvedOrderListing,
+        ResolvedSellerOrderRequest, SellerOrderRequestResolution,
+        accepted_order_decision_payload_from_request, active_request_record_from_resolved,
+        canonical_order_request_payload_from_loaded, collect_issues,
+        declined_order_decision_payload_from_request, inspect_document,
+        listing_provenance_relays_from_delivery_evidence, next_order_id,
+        order_accept_inventory_preflight_view_from_projection, order_cancellation_dry_run_view,
+        order_cancellation_event_parts, order_cancellation_payload_from_status,
+        order_cancellation_preflight_view_from_status, order_decision_dry_run_view,
+        order_decision_preflight_view_from_status, order_decision_view_from_resolution,
+        order_economics_from_resolved_listing, order_event_list_entry_from_event,
+        order_event_list_from_receipt, order_fulfillment_dry_run_view,
+        order_fulfillment_preflight_view_from_status, order_listing_event_ptr,
+        order_payment_dry_run_view, order_payment_event_parts, order_payment_payload_from_status,
+        order_payment_preflight_view_from_status, order_receipt_dry_run_view,
+        order_receipt_event_parts, order_receipt_payload_from_status,
         order_receipt_preflight_view_from_status, order_relay_publish_client, order_request_filter,
         order_revision_decision_event_parts, order_revision_decision_payload_from_proposal,
         order_revision_decision_preflight_view_from_status, order_revision_event_parts,
@@ -13769,6 +13779,38 @@ mod tests {
 
         assert_eq!(ptr.id, fixture.listing_event_id);
         assert_eq!(ptr.relays, Some("ws://relay.test".to_owned()));
+    }
+
+    #[test]
+    fn listing_provenance_relays_use_observed_relays_without_acknowledgement() {
+        let evidence = RelayDeliveryEvidence::observed(
+            ["ws://target.test"],
+            ["ws://connected.test"],
+            ["ws://observed.test"],
+            Vec::new(),
+        )
+        .expect("observed evidence");
+
+        let relays =
+            listing_provenance_relays_from_delivery_evidence(evidence).expect("listing relays");
+
+        assert_eq!(relays, vec!["ws://observed.test"]);
+    }
+
+    #[test]
+    fn listing_provenance_relays_ignore_connected_relays_when_observed_relay_is_unknown() {
+        let evidence = RelayDeliveryEvidence::observed(
+            ["ws://target.test"],
+            ["ws://connected.test"],
+            Vec::<String>::new(),
+            Vec::new(),
+        )
+        .expect("observed evidence");
+
+        let relays =
+            listing_provenance_relays_from_delivery_evidence(evidence).expect("listing relays");
+
+        assert!(relays.is_empty());
     }
 
     #[test]
