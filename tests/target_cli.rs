@@ -8,7 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use radroots_events::RadrootsNostrEventPtr;
-use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
+use radroots_events::kinds::{KIND_FARM, KIND_PROFILE, KIND_TRADE_ORDER_REQUEST};
 use radroots_events::trade::{
     RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
 };
@@ -16,7 +16,7 @@ use radroots_events_codec::trade::active_trade_order_request_event_build;
 use radroots_local_events::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, CANONICAL_RELAY_SET_FINGERPRINT_VERSION,
     LocalEventRecordInput, LocalEventsStore, LocalRecordFamily, LocalRecordStatus,
-    PublishOutboxStatus, SourceRuntime, canonical_relay_set_fingerprint,
+    PublishOutboxStatus, RelayDeliveryEvidence, SourceRuntime, canonical_relay_set_fingerprint,
 };
 use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
 use radroots_replica_db::{farm, farm_member_claim, migrations};
@@ -676,6 +676,143 @@ fn seed_app_order_record_variant_with_record_id(
             outbox_status: PublishOutboxStatus::None,
             relay_set_fingerprint: None,
             relay_delivery_json: None,
+        },
+        sandbox,
+    );
+    record_id
+}
+
+fn app_order_economics(order_id: &str, bin_count: u32) -> RadrootsTradeOrderEconomics {
+    let line_total = (bin_count * 6).to_string();
+    serde_json::from_value(json!({
+        "quote_id": format!("app-order:{order_id}"),
+        "quote_version": 1,
+        "pricing_basis": "listing_event",
+        "currency": "USD",
+        "items": [
+            {
+                "bin_id": "bin-1",
+                "bin_count": bin_count,
+                "quantity_amount": "1",
+                "quantity_unit": "each",
+                "unit_price_amount": "6",
+                "unit_price_currency": "USD",
+                "line_subtotal": {
+                    "amount": line_total,
+                    "currency": "USD",
+                },
+            }
+        ],
+        "discounts": [],
+        "adjustments": [],
+        "subtotal": {
+            "amount": line_total,
+            "currency": "USD",
+        },
+        "discount_total": {
+            "amount": "0",
+            "currency": "USD",
+        },
+        "adjustment_total": {
+            "amount": "0",
+            "currency": "USD",
+        },
+        "total": {
+            "amount": line_total,
+            "currency": "USD",
+        },
+    }))
+    .expect("app order economics")
+}
+
+fn signed_app_order_request_event(
+    buyer: &radroots_identity::RadrootsIdentity,
+    order_id: &str,
+    listing_addr: &str,
+    listing_event_id: &str,
+    seller_pubkey: &str,
+    bin_count: u32,
+) -> RadrootsNostrEvent {
+    let payload = RadrootsTradeOrderRequested {
+        order_id: order_id.to_owned(),
+        listing_addr: listing_addr.to_owned(),
+        buyer_pubkey: buyer.public_key_hex(),
+        seller_pubkey: seller_pubkey.to_owned(),
+        items: vec![RadrootsTradeOrderItem {
+            bin_id: "bin-1".to_owned(),
+            bin_count,
+        }],
+        economics: app_order_economics(order_id, bin_count),
+    };
+    let parts = active_trade_order_request_event_build(
+        &RadrootsNostrEventPtr {
+            id: listing_event_id.to_owned(),
+            relays: None,
+        },
+        &payload,
+    )
+    .expect("app order request parts");
+    radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
+        .expect("nostr event builder")
+        .sign_with_keys(buyer.keys())
+        .expect("signed app order request")
+}
+
+fn append_app_signed_order_request_record(
+    sandbox: &RadrootsCliSandbox,
+    account_id: &str,
+    listing_addr: &str,
+    event: &RadrootsNostrEvent,
+) -> String {
+    let event_id = event.id.to_hex();
+    let event_tags = event
+        .tags
+        .iter()
+        .map(|tag| tag.as_slice().to_vec())
+        .collect::<Vec<_>>();
+    let delivery = RelayDeliveryEvidence::acknowledged(
+        [ORDERABLE_LISTING_RELAY],
+        [ORDERABLE_LISTING_RELAY],
+        [ORDERABLE_LISTING_RELAY],
+        Vec::new(),
+    )
+    .expect("order request delivery evidence");
+    let record_id = format!("app:signed_event:{event_id}");
+    append_app_local_record(
+        LocalEventRecordInput {
+            record_id: record_id.clone(),
+            family: LocalRecordFamily::SignedEvent,
+            status: LocalRecordStatus::Published,
+            source_runtime: SourceRuntime::App,
+            created_at_ms: i64::try_from(event.created_at.as_secs()).expect("event created_at")
+                * 1_000,
+            inserted_at_ms: 1_779_000_011_000,
+            owner_account_id: Some(account_id.to_owned()),
+            owner_pubkey: Some(event.pubkey.to_string()),
+            farm_id: Some("018f47a8-7b2c-7000-8000-0000000000f1".to_owned()),
+            listing_addr: Some(listing_addr.to_owned()),
+            local_work_json: None,
+            event_id: Some(event_id),
+            event_kind: Some(i64::from(KIND_TRADE_ORDER_REQUEST)),
+            event_pubkey: Some(event.pubkey.to_string()),
+            event_created_at: Some(
+                i64::try_from(event.created_at.as_secs()).expect("event created_at"),
+            ),
+            event_tags_json: Some(json!(event_tags.clone())),
+            event_content: Some(event.content.clone()),
+            event_sig: Some(event.sig.to_string()),
+            raw_event_json: Some(json!({
+                "id": event.id.to_hex(),
+                "pubkey": event.pubkey.to_string(),
+                "created_at": i64::try_from(event.created_at.as_secs()).expect("event created_at"),
+                "kind": u32::from(event.kind.as_u16()),
+                "tags": event_tags,
+                "content": event.content.clone(),
+                "sig": event.sig.to_string(),
+            })),
+            outbox_status: PublishOutboxStatus::Acknowledged,
+            relay_set_fingerprint: canonical_relay_set_fingerprint([ORDERABLE_LISTING_RELAY]),
+            relay_delivery_json: Some(delivery.to_json_value().expect("delivery json")),
         },
         sandbox,
     );
@@ -4456,6 +4593,264 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
             .as_str()
             .expect("submit message")
             .contains("order submit requires at least one configured relay")
+    );
+}
+
+#[test]
+fn order_app_records_treat_matching_signed_evidence_as_submitted() {
+    let sandbox = RadrootsCliSandbox::new();
+    let buyer = identity_secret(97);
+    let buyer_public_file =
+        write_public_identity_profile(&sandbox, "app-order-submitted-buyer", &buyer.to_public());
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        buyer_public_file.to_string_lossy().as_ref(),
+    ]);
+    let account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let buyer_secret_file = write_secret_identity_profile(&sandbox, "app-order-submitted", &buyer);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "attach-secret",
+        account_id,
+        buyer_secret_file.to_string_lossy().as_ref(),
+        "--default",
+    ]);
+
+    let buyer_pubkey = buyer.public_key_hex();
+    let seller_pubkey = identity_public(77).public_key_hex;
+    let listing_d_tag = "AAAAAAAAAAAAAAAAAAAAAQ";
+    let listing_addr = format!("30402:{seller_pubkey}:{listing_d_tag}");
+    let listing_event_id = seed_orderable_listing(&sandbox, listing_addr.as_str());
+    let order_id = "018f47a8-7b2c-7000-8000-000000000016";
+    let record_id = seed_app_order_record(
+        &sandbox,
+        account_id,
+        buyer_pubkey.as_str(),
+        seller_pubkey.as_str(),
+        order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+    );
+    let signed_event = signed_app_order_request_event(
+        &buyer,
+        order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+        seller_pubkey.as_str(),
+        2,
+    );
+    let signed_event_id = signed_event.id.to_hex();
+    append_app_signed_order_request_record(
+        &sandbox,
+        account_id,
+        listing_addr.as_str(),
+        &signed_event,
+    );
+
+    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    let listed = &app_list["result"]["records"][0];
+    assert_eq!(listed["record_id"], record_id);
+    assert_eq!(listed["status"], "submitted");
+    assert_eq!(listed["ready_for_submit"], false);
+    assert_eq!(listed["exportable"], false);
+    assert_eq!(
+        listed["actions"].as_array().expect("actions"),
+        &vec![json!(format!("radroots order status get {order_id}"))]
+    );
+
+    let orders = sandbox.json_success(&["--format", "json", "order", "list"]);
+    assert_eq!(orders["result"]["state"], "ready");
+    assert_eq!(orders["result"]["orders"][0]["state"], "submitted");
+    assert_eq!(orders["result"]["orders"][0]["ready_for_submit"], false);
+
+    let get_by_record =
+        sandbox.json_success(&["--format", "json", "order", "get", record_id.as_str()]);
+    assert_eq!(get_by_record["result"]["state"], "submitted");
+    assert_eq!(get_by_record["result"]["ready_for_submit"], false);
+    assert_eq!(
+        get_by_record["result"]["issues"][0]["code"],
+        "app_order_already_submitted"
+    );
+    assert_eq!(
+        get_by_record["result"]["issues"][0]["event_ids"][0],
+        signed_event_id
+    );
+    assert_eq!(
+        get_by_record["result"]["actions"]
+            .as_array()
+            .expect("actions"),
+        &vec![json!(format!("radroots order status get {order_id}"))]
+    );
+
+    let export_path = sandbox.root().join("submitted-app-order.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (export_output, export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "app",
+        "export",
+        record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!export_output.status.success());
+    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["errors"][0]["detail"]["state"], "already_submitted");
+    assert_eq!(export["errors"][0]["detail"]["valid"], false);
+    assert!(!export_path.exists());
+
+    let submit = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "order",
+        "submit",
+        record_id.as_str(),
+    ]);
+    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["result"]["state"], "submitted");
+    assert_eq!(submit["result"]["deduplicated"], true);
+    assert_eq!(submit["result"]["event_id"], signed_event_id);
+    assert!(
+        submit["result"]
+            .get("actions")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    );
+}
+
+#[test]
+fn order_app_records_fail_closed_when_signed_evidence_conflicts() {
+    let sandbox = RadrootsCliSandbox::new();
+    let buyer = identity_secret(98);
+    let buyer_public_file =
+        write_public_identity_profile(&sandbox, "app-order-conflict-buyer", &buyer.to_public());
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        buyer_public_file.to_string_lossy().as_ref(),
+    ]);
+    let account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    let buyer_secret_file = write_secret_identity_profile(&sandbox, "app-order-conflict", &buyer);
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "attach-secret",
+        account_id,
+        buyer_secret_file.to_string_lossy().as_ref(),
+        "--default",
+    ]);
+
+    let buyer_pubkey = buyer.public_key_hex();
+    let seller_pubkey = identity_public(78).public_key_hex;
+    let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAQ");
+    let listing_event_id = seed_orderable_listing(&sandbox, listing_addr.as_str());
+    let order_id = "018f47a8-7b2c-7000-8000-000000000017";
+    let record_id = seed_app_order_record(
+        &sandbox,
+        account_id,
+        buyer_pubkey.as_str(),
+        seller_pubkey.as_str(),
+        order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+    );
+    let signed_event = signed_app_order_request_event(
+        &buyer,
+        order_id,
+        listing_addr.as_str(),
+        listing_event_id.as_str(),
+        seller_pubkey.as_str(),
+        3,
+    );
+    append_app_signed_order_request_record(
+        &sandbox,
+        account_id,
+        listing_addr.as_str(),
+        &signed_event,
+    );
+
+    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    let listed = &app_list["result"]["records"][0];
+    assert_eq!(listed["record_id"], record_id);
+    assert_eq!(listed["status"], "conflict");
+    assert_eq!(listed["ready_for_submit"], false);
+    assert_eq!(listed["exportable"], false);
+    assert!(
+        listed["reason"]
+            .as_str()
+            .expect("conflict reason")
+            .contains("conflicts")
+    );
+    assert!(
+        !listed["actions"]
+            .as_array()
+            .expect("actions")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .expect("action")
+                .contains("order app export"))
+    );
+
+    let export_path = sandbox.root().join("conflicting-signed-app-order.toml");
+    let export_path_arg = export_path.to_string_lossy();
+    let (export_output, export) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "app",
+        "export",
+        record_id.as_str(),
+        "--output",
+        export_path_arg.as_ref(),
+    ]);
+    assert!(!export_output.status.success());
+    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["errors"][0]["detail"]["state"], "conflict");
+    assert_eq!(
+        export["errors"][0]["detail"]["issues"][0]["code"],
+        "app_order_signed_evidence_conflict"
+    );
+    assert!(!export_path.exists());
+
+    let (submit_output, submit) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "order",
+        "submit",
+        record_id.as_str(),
+    ]);
+    assert!(!submit_output.status.success());
+    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["errors"][0]["detail"]["state"], "invalid");
+    assert_eq!(
+        submit["errors"][0]["detail"]["issues"][0]["code"],
+        "app_order_signed_evidence_conflict"
     );
 }
 

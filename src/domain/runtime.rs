@@ -1509,7 +1509,7 @@ impl OrderAppRecordExportView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "missing" => CommandDisposition::NotFound,
-            "conflict" | "invalid" | "stale" | "unsupported" => {
+            "already_submitted" | "conflict" | "invalid" | "stale" | "unsupported" => {
                 CommandDisposition::ValidationFailed
             }
             "error" => CommandDisposition::InternalError,

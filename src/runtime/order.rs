@@ -49,8 +49,8 @@ use radroots_events_codec::trade::{
 use radroots_events_codec::wire::WireEventParts;
 use radroots_local_events::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecord, LocalRecordFamily,
-    LocalRecordStatus, RelayDeliveryEvidence, RelayDeliveryState, SourceRuntime,
-    normalize_relay_urls, validate_supported_buyer_order_request_local_work_payload,
+    LocalRecordStatus, PublishOutboxStatus, RelayDeliveryEvidence, RelayDeliveryState,
+    SourceRuntime, normalize_relay_urls, validate_supported_buyer_order_request_local_work_payload,
 };
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
@@ -145,6 +145,8 @@ const ORDER_ACTOR_CONTEXT_ORDER_DRAFT: &str = "order_draft";
 const ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT: &str = "resolved_account";
 const ORDER_ACTOR_CONTEXT_NETWORK_ONLY: &str = "network_only";
 const ORDERS_DIR: &str = "orders/drafts";
+const APP_ORDER_ALREADY_SUBMITTED_ISSUE: &str = "app_order_already_submitted";
+const APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE: &str = "app_order_signed_evidence_conflict";
 
 static ORDER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -637,10 +639,9 @@ pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
 
     let state = if orders.is_empty() {
         "empty"
-    } else if orders
-        .iter()
-        .any(|order| order.state == "error" || !order.ready_for_submit)
-    {
+    } else if orders.iter().any(|order| {
+        order.state == "error" || (!order.ready_for_submit && order.state != "submitted")
+    }) {
         "degraded"
     } else {
         "ready"
@@ -736,6 +737,7 @@ pub fn app_record_export(
     let mut issues = source_and_document_issues(config, &app_order)?;
     if !issues.is_empty() {
         let state = app_order_export_failure_state(issues.as_slice());
+        let actions = app_order_export_failure_actions(&app_order.loaded.document, &issues);
         return Ok(OrderAppRecordExportView {
             state: state.to_owned(),
             source: ORDER_APP_RECORD_SOURCE.to_owned(),
@@ -762,7 +764,7 @@ pub fn app_record_export(
                 "app-authored local order record `{}` is not ready as a CLI order draft",
                 args.record_id
             )),
-            actions: vec!["radroots order app list".to_owned()],
+            actions,
         });
     }
 
@@ -903,6 +905,9 @@ pub fn submit(
 
     let mut issues = collect_issues(&loaded.document);
     issues.extend(source_issues.clone());
+    if let Some(view) = order_submit_app_signed_evidence_view(config, &loaded, args, &issues) {
+        return Ok(view);
+    }
     if !issues.is_empty() {
         let mut actions = actions_for_document(&loaded.document, loaded.file.as_path(), &issues);
         actions.push(format!(
@@ -9647,12 +9652,15 @@ fn load_app_order_record_from_record(
             placeholder_app_order_document(&record)
         }
     };
+    let loaded = LoadedOrderDraft {
+        file: PathBuf::from(format!("shared-local-events/{}", record.record_id)),
+        updated_at_unix: u64::try_from(record.updated_at_ms / 1000).unwrap_or_default(),
+        document,
+    };
+    source_issues.extend(app_order_signed_evidence_issues(config, &loaded)?);
+
     Ok(LoadedAppOrderRecord {
-        loaded: LoadedOrderDraft {
-            file: PathBuf::from(format!("shared-local-events/{}", record.record_id)),
-            updated_at_unix: u64::try_from(record.updated_at_ms / 1000).unwrap_or_default(),
-            document,
-        },
+        loaded,
         record,
         source_issues,
     })
@@ -9770,6 +9778,185 @@ fn app_order_record_source_issues(
     Ok(issues)
 }
 
+fn app_order_signed_evidence_issues(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+) -> Result<Vec<OrderIssueView>, RuntimeError> {
+    let order_id = loaded.document.order.order_id.as_str();
+    let candidate_records = visible_signed_order_request_records(config, order_id)?;
+    if candidate_records.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let expected_payload = match canonical_order_request_payload_from_loaded(
+        loaded,
+        loaded.document.order.buyer_pubkey.as_str(),
+    ) {
+        Ok(payload) => payload,
+        Err(error) => {
+            let event_ids = candidate_records
+                .iter()
+                .map(signed_record_event_id)
+                .collect::<Vec<_>>();
+            return Ok(vec![issue_with_events(
+                APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE,
+                "signed_event",
+                format!(
+                    "signed order request evidence cannot be compared with local work: {error}"
+                ),
+                event_ids,
+            )]);
+        }
+    };
+
+    let mut submitted_event_ids = Vec::new();
+    let mut conflict_issues = Vec::new();
+    for record in candidate_records {
+        let event_id = signed_record_event_id(&record);
+        match signed_order_request_from_record(&record)
+            .and_then(|event| order_submit_request_from_event(&event, loaded))
+        {
+            Ok(request)
+                if order_submit_request_matches_draft(&request, loaded, &expected_payload) =>
+            {
+                submitted_event_ids.push(request.request_event_id);
+            }
+            Ok(request) => conflict_issues.push(issue_with_events(
+                APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE,
+                "signed_event",
+                format!(
+                    "signed order request event `{}` conflicts with the app-authored local order",
+                    request.request_event_id
+                ),
+                vec![request.request_event_id],
+            )),
+            Err(error) => conflict_issues.push(issue_with_events(
+                APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE,
+                "signed_event",
+                format!("signed order request event `{event_id}` cannot be validated: {error}"),
+                vec![event_id],
+            )),
+        }
+    }
+
+    conflict_issues.sort_by(|left, right| {
+        left.event_ids
+            .cmp(&right.event_ids)
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    if !conflict_issues.is_empty() {
+        return Ok(conflict_issues);
+    }
+
+    submitted_event_ids.sort();
+    submitted_event_ids.dedup();
+    if submitted_event_ids.is_empty() {
+        Ok(Vec::new())
+    } else {
+        Ok(vec![issue_with_events(
+            APP_ORDER_ALREADY_SUBMITTED_ISSUE,
+            "signed_event",
+            "app-authored local order already has matching signed order request evidence",
+            submitted_event_ids,
+        )])
+    }
+}
+
+fn visible_signed_order_request_records(
+    config: &RuntimeConfig,
+    order_id: &str,
+) -> Result<Vec<LocalEventRecord>, RuntimeError> {
+    let mut records = Vec::new();
+    let mut before_cursor = None::<(i64, i64)>;
+    loop {
+        let shared_records = if let Some((before_change_seq, before_seq)) = before_cursor {
+            list_shared_records_before(
+                config,
+                before_change_seq,
+                before_seq,
+                ORDER_APP_RECORD_LIST_LIMIT,
+            )?
+        } else {
+            list_shared_records_latest(config, ORDER_APP_RECORD_LIST_LIMIT)?
+        };
+        let Some(next_cursor) = shared_records
+            .last()
+            .map(|record| (record.change_seq, record.seq))
+        else {
+            break;
+        };
+        let has_more = shared_records.len() == ORDER_APP_RECORD_LIST_LIMIT as usize;
+        records.extend(
+            shared_records
+                .into_iter()
+                .filter(|record| is_visible_signed_order_request_record(record, order_id)),
+        );
+        if !has_more {
+            break;
+        }
+        before_cursor = Some(next_cursor);
+    }
+    Ok(records)
+}
+
+fn is_visible_signed_order_request_record(record: &LocalEventRecord, order_id: &str) -> bool {
+    record.family == LocalRecordFamily::SignedEvent
+        && record.status == LocalRecordStatus::Published
+        && record.outbox_status == PublishOutboxStatus::Acknowledged
+        && record.event_kind == Some(i64::from(KIND_TRADE_ORDER_REQUEST))
+        && signed_record_tag_values(record, "d")
+            .iter()
+            .any(|value| value == order_id)
+}
+
+fn signed_order_request_from_record(
+    record: &LocalEventRecord,
+) -> Result<RadrootsNostrEvent, RuntimeError> {
+    let raw_event_json = record.raw_event_json.as_ref().ok_or_else(|| {
+        RuntimeError::Config(format!(
+            "signed event record `{}` is missing raw_event_json",
+            record.record_id
+        ))
+    })?;
+    serde_json::from_value::<RadrootsNostrEvent>(raw_event_json.clone()).map_err(|error| {
+        RuntimeError::Config(format!(
+            "signed event record `{}` raw_event_json cannot be decoded: {error}",
+            record.record_id
+        ))
+    })
+}
+
+fn signed_record_tag_values(record: &LocalEventRecord, key: &str) -> Vec<String> {
+    record
+        .event_tags_json
+        .as_ref()
+        .or(record
+            .raw_event_json
+            .as_ref()
+            .and_then(|event| event.get("tags")))
+        .and_then(Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(Value::as_array)
+                .filter_map(|tag| {
+                    if tag.first().and_then(Value::as_str) == Some(key) {
+                        tag.get(1).and_then(Value::as_str).map(str::to_owned)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn signed_record_event_id(record: &LocalEventRecord) -> String {
+    record
+        .event_id
+        .clone()
+        .unwrap_or_else(|| record.record_id.clone())
+}
+
 fn source_and_document_issues(
     config: &RuntimeConfig,
     app_order: &LoadedAppOrderRecord,
@@ -9793,13 +9980,42 @@ fn app_order_record_summary(
     let exportable = issues.is_empty();
     let reason = issues.first().map(|issue| issue.message.clone());
     let document = &app_order.loaded.document;
+    let status = if app_order_issue_present(&issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
+        "submitted".to_owned()
+    } else if app_order_issue_present(&issues, APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE) {
+        "conflict".to_owned()
+    } else {
+        record.status.as_str().to_owned()
+    };
+    let actions = if exportable {
+        vec![
+            format!("radroots order get {}", document.order.order_id),
+            format!("radroots order app export {}", record.record_id),
+            format!(
+                "radroots --relay wss://relay.example.com order submit {}",
+                document.order.order_id
+            ),
+        ]
+    } else if app_order_issue_present(&issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
+        vec![format!(
+            "radroots order status get {}",
+            document.order.order_id
+        )]
+    } else if app_order_issue_present(&issues, APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE) {
+        vec![
+            format!("radroots order status get {}", document.order.order_id),
+            "radroots order app list".to_owned(),
+        ]
+    } else {
+        Vec::new()
+    };
     Ok(OrderAppRecordSummaryView {
         record_id: record.record_id.clone(),
         seq: record.seq,
         change_seq: record.change_seq,
         superseded_count,
         record_kind,
-        status: record.status.as_str().to_owned(),
+        status,
         source_runtime: record.source_runtime.as_str().to_owned(),
         owner_account_id: record.owner_account_id.clone(),
         owner_pubkey: record.owner_pubkey.clone(),
@@ -9816,18 +10032,7 @@ fn app_order_record_summary(
         ready_for_submit: exportable,
         exportable,
         reason,
-        actions: if exportable {
-            vec![
-                format!("radroots order get {}", document.order.order_id),
-                format!("radroots order app export {}", record.record_id),
-                format!(
-                    "radroots --relay wss://relay.example.com order submit {}",
-                    document.order.order_id
-                ),
-            ]
-        } else {
-            Vec::new()
-        },
+        actions,
     })
 }
 
@@ -9873,8 +10078,12 @@ fn placeholder_app_order_document(record: &LocalEventRecord) -> OrderDraftDocume
 fn app_order_export_failure_state(issues: &[OrderIssueView]) -> &'static str {
     if issues
         .iter()
-        .any(|issue| issue.code == "app_order_conflict")
+        .any(|issue| issue.code == APP_ORDER_ALREADY_SUBMITTED_ISSUE)
     {
+        "already_submitted"
+    } else if issues.iter().any(|issue| {
+        issue.code == "app_order_conflict" || issue.code == APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE
+    }) {
         "conflict"
     } else if issues.iter().any(|issue| issue.code == "app_order_stale") {
         "stale"
@@ -9890,6 +10099,25 @@ fn app_order_export_failure_state(issues: &[OrderIssueView]) -> &'static str {
         "unsupported"
     } else {
         "invalid"
+    }
+}
+
+fn app_order_export_failure_actions(
+    document: &OrderDraftDocument,
+    issues: &[OrderIssueView],
+) -> Vec<String> {
+    if app_order_issue_present(issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
+        vec![format!(
+            "radroots order status get {}",
+            document.order.order_id
+        )]
+    } else if app_order_issue_present(issues, APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE) {
+        vec![
+            format!("radroots order status get {}", document.order.order_id),
+            "radroots order app list".to_owned(),
+        ]
+    } else {
+        vec!["radroots order app list".to_owned()]
     }
 }
 
@@ -9957,7 +10185,11 @@ fn inspect_document_with_source_issues(
     issues.extend(buyer_readiness.issues);
     issues.extend(source_issues.iter().cloned());
     let ready_for_submit = issues.is_empty();
-    let state = if ready_for_submit {
+    let state = if app_order_issue_present(&issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
+        "submitted".to_owned()
+    } else if app_order_issue_present(&issues, APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE) {
+        "conflict".to_owned()
+    } else if ready_for_submit {
         "ready".to_owned()
     } else {
         "draft".to_owned()
@@ -10232,6 +10464,19 @@ fn actions_for_document(
     file: &Path,
     issues: &[OrderIssueView],
 ) -> Vec<String> {
+    if app_order_issue_present(issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
+        return vec![format!(
+            "radroots order status get {}",
+            document.order.order_id
+        )];
+    }
+    if app_order_issue_present(issues, APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE) {
+        return vec![
+            format!("radroots order status get {}", document.order.order_id),
+            "radroots order app list".to_owned(),
+        ];
+    }
+
     let mut actions = Vec::new();
     actions.push(format!(
         "edit {} and fill the remaining draft fields",
@@ -10290,6 +10535,14 @@ fn actions_for_document(
         }
     }
     deduped
+}
+
+fn app_order_issue_present(issues: &[OrderIssueView], code: &str) -> bool {
+    issues.iter().any(|issue| issue.code == code)
+}
+
+fn app_order_issue<'a>(issues: &'a [OrderIssueView], code: &str) -> Option<&'a OrderIssueView> {
+    issues.iter().find(|issue| issue.code == code)
 }
 
 fn order_rebind_selector_error(selector: &str, error: RuntimeError) -> RuntimeError {
@@ -10763,6 +11016,93 @@ fn order_submit_unconfigured_view(
         issues,
         actions,
     }
+}
+
+fn order_submit_app_signed_evidence_view(
+    config: &RuntimeConfig,
+    loaded: &LoadedOrderDraft,
+    args: &OrderSubmitArgs,
+    issues: &[OrderIssueView],
+) -> Option<OrderSubmitView> {
+    if let Some(issue) = app_order_issue(issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
+        return Some(OrderSubmitView {
+            state: "submitted".to_owned(),
+            source: ORDER_SUBMIT_SOURCE.to_owned(),
+            order_id: loaded.document.order.order_id.clone(),
+            file: loaded.file.display().to_string(),
+            listing_lookup: loaded.document.listing_lookup.clone(),
+            listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+            listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+            listing_relays: order_listing_relays(&loaded.document),
+            buyer_account_id: buyer_account_id(&loaded.document),
+            buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+            buyer_actor_source: buyer_actor_source(&loaded.document),
+            buyer_custody: None,
+            buyer_write_capable: None,
+            seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+            event_id: issue.event_ids.first().cloned(),
+            event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+            dry_run: config.output.dry_run,
+            deduplicated: true,
+            target_relays: Vec::new(),
+            connected_relays: Vec::new(),
+            acknowledged_relays: Vec::new(),
+            failed_relays: Vec::new(),
+            idempotency_key: args.idempotency_key.clone(),
+            signer_mode: None,
+            signer_session_id: None,
+            requested_signer_session_id: None,
+            reason: Some(
+                "matching signed order request evidence already exists; publish skipped".to_owned(),
+            ),
+            job: None,
+            issues: vec![issue.clone()],
+            actions: Vec::new(),
+        });
+    }
+
+    if app_order_issue_present(issues, APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE) {
+        return Some(OrderSubmitView {
+            state: "invalid".to_owned(),
+            source: ORDER_SUBMIT_SOURCE.to_owned(),
+            order_id: loaded.document.order.order_id.clone(),
+            file: loaded.file.display().to_string(),
+            listing_lookup: loaded.document.listing_lookup.clone(),
+            listing_addr: non_empty_string(loaded.document.order.listing_addr.clone()),
+            listing_event_id: non_empty_string(loaded.document.order.listing_event_id.clone()),
+            listing_relays: order_listing_relays(&loaded.document),
+            buyer_account_id: buyer_account_id(&loaded.document),
+            buyer_pubkey: non_empty_string(loaded.document.order.buyer_pubkey.clone()),
+            buyer_actor_source: buyer_actor_source(&loaded.document),
+            buyer_custody: None,
+            buyer_write_capable: None,
+            seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
+            event_id: None,
+            event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+            dry_run: config.output.dry_run,
+            deduplicated: false,
+            target_relays: Vec::new(),
+            connected_relays: Vec::new(),
+            acknowledged_relays: Vec::new(),
+            failed_relays: Vec::new(),
+            idempotency_key: args.idempotency_key.clone(),
+            signer_mode: None,
+            signer_session_id: None,
+            requested_signer_session_id: None,
+            reason: Some(
+                "signed order request evidence conflicts with the app-authored local order"
+                    .to_owned(),
+            ),
+            job: None,
+            issues: issues.to_vec(),
+            actions: vec![format!(
+                "radroots order status get {}",
+                loaded.document.order.order_id
+            )],
+        });
+    }
+
+    None
 }
 
 fn order_submit_invalid_quantity_view(
