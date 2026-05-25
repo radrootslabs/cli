@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 
+use radroots_local_events::{RelayUrlValidationError, normalize_relay_url};
 use radroots_runtime_paths::{
     RadrootsLegacyPathCandidate, RadrootsMigrationReport, RadrootsPathResolver,
     inspect_legacy_paths,
@@ -1349,7 +1350,6 @@ fn parse_relay_env_value(value: &str, key: &str) -> Result<Vec<String>, RuntimeE
     let entries = value
         .split(',')
         .map(str::trim)
-        .filter(|entry| !entry.is_empty())
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
 
@@ -1380,20 +1380,14 @@ fn validate_relay_url(value: &str, source: &str) -> Result<String, RuntimeError>
             "{source} contains an empty relay url"
         )));
     }
-
-    let parsed = Url::parse(trimmed).map_err(|err| {
-        RuntimeError::Config(format!(
-            "{source} contains invalid relay url `{trimmed}`: {err}"
-        ))
-    })?;
-
-    if !matches!(parsed.scheme(), "ws" | "wss") || parsed.host_str().is_none() {
-        return Err(RuntimeError::Config(format!(
+    normalize_relay_url(trimmed).map_err(|error| match error {
+        RelayUrlValidationError::UnsupportedScheme(_) => RuntimeError::Config(format!(
             "{source} must use websocket relay urls, got `{trimmed}`"
-        )));
-    }
-
-    Ok(trimmed.to_owned())
+        )),
+        _ => RuntimeError::Config(format!(
+            "{source} contains invalid relay url `{trimmed}`: {error}"
+        )),
+    })
 }
 
 fn resolve_env_file_path(args: &RuntimeInvocationArgs, env: &dyn Environment) -> Option<PathBuf> {
@@ -2869,14 +2863,53 @@ target = "workflow-default"
 
     #[test]
     fn invalid_relay_url_fails() {
+        for relay in [
+            "https://not-a-websocket.example.com",
+            "wss://",
+            "wss://user@relay.example",
+            "wss://relay.example:abc",
+            " ",
+        ] {
+            let args = RuntimeInvocationArgs {
+                relay: vec![relay.to_owned()],
+                ..runtime_args()
+            };
+            let env = MapEnvironment::new(BTreeMap::new());
+            let error =
+                RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+                    .expect_err("invalid relay url");
+            assert!(
+                error.to_string().contains("relay url")
+                    || error.to_string().contains("websocket relay urls"),
+                "unexpected error for {relay}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn relay_env_value_rejects_empty_entries() {
+        let env = MapEnvironment::new(BTreeMap::from([(
+            super::ENV_RELAYS.to_owned(),
+            "wss://relay.example,,wss://relay-two.example".to_owned(),
+        )]));
+        let error =
+            RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
+                .expect_err("empty relay entry");
+
+        assert!(error.to_string().contains("empty relay url"));
+    }
+
+    #[test]
+    fn valid_ipv6_relay_url_resolves() {
         let args = RuntimeInvocationArgs {
-            relay: vec!["https://not-a-websocket.example.com".to_owned()],
+            relay: vec![" wss://[2001:db8::1]:443/relay ".to_owned()],
             ..runtime_args()
         };
         let env = MapEnvironment::new(BTreeMap::new());
-        let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
-            .expect_err("invalid relay url");
-        assert!(error.to_string().contains("websocket relay urls"));
+        let config = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("valid relay url");
+
+        assert_eq!(config.relay.urls, vec!["wss://[2001:db8::1]:443/relay"]);
     }
 
     #[test]
