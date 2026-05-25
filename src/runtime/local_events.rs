@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_local_events::{
     LocalEventRecord, LocalEventRecordInput, LocalEventsStore, LocalRecordFamily,
-    LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
+    LocalRecordStatus, PublishOutboxStatus, SourceRuntime, canonical_relay_set_fingerprint,
 };
 use radroots_runtime_paths::{
     default_shared_local_events_database_path_from_shared_accounts_data_root,
@@ -69,7 +69,7 @@ pub fn append_signed_event(
     event: &radroots_nostr::prelude::RadrootsNostrEvent,
 ) -> Result<LocalEventRecord, RuntimeError> {
     let timestamp = current_time_ms()?;
-    let relay_set = relay_set_fingerprint(&config.relay.urls);
+    let relay_set = canonical_relay_set_fingerprint(&config.relay.urls);
     let input = LocalEventRecordInput {
         record_id: format!("cli:signed_event:{subject}:{}", event.id.to_hex()),
         family: LocalRecordFamily::SignedEvent,
@@ -229,7 +229,7 @@ fn update_signed_event_outbox(
             record_id: record_id.to_owned(),
             status,
             outbox_status,
-            relay_set_fingerprint: relay_set_fingerprint(&config.relay.urls),
+            relay_set_fingerprint: canonical_relay_set_fingerprint(&config.relay.urls),
             relay_delivery_json: Some(relay_delivery_json),
             updated_at_ms: current_time_ms()?,
         })?,
@@ -312,21 +312,6 @@ fn current_time_ms() -> Result<i64, RuntimeError> {
         })?;
     i64::try_from(duration.as_millis())
         .map_err(|_| RuntimeError::Config("current timestamp exceeds i64 milliseconds".to_owned()))
-}
-
-fn relay_set_fingerprint(relay_urls: &[String]) -> Option<String> {
-    if relay_urls.is_empty() {
-        return None;
-    }
-    let mut relays = relay_urls
-        .iter()
-        .map(|relay| relay.trim())
-        .filter(|relay| !relay.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    relays.sort();
-    relays.dedup();
-    (!relays.is_empty()).then(|| format!("nostr-relay-set-v1:{}", relays.join(",")))
 }
 
 fn pending_delivery_json(relay_urls: &[String]) -> Value {

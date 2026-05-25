@@ -14,8 +14,9 @@ use radroots_events::trade::{
 };
 use radroots_events_codec::trade::active_trade_order_request_event_build;
 use radroots_local_events::{
-    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecordInput, LocalEventsStore,
-    LocalRecordFamily, LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
+    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, CANONICAL_RELAY_SET_FINGERPRINT_VERSION,
+    LocalEventRecordInput, LocalEventsStore, LocalRecordFamily, LocalRecordStatus,
+    PublishOutboxStatus, SourceRuntime, canonical_relay_set_fingerprint,
 };
 use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
 use radroots_replica_db::{farm, farm_member_claim, migrations};
@@ -4829,6 +4830,17 @@ fn farm_publish_writes_acknowledged_signed_outbox_records() {
         assert_eq!(
             record.relay_delivery_json.as_ref().unwrap()["acknowledged_relays"][0],
             relay_url
+        );
+        assert_eq!(
+            record.relay_set_fingerprint.as_deref(),
+            canonical_relay_set_fingerprint([relay_url.as_str()]).as_deref()
+        );
+        assert!(
+            record
+                .relay_set_fingerprint
+                .as_deref()
+                .expect("relay set fingerprint")
+                .starts_with(CANONICAL_RELAY_SET_FINGERPRINT_VERSION)
         );
         assert_eq!(
             record.raw_event_json.as_ref().unwrap()["id"],
