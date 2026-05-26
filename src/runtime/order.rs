@@ -9092,6 +9092,7 @@ fn trade_product_listing_addr_filter(listing_addr: &str) -> ITradeProductFieldsF
         price_qty_unit: None,
         listing_addr: Some(listing_addr.to_owned()),
         primary_bin_id: None,
+        verified_primary_bin_id: None,
         notes: None,
     }
 }

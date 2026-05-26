@@ -592,6 +592,7 @@ mod tests {
             protocol_valid: true,
             marketplace_eligible: true,
             checkout_enabled: true,
+            primary_bin_verified: true,
             reason_codes: Vec::new(),
         }
     }
@@ -601,6 +602,7 @@ mod tests {
             protocol_valid: true,
             marketplace_eligible: true,
             checkout_enabled: false,
+            primary_bin_verified: true,
             reason_codes: vec![
                 "listing_checkout_disabled".to_owned(),
                 "listing_inventory_unavailable".to_owned(),

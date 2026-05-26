@@ -5633,6 +5633,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     assert_eq!(result["protocol_valid"], true);
     assert_eq!(result["marketplace_eligible"], true);
     assert_eq!(result["checkout_enabled"], true);
+    assert_eq!(result["primary_bin_verified"], true);
     assert!(result.get("reason_codes").is_none());
     assert!(
         search["result"]["actions"]
@@ -5654,6 +5655,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     assert_eq!(listing["result"]["protocol_valid"], true);
     assert_eq!(listing["result"]["marketplace_eligible"], true);
     assert_eq!(listing["result"]["checkout_enabled"], true);
+    assert_eq!(listing["result"]["primary_bin_verified"], true);
     assert!(
         listing["result"]["actions"]
             .as_array()
@@ -5670,6 +5672,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     assert_eq!(disabled_result["protocol_valid"], true);
     assert_eq!(disabled_result["marketplace_eligible"], true);
     assert_eq!(disabled_result["checkout_enabled"], false);
+    assert_eq!(disabled_result["primary_bin_verified"], true);
     assert_eq!(
         disabled_result["reason_codes"][0],
         "listing_checkout_disabled"
@@ -5697,6 +5700,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     assert_eq!(disabled_listing["result"]["protocol_valid"], true);
     assert_eq!(disabled_listing["result"]["marketplace_eligible"], true);
     assert_eq!(disabled_listing["result"]["checkout_enabled"], false);
+    assert_eq!(disabled_listing["result"]["primary_bin_verified"], true);
     assert_eq!(
         disabled_listing["result"]["reason_codes"][0],
         "listing_checkout_disabled"
@@ -5716,6 +5720,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     let no_bin_result = &no_bin_search["result"]["results"][0];
     assert_eq!(no_bin_result["primary_bin_id"], Value::Null);
     assert_eq!(no_bin_result["checkout_enabled"], false);
+    assert_eq!(no_bin_result["primary_bin_verified"], false);
     assert_eq!(
         no_bin_result["reason_codes"][0],
         "listing_checkout_disabled"
@@ -5742,12 +5747,58 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     ]);
     assert_eq!(no_bin_listing["result"]["primary_bin_id"], Value::Null);
     assert_eq!(no_bin_listing["result"]["checkout_enabled"], false);
+    assert_eq!(no_bin_listing["result"]["primary_bin_verified"], false);
     assert_eq!(
         no_bin_listing["result"]["reason_codes"][1],
         "listing_primary_bin_missing"
     );
     assert!(
         no_bin_listing["result"]
+            .get("actions")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    );
+
+    update_orderable_listing_primary_bin_id(&sandbox, LISTING_ADDR, Some("missing-bin"));
+
+    let invalid_bin_search =
+        sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
+    let invalid_bin_result = &invalid_bin_search["result"]["results"][0];
+    assert_eq!(invalid_bin_result["primary_bin_id"], "missing-bin");
+    assert_eq!(invalid_bin_result["checkout_enabled"], false);
+    assert_eq!(invalid_bin_result["primary_bin_verified"], false);
+    assert_eq!(
+        invalid_bin_result["reason_codes"][1],
+        "listing_primary_bin_invalid"
+    );
+    assert!(
+        invalid_bin_search["result"]["actions"]
+            .as_array()
+            .expect("invalid-bin search actions")
+            .iter()
+            .all(|action| action != "radroots basket create")
+    );
+
+    let invalid_bin_listing = sandbox.json_success(&[
+        "--format",
+        "json",
+        "market",
+        "listing",
+        "get",
+        "pasture-eggs",
+    ]);
+    assert_eq!(
+        invalid_bin_listing["result"]["primary_bin_id"],
+        "missing-bin"
+    );
+    assert_eq!(invalid_bin_listing["result"]["checkout_enabled"], false);
+    assert_eq!(invalid_bin_listing["result"]["primary_bin_verified"], false);
+    assert_eq!(
+        invalid_bin_listing["result"]["reason_codes"][1],
+        "listing_primary_bin_invalid"
+    );
+    assert!(
+        invalid_bin_listing["result"]
             .get("actions")
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty)
@@ -5765,6 +5816,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     ]);
     assert_eq!(restored_listing["result"]["primary_bin_id"], "bin-1");
     assert_eq!(restored_listing["result"]["checkout_enabled"], true);
+    assert_eq!(restored_listing["result"]["primary_bin_verified"], true);
     assert!(
         restored_listing["result"]
             .get("reason_codes")

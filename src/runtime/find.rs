@@ -82,6 +82,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
         .map(|row| {
             let listing_addr = row.listing_addr.and_then(non_empty);
             let primary_bin_id = row.primary_bin_id.and_then(non_empty);
+            let verified_primary_bin_id = row.verified_primary_bin_id.and_then(non_empty);
             let available_amount = row.qty_avail;
             let price_amount = row.price_amt;
             let price_currency = row.price_currency;
@@ -89,6 +90,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
             let readiness = MarketReadinessView::from_market_projection(
                 listing_addr.as_deref(),
                 primary_bin_id.as_deref(),
+                verified_primary_bin_id.as_deref(),
                 Some(row.title.as_str()),
                 Some(row.category.as_str()),
                 available_amount,
