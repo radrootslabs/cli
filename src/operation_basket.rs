@@ -109,6 +109,13 @@ struct BasketProductBinState {
     verified_primary_bin_id: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+enum BasketProductResolution {
+    Resolved(BasketProductBinState),
+    Unresolved,
+    Ambiguous(usize),
+}
+
 pub struct BasketOperationService<'a> {
     config: &'a RuntimeConfig,
 }
@@ -867,7 +874,11 @@ fn basket_market_issues(
     document: &BasketDocument,
 ) -> Result<Vec<BasketIssue>, OperationAdapterError> {
     if !config.local.replica_db_path.exists() {
-        return Ok(Vec::new());
+        return Ok(vec![basket_issue(
+            "basket_market_replica_missing",
+            "local.replica_db",
+            "current local replica data is required before quote creation; run `radroots store init` and `radroots market refresh`",
+        )]);
     }
     let executor = SqliteExecutor::open(&config.local.replica_db_path).map_err(|error| {
         OperationAdapterError::Runtime(format!(
@@ -877,8 +888,26 @@ fn basket_market_issues(
     })?;
     let mut issues = Vec::new();
     for item in &document.basket.items {
-        let Some(product) = basket_product_bin_state(config, &executor, item)? else {
-            continue;
+        let product = match basket_product_bin_state(config, &executor, item)? {
+            BasketProductResolution::Resolved(product) => product,
+            BasketProductResolution::Unresolved => {
+                issues.push(basket_issue(
+                    "basket_item_listing_unresolved",
+                    basket_item_listing_field(item),
+                    "basket item listing is not active in the current local replica; run `radroots market refresh` before quote creation",
+                ));
+                continue;
+            }
+            BasketProductResolution::Ambiguous(count) => {
+                issues.push(basket_issue(
+                    "basket_item_listing_ambiguous",
+                    basket_item_listing_field(item),
+                    format!(
+                        "basket item listing matched {count} active local replica rows; choose a unique listing before quote creation"
+                    ),
+                ));
+                continue;
+            }
         };
         let Some(primary_bin_id) = product.primary_bin_id.as_deref().and_then(non_empty_ref) else {
             issues.push(basket_issue(
@@ -928,7 +957,7 @@ fn basket_product_bin_state(
     config: &RuntimeConfig,
     executor: &SqliteExecutor,
     item: &BasketItem,
-) -> Result<Option<BasketProductBinState>, OperationAdapterError> {
+) -> Result<BasketProductResolution, OperationAdapterError> {
     if let Some(listing_addr) = item.listing_addr.as_deref().and_then(non_empty_ref) {
         let product_rows = trade_product::find_many(
             executor,
@@ -940,17 +969,19 @@ fn basket_product_bin_state(
             OperationAdapterError::Runtime(format!("resolve listing product state: {error:?}"))
         })?
         .results;
-        let [product] = product_rows.as_slice() else {
-            return Ok(None);
+        let product = match product_rows.as_slice() {
+            [] => return Ok(BasketProductResolution::Unresolved),
+            [product] => product,
+            rows => return Ok(BasketProductResolution::Ambiguous(rows.len())),
         };
-        return Ok(Some(BasketProductBinState {
+        return Ok(BasketProductResolution::Resolved(BasketProductBinState {
             primary_bin_id: product.primary_bin_id.clone(),
             verified_primary_bin_id: product.verified_primary_bin_id.clone(),
         }));
     }
 
     let Some(listing_lookup) = item.listing.as_deref().and_then(non_empty_ref) else {
-        return Ok(None);
+        return Ok(BasketProductResolution::Unresolved);
     };
     let lookup_executor = SqliteExecutor::open(&config.local.replica_db_path).map_err(|error| {
         OperationAdapterError::Runtime(format!(
@@ -963,13 +994,28 @@ fn basket_product_bin_state(
         .map_err(|error| {
             OperationAdapterError::Runtime(format!("resolve listing product state: {error:?}"))
         })?;
-    let [product] = rows.as_slice() else {
-        return Ok(None);
+    let product = match rows.as_slice() {
+        [] => return Ok(BasketProductResolution::Unresolved),
+        [product] => product,
+        rows => return Ok(BasketProductResolution::Ambiguous(rows.len())),
     };
-    Ok(Some(BasketProductBinState {
+    Ok(BasketProductResolution::Resolved(BasketProductBinState {
         primary_bin_id: product.primary_bin_id.clone(),
         verified_primary_bin_id: product.verified_primary_bin_id.clone(),
     }))
+}
+
+fn basket_item_listing_field(item: &BasketItem) -> String {
+    if item
+        .listing_addr
+        .as_deref()
+        .and_then(non_empty_ref)
+        .is_some()
+    {
+        format!("basket.items.{}.listing_addr", item.item_id)
+    } else {
+        format!("basket.items.{}.listing", item.item_id)
+    }
 }
 
 fn basket_issue(
@@ -1268,9 +1314,14 @@ fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use radroots_events::RadrootsNostrEvent;
+    use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
+    use radroots_events_codec::trade::RadrootsTradeListingAddress;
+    use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
-    use serde_json::{Map, Value};
+    use radroots_sql_core::{SqlExecutor, SqliteExecutor};
+    use serde_json::{Map, Value, json};
     use tempfile::tempdir;
 
     use super::BasketOperationService;
@@ -1386,7 +1437,11 @@ mod tests {
             .to_envelope(OperationContext::default().envelope_context("req_basket_validate"))
             .expect("basket validate envelope");
         assert_eq!(validate_envelope.operation_id, "basket.validate");
-        assert_eq!(validate_envelope.result["ready_for_quote"], true);
+        assert_eq!(validate_envelope.result["ready_for_quote"], false);
+        assert_eq!(
+            validate_envelope.result["issues"][0]["code"],
+            "basket_market_replica_missing"
+        );
 
         let adjustment_add = OperationRequest::new(
             OperationContext::default(),
@@ -1452,6 +1507,7 @@ mod tests {
     fn basket_quote_create_materializes_order_draft() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
+        seed_current_listing(&config);
         accounts::create_or_migrate_default_account(&config).expect("create buyer account");
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_quote");
@@ -1505,6 +1561,7 @@ mod tests {
     fn basket_quote_create_dry_run_skips_order_draft() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
+        seed_current_listing(&config);
         accounts::create_or_migrate_default_account(&config).expect("create buyer account");
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_dry_run");
@@ -1538,6 +1595,7 @@ mod tests {
     fn basket_quote_create_requires_resolved_buyer_account() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
+        seed_current_listing(&config);
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_no_buyer");
         add_listing_item(&service, "basket_no_buyer");
@@ -1556,6 +1614,130 @@ mod tests {
         assert_eq!(detail["actions"][0], "radroots account create");
     }
 
+    #[test]
+    fn basket_readiness_fails_closed_without_replica_data() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(BasketOperationService::new(&config));
+        create_basket(&service, "basket_missing_replica");
+        let add = add_listing_item(&service, "basket_missing_replica");
+        assert_eq!(add.result["ready_for_quote"], false);
+        assert_eq!(
+            add.result["issues"][0]["code"],
+            "basket_market_replica_missing"
+        );
+
+        let list = OperationRequest::new(OperationContext::default(), BasketListRequest::default())
+            .expect("basket list request");
+        let list_envelope = service
+            .execute(list)
+            .expect("basket list result")
+            .to_envelope(OperationContext::default().envelope_context("req_basket_list"))
+            .expect("basket list envelope");
+        assert_eq!(
+            list_envelope.result["baskets"][0]["issues"][0]["code"],
+            "basket_market_replica_missing"
+        );
+
+        let validate = OperationRequest::new(
+            OperationContext::default(),
+            BasketValidateRequest::from_data(data(&[("basket_id", "basket_missing_replica")])),
+        )
+        .expect("basket validate request");
+        let validate_envelope = service
+            .execute(validate)
+            .expect("basket validate result")
+            .to_envelope(OperationContext::default().envelope_context("req_basket_validate"))
+            .expect("basket validate envelope");
+        assert_eq!(validate_envelope.result["state"], "unconfigured");
+        assert_eq!(
+            validate_envelope.result["issues"][0]["code"],
+            "basket_market_replica_missing"
+        );
+
+        let quote = OperationRequest::new(
+            OperationContext::default(),
+            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_missing_replica")])),
+        )
+        .expect("basket quote request");
+        let quote_envelope = service
+            .execute(quote)
+            .expect("basket quote result")
+            .to_envelope(OperationContext::default().envelope_context("req_basket_quote"))
+            .expect("basket quote envelope");
+        assert_eq!(quote_envelope.result["state"], "unconfigured");
+        assert_eq!(
+            quote_envelope.result["issues"][0]["code"],
+            "basket_market_replica_missing"
+        );
+        assert!(!config.paths.app_data_root.join("orders/drafts").exists());
+    }
+
+    #[test]
+    fn basket_readiness_fails_closed_for_unresolved_listing() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        crate::runtime::local::init(&config).expect("store init");
+        let service = OperationAdapter::new(BasketOperationService::new(&config));
+        create_basket(&service, "basket_unresolved");
+        let add = add_listing_item(&service, "basket_unresolved");
+        assert_eq!(add.result["ready_for_quote"], false);
+        assert_eq!(
+            add.result["issues"][0]["code"],
+            "basket_item_listing_unresolved"
+        );
+
+        let quote = OperationRequest::new(
+            OperationContext::default(),
+            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_unresolved")])),
+        )
+        .expect("basket quote request");
+        let quote_envelope = service
+            .execute(quote)
+            .expect("basket quote result")
+            .to_envelope(OperationContext::default().envelope_context("req_basket_quote"))
+            .expect("basket quote envelope");
+        assert_eq!(quote_envelope.result["state"], "unconfigured");
+        assert_eq!(
+            quote_envelope.result["issues"][0]["code"],
+            "basket_item_listing_unresolved"
+        );
+        assert!(!config.paths.app_data_root.join("orders/drafts").exists());
+    }
+
+    #[test]
+    fn basket_readiness_fails_closed_for_ambiguous_listing() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        seed_current_listing(&config);
+        duplicate_current_listing_row(&config);
+        let service = OperationAdapter::new(BasketOperationService::new(&config));
+        create_basket(&service, "basket_ambiguous");
+        let add = add_listing_item(&service, "basket_ambiguous");
+        assert_eq!(add.result["ready_for_quote"], false);
+        assert_eq!(
+            add.result["issues"][0]["code"],
+            "basket_item_listing_ambiguous"
+        );
+
+        let quote = OperationRequest::new(
+            OperationContext::default(),
+            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_ambiguous")])),
+        )
+        .expect("basket quote request");
+        let quote_envelope = service
+            .execute(quote)
+            .expect("basket quote result")
+            .to_envelope(OperationContext::default().envelope_context("req_basket_quote"))
+            .expect("basket quote envelope");
+        assert_eq!(quote_envelope.result["state"], "unconfigured");
+        assert_eq!(
+            quote_envelope.result["issues"][0]["code"],
+            "basket_item_listing_ambiguous"
+        );
+        assert!(!config.paths.app_data_root.join("orders/drafts").exists());
+    }
+
     fn create_basket(service: &OperationAdapter<BasketOperationService<'_>>, basket_id: &str) {
         let request = OperationRequest::new(
             OperationContext::default(),
@@ -1565,7 +1747,10 @@ mod tests {
         service.execute(request).expect("basket create result");
     }
 
-    fn add_listing_item(service: &OperationAdapter<BasketOperationService<'_>>, basket_id: &str) {
+    fn add_listing_item(
+        service: &OperationAdapter<BasketOperationService<'_>>,
+        basket_id: &str,
+    ) -> crate::output_contract::OutputEnvelope {
         let request = OperationRequest::new(
             OperationContext::default(),
             BasketItemAddRequest::from_data(data(&[
@@ -1576,7 +1761,81 @@ mod tests {
             ])),
         )
         .expect("basket item add request");
-        service.execute(request).expect("basket item add result");
+        service
+            .execute(request)
+            .expect("basket item add result")
+            .to_envelope(OperationContext::default().envelope_context("req_basket_add"))
+            .expect("basket item add envelope")
+    }
+
+    fn seed_current_listing(config: &RuntimeConfig) {
+        crate::runtime::local::init(config).expect("store init");
+        let parsed = RadrootsTradeListingAddress::parse(LISTING_ADDR).expect("listing addr");
+        let event = RadrootsNostrEvent {
+            id: "2".repeat(64),
+            author: parsed.seller_pubkey.clone(),
+            created_at: 1,
+            kind: KIND_LISTING,
+            tags: vec![
+                vec!["d".to_owned(), parsed.listing_id],
+                vec![
+                    "a".to_owned(),
+                    format!(
+                        "{}:{}:{}",
+                        KIND_FARM, parsed.seller_pubkey, "AAAAAAAAAAAAAAAAAAAAAA"
+                    ),
+                ],
+                vec!["p".to_owned(), parsed.seller_pubkey],
+                vec!["key".to_owned(), "pasture-eggs".to_owned()],
+                vec!["title".to_owned(), "Market Eggs".to_owned()],
+                vec!["category".to_owned(), "eggs".to_owned()],
+                vec!["summary".to_owned(), "Pasture-raised eggs".to_owned()],
+                vec!["process".to_owned(), "washed".to_owned()],
+                vec!["lot".to_owned(), "lot-a".to_owned()],
+                vec!["profile".to_owned(), "dozen".to_owned()],
+                vec!["year".to_owned(), "2026".to_owned()],
+                vec!["radroots:primary_bin".to_owned(), "bin-1".to_owned()],
+                vec![
+                    "radroots:bin".to_owned(),
+                    "bin-1".to_owned(),
+                    "12".to_owned(),
+                    "each".to_owned(),
+                    "12".to_owned(),
+                    "each".to_owned(),
+                    "dozen".to_owned(),
+                ],
+                vec![
+                    "radroots:price".to_owned(),
+                    "bin-1".to_owned(),
+                    "6".to_owned(),
+                    "USD".to_owned(),
+                    "1".to_owned(),
+                    "each".to_owned(),
+                    "6".to_owned(),
+                    "each".to_owned(),
+                ],
+                vec!["inventory".to_owned(), "5".to_owned()],
+                vec!["status".to_owned(), "active".to_owned()],
+            ],
+            content: "# Market Eggs".to_owned(),
+            sig: "f".repeat(128),
+        };
+        let executor = SqliteExecutor::open(&config.local.replica_db_path).expect("open replica");
+        assert_eq!(
+            radroots_replica_ingest_event(&executor, &event).expect("ingest listing"),
+            RadrootsReplicaIngestOutcome::Applied
+        );
+    }
+
+    fn duplicate_current_listing_row(config: &RuntimeConfig) {
+        let executor = SqliteExecutor::open(&config.local.replica_db_path).expect("open replica");
+        let params = json!(["33333333-3333-3333-3333-333333333333", LISTING_ADDR]).to_string();
+        executor
+            .exec(
+                "INSERT INTO trade_product (id, created_at, updated_at, key, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes, listing_addr, primary_bin_id, qty_amt_exact, price_amt_exact, price_qty_amt_exact, verified_primary_bin_id) SELECT ?, created_at, updated_at, key, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes, listing_addr, primary_bin_id, qty_amt_exact, price_amt_exact, price_qty_amt_exact, verified_primary_bin_id FROM trade_product WHERE listing_addr = ?;",
+                params.as_str(),
+            )
+            .expect("duplicate listing row");
     }
 
     fn sample_config(root: &Path) -> RuntimeConfig {

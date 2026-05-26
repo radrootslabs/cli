@@ -391,6 +391,21 @@ pub fn update_orderable_listing_primary_bin_id(
         .expect("update listing primary bin");
 }
 
+pub fn duplicate_orderable_listing_row(sandbox: &RadrootsCliSandbox, listing_addr: &str) {
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica db");
+    let params = serde_json::to_string(&json!([
+        "33333333-3333-3333-3333-333333333333",
+        listing_addr
+    ]))
+    .expect("duplicate listing params");
+    executor
+        .exec(
+            "INSERT INTO trade_product (id, created_at, updated_at, key, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes, listing_addr, primary_bin_id, qty_amt_exact, price_amt_exact, price_qty_amt_exact, verified_primary_bin_id) SELECT ?, created_at, updated_at, key, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes, listing_addr, primary_bin_id, qty_amt_exact, price_amt_exact, price_qty_amt_exact, verified_primary_bin_id FROM trade_product WHERE listing_addr = ?;",
+            params.as_str(),
+        )
+        .expect("duplicate listing row");
+}
+
 pub fn replace_latest_listing_event_id(
     sandbox: &RadrootsCliSandbox,
     listing_addr: &str,

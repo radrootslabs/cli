@@ -32,9 +32,9 @@ use serde_json::json;
 use support::{
     ORDERABLE_LISTING_RELAY, RadrootsCliSandbox, assert_contains,
     assert_no_daemon_runtime_reference, assert_no_removed_command_reference, create_listing_draft,
-    identity_public, identity_secret, json_from_stdout, make_listing_publishable,
-    make_listing_publishable_with_seller, ndjson_from_stdout, radroots, remove_orderable_listing,
-    replace_latest_listing_event_id, seed_orderable_listing, toml_string,
+    duplicate_orderable_listing_row, identity_public, identity_secret, json_from_stdout,
+    make_listing_publishable, make_listing_publishable_with_seller, ndjson_from_stdout, radroots,
+    remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing, toml_string,
     update_orderable_listing_available_amount, update_orderable_listing_primary_bin_id,
     write_public_identity_profile, write_secret_identity_profile,
 };
@@ -5609,13 +5609,13 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
         "create",
         "basket_probe",
     ]);
-    let order_file = quote["result"]["order"]["file"]
-        .as_str()
-        .expect("order file");
     assert_eq!(quote["operation_id"], "basket.quote.create");
-    assert_eq!(quote["result"]["state"], "dry_run");
-    assert_eq!(quote["result"]["order"]["state"], "dry_run");
-    assert!(!Path::new(order_file).exists());
+    assert_eq!(quote["result"]["state"], "unconfigured");
+    assert_eq!(quote["result"]["ready_for_quote"], false);
+    assert_eq!(
+        quote["result"]["issues"][0]["code"],
+        "basket_item_listing_unresolved"
+    );
 
     let basket_after_quote =
         sandbox.json_success(&["--format", "json", "basket", "get", "basket_probe"]);
@@ -7226,6 +7226,135 @@ fn order_submit_rejects_unknown_local_listing_bin_before_publish() {
     );
     assert_no_removed_command_reference(&value, &["order", "submit"]);
     assert_no_daemon_runtime_reference(&value, &["order", "submit"]);
+}
+
+#[test]
+fn basket_quote_rejects_missing_replica_before_order_write() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&["--format", "json", "basket", "create", "missing_replica"]);
+    let add = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "missing_replica",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    assert_eq!(add["result"]["ready_for_quote"], false);
+    assert_eq!(
+        add["result"]["issues"][0]["code"],
+        "basket_market_replica_missing"
+    );
+
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "missing_replica",
+    ]);
+    assert_eq!(quote["result"]["state"], "unconfigured");
+    assert_eq!(quote["result"]["ready_for_quote"], false);
+    assert_eq!(
+        quote["result"]["issues"][0]["code"],
+        "basket_market_replica_missing"
+    );
+    assert!(!sandbox.root().join("data/apps/cli/orders/drafts").exists());
+}
+
+#[test]
+fn basket_quote_rejects_unresolved_listing_before_order_write() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    sandbox.json_success(&["--format", "json", "store", "init"]);
+    sandbox.json_success(&["--format", "json", "basket", "create", "unresolved_listing"]);
+    let add = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "unresolved_listing",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    assert_eq!(add["result"]["ready_for_quote"], false);
+    assert_eq!(
+        add["result"]["issues"][0]["code"],
+        "basket_item_listing_unresolved"
+    );
+
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "unresolved_listing",
+    ]);
+    assert_eq!(quote["result"]["state"], "unconfigured");
+    assert_eq!(quote["result"]["ready_for_quote"], false);
+    assert_eq!(
+        quote["result"]["issues"][0]["code"],
+        "basket_item_listing_unresolved"
+    );
+    assert!(!sandbox.root().join("data/apps/cli/orders/drafts").exists());
+}
+
+#[test]
+fn basket_quote_rejects_ambiguous_listing_before_order_write() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    seed_orderable_listing(&sandbox, LISTING_ADDR);
+    duplicate_orderable_listing_row(&sandbox, LISTING_ADDR);
+    sandbox.json_success(&["--format", "json", "basket", "create", "ambiguous_listing"]);
+    let add = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "ambiguous_listing",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    assert_eq!(add["result"]["ready_for_quote"], false);
+    assert_eq!(
+        add["result"]["issues"][0]["code"],
+        "basket_item_listing_ambiguous"
+    );
+
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "ambiguous_listing",
+    ]);
+    assert_eq!(quote["result"]["state"], "unconfigured");
+    assert_eq!(quote["result"]["ready_for_quote"], false);
+    assert_eq!(
+        quote["result"]["issues"][0]["code"],
+        "basket_item_listing_ambiguous"
+    );
+    assert!(!sandbox.root().join("data/apps/cli/orders/drafts").exists());
 }
 
 #[test]
