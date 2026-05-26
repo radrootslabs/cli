@@ -26,7 +26,7 @@ mod tests {
     use crate::cli::TargetCliArgs;
     use crate::registry::OPERATION_REGISTRY;
     use crate::runtime::RuntimeError;
-    use crate::runtime::accounts::AccountRuntimeFailure;
+    use crate::runtime::account::AccountRuntimeFailure;
 
     #[test]
     fn adapter_binds_every_registry_entry() {

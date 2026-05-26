@@ -314,7 +314,7 @@ mod tests {
         let mut config = sample_config(dir.path());
         config.output.dry_run = true;
         config.relay.urls = vec!["wss://relay.example.com".to_owned()];
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
 
         let service = OperationAdapter::new(MarketOperationService::new(&config));
         let mut context = OperationContext::default();
@@ -349,7 +349,7 @@ mod tests {
     fn market_refresh_no_relay_action_is_actionable() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let service = OperationAdapter::new(MarketOperationService::new(&config));
         let request =
             OperationRequest::new(OperationContext::default(), MarketRefreshRequest::default())

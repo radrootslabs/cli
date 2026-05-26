@@ -1331,7 +1331,7 @@ mod tests {
         BasketListRequest, BasketQuoteCreateRequest, BasketValidateRequest, OperationAdapter,
         OperationContext, OperationData, OperationRequest,
     };
-    use crate::runtime::accounts;
+    use crate::runtime::account;
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
@@ -1508,7 +1508,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         seed_current_listing(&config);
-        accounts::create_or_migrate_default_account(&config).expect("create buyer account");
+        account::create_or_migrate_default_account(&config).expect("create buyer account");
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_quote");
         add_listing_item(&service, "basket_quote");
@@ -1562,7 +1562,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         seed_current_listing(&config);
-        accounts::create_or_migrate_default_account(&config).expect("create buyer account");
+        account::create_or_migrate_default_account(&config).expect("create buyer account");
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_dry_run");
         add_listing_item(&service, "basket_dry_run");
@@ -1677,7 +1677,7 @@ mod tests {
     fn basket_readiness_fails_closed_for_unresolved_listing() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_unresolved");
         let add = add_listing_item(&service, "basket_unresolved");
@@ -1769,7 +1769,7 @@ mod tests {
     }
 
     fn seed_current_listing(config: &RuntimeConfig) {
-        crate::runtime::local::init(config).expect("store init");
+        crate::runtime::store::init(config).expect("store init");
         let parsed = RadrootsTradeListingAddress::parse(LISTING_ADDR).expect("listing addr");
         let event = RadrootsNostrEvent {
             id: "2".repeat(64),

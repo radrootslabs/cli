@@ -20,7 +20,7 @@ use crate::cli::global::{
     FarmUpdateArgs,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::accounts::{self, AccountRecordView};
+use crate::runtime::account::{self, AccountRecordView};
 use crate::runtime::config::{
     PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
 };
@@ -151,7 +151,7 @@ fn rebind_inner(
     let from_seller_pubkey = from_account
         .as_ref()
         .map(|account| account.record.public_identity.public_key_hex.clone());
-    let target_account = accounts::resolve_account_selector(config, args.selector.as_str())
+    let target_account = account::resolve_account_selector(config, args.selector.as_str())
         .map_err(|error| farm_rebind_selector_error(args.selector.as_str(), error))?;
     let to_seller_pubkey = target_account.record.public_identity.public_key_hex.clone();
     let seller_pubkey_changed = from_seller_pubkey
@@ -220,8 +220,8 @@ fn rebind_inner(
 
 fn farm_rebind_selector_error(selector: &str, error: RuntimeError) -> RuntimeError {
     match error {
-        RuntimeError::Account(accounts::AccountRuntimeFailure::Unresolved(issue)) => {
-            accounts::AccountRuntimeFailure::unresolved_with_detail(
+        RuntimeError::Account(account::AccountRuntimeFailure::Unresolved(issue)) => {
+            account::AccountRuntimeFailure::unresolved_with_detail(
                 issue.message().to_owned(),
                 json!({
                     "seller_actor_source": FARM_SELLER_ACTOR_SOURCE,
@@ -539,7 +539,7 @@ fn relay_farm_publish_readiness(
             state: "unconfigured",
             executable: false,
             reason: Some(
-                accounts::AccountRuntimeFailure::watch_only(&account.record.account_id).to_string(),
+                account::AccountRuntimeFailure::watch_only(&account.record.account_id).to_string(),
             ),
             missing: vec!["Write-capable farm-bound seller account".to_owned()],
             actions: vec![format!(
@@ -968,7 +968,7 @@ fn resolve_farm_signing_identity(
     config: &RuntimeConfig,
     account_id: &str,
     account_pubkey: &str,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(
         config.signer.backend,
         crate::runtime::config::SignerBackend::Local
@@ -979,7 +979,7 @@ fn resolve_farm_signing_identity(
             ))
         });
     }
-    let signing = accounts::resolve_local_signing_identity_for_account(config, account_id)
+    let signing = account::resolve_local_signing_identity_for_account(config, account_id)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -989,7 +989,7 @@ fn resolve_farm_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(account_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch(format!(
+            account::AccountRuntimeFailure::mismatch(format!(
                 "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign farm-bound seller pubkey `{account_pubkey}`"
             )),
         ));
@@ -1558,7 +1558,7 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
 fn selected_account_for_draft(
     config: &RuntimeConfig,
 ) -> Result<Option<AccountRecordView>, RuntimeError> {
-    accounts::resolve_account(config)
+    account::resolve_account(config)
 }
 
 fn missing_selected_account_setup_view() -> FarmSetupView {
@@ -1585,7 +1585,7 @@ fn init_document(
             "account mismatch: farm config is bound to seller account `{}`; use `radroots farm rebind {}` to change the farm-bound seller account",
             document.selection.account, account.record.account_id
         );
-        return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+        return Err(account::AccountRuntimeFailure::mismatch_with_detail(
             message,
             json!({
                 "seller_actor_source": FARM_SELLER_ACTOR_SOURCE,
@@ -1954,7 +1954,7 @@ fn configured_account(
     config: &RuntimeConfig,
     account_id: &str,
 ) -> Result<Option<AccountRecordView>, RuntimeError> {
-    let snapshot = accounts::snapshot(config)?;
+    let snapshot = account::snapshot(config)?;
     Ok(snapshot
         .accounts
         .into_iter()

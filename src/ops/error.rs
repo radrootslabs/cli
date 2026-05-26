@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 use crate::out::envelope::{CliExitCode, OutputError};
 use crate::runtime::RuntimeError;
-use crate::runtime::accounts::AccountRuntimeFailure;
+use crate::runtime::account::AccountRuntimeFailure;
 use crate::view::runtime::CommandDisposition;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

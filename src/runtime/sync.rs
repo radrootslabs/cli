@@ -26,7 +26,7 @@ use serde_json::json;
 
 use crate::cli::global::SyncWatchArgs;
 use crate::runtime::RuntimeError;
-use crate::runtime::accounts;
+use crate::runtime::account;
 use crate::runtime::config::{PublishMode, RuntimeConfig};
 use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, DirectRelayPublishError,
@@ -376,7 +376,7 @@ where
         return Ok(push_unconfigured_view(snapshot));
     }
 
-    let signing = match accounts::resolve_local_signing_identity(config) {
+    let signing = match account::resolve_local_signing_identity(config) {
         Ok(signing) => signing,
         Err(RuntimeError::Account(failure)) => {
             let mut view = empty_action_from_snapshot(snapshot, "push");
@@ -1632,7 +1632,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
         config.output.dry_run = true;
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
 
         let view = pull_with_fetcher(&config, |_, _| panic!("dry run must not fetch"))
             .expect("sync pull dry run");
@@ -1650,7 +1650,7 @@ mod tests {
     fn sync_pull_no_relay_action_is_actionable() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), Vec::new());
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
 
         let view = pull_with_fetcher(&config, |_, _| {
             panic!("unconfigured sync pull must not fetch")
@@ -1669,9 +1669,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
         config.output.dry_run = true;
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let signing =
-            crate::runtime::accounts::create_or_migrate_default_account(&config).expect("account");
+            crate::runtime::account::create_or_migrate_default_account(&config).expect("account");
         seed_replica_farm(
             &config,
             signing
@@ -1718,9 +1718,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
         config.output.dry_run = true;
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let signing =
-            crate::runtime::accounts::create_or_migrate_default_account(&config).expect("account");
+            crate::runtime::account::create_or_migrate_default_account(&config).expect("account");
         let selected_pubkey = signing
             .account
             .record
@@ -1764,9 +1764,9 @@ mod tests {
     fn sync_push_publishes_pending_local_author_events_and_updates_state() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let signing =
-            crate::runtime::accounts::create_or_migrate_default_account(&config).expect("account");
+            crate::runtime::account::create_or_migrate_default_account(&config).expect("account");
         seed_replica_farm(
             &config,
             signing
@@ -1820,9 +1820,9 @@ mod tests {
     fn sync_push_reports_partial_when_other_author_events_remain_pending() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let signing =
-            crate::runtime::accounts::create_or_migrate_default_account(&config).expect("account");
+            crate::runtime::account::create_or_migrate_default_account(&config).expect("account");
         let selected_pubkey = signing
             .account
             .record
@@ -1891,8 +1891,8 @@ mod tests {
     fn sync_push_reports_unconfigured_when_only_other_author_events_are_pending() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
-        crate::runtime::accounts::create_or_migrate_default_account(&config).expect("account");
+        crate::runtime::store::init(&config).expect("store init");
+        crate::runtime::account::create_or_migrate_default_account(&config).expect("account");
         let other_pubkey = identity(44).public_key_hex();
         seed_replica_farm(&config, other_pubkey.as_str());
 
@@ -1933,9 +1933,9 @@ mod tests {
     fn sync_push_failed_publish_leaves_pending_state_retryable() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let signing =
-            crate::runtime::accounts::create_or_migrate_default_account(&config).expect("account");
+            crate::runtime::account::create_or_migrate_default_account(&config).expect("account");
         seed_replica_farm(
             &config,
             signing
@@ -1999,7 +1999,7 @@ mod tests {
     fn sync_pull_ingests_relay_events_and_market_reads_without_daemon() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let seller = identity(7);
         let seller_pubkey = seller.public_key_hex();
         let listing_addr = format!("{KIND_LISTING}:{seller_pubkey}:{LISTING_D_TAG}");
@@ -2050,7 +2050,7 @@ mod tests {
     fn market_refresh_uses_market_scope_for_ingest() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let seller = identity(8);
         let events = vec![listing_event(&seller), plot_event(&seller)];
 
@@ -2074,7 +2074,7 @@ mod tests {
                 "wss://relay-b.example.com".to_owned(),
             ],
         );
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let seller = identity(9);
 
         let _ = market_refresh_with_fetcher(&config, fake_fetcher(vec![listing_event(&seller)]))
@@ -2095,7 +2095,7 @@ mod tests {
     fn relay_refresh_records_current_run_freshness() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let seller = identity(10);
 
         let view = market_refresh_with_fetcher(&config, fake_fetcher(vec![listing_event(&seller)]))
@@ -2120,7 +2120,7 @@ mod tests {
                 "wss://relay-b.example.com".to_owned(),
             ],
         );
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let seller = identity(13);
 
         let view = pull_with_fetcher(&config, |relays, _| {
@@ -2156,7 +2156,7 @@ mod tests {
     fn sync_pull_reports_no_overwrite_skips_without_replacing_projection() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let seller = identity(12);
 
         let first = listing_event_with_title_at(&seller, "Pasture Eggs", 200);
@@ -2193,7 +2193,7 @@ mod tests {
     fn sync_status_reports_relay_set_changed_freshness() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay-a.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let seller = identity(11);
         pull_with_fetcher(&config, fake_fetcher(vec![listing_event(&seller)])).expect("sync pull");
         let changed = sample_config(dir.path(), vec!["wss://relay-b.example.com".to_owned()]);
@@ -2210,7 +2210,7 @@ mod tests {
     fn relay_ingest_splits_unsupported_and_failed_events() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
-        crate::runtime::local::init(&config).expect("store init");
+        crate::runtime::store::init(&config).expect("store init");
         let seller = identity(9);
         let events = vec![
             signed_event(

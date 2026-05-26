@@ -36,7 +36,7 @@ use crate::cli::global::{
     ListingRebindArgs, RecordLookupArgs,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::accounts;
+use crate::runtime::account;
 use crate::runtime::config::{
     PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
 };
@@ -910,7 +910,7 @@ fn rebind_inner(
         )));
     }
 
-    let target_account = accounts::resolve_account_selector(config, args.selector.as_str())
+    let target_account = account::resolve_account_selector(config, args.selector.as_str())
         .map_err(|error| listing_rebind_selector_error(args.selector.as_str(), error))?;
     let from_seller_account_id = non_empty(draft.seller_actor.account_id.clone());
     let from_seller_pubkey = non_empty(draft.seller_actor.pubkey.clone());
@@ -1023,8 +1023,8 @@ fn resolve_rebind_farm_d_tag(
 
 fn listing_rebind_selector_error(selector: &str, error: RuntimeError) -> RuntimeError {
     match error {
-        RuntimeError::Account(accounts::AccountRuntimeFailure::Unresolved(issue)) => {
-            accounts::AccountRuntimeFailure::unresolved_with_detail(
+        RuntimeError::Account(account::AccountRuntimeFailure::Unresolved(issue)) => {
+            account::AccountRuntimeFailure::unresolved_with_detail(
                 issue.message().to_owned(),
                 json!({
                     "seller_actor_source": LISTING_SELLER_ACTOR_SOURCE_REBIND,
@@ -1757,7 +1757,7 @@ fn mutate(
     let mut canonical = canonicalize_draft(&parsed, &contents, &context).map_err(|error| {
         let issue = match error {
             ListingDraftValidationError::MissingSellerAccount(issue) => {
-                return accounts::AccountRuntimeFailure::unresolved_with_detail(
+                return account::AccountRuntimeFailure::unresolved_with_detail(
                     format!("{} ({})", issue.message, issue.field),
                     json!({
                         "seller_actor_source": "listing_draft",
@@ -2468,7 +2468,7 @@ fn ensure_listing_bound_account(
 ) -> Result<(), RuntimeError> {
     validate_invocation_account_matches_bound(config, canonical, file)?;
     let Some(account) = configured_account(config, &canonical.seller_account_id)? else {
-        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
+        return Err(account::AccountRuntimeFailure::unresolved_with_detail(
             format!(
                 "listing-bound seller account `{}` is not present in the local account store",
                 canonical.seller_account_id
@@ -2484,7 +2484,7 @@ fn ensure_listing_bound_account(
     };
     let account_pubkey = account.record.public_identity.public_key_hex;
     if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
-        return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+        return Err(account::AccountRuntimeFailure::mismatch_with_detail(
             format!(
                 "account mismatch: listing-bound seller account `{}` pubkey `{account_pubkey}` cannot sign listing seller_pubkey `{}`",
                 canonical.seller_account_id, canonical.seller_pubkey
@@ -2517,11 +2517,11 @@ fn validate_invocation_account_matches_bound(
     else {
         return Ok(());
     };
-    let attempted = accounts::resolve_account_selector(config, selector)?;
+    let attempted = account::resolve_account_selector(config, selector)?;
     if attempted.record.account_id.to_string() == canonical.seller_account_id {
         return Ok(());
     }
-    Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+    Err(account::AccountRuntimeFailure::mismatch_with_detail(
         format!(
             "account mismatch: listing draft is bound to seller account `{}`; invocation selected `{}`",
             canonical.seller_account_id, attempted.record.account_id
@@ -2779,8 +2779,8 @@ fn validate_local_listing_signer(
 fn resolve_listing_signing_identity(
     config: &RuntimeConfig,
     canonical: &CanonicalListingDraft,
-) -> Result<accounts::AccountSigningIdentity, RuntimeError> {
-    let signing = accounts::resolve_local_signing_identity_for_account(
+) -> Result<account::AccountSigningIdentity, RuntimeError> {
+    let signing = account::resolve_local_signing_identity_for_account(
         config,
         canonical.seller_account_id.as_str(),
     )
@@ -2792,7 +2792,7 @@ fn resolve_listing_signing_identity(
         .public_key_hex
         .as_str();
     if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
-        return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+        return Err(account::AccountRuntimeFailure::mismatch_with_detail(
             format!(
                 "account mismatch: listing-bound seller account `{}` pubkey `{account_pubkey}` cannot sign listing seller_pubkey `{}`",
                 canonical.seller_account_id, canonical.seller_pubkey
@@ -2818,8 +2818,8 @@ fn listing_bound_signing_error(
     canonical: &CanonicalListingDraft,
 ) -> RuntimeError {
     match error {
-        RuntimeError::Account(accounts::AccountRuntimeFailure::Unresolved(issue)) => {
-            accounts::AccountRuntimeFailure::unresolved_with_detail(
+        RuntimeError::Account(account::AccountRuntimeFailure::Unresolved(issue)) => {
+            account::AccountRuntimeFailure::unresolved_with_detail(
                 issue.message().to_owned(),
                 json!({
                     "seller_actor_source": canonical.seller_actor_source,
@@ -2833,8 +2833,8 @@ fn listing_bound_signing_error(
             )
             .into()
         }
-        RuntimeError::Account(accounts::AccountRuntimeFailure::WatchOnly(issue)) => {
-            accounts::AccountRuntimeFailure::watch_only_with_detail(
+        RuntimeError::Account(account::AccountRuntimeFailure::WatchOnly(issue)) => {
+            account::AccountRuntimeFailure::watch_only_with_detail(
                 &canonical.seller_account_id,
                 json!({
                     "seller_actor_source": canonical.seller_actor_source,
@@ -3114,9 +3114,9 @@ fn issue_from_trade_validation(
 }
 
 fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults, RuntimeError> {
-    let account_resolution = accounts::resolve_account_resolution(config)?;
+    let account_resolution = account::resolve_account_resolution(config)?;
     let Some(selected_account) = account_resolution.resolved_account.clone() else {
-        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
+        return Err(account::AccountRuntimeFailure::unresolved_with_detail(
             "no resolved account is available for listing seller actor",
             json!({
                 "seller_actor_source": LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT,
@@ -3154,7 +3154,7 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
     };
     let Some(account) = configured_account(config, &resolved.document.selection.account)? else {
         let account_id = resolved.document.selection.account.clone();
-        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
+        return Err(account::AccountRuntimeFailure::unresolved_with_detail(
             format!(
                 "farm-bound seller account `{account_id}` is not present in the local account store"
             ),
@@ -3242,8 +3242,8 @@ fn modified_unix(path: &Path) -> Option<u64> {
 fn configured_account(
     config: &RuntimeConfig,
     account_id: &str,
-) -> Result<Option<accounts::AccountRecordView>, RuntimeError> {
-    let snapshot = accounts::snapshot(config)?;
+) -> Result<Option<account::AccountRecordView>, RuntimeError> {
+    let snapshot = account::snapshot(config)?;
     Ok(snapshot
         .accounts
         .into_iter()

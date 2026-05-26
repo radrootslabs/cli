@@ -1,6 +1,6 @@
 use crate::runtime::RuntimeError;
-use crate::runtime::accounts::AccountRuntimeFailure;
-use crate::runtime::accounts::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolution_view};
+use crate::runtime::account::AccountRuntimeFailure;
+use crate::runtime::account::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolution_view};
 use crate::runtime::config::{RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend};
 use crate::view::runtime::{
     IdentityPublicView, LocalSignerStatusView, SignerBindingStatusView, SignerStatusView,
@@ -81,9 +81,9 @@ pub fn resolve_actor_write_authority(
 
 fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     let (account_resolution, resolved_account_id) =
-        match crate::runtime::accounts::resolve_account_resolution(config) {
+        match crate::runtime::account::resolve_account_resolution(config) {
             Ok(resolution) => (
-                crate::runtime::accounts::account_resolution_view(&resolution),
+                crate::runtime::account::account_resolution_view(&resolution),
                 resolution
                     .resolved_account
                     .as_ref()
@@ -105,7 +105,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 };
             }
         };
-    let secret_backend = crate::runtime::accounts::secret_backend_status(config);
+    let secret_backend = crate::runtime::account::secret_backend_status(config);
     if secret_backend.state == "unavailable" {
         let reason = secret_backend.reason.clone();
         return SignerStatusView {
@@ -143,7 +143,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         .unwrap_or_else(|| "unknown".to_owned());
     let used_fallback = secret_backend.used_fallback;
 
-    match crate::runtime::accounts::resolved_account_signing_status(config) {
+    match crate::runtime::account::resolved_account_signing_status(config) {
         Ok(RadrootsNostrAccountStatus::Ready { account }) => {
             let capability = RadrootsNostrSignerCapability::LocalAccount(
                 RadrootsNostrLocalSignerCapability::new(
@@ -211,11 +211,11 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
             source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
             signer_account_id: None,
             account_resolution: account_resolution.clone(),
-            reason: crate::runtime::accounts::unresolved_account_reason(config).ok(),
+            reason: crate::runtime::account::unresolved_account_reason(config).ok(),
             binding: disabled_binding_status(),
             write_kinds: local_write_kind_readiness(
                 false,
-                crate::runtime::accounts::unresolved_account_reason(config).ok(),
+                crate::runtime::account::unresolved_account_reason(config).ok(),
             ),
             local: None,
             myc: None,
@@ -239,8 +239,8 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
 }
 
 fn resolve_myc_signer_status(config: &RuntimeConfig) -> SignerStatusView {
-    let account_resolution = match crate::runtime::accounts::resolve_account_resolution(config) {
-        Ok(resolution) => crate::runtime::accounts::account_resolution_view(&resolution),
+    let account_resolution = match crate::runtime::account::resolve_account_resolution(config) {
+        Ok(resolution) => crate::runtime::account::account_resolution_view(&resolution),
         Err(_) => empty_account_resolution_view(),
     };
     SignerStatusView {

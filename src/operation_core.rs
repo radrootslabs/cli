@@ -19,7 +19,7 @@ use crate::ops::{
     WorkspaceInitRequest, WorkspaceInitResult,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::accounts::{
+use crate::runtime::account::{
     AccountResolution, AccountRuntimeFailure, account_resolution_view, account_summary_view,
     attach_identity_secret, clear_default_account, create_or_migrate_default_account,
     import_public_identity, preview_account_removal, preview_identity_secret_attachment,
@@ -55,7 +55,7 @@ impl OperationService<WorkspaceInitRequest> for CoreOperationService<'_> {
         request: OperationRequest<WorkspaceInitRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if request.context.dry_run {
-            let local = map_runtime(crate::runtime::local::init_preflight(self.config))?;
+            let local = map_runtime(crate::runtime::store::init_preflight(self.config))?;
             return json_operation_result::<WorkspaceInitResult>(json!({
                 "state": local.state,
                 "profile": self.config.paths.profile,
@@ -63,7 +63,7 @@ impl OperationService<WorkspaceInitRequest> for CoreOperationService<'_> {
             }));
         }
 
-        let local = map_runtime(crate::runtime::local::init(self.config))?;
+        let local = map_runtime(crate::runtime::store::init(self.config))?;
         json_operation_result::<WorkspaceInitResult>(json!({
             "state": local.state,
             "profile": self.config.paths.profile,
@@ -101,7 +101,7 @@ impl OperationService<HealthStatusGetRequest> for CoreOperationService<'_> {
         &self,
         _request: OperationRequest<HealthStatusGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let store = map_runtime(crate::runtime::local::status(self.config))?;
+        let store = map_runtime(crate::runtime::store::status(self.config))?;
         let account = map_runtime(resolve_account_resolution(self.config))?;
         let publish = publish_runtime_view(self.config, true, &account);
         let state = health_status_state(&store.state, &publish);
@@ -127,7 +127,7 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
         &self,
         _request: OperationRequest<HealthCheckRunRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let store = map_runtime(crate::runtime::local::status(self.config))?;
+        let store = map_runtime(crate::runtime::store::status(self.config))?;
         let account = map_runtime(resolve_account_resolution(self.config))?;
         let account_reason = if account.resolved_account.is_some() {
             None
@@ -281,8 +281,8 @@ impl OperationService<AccountCreateRequest> for CoreOperationService<'_> {
         let result = map_runtime(create_or_migrate_default_account(self.config))?;
         json_operation_result::<AccountCreateResult>(json!({
             "state": match result.mode {
-                crate::runtime::accounts::AccountCreateMode::Created => "created",
-                crate::runtime::accounts::AccountCreateMode::Migrated => "migrated",
+                crate::runtime::account::AccountCreateMode::Created => "created",
+                crate::runtime::account::AccountCreateMode::Migrated => "migrated",
             },
             "account": account_summary_view(&result.account),
         }))
@@ -428,7 +428,7 @@ impl OperationService<AccountListRequest> for CoreOperationService<'_> {
             .map(account_summary_view)
             .collect::<Vec<_>>();
         json_operation_result::<AccountListResult>(json!({
-            "source": crate::runtime::accounts::SHARED_ACCOUNT_STORE_SOURCE,
+            "source": crate::runtime::account::SHARED_ACCOUNT_STORE_SOURCE,
             "count": accounts.len(),
             "accounts": accounts,
         }))
@@ -550,11 +550,11 @@ impl OperationService<StoreInitRequest> for CoreOperationService<'_> {
         request: OperationRequest<StoreInitRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if request.context.dry_run {
-            let view = map_runtime(crate::runtime::local::init_preflight(self.config))?;
+            let view = map_runtime(crate::runtime::store::init_preflight(self.config))?;
             return serialized_operation_result::<StoreInitResult, _>(&view);
         }
 
-        let view = map_runtime(crate::runtime::local::init(self.config))?;
+        let view = map_runtime(crate::runtime::store::init(self.config))?;
         serialized_operation_result::<StoreInitResult, _>(&view)
     }
 }
@@ -566,7 +566,7 @@ impl OperationService<StoreStatusGetRequest> for CoreOperationService<'_> {
         &self,
         _request: OperationRequest<StoreStatusGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = map_runtime(crate::runtime::local::status(self.config))?;
+        let view = map_runtime(crate::runtime::store::status(self.config))?;
         serialized_operation_result::<StoreStatusGetResult, _>(&view)
     }
 }
@@ -597,7 +597,7 @@ impl OperationService<StoreExportRequest> for CoreOperationService<'_> {
             ));
         }
 
-        let view = map_runtime(crate::runtime::local::export(
+        let view = map_runtime(crate::runtime::store::export(
             self.config,
             format,
             output.as_path(),
@@ -618,14 +618,14 @@ impl OperationService<StoreBackupCreateRequest> for CoreOperationService<'_> {
         if request.context.dry_run {
             let view = map_expected_runtime(
                 request.operation_id(),
-                crate::runtime::local::backup_preflight(self.config, output.as_path()),
+                crate::runtime::store::backup_preflight(self.config, output.as_path()),
             )?;
             return local_backup_result(request.operation_id(), &view);
         }
 
         let view = map_expected_runtime(
             request.operation_id(),
-            crate::runtime::local::backup(self.config, output.as_path()),
+            crate::runtime::store::backup(self.config, output.as_path()),
         )?;
         local_backup_result(request.operation_id(), &view)
     }
@@ -653,7 +653,7 @@ fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapter
 fn account_secret_backend_ready(
     operation_id: &str,
     config: &RuntimeConfig,
-) -> Result<crate::runtime::accounts::AccountSecretBackendStatus, OperationAdapterError> {
+) -> Result<crate::runtime::account::AccountSecretBackendStatus, OperationAdapterError> {
     let secret_backend = secret_backend_status(config);
     if secret_backend.state == "ready" {
         return Ok(secret_backend);

@@ -94,7 +94,7 @@ use crate::cli::global::{
     OrderSubmitArgs, RecordLookupArgs,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::accounts;
+use crate::runtime::account;
 use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, DirectRelayPublishReceipt,
@@ -335,7 +335,7 @@ struct OrderEventListActorContext {
 #[derive(Debug, Clone)]
 struct OrderBoundBuyerWriteContext {
     loaded: LoadedOrderDraft,
-    account: accounts::AccountRecordView,
+    account: account::AccountRecordView,
 }
 
 #[derive(Debug, Clone)]
@@ -1054,7 +1054,7 @@ fn rebind_inner(
     }
 
     let loaded = load_draft(file.as_path()).map_err(RuntimeError::Config)?;
-    let target_account = accounts::resolve_account_selector(config, args.selector.as_str())
+    let target_account = account::resolve_account_selector(config, args.selector.as_str())
         .map_err(|error| order_rebind_selector_error(args.selector.as_str(), error))?;
     let existing_request = order_rebind_existing_request_check(config, &loaded)?;
     let from_order_id = loaded.document.order.order_id.clone();
@@ -1236,7 +1236,7 @@ pub fn decide(
         return Ok(view);
     }
 
-    let seller = match accounts::resolve_account(config)? {
+    let seller = match account::resolve_account(config)? {
         Some(account) => account,
         None => {
             let mut view =
@@ -1373,7 +1373,7 @@ pub fn revision_propose(
         return Ok(view);
     }
 
-    let seller = match accounts::resolve_account(config)? {
+    let seller = match account::resolve_account(config)? {
         Some(account) => account,
         None => {
             let mut view =
@@ -1684,7 +1684,7 @@ pub fn fulfillment_update(
         }
     };
 
-    let selected_account = match accounts::resolve_account(config)? {
+    let selected_account = match account::resolve_account(config)? {
         Some(account) => account,
         None => {
             let mut view =
@@ -1975,7 +1975,7 @@ pub fn payment_record(
         return Ok(view);
     }
 
-    let selected_account = match accounts::resolve_account(config)? {
+    let selected_account = match account::resolve_account(config)? {
         Some(account) => account,
         None => {
             let mut view =
@@ -2069,7 +2069,7 @@ pub fn settlement_decision(
         return Ok(view);
     }
 
-    let selected_account = match accounts::resolve_account(config)? {
+    let selected_account = match account::resolve_account(config)? {
         Some(account) => account,
         None => {
             let mut view =
@@ -7907,7 +7907,7 @@ fn publish_order_revision(
     config: &RuntimeConfig,
     args: &OrderRevisionProposeArgs,
     status: OrderStatusView,
-    signing: accounts::AccountSigningIdentity,
+    signing: account::AccountSigningIdentity,
     payload: RadrootsTradeOrderRevisionProposed,
 ) -> Result<OrderRevisionProposalView, RuntimeError> {
     let parts = order_revision_event_parts(&status, &payload)?;
@@ -7924,7 +7924,7 @@ fn publish_order_revision_decision(
     args: &OrderRevisionDecisionArgs,
     status: OrderStatusView,
     proposal: &OrderRevisionProposalRecord,
-    signing: accounts::AccountSigningIdentity,
+    signing: account::AccountSigningIdentity,
     payload: RadrootsTradeOrderRevisionDecisionEvent,
 ) -> Result<OrderRevisionDecisionView, RuntimeError> {
     let parts = order_revision_decision_event_parts(&payload)?;
@@ -8013,7 +8013,7 @@ fn publish_order_fulfillment(
     config: &RuntimeConfig,
     args: &OrderFulfillmentArgs,
     status: OrderStatusView,
-    signing: accounts::AccountSigningIdentity,
+    signing: account::AccountSigningIdentity,
     payload: RadrootsTradeFulfillmentUpdated,
 ) -> Result<OrderFulfillmentView, RuntimeError> {
     let parts = order_fulfillment_event_parts(&status, &payload)?;
@@ -8034,7 +8034,7 @@ fn publish_order_cancellation(
     config: &RuntimeConfig,
     args: &OrderCancelArgs,
     status: OrderStatusView,
-    signing: accounts::AccountSigningIdentity,
+    signing: account::AccountSigningIdentity,
     payload: RadrootsTradeOrderCancelled,
 ) -> Result<OrderCancellationView, RuntimeError> {
     let parts = order_cancellation_event_parts(&status, &payload)?;
@@ -8050,7 +8050,7 @@ fn publish_order_receipt(
     config: &RuntimeConfig,
     args: &OrderReceiptArgs,
     status: OrderStatusView,
-    signing: accounts::AccountSigningIdentity,
+    signing: account::AccountSigningIdentity,
     payload: RadrootsTradeBuyerReceipt,
 ) -> Result<OrderReceiptView, RuntimeError> {
     let parts = order_receipt_event_parts(&status, &payload)?;
@@ -8066,7 +8066,7 @@ fn publish_order_payment(
     config: &RuntimeConfig,
     args: &OrderPaymentArgs,
     status: OrderStatusView,
-    signing: accounts::AccountSigningIdentity,
+    signing: account::AccountSigningIdentity,
     payload: RadrootsTradePaymentRecorded,
 ) -> Result<OrderPaymentView, RuntimeError> {
     let parts = order_payment_event_parts(&status, &payload)?;
@@ -8082,7 +8082,7 @@ fn publish_order_settlement(
     config: &RuntimeConfig,
     args: &OrderSettlementArgs,
     status: OrderStatusView,
-    signing: accounts::AccountSigningIdentity,
+    signing: account::AccountSigningIdentity,
     payload: RadrootsTradeSettlementDecisionEvent,
 ) -> Result<OrderSettlementView, RuntimeError> {
     let parts = order_settlement_event_parts(&status, &payload)?;
@@ -8488,7 +8488,7 @@ fn publish_order_decision(
     args: &OrderDecisionArgs,
     request: ResolvedSellerOrderRequest,
     resolution: SellerOrderRequestResolution,
-    signing: accounts::AccountSigningIdentity,
+    signing: account::AccountSigningIdentity,
     payload: RadrootsTradeOrderDecisionEvent,
     inventory: Option<OrderInventoryView>,
 ) -> Result<OrderDecisionView, RuntimeError> {
@@ -10243,7 +10243,7 @@ fn inspect_document_with_source_issues(
 
 #[derive(Debug, Clone)]
 struct OrderBuyerActorReadiness {
-    account: Option<accounts::AccountRecordView>,
+    account: Option<account::AccountRecordView>,
     issues: Vec<OrderIssueView>,
 }
 
@@ -10260,7 +10260,7 @@ fn inspect_buyer_actor_readiness(
         });
     }
 
-    let snapshot = accounts::snapshot(config)?;
+    let snapshot = account::snapshot(config)?;
     let Some(account) = snapshot
         .accounts
         .into_iter()
@@ -10576,7 +10576,7 @@ fn app_order_issue<'a>(issues: &'a [OrderIssueView], code: &str) -> Option<&'a O
 fn order_rebind_selector_error(selector: &str, error: RuntimeError) -> RuntimeError {
     match error {
         RuntimeError::Accounts(_) | RuntimeError::Account(_) => {
-            accounts::AccountRuntimeFailure::unresolved_with_detail(
+            account::AccountRuntimeFailure::unresolved_with_detail(
                 format!("order rebind target selector `{selector}` did not resolve"),
                 json!({
                     "selector": selector,
@@ -10635,10 +10635,10 @@ fn order_rebind_existing_request_check(
 fn resolve_initial_buyer_actor(
     config: &RuntimeConfig,
 ) -> Result<OrderDraftBuyerActor, RuntimeError> {
-    let resolution = accounts::resolve_account_resolution(config)?;
+    let resolution = account::resolve_account_resolution(config)?;
     let Some(account) = resolution.resolved_account else {
-        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
-            accounts::unresolved_account_reason(config)?,
+        return Err(account::AccountRuntimeFailure::unresolved_with_detail(
+            account::unresolved_account_reason(config)?,
             json!({
                 "buyer_actor_source": ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT,
                 "actions": [
@@ -10691,7 +10691,7 @@ fn order_status_actor_context(
         });
     }
 
-    let selected_account = accounts::resolve_account(config)?;
+    let selected_account = account::resolve_account(config)?;
     let Some(account) = selected_account else {
         return Ok(OrderDraftStatusActorContext {
             source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
@@ -10729,7 +10729,7 @@ fn order_event_list_actor_context(
     }
 
     Ok(
-        accounts::resolve_account(config)?.map(|account| OrderEventListActorContext {
+        account::resolve_account(config)?.map(|account| OrderEventListActorContext {
             source: ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT,
             seller_pubkey: account.record.public_identity.public_key_hex,
         }),
@@ -10764,7 +10764,7 @@ fn order_buyer_write_actor_context(
         }));
     }
 
-    Ok(accounts::resolve_account(config)?.map(|account| {
+    Ok(account::resolve_account(config)?.map(|account| {
         let selected_pubkey = account.record.public_identity.public_key_hex;
         OrderBuyerWriteActorContext {
             bound: None,
@@ -11682,7 +11682,7 @@ fn publish_order_request(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
     args: &OrderSubmitArgs,
-    signing: accounts::AccountSigningIdentity,
+    signing: account::AccountSigningIdentity,
     payload: RadrootsTradeOrderRequested,
 ) -> Result<OrderSubmitView, RuntimeError> {
     let listing_event = order_listing_event_ptr(config, loaded)?;
@@ -11850,18 +11850,18 @@ fn order_binding_error_view(
 fn validate_bound_order_buyer_account(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
-) -> Result<accounts::AccountRecordView, RuntimeError> {
+) -> Result<account::AccountRecordView, RuntimeError> {
     let document = &loaded.document;
     let account_id = document.buyer_actor.account_id.trim();
     let buyer_pubkey = document.buyer_actor.pubkey.trim();
-    let snapshot = accounts::snapshot(config)?;
+    let snapshot = account::snapshot(config)?;
     let Some(account) = snapshot
         .accounts
         .iter()
         .find(|account| account.record.account_id.as_str() == account_id)
         .cloned()
     else {
-        return Err(accounts::AccountRuntimeFailure::unresolved_with_detail(
+        return Err(account::AccountRuntimeFailure::unresolved_with_detail(
             format!(
                 "order-bound buyer account `{account_id}` is not present in the local account store"
             ),
@@ -11886,7 +11886,7 @@ fn validate_bound_order_buyer_account(
             .buyer_pubkey
             .eq_ignore_ascii_case(buyer_pubkey)
     {
-        return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+        return Err(account::AccountRuntimeFailure::mismatch_with_detail(
             format!(
                 "order-bound buyer account `{account_id}` does not match order buyer pubkey `{buyer_pubkey}`"
             ),
@@ -11906,7 +11906,7 @@ fn validate_bound_order_buyer_account(
     }
 
     if !account.write_capable {
-        return Err(accounts::AccountRuntimeFailure::watch_only_with_detail(
+        return Err(account::AccountRuntimeFailure::watch_only_with_detail(
             account_id,
             order_buyer_failure_detail(
                 loaded,
@@ -11922,8 +11922,8 @@ fn validate_bound_order_buyer_account(
     }
 
     if let Some(selector) = config.account.selector.as_deref() {
-        let attempted = accounts::resolve_account_selector(config, selector).map_err(|_| {
-            accounts::AccountRuntimeFailure::unresolved_with_detail(
+        let attempted = account::resolve_account_selector(config, selector).map_err(|_| {
+            account::AccountRuntimeFailure::unresolved_with_detail(
                 format!("account override `{selector}` did not resolve to a local buyer account"),
                 order_buyer_failure_detail(
                     loaded,
@@ -11939,7 +11939,7 @@ fn validate_bound_order_buyer_account(
         })?;
         if attempted.record.account_id.as_str() != account_id {
             let attempted_pubkey = attempted.record.public_identity.public_key_hex.as_str();
-            return Err(accounts::AccountRuntimeFailure::mismatch_with_detail(
+            return Err(account::AccountRuntimeFailure::mismatch_with_detail(
                 format!(
                     "account override `{}` cannot retarget order `{}` bound to buyer account `{account_id}`",
                     attempted.record.account_id, document.order.order_id
@@ -11986,7 +11986,7 @@ fn order_buyer_failure_detail(
 fn resolve_local_order_signing_identity(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     resolve_local_order_bound_buyer_signing_identity(config, loaded, "order submit")
 }
 
@@ -11994,7 +11994,7 @@ fn resolve_local_order_bound_buyer_signing_identity(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
     action: &str,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
         return Err(ActorWriteBindingError::Unconfigured(format!(
             "{action} requires signer mode `local`"
@@ -12002,7 +12002,7 @@ fn resolve_local_order_bound_buyer_signing_identity(
     }
     let account_id = loaded.document.buyer_actor.account_id.trim();
     let buyer_pubkey = loaded.document.buyer_actor.pubkey.trim();
-    let signing = accounts::resolve_local_signing_identity_for_account(config, account_id)
+    let signing = account::resolve_local_signing_identity_for_account(config, account_id)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -12012,7 +12012,7 @@ fn resolve_local_order_bound_buyer_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch_with_detail(
+            account::AccountRuntimeFailure::mismatch_with_detail(
                 format!(
                     "account mismatch: order-bound buyer account `{account_id}` pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
                 ),
@@ -12037,14 +12037,14 @@ fn resolve_local_order_decision_signing_identity(
     config: &RuntimeConfig,
     seller_pubkey: &str,
     decision: OrderDecisionArg,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
         return Err(ActorWriteBindingError::Unconfigured(format!(
             "order {} requires signer mode `local`",
             decision.command()
         )));
     }
-    let signing = accounts::resolve_local_signing_identity(config)
+    let signing = account::resolve_local_signing_identity(config)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -12054,7 +12054,7 @@ fn resolve_local_order_decision_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(seller_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch(format!(
+            account::AccountRuntimeFailure::mismatch(format!(
                 "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
             )),
         ));
@@ -12065,13 +12065,13 @@ fn resolve_local_order_decision_signing_identity(
 fn resolve_local_order_fulfillment_signing_identity(
     config: &RuntimeConfig,
     seller_pubkey: &str,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
         return Err(ActorWriteBindingError::Unconfigured(
             "order fulfillment update requires signer mode `local`".to_owned(),
         ));
     }
-    let signing = accounts::resolve_local_signing_identity(config)
+    let signing = account::resolve_local_signing_identity(config)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -12081,7 +12081,7 @@ fn resolve_local_order_fulfillment_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(seller_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch(format!(
+            account::AccountRuntimeFailure::mismatch(format!(
                 "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
             )),
         ));
@@ -12092,13 +12092,13 @@ fn resolve_local_order_fulfillment_signing_identity(
 fn resolve_local_order_cancellation_signing_identity(
     config: &RuntimeConfig,
     buyer_pubkey: &str,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
         return Err(ActorWriteBindingError::Unconfigured(
             "order cancel requires signer mode `local`".to_owned(),
         ));
     }
-    let signing = accounts::resolve_local_signing_identity(config)
+    let signing = account::resolve_local_signing_identity(config)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -12108,7 +12108,7 @@ fn resolve_local_order_cancellation_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch(format!(
+            account::AccountRuntimeFailure::mismatch(format!(
                 "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
             )),
         ));
@@ -12119,13 +12119,13 @@ fn resolve_local_order_cancellation_signing_identity(
 fn resolve_local_order_receipt_signing_identity(
     config: &RuntimeConfig,
     buyer_pubkey: &str,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
         return Err(ActorWriteBindingError::Unconfigured(
             "order receipt record requires signer mode `local`".to_owned(),
         ));
     }
-    let signing = accounts::resolve_local_signing_identity(config)
+    let signing = account::resolve_local_signing_identity(config)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -12135,7 +12135,7 @@ fn resolve_local_order_receipt_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch(format!(
+            account::AccountRuntimeFailure::mismatch(format!(
                 "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
             )),
         ));
@@ -12146,13 +12146,13 @@ fn resolve_local_order_receipt_signing_identity(
 fn resolve_local_order_payment_signing_identity(
     config: &RuntimeConfig,
     buyer_pubkey: &str,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
         return Err(ActorWriteBindingError::Unconfigured(
             "order payment record requires signer mode `local`".to_owned(),
         ));
     }
-    let signing = accounts::resolve_local_signing_identity(config)
+    let signing = account::resolve_local_signing_identity(config)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -12162,7 +12162,7 @@ fn resolve_local_order_payment_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch(format!(
+            account::AccountRuntimeFailure::mismatch(format!(
                 "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
             )),
         ));
@@ -12173,13 +12173,13 @@ fn resolve_local_order_payment_signing_identity(
 fn resolve_local_order_settlement_signing_identity(
     config: &RuntimeConfig,
     seller_pubkey: &str,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
         return Err(ActorWriteBindingError::Unconfigured(
             "order settlement decision requires signer mode `local`".to_owned(),
         ));
     }
-    let signing = accounts::resolve_local_signing_identity(config)
+    let signing = account::resolve_local_signing_identity(config)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -12189,7 +12189,7 @@ fn resolve_local_order_settlement_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(seller_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch(format!(
+            account::AccountRuntimeFailure::mismatch(format!(
                 "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order seller_pubkey `{seller_pubkey}`"
             )),
         ));
@@ -12201,14 +12201,14 @@ fn resolve_local_order_revision_decision_signing_identity(
     config: &RuntimeConfig,
     buyer_pubkey: &str,
     args: &OrderRevisionDecisionArgs,
-) -> Result<accounts::AccountSigningIdentity, ActorWriteBindingError> {
+) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
     if !matches!(config.signer.backend, SignerBackend::Local) {
         return Err(ActorWriteBindingError::Unconfigured(format!(
             "order revision {} requires signer mode `local`",
             args.decision.command()
         )));
     }
-    let signing = accounts::resolve_local_signing_identity(config)
+    let signing = account::resolve_local_signing_identity(config)
         .map_err(ActorWriteBindingError::from_runtime)?;
     let selected_pubkey = signing
         .account
@@ -12218,7 +12218,7 @@ fn resolve_local_order_revision_decision_signing_identity(
         .as_str();
     if !selected_pubkey.eq_ignore_ascii_case(buyer_pubkey) {
         return Err(ActorWriteBindingError::Account(
-            accounts::AccountRuntimeFailure::mismatch(format!(
+            account::AccountRuntimeFailure::mismatch(format!(
                 "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign order buyer_pubkey `{buyer_pubkey}`"
             )),
         ));
@@ -12631,7 +12631,7 @@ mod tests {
         OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderSettlementArgs,
         OrderSettlementDecisionArg, OrderSubmitArgs,
     };
-    use crate::runtime::accounts;
+    use crate::runtime::account;
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
@@ -12867,7 +12867,7 @@ mod tests {
     fn order_draft_requires_listing_event_id_for_submit_readiness() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let buyer = accounts::create_or_migrate_default_account(&config)
+        let buyer = account::create_or_migrate_default_account(&config)
             .expect("buyer account")
             .account;
         let buyer_account_id = buyer.record.account_id.to_string();
@@ -12914,7 +12914,7 @@ mod tests {
     fn order_draft_requires_listing_relays_for_submit_readiness() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let buyer = accounts::create_or_migrate_default_account(&config)
+        let buyer = account::create_or_migrate_default_account(&config)
             .expect("buyer account")
             .account;
         let buyer_account_id = buyer.record.account_id.to_string();
@@ -17534,7 +17534,7 @@ mod tests {
     fn order_fulfillment_signing_rejects_selected_non_seller_account() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        accounts::create_or_migrate_default_account(&config).expect("create selected account");
+        account::create_or_migrate_default_account(&config).expect("create selected account");
         let fixture = order_status_fixture();
 
         let error = resolve_local_order_fulfillment_signing_identity(

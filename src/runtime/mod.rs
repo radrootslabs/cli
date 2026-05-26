@@ -1,4 +1,4 @@
-pub mod accounts;
+pub mod account;
 pub mod config;
 pub mod direct_relay;
 pub mod farm;
@@ -6,7 +6,6 @@ pub mod farm_config;
 pub mod find;
 pub mod hyf;
 pub mod listing;
-pub mod local;
 pub mod local_events;
 pub mod logging;
 pub mod network;
@@ -14,6 +13,7 @@ pub mod order;
 pub mod paths;
 pub mod provider;
 pub mod signer;
+pub mod store;
 pub mod sync;
 pub mod validation_receipt;
 
@@ -24,7 +24,7 @@ pub enum RuntimeError {
     #[error("{0}")]
     Config(String),
     #[error("{0}")]
-    Account(#[from] accounts::AccountRuntimeFailure),
+    Account(#[from] account::AccountRuntimeFailure),
     #[error("failed to initialize logging: {0}")]
     Logging(#[from] radroots_log::Error),
     #[error("accounts error: {0}")]
