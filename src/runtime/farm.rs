@@ -15,11 +15,9 @@ use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_inges
 use radroots_sql_core::SqliteExecutor;
 use serde_json::json;
 
-use crate::domain::runtime::{
-    FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
-    FarmPublicationView, FarmPublishComponentView, FarmPublishEventView,
-    FarmPublishLocalReplicaView, FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView,
-    FarmSetupView, FarmStatusView, RelayFailureView,
+use crate::cli::global::{
+    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
+    FarmUpdateArgs,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::{self, AccountRecordView};
@@ -39,9 +37,11 @@ use crate::runtime::local_events::{
     mark_signed_event_failed_for_publish_error,
 };
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
-use crate::runtime_args::{
-    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
-    FarmUpdateArgs,
+use crate::view::runtime::{
+    FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
+    FarmPublicationView, FarmPublishComponentView, FarmPublishEventView,
+    FarmPublishLocalReplicaView, FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView,
+    FarmSetupView, FarmStatusView, RelayFailureView,
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";

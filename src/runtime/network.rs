@@ -1,5 +1,5 @@
-use crate::domain::runtime::{RelayEntryView, RelayListView};
 use crate::runtime::config::RuntimeConfig;
+use crate::view::runtime::{RelayEntryView, RelayListView};
 
 pub fn relay_list(config: &RuntimeConfig) -> RelayListView {
     let relays = config

@@ -3,11 +3,8 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::domain::runtime::{
-    CommandDisposition, LocalBackupView, PublishProviderRuntimeView, PublishRelayRuntimeView,
-    PublishRuntimeView,
-};
-use crate::operation_adapter::{
+use crate::cli::global::LocalExportFormatArg;
+use crate::ops::{
     AccountAttachSecretRequest, AccountAttachSecretResult, AccountCreateRequest,
     AccountCreateResult, AccountGetRequest, AccountGetResult, AccountImportRequest,
     AccountImportResult, AccountListRequest, AccountListResult, AccountRemoveRequest,
@@ -34,7 +31,10 @@ use crate::runtime::config::{
     PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
 };
 use crate::runtime::logging::LoggingState;
-use crate::runtime_args::LocalExportFormatArg;
+use crate::view::runtime::{
+    CommandDisposition, LocalBackupView, PublishProviderRuntimeView, PublishRelayRuntimeView,
+    PublishRuntimeView,
+};
 
 pub struct CoreOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -999,7 +999,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::CoreOperationService;
-    use crate::operation_adapter::{
+    use crate::ops::{
         AccountAttachSecretRequest, AccountCreateRequest, AccountImportRequest, AccountListRequest,
         AccountRemoveRequest, OperationAdapter, OperationContext, OperationData, OperationRequest,
         StoreStatusGetRequest, WorkspaceGetRequest,

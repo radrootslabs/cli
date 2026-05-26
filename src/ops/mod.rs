@@ -6,15 +6,15 @@ use std::io::ErrorKind;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-use crate::domain::runtime::CommandDisposition;
-use crate::operation_registry::{OPERATION_REGISTRY, OperationSpec, get_operation};
-use crate::output_contract::{
+use crate::cli::{TargetCliArgs, TargetOutputFormat};
+use crate::out::envelope::{
     CliExitCode, EnvelopeActor, EnvelopeContext, NextAction, OutputEnvelope, OutputError,
     OutputFormat, OutputWarning, next_actions_from_result_value,
 };
+use crate::registry::{OPERATION_REGISTRY, OperationSpec, get_operation};
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::AccountRuntimeFailure;
-use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
+use crate::view::runtime::CommandDisposition;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationOutputFormat {
@@ -1280,8 +1280,8 @@ fn value_to_data(value: Value) -> OperationData {
     }
 }
 
-fn target_operation_input(command: &crate::target_cli::TargetCommand) -> OperationData {
-    use crate::target_cli::{
+fn target_operation_input(command: &crate::cli::TargetCommand) -> OperationData {
+    use crate::cli::{
         AccountCommand, AccountSelectionCommand, BasketAdjustmentCommand, BasketCommand,
         BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
         FarmLocationCommand, FarmProfileCommand, ListingAppCommand, ListingCommand, MarketCommand,
@@ -1713,10 +1713,10 @@ mod tests {
         OperationService, TargetOperationRequest, WorkspaceGetRequest, WorkspaceGetResult,
         adapter_registry_linkage_is_valid,
     };
-    use crate::operation_registry::OPERATION_REGISTRY;
+    use crate::cli::TargetCliArgs;
+    use crate::registry::OPERATION_REGISTRY;
     use crate::runtime::RuntimeError;
     use crate::runtime::accounts::AccountRuntimeFailure;
-    use crate::target_cli::TargetCliArgs;
 
     #[test]
     fn adapter_binds_every_registry_entry() {

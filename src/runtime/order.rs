@@ -86,15 +86,12 @@ use radroots_trade::order::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::domain::runtime::{
-    OrderAppRecordExportView, OrderAppRecordListView, OrderAppRecordSummaryView,
-    OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
-    OrderEventListView, OrderFulfillmentView, OrderGetView, OrderInventoryBinView,
-    OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderPaymentView,
-    OrderRebindView, OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView,
-    OrderSettlementView, OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
-    OrderStatusLifecycleReceiptView, OrderStatusLifecycleView, OrderStatusPaymentView,
-    OrderStatusRevisionView, OrderStatusView, OrderSubmitView, OrderSummaryView, RelayFailureView,
+use crate::cli::global::{
+    OrderAppRecordExportArgs, OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs,
+    OrderDraftCreateArgs, OrderFulfillmentArgs, OrderPaymentArgs, OrderRebindArgs,
+    OrderReceiptArgs, OrderRevisionDecisionArg, OrderRevisionDecisionArgs,
+    OrderRevisionProposeArgs, OrderSettlementArgs, OrderSettlementDecisionArg, OrderStatusArgs,
+    OrderSubmitArgs, RecordLookupArgs,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -112,12 +109,15 @@ use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope, freshness_requires_refresh, market_refresh,
     relay_provenance_relays_for_scope,
 };
-use crate::runtime_args::{
-    OrderAppRecordExportArgs, OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs,
-    OrderDraftCreateArgs, OrderFulfillmentArgs, OrderPaymentArgs, OrderRebindArgs,
-    OrderReceiptArgs, OrderRevisionDecisionArg, OrderRevisionDecisionArgs,
-    OrderRevisionProposeArgs, OrderSettlementArgs, OrderSettlementDecisionArg, OrderStatusArgs,
-    OrderSubmitArgs, RecordLookupArgs,
+use crate::view::runtime::{
+    OrderAppRecordExportView, OrderAppRecordListView, OrderAppRecordSummaryView,
+    OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
+    OrderEventListView, OrderFulfillmentView, OrderGetView, OrderInventoryBinView,
+    OrderInventoryView, OrderIssueView, OrderListView, OrderNewView, OrderPaymentView,
+    OrderRebindView, OrderReceiptView, OrderRevisionDecisionView, OrderRevisionProposalView,
+    OrderSettlementView, OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
+    OrderStatusLifecycleReceiptView, OrderStatusLifecycleView, OrderStatusPaymentView,
+    OrderStatusRevisionView, OrderStatusView, OrderSubmitView, OrderSummaryView, RelayFailureView,
 };
 
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
@@ -9104,7 +9104,7 @@ fn order_economics_from_resolved_listing(
     order_id: &str,
     resolved_listing: Option<&ResolvedOrderListing>,
     items: &[OrderDraftItem],
-    adjustments: &[crate::runtime_args::OrderDraftAdjustmentArgs],
+    adjustments: &[crate::cli::global::OrderDraftAdjustmentArgs],
 ) -> Result<Option<RadrootsTradeOrderEconomics>, RuntimeError> {
     let Some(listing) = resolved_listing else {
         return Ok(None);
@@ -9293,7 +9293,7 @@ fn listing_discount_amount(
 }
 
 fn basket_adjustment_lines(
-    adjustments: &[crate::runtime_args::OrderDraftAdjustmentArgs],
+    adjustments: &[crate::cli::global::OrderDraftAdjustmentArgs],
 ) -> Result<Vec<RadrootsTradeOrderEconomicLine>, RuntimeError> {
     adjustments
         .iter()
@@ -12625,6 +12625,12 @@ mod tests {
         resolve_local_order_fulfillment_signing_identity,
         seller_order_request_resolution_from_receipt,
     };
+    use crate::cli::global::{
+        OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftAdjustmentArgs,
+        OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
+        OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderSettlementArgs,
+        OrderSettlementDecisionArg, OrderSubmitArgs,
+    };
     use crate::runtime::accounts;
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -12633,12 +12639,6 @@ mod tests {
         RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
-    use crate::runtime_args::{
-        OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs, OrderDraftAdjustmentArgs,
-        OrderFulfillmentArgs, OrderPaymentArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
-        OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderSettlementArgs,
-        OrderSettlementDecisionArg, OrderSubmitArgs,
-    };
 
     #[test]
     fn generated_order_id_uses_stable_prefix() {
@@ -13576,7 +13576,7 @@ mod tests {
         assert_eq!(view.state, "declined");
         assert_eq!(
             view.disposition(),
-            crate::domain::runtime::CommandDisposition::ValidationFailed
+            crate::view::runtime::CommandDisposition::ValidationFailed
         );
         assert_eq!(
             view.decision_event_id.as_deref(),
@@ -17335,7 +17335,7 @@ mod tests {
         assert_eq!(view.state, "terminal");
         assert_eq!(
             view.disposition(),
-            crate::domain::runtime::CommandDisposition::ValidationFailed
+            crate::view::runtime::CommandDisposition::ValidationFailed
         );
         assert_eq!(
             view.prev_event_id.as_deref(),
@@ -17733,7 +17733,7 @@ mod tests {
         assert_eq!(view.state, "terminal");
         assert_eq!(
             view.disposition(),
-            crate::domain::runtime::CommandDisposition::ValidationFailed
+            crate::view::runtime::CommandDisposition::ValidationFailed
         );
         assert_eq!(view.event_id.as_deref(), Some(decision_event_id.as_str()));
         assert_eq!(view.event_kind, Some(KIND_TRADE_ORDER_DECISION));

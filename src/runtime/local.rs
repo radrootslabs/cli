@@ -8,14 +8,14 @@ use radroots_replica_sync::radroots_replica_sync_status;
 use radroots_sql_core::SqliteExecutor;
 use serde_json::json;
 
-use crate::domain::runtime::{
-    LocalBackupView, LocalExportView, LocalInitView, LocalReplicaCountsView, LocalReplicaSyncView,
-    LocalStatusView,
-};
+use crate::cli::global::LocalExportFormatArg;
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::sync::ensure_sync_run_table;
-use crate::runtime_args::LocalExportFormatArg;
+use crate::view::runtime::{
+    LocalBackupView, LocalExportView, LocalInitView, LocalReplicaCountsView, LocalReplicaSyncView,
+    LocalStatusView,
+};
 
 const LOCAL_SOURCE: &str = "local replica · local first";
 

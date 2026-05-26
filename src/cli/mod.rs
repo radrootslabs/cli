@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod global;
+
 use std::path::PathBuf;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
@@ -1162,7 +1164,7 @@ mod tests {
         OrderSettlementCommand, TargetCliArgs, TargetOutputFormat, ValidationCommand,
         ValidationReceiptCommand,
     };
-    use crate::operation_registry::OPERATION_REGISTRY;
+    use crate::registry::OPERATION_REGISTRY;
 
     #[test]
     fn target_parser_accepts_every_target_registry_path() {
@@ -1262,7 +1264,7 @@ mod tests {
         .expect("target args parse");
 
         assert_eq!(parsed.command.operation_id(), "account.attach_secret");
-        let crate::target_cli::TargetCommand::Account(account) = parsed.command else {
+        let crate::cli::TargetCommand::Account(account) = parsed.command else {
             panic!("expected account command")
         };
         let AccountCommand::AttachSecret(args) = account.command else {
@@ -1282,7 +1284,7 @@ mod tests {
             .expect("target args parse");
 
         assert_eq!(parsed.command.operation_id(), "farm.rebind");
-        let crate::target_cli::TargetCommand::Farm(farm) = parsed.command else {
+        let crate::cli::TargetCommand::Farm(farm) = parsed.command else {
             panic!("expected farm command")
         };
         let FarmCommand::Rebind(args) = farm.command else {
@@ -1305,7 +1307,7 @@ mod tests {
         .expect("target args parse");
 
         assert_eq!(parsed.command.operation_id(), "listing.rebind");
-        let crate::target_cli::TargetCommand::Listing(listing) = parsed.command else {
+        let crate::cli::TargetCommand::Listing(listing) = parsed.command else {
             panic!("expected listing command")
         };
         let ListingCommand::Rebind(args) = listing.command else {
@@ -1326,7 +1328,7 @@ mod tests {
                 .expect("target args parse");
 
         assert_eq!(parsed.command.operation_id(), "order.rebind");
-        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+        let crate::cli::TargetCommand::Order(order) = parsed.command else {
             panic!("expected order command")
         };
         let OrderCommand::Rebind(args) = order.command else {
@@ -1350,7 +1352,7 @@ mod tests {
         .expect("target args parse");
 
         assert_eq!(parsed.command.operation_id(), "order.fulfillment.update");
-        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+        let crate::cli::TargetCommand::Order(order) = parsed.command else {
             panic!("expected order command")
         };
         let OrderCommand::Fulfillment(fulfillment) = order.command else {
@@ -1374,7 +1376,7 @@ mod tests {
         .expect("target args parse");
 
         assert_eq!(parsed.command.operation_id(), "order.cancel");
-        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+        let crate::cli::TargetCommand::Order(order) = parsed.command else {
             panic!("expected order command")
         };
         let OrderCommand::Cancel(args) = order.command else {
@@ -1412,7 +1414,7 @@ mod tests {
         .expect("target args parse");
 
         assert_eq!(parsed.command.operation_id(), "order.revision.propose");
-        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+        let crate::cli::TargetCommand::Order(order) = parsed.command else {
             panic!("expected order command")
         };
         let OrderCommand::Revision(revision) = order.command else {
@@ -1443,7 +1445,7 @@ mod tests {
         .expect("target args parse");
 
         assert_eq!(accepted.command.operation_id(), "order.revision.accept");
-        let crate::target_cli::TargetCommand::Order(order) = accepted.command else {
+        let crate::cli::TargetCommand::Order(order) = accepted.command else {
             panic!("expected order command")
         };
         let OrderCommand::Revision(revision) = order.command else {
@@ -1469,7 +1471,7 @@ mod tests {
         .expect("target args parse");
 
         assert_eq!(declined.command.operation_id(), "order.revision.decline");
-        let crate::target_cli::TargetCommand::Order(order) = declined.command else {
+        let crate::cli::TargetCommand::Order(order) = declined.command else {
             panic!("expected order command")
         };
         let OrderCommand::Revision(revision) = order.command else {
@@ -1495,7 +1497,7 @@ mod tests {
         ])
         .expect("target args parse");
         assert_eq!(received.command.operation_id(), "order.receipt.record");
-        let crate::target_cli::TargetCommand::Order(order) = received.command else {
+        let crate::cli::TargetCommand::Order(order) = received.command else {
             panic!("expected order command")
         };
         let OrderCommand::Receipt(receipt) = order.command else {
@@ -1530,7 +1532,7 @@ mod tests {
         ])
         .expect("target args parse");
         assert_eq!(get.command.operation_id(), "validation.receipt.get");
-        let crate::target_cli::TargetCommand::Validation(validation) = get.command else {
+        let crate::cli::TargetCommand::Validation(validation) = get.command else {
             panic!("expected validation command")
         };
         let ValidationCommand::Receipt(receipt) = validation.command;
@@ -1552,7 +1554,7 @@ mod tests {
         ])
         .expect("target args parse");
         assert_eq!(list.command.operation_id(), "validation.receipt.list");
-        let crate::target_cli::TargetCommand::Validation(validation) = list.command else {
+        let crate::cli::TargetCommand::Validation(validation) = list.command else {
             panic!("expected validation command")
         };
         let ValidationCommand::Receipt(receipt) = validation.command;
@@ -1593,7 +1595,7 @@ mod tests {
         ])
         .expect("target args parse");
         assert_eq!(parsed.command.operation_id(), "order.payment.record");
-        let crate::target_cli::TargetCommand::Order(order) = parsed.command else {
+        let crate::cli::TargetCommand::Order(order) = parsed.command else {
             panic!("expected order command")
         };
         let OrderCommand::Payment(payment) = order.command else {
@@ -1611,7 +1613,7 @@ mod tests {
             "radroots", "order", "payment", "record", "ord_test", "--method", "card",
         ])
         .expect("target args parse");
-        let crate::target_cli::TargetCommand::Order(order) = future_method.command else {
+        let crate::cli::TargetCommand::Order(order) = future_method.command else {
             panic!("expected order command")
         };
         let OrderCommand::Payment(payment) = order.command else {
@@ -1634,7 +1636,7 @@ mod tests {
         ])
         .expect("target args parse");
         assert_eq!(accept.command.operation_id(), "order.settlement.accept");
-        let crate::target_cli::TargetCommand::Order(order) = accept.command else {
+        let crate::cli::TargetCommand::Order(order) = accept.command else {
             panic!("expected order command")
         };
         let OrderCommand::Settlement(settlement) = order.command else {

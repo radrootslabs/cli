@@ -13,9 +13,9 @@ use radroots_secret_vault::{
     RadrootsSecretVaultError, RadrootsSecretVaultOsKeyring,
 };
 
-use crate::domain::runtime::{AccountResolutionView, AccountSummaryView};
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::view::runtime::{AccountResolutionView, AccountSummaryView};
 
 const HOST_VAULT_AVAILABILITY_OVERRIDE_ENV: &str = "RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE";
 const HOST_VAULT_SERVICE_NAME: &str = "org.radroots.cli.local-account";

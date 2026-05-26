@@ -1,8 +1,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::domain::runtime::{FindView, ListingGetView, SyncActionView};
-use crate::operation_adapter::{
+use crate::cli::global::{FindQueryArgs, RecordLookupArgs};
+use crate::ops::{
     MarketListingGetRequest, MarketListingGetResult, MarketProductSearchRequest,
     MarketProductSearchResult, MarketRefreshRequest, MarketRefreshResult, OperationAdapterError,
     OperationRequest, OperationRequestData, OperationRequestPayload, OperationResult,
@@ -10,7 +10,7 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime_args::{FindQueryArgs, RecordLookupArgs};
+use crate::view::runtime::{FindView, ListingGetView, SyncActionView};
 
 pub struct MarketOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -249,11 +249,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{MarketOperationService, market_listing_get_view, market_product_search_view};
-    use crate::domain::runtime::{
-        FindPriceView, FindQuantityView, FindResultProvenanceView, FindResultView, FindView,
-        ListingGetView, MarketReadinessView, SyncFreshnessView,
-    };
-    use crate::operation_adapter::{
+    use crate::ops::{
         MarketListingGetRequest, MarketProductSearchRequest, MarketRefreshRequest,
         OperationAdapter, OperationContext, OperationData, OperationRequest,
     };
@@ -262,6 +258,10 @@ mod tests {
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
         PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
         RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+    };
+    use crate::view::runtime::{
+        FindPriceView, FindQuantityView, FindResultProvenanceView, FindResultView, FindView,
+        ListingGetView, MarketReadinessView, SyncFreshnessView,
     };
 
     const LISTING_ADDR: &str = "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";

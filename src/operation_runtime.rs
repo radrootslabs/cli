@@ -1,8 +1,8 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::domain::runtime::{CommandDisposition, SyncActionView, SyncStatusView};
-use crate::operation_adapter::{
+use crate::cli::global::SyncWatchArgs;
+use crate::ops::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, RelayListRequest, RelayListResult,
     SignerStatusGetRequest, SignerStatusGetResult, SyncPullRequest, SyncPullResult,
@@ -11,7 +11,7 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{PublishMode, RuntimeConfig};
-use crate::runtime_args::SyncWatchArgs;
+use crate::view::runtime::{CommandDisposition, SyncActionView, SyncStatusView};
 
 pub struct RuntimeOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -241,7 +241,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::RuntimeOperationService;
-    use crate::operation_adapter::{
+    use crate::ops::{
         OperationAdapter, OperationContext, OperationRequest, RelayListRequest,
         SignerStatusGetRequest, SyncPushRequest, SyncStatusGetRequest,
     };

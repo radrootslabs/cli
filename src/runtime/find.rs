@@ -1,10 +1,7 @@
 use radroots_replica_db::ReplicaSql;
 use radroots_sql_core::SqliteExecutor;
 
-use crate::domain::runtime::{
-    FindHyfView, FindPriceView, FindQuantityView, FindResultHyfView, FindResultProvenanceView,
-    FindResultView, FindView, MarketReadinessView,
-};
+use crate::cli::global::FindQueryArgs;
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::hyf::{self, HyfQueryRewriteRequest, HyfRequestContext};
@@ -12,7 +9,10 @@ use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, freshness_requires_refresh,
     market_refresh, missing_freshness,
 };
-use crate::runtime_args::FindQueryArgs;
+use crate::view::runtime::{
+    FindHyfView, FindPriceView, FindQuantityView, FindResultHyfView, FindResultProvenanceView,
+    FindResultView, FindView, MarketReadinessView,
+};
 
 const FIND_SOURCE: &str = "local replica · local first";
 const FIND_HYF_SOURCE: &str = "hyf query_rewrite · local first";

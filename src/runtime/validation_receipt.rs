@@ -20,11 +20,11 @@ use radroots_trade::validation_receipt::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::domain::runtime::{CommandDisposition, RelayFailureView};
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, fetch_events_from_relays,
 };
+use crate::view::runtime::{CommandDisposition, RelayFailureView};
 
 #[derive(Debug, Clone)]
 pub struct ValidationReceiptEventArgs {

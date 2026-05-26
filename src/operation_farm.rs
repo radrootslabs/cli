@@ -1,8 +1,11 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::domain::runtime::{CommandDisposition, FarmPublishView};
-use crate::operation_adapter::{
+use crate::cli::global::{
+    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
+    FarmUpdateArgs,
+};
+use crate::ops::{
     FarmCreateRequest, FarmCreateResult, FarmFulfillmentUpdateRequest, FarmFulfillmentUpdateResult,
     FarmGetRequest, FarmGetResult, FarmLocationUpdateRequest, FarmLocationUpdateResult,
     FarmProfileUpdateRequest, FarmProfileUpdateResult, FarmPublishRequest, FarmPublishResult,
@@ -12,10 +15,7 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{PublishMode, RuntimeConfig};
-use crate::runtime_args::{
-    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
-    FarmUpdateArgs,
-};
+use crate::view::runtime::{CommandDisposition, FarmPublishView};
 
 pub struct FarmOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -383,7 +383,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::FarmOperationService;
-    use crate::operation_adapter::{
+    use crate::ops::{
         FarmCreateRequest, FarmGetRequest, FarmPublishRequest, FarmReadinessCheckRequest,
         FarmRebindRequest, OperationAdapter, OperationContext, OperationData, OperationRequest,
     };

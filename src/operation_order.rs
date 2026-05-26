@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::deferred_payment::deferred_payment_message;
-use crate::domain::runtime::{
-    CommandDisposition, OrderAppRecordExportView, OrderCancellationView, OrderDecisionView,
-    OrderFulfillmentView, OrderRebindView, OrderReceiptView, OrderRevisionDecisionView,
-    OrderRevisionProposalView, OrderStatusView, OrderSubmitView,
+use crate::cli::global::{
+    OrderAppRecordExportArgs, OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs,
+    OrderFulfillmentArgs, OrderRebindArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
+    OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs,
+    RecordLookupArgs,
 };
-use crate::operation_adapter::{
+use crate::deferred_payment::deferred_payment_message;
+use crate::ops::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, OrderAcceptRequest, OrderAcceptResult,
     OrderAppExportRequest, OrderAppExportResult, OrderAppListRequest, OrderAppListResult,
@@ -26,11 +27,10 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime_args::{
-    OrderAppRecordExportArgs, OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs,
-    OrderFulfillmentArgs, OrderRebindArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
-    OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs,
-    RecordLookupArgs,
+use crate::view::runtime::{
+    CommandDisposition, OrderAppRecordExportView, OrderCancellationView, OrderDecisionView,
+    OrderFulfillmentView, OrderRebindView, OrderReceiptView, OrderRevisionDecisionView,
+    OrderRevisionProposalView, OrderStatusView, OrderSubmitView,
 };
 
 const ORDER_EVENT_WATCH_DEFERRED_REASON: &str = "relay-backed order event watch is not implemented";
@@ -1420,7 +1420,7 @@ fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
 
 fn event_list_result<R>(
     operation_id: &str,
-    view: &crate::domain::runtime::OrderEventListView,
+    view: &crate::view::runtime::OrderEventListView,
 ) -> Result<OperationResult<R>, OperationAdapterError>
 where
     R: OperationResultData,
@@ -1455,7 +1455,7 @@ where
     }
 }
 
-fn order_event_list_error_detail(view: &crate::domain::runtime::OrderEventListView) -> Value {
+fn order_event_list_error_detail(view: &crate::view::runtime::OrderEventListView) -> Value {
     json!({
         "state": &view.state,
         "seller_pubkey": &view.seller_pubkey,
@@ -1565,8 +1565,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{OrderOperationService, decision_result};
-    use crate::domain::runtime::OrderDecisionView;
-    use crate::operation_adapter::{
+    use crate::ops::{
         OperationAdapter, OperationContext, OperationData, OperationRequest, OrderAcceptRequest,
         OrderAcceptResult, OrderCancelRequest, OrderDeclineRequest, OrderDeclineResult,
         OrderEventListRequest, OrderEventWatchRequest, OrderGetRequest, OrderListRequest,
@@ -1580,6 +1579,7 @@ mod tests {
         PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
         RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
+    use crate::view::runtime::OrderDecisionView;
 
     #[test]
     fn order_service_get_and_list_preserve_order_truth() {
@@ -1649,7 +1649,7 @@ mod tests {
         assert_eq!(output_error.code, "not_found");
         assert_eq!(output_error.exit_code, 4);
         assert!(output_error.message.contains("ord_missing"));
-        let envelope = crate::output_contract::OutputEnvelope::failure(
+        let envelope = crate::out::envelope::OutputEnvelope::failure(
             "order.submit",
             output_error,
             context.envelope_context("req_order_submit"),
@@ -2016,7 +2016,7 @@ mod tests {
         assert_eq!(detail["fetched_count"], 0);
         assert_eq!(detail["decoded_count"], 0);
         assert_eq!(detail["skipped_count"], 0);
-        let envelope = crate::output_contract::OutputEnvelope::failure(
+        let envelope = crate::out::envelope::OutputEnvelope::failure(
             "order.status.get",
             output_error,
             OperationContext::default().envelope_context("req_order_status"),
@@ -2039,7 +2039,7 @@ mod tests {
             .execute(request)
             .expect_err("order event list unconfigured")
             .to_output_error();
-        let envelope = crate::output_contract::OutputEnvelope::failure(
+        let envelope = crate::out::envelope::OutputEnvelope::failure(
             "order.event.list",
             output_error,
             context.envelope_context("req_order_event_list"),
@@ -2071,7 +2071,7 @@ mod tests {
             .execute(request)
             .expect_err("order event list missing account")
             .to_output_error();
-        let envelope = crate::output_contract::OutputEnvelope::failure(
+        let envelope = crate::out::envelope::OutputEnvelope::failure(
             "order.event.list",
             output_error,
             context.envelope_context("req_order_event_list"),
@@ -2106,7 +2106,7 @@ mod tests {
         let error = service
             .execute(request)
             .expect_err("order event watch deferred");
-        let envelope = crate::output_contract::OutputEnvelope::failure(
+        let envelope = crate::out::envelope::OutputEnvelope::failure(
             "order.event.watch",
             error.to_output_error(),
             OperationContext::default().envelope_context("req_order_watch"),

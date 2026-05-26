@@ -1,21 +1,20 @@
 #![forbid(unsafe_code)]
 
+mod cli;
 mod deferred_payment;
-mod domain;
-mod operation_adapter;
 mod operation_basket;
 mod operation_core;
 mod operation_farm;
 mod operation_listing;
 mod operation_market;
 mod operation_order;
-mod operation_registry;
 mod operation_runtime;
 mod operation_validation;
-mod output_contract;
+mod ops;
+mod out;
+mod registry;
 mod runtime;
-mod runtime_args;
-mod target_cli;
+mod view;
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -25,31 +24,31 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use serde_json::{Value, json};
 
+use crate::cli::global::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
+use crate::cli::{TargetCliArgs, TargetOutputFormat};
 use crate::deferred_payment::{deferred_payment_message, is_deferred_payment_operation};
-use crate::operation_adapter::{
-    OperationAdapter, OperationAdapterError, OperationNetworkMode, OperationOutputFormat,
-    OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
-    TargetOperationRequest,
-};
 use crate::operation_basket::BasketOperationService;
 use crate::operation_core::CoreOperationService;
 use crate::operation_farm::FarmOperationService;
 use crate::operation_listing::ListingOperationService;
 use crate::operation_market::MarketOperationService;
 use crate::operation_order::OrderOperationService;
-use crate::operation_registry::{
+use crate::operation_runtime::RuntimeOperationService;
+use crate::operation_validation::ValidationOperationService;
+use crate::ops::{
+    OperationAdapter, OperationAdapterError, OperationNetworkMode, OperationOutputFormat,
+    OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
+    TargetOperationRequest,
+};
+use crate::out::envelope::OutputEnvelope;
+use crate::registry::{
     NetworkRequirement, network_requirement, requires_local_signer_mode,
     requires_nostr_relay_publish_mode,
 };
-use crate::operation_runtime::RuntimeOperationService;
-use crate::operation_validation::ValidationOperationService;
-use crate::output_contract::OutputEnvelope;
 use crate::runtime::config::{
     PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
 };
 use crate::runtime::logging::initialize_logging;
-use crate::runtime_args::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
-use crate::target_cli::{TargetCliArgs, TargetOutputFormat};
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -64,8 +63,8 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<ExitCode, runtime::RuntimeError> {
-    debug_assert!(operation_registry::registry_linkage_is_valid());
-    debug_assert!(operation_adapter::adapter_registry_linkage_is_valid());
+    debug_assert!(registry::registry_linkage_is_valid());
+    debug_assert!(ops::adapter_registry_linkage_is_valid());
     let args = TargetCliArgs::parse();
     let request =
         TargetOperationRequest::from_target_args(&args).map_err(operation_config_error)?;

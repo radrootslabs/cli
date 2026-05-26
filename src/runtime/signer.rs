@@ -1,11 +1,11 @@
-use crate::domain::runtime::{
-    IdentityPublicView, LocalSignerStatusView, SignerBindingStatusView, SignerStatusView,
-    SignerWriteKindReadinessView,
-};
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts::AccountRuntimeFailure;
 use crate::runtime::accounts::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolution_view};
 use crate::runtime::config::{RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend};
+use crate::view::runtime::{
+    IdentityPublicView, LocalSignerStatusView, SignerBindingStatusView, SignerStatusView,
+    SignerWriteKindReadinessView,
+};
 use radroots_events::kinds::{
     KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE,
     KIND_TRADE_ORDER_DECISION, KIND_TRADE_ORDER_REQUEST, KIND_TRADE_ORDER_REVISION,

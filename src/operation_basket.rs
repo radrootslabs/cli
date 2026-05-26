@@ -10,8 +10,8 @@ use radroots_sql_core::SqliteExecutor;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::domain::runtime::OrderNewView;
-use crate::operation_adapter::{
+use crate::cli::global::{OrderDraftAdjustmentArgs, OrderDraftCreateArgs};
+use crate::ops::{
     BasketAdjustmentAddRequest, BasketAdjustmentAddResult, BasketAdjustmentRemoveRequest,
     BasketAdjustmentRemoveResult, BasketCreateRequest, BasketCreateResult, BasketGetRequest,
     BasketGetResult, BasketItemAddRequest, BasketItemAddResult, BasketItemRemoveRequest,
@@ -21,7 +21,7 @@ use crate::operation_adapter::{
     OperationRequestPayload, OperationResult, OperationResultData, OperationService,
 };
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime_args::{OrderDraftAdjustmentArgs, OrderDraftCreateArgs};
+use crate::view::runtime::OrderNewView;
 
 const BASKET_KIND: &str = "basket_v1";
 const BASKET_SOURCE: &str = "local baskets - local first";
@@ -1325,7 +1325,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::BasketOperationService;
-    use crate::operation_adapter::{
+    use crate::ops::{
         BasketAdjustmentAddRequest, BasketAdjustmentRemoveRequest, BasketCreateRequest,
         BasketGetRequest, BasketItemAddRequest, BasketItemRemoveRequest, BasketItemUpdateRequest,
         BasketListRequest, BasketQuoteCreateRequest, BasketValidateRequest, OperationAdapter,
@@ -1750,7 +1750,7 @@ mod tests {
     fn add_listing_item(
         service: &OperationAdapter<BasketOperationService<'_>>,
         basket_id: &str,
-    ) -> crate::output_contract::OutputEnvelope {
+    ) -> crate::out::envelope::OutputEnvelope {
         let request = OperationRequest::new(
             OperationContext::default(),
             BasketItemAddRequest::from_data(data(&[

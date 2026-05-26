@@ -31,12 +31,9 @@ use radroots_trade::listing::validation::validate_listing_event;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::domain::runtime::{
-    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingAppRecordExportView,
-    ListingAppRecordListView, ListingAppRecordSummaryView, ListingGetView, ListingListView,
-    ListingMutationEventView, ListingMutationLocalReplicaView, ListingMutationView, ListingNewView,
-    ListingRebindView, ListingSummaryView, ListingValidateView, ListingValidationIssueView,
-    MarketReadinessView, RelayFailureView,
+use crate::cli::global::{
+    ListingAppRecordExportArgs, ListingCreateArgs, ListingFileArgs, ListingMutationArgs,
+    ListingRebindArgs, RecordLookupArgs,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
@@ -57,9 +54,12 @@ use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authori
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
 };
-use crate::runtime_args::{
-    ListingAppRecordExportArgs, ListingCreateArgs, ListingFileArgs, ListingMutationArgs,
-    ListingRebindArgs, RecordLookupArgs,
+use crate::view::runtime::{
+    FindPriceView, FindQuantityView, FindResultProvenanceView, ListingAppRecordExportView,
+    ListingAppRecordListView, ListingAppRecordSummaryView, ListingGetView, ListingListView,
+    ListingMutationEventView, ListingMutationLocalReplicaView, ListingMutationView, ListingNewView,
+    ListingRebindView, ListingSummaryView, ListingValidateView, ListingValidationIssueView,
+    MarketReadinessView, RelayFailureView,
 };
 
 const DRAFT_KIND: &str = "listing_draft_v1";

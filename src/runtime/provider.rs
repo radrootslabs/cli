@@ -1,4 +1,3 @@
-use crate::domain::runtime::PublishRuntimeView;
 #[cfg(test)]
 use crate::runtime::config::{
     CapabilityBindingInspection, CapabilityBindingInspectionState, INFERENCE_HYF_STDIO_CAPABILITY,
@@ -6,6 +5,7 @@ use crate::runtime::config::{
 use crate::runtime::config::{PublishMode, RuntimeConfig};
 #[cfg(test)]
 use crate::runtime::hyf;
+use crate::view::runtime::PublishRuntimeView;
 
 #[cfg(test)]
 const WRITE_PLANE_TARGET_DETAIL: &str =
@@ -264,9 +264,6 @@ mod tests {
         ProviderProvenance, resolve_actor_write_plane_target, resolve_capability_providers,
         resolve_hyf_provider, resolve_write_plane_provider,
     };
-    use crate::domain::runtime::{
-        PublishProviderRuntimeView, PublishRelayRuntimeView, PublishRuntimeView,
-    };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
         CapabilityBindingSource, CapabilityBindingTargetKind, HyfConfig, IdentityConfig,
@@ -274,6 +271,9 @@ mod tests {
         OutputFormat, PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig,
         RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
         SignerConfig, Verbosity,
+    };
+    use crate::view::runtime::{
+        PublishProviderRuntimeView, PublishRelayRuntimeView, PublishRuntimeView,
     };
 
     fn sample_config(bindings: Vec<CapabilityBindingConfig>, hyf_enabled: bool) -> RuntimeConfig {

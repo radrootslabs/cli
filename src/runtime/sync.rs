@@ -24,11 +24,7 @@ use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::domain::runtime::{
-    RelayFailureView, SyncActionView, SyncFreshnessView, SyncPublishPlanAuthorView,
-    SyncPublishPlanKindView, SyncPublishPlanView, SyncQueueView, SyncRunFreshnessView,
-    SyncStatusView, SyncWatchFrameView, SyncWatchView,
-};
+use crate::cli::global::SyncWatchArgs;
 use crate::runtime::RuntimeError;
 use crate::runtime::accounts;
 use crate::runtime::config::{PublishMode, RuntimeConfig};
@@ -36,7 +32,11 @@ use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, DirectRelayPublishError,
     DirectRelayPublishReceipt, fetch_events_from_relays, publish_parts_with_identity,
 };
-use crate::runtime_args::SyncWatchArgs;
+use crate::view::runtime::{
+    RelayFailureView, SyncActionView, SyncFreshnessView, SyncPublishPlanAuthorView,
+    SyncPublishPlanKindView, SyncPublishPlanView, SyncQueueView, SyncRunFreshnessView,
+    SyncStatusView, SyncWatchFrameView, SyncWatchView,
+};
 
 const SYNC_SOURCE: &str = "local replica · local first";
 const RELAY_PULL_SETUP_ACTION: &str = "radroots --relay wss://relay.example.com sync pull";
@@ -1615,13 +1615,13 @@ mod tests {
         DirectRelayPublishReceipt, RelayIngestScope, market_refresh_with_fetcher,
         pull_with_fetcher, push_with_publisher, relay_provenance_relays_for_scope, status,
     };
+    use crate::cli::global::{FindQueryArgs, RecordLookupArgs};
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
         PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
         RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
-    use crate::runtime_args::{FindQueryArgs, RecordLookupArgs};
 
     const FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
     const PLOT_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAQ";

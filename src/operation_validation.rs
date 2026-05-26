@@ -1,8 +1,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::domain::runtime::CommandDisposition;
-use crate::operation_adapter::{
+use crate::ops::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, ValidationReceiptGetRequest,
     ValidationReceiptGetResult, ValidationReceiptListRequest, ValidationReceiptListResult,
@@ -13,6 +12,7 @@ use crate::runtime::validation_receipt::{
     ValidationReceiptEventArgs, ValidationReceiptInspectionView, ValidationReceiptListArgs,
     ValidationReceiptListView,
 };
+use crate::view::runtime::CommandDisposition;
 
 pub struct ValidationOperationService<'a> {
     config: &'a RuntimeConfig,

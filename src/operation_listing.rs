@@ -3,8 +3,11 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::domain::runtime::{CommandDisposition, ListingAppRecordExportView, ListingMutationView};
-use crate::operation_adapter::{
+use crate::cli::global::{
+    ListingAppRecordExportArgs, ListingCreateArgs, ListingFileArgs, ListingMutationArgs,
+    ListingRebindArgs, RecordLookupArgs,
+};
+use crate::ops::{
     ListingAppExportRequest, ListingAppExportResult, ListingAppListRequest, ListingAppListResult,
     ListingArchiveRequest, ListingArchiveResult, ListingCreateRequest, ListingCreateResult,
     ListingGetRequest, ListingGetResult, ListingListRequest, ListingListResult,
@@ -15,10 +18,7 @@ use crate::operation_adapter::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime_args::{
-    ListingAppRecordExportArgs, ListingCreateArgs, ListingFileArgs, ListingMutationArgs,
-    ListingRebindArgs, RecordLookupArgs,
-};
+use crate::view::runtime::{CommandDisposition, ListingAppRecordExportView, ListingMutationView};
 
 pub struct ListingOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -467,7 +467,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::ListingOperationService;
-    use crate::operation_adapter::{
+    use crate::ops::{
         ListingArchiveRequest, ListingCreateRequest, ListingListRequest, ListingPublishRequest,
         OperationAdapter, OperationContext, OperationData, OperationRequest,
     };

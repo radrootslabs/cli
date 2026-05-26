@@ -13,10 +13,10 @@ use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
 use serde::Deserialize;
 use url::Url;
 
+use crate::cli::global::RuntimeInvocationArgs;
 use crate::runtime::RuntimeError;
 pub use crate::runtime::paths::PathsConfig;
 use crate::runtime::paths::{ENV_CLI_PATHS_PROFILE, ENV_CLI_PATHS_REPO_LOCAL_ROOT, resolve_paths};
-use crate::runtime_args::RuntimeInvocationArgs;
 
 const DEFAULT_LOG_FILTER: &str = "info";
 const DEFAULT_ENV_PATH: &str = ".env";
@@ -1689,7 +1689,7 @@ mod tests {
         PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfigSource,
         RelayPublishPolicy, RuntimeConfig, SignerBackend, Verbosity, parse_env_file_values,
     };
-    use crate::runtime_args::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
+    use crate::cli::global::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
     use radroots_runtime_paths::{RadrootsHostEnvironment, RadrootsPathResolver, RadrootsPlatform};
     use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
     use std::collections::BTreeMap;
