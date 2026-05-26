@@ -35,8 +35,8 @@ use support::{
     identity_public, identity_secret, json_from_stdout, make_listing_publishable,
     make_listing_publishable_with_seller, ndjson_from_stdout, radroots, remove_orderable_listing,
     replace_latest_listing_event_id, seed_orderable_listing, toml_string,
-    update_orderable_listing_available_amount, write_public_identity_profile,
-    write_secret_identity_profile,
+    update_orderable_listing_available_amount, update_orderable_listing_primary_bin_id,
+    write_public_identity_profile, write_secret_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -5706,6 +5706,76 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
             .get("actions")
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty)
+    );
+
+    update_orderable_listing_available_amount(&sandbox, LISTING_ADDR, 5);
+    update_orderable_listing_primary_bin_id(&sandbox, LISTING_ADDR, None);
+
+    let no_bin_search =
+        sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
+    let no_bin_result = &no_bin_search["result"]["results"][0];
+    assert_eq!(no_bin_result["primary_bin_id"], Value::Null);
+    assert_eq!(no_bin_result["checkout_enabled"], false);
+    assert_eq!(
+        no_bin_result["reason_codes"][0],
+        "listing_checkout_disabled"
+    );
+    assert_eq!(
+        no_bin_result["reason_codes"][1],
+        "listing_primary_bin_missing"
+    );
+    assert!(
+        no_bin_search["result"]["actions"]
+            .as_array()
+            .expect("no-bin search actions")
+            .iter()
+            .all(|action| action != "radroots basket create")
+    );
+
+    let no_bin_listing = sandbox.json_success(&[
+        "--format",
+        "json",
+        "market",
+        "listing",
+        "get",
+        "pasture-eggs",
+    ]);
+    assert_eq!(no_bin_listing["result"]["primary_bin_id"], Value::Null);
+    assert_eq!(no_bin_listing["result"]["checkout_enabled"], false);
+    assert_eq!(
+        no_bin_listing["result"]["reason_codes"][1],
+        "listing_primary_bin_missing"
+    );
+    assert!(
+        no_bin_listing["result"]
+            .get("actions")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    );
+
+    update_orderable_listing_primary_bin_id(&sandbox, LISTING_ADDR, Some("bin-1"));
+
+    let restored_listing = sandbox.json_success(&[
+        "--format",
+        "json",
+        "market",
+        "listing",
+        "get",
+        "pasture-eggs",
+    ]);
+    assert_eq!(restored_listing["result"]["primary_bin_id"], "bin-1");
+    assert_eq!(restored_listing["result"]["checkout_enabled"], true);
+    assert!(
+        restored_listing["result"]
+            .get("reason_codes")
+            .is_none_or(Value::is_null)
+    );
+    assert!(
+        restored_listing["result"]["actions"]
+            .as_array()
+            .expect("restored listing actions")
+            .iter()
+            .any(|action| action == "radroots basket create")
     );
 }
 

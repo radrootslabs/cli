@@ -1074,6 +1074,7 @@ impl MarketReadinessView {
 
     pub fn from_market_projection(
         listing_addr: Option<&str>,
+        primary_bin_id: Option<&str>,
         title: Option<&str>,
         category: Option<&str>,
         available_amount: Option<i64>,
@@ -1089,12 +1090,15 @@ impl MarketReadinessView {
             && title.is_some_and(|title| !title.trim().is_empty())
             && category.is_some_and(|category| !category.trim().is_empty());
         let inventory_available = available_amount.is_some_and(|amount| amount > 0);
+        let primary_bin_available =
+            primary_bin_id.is_some_and(|primary_bin_id| !primary_bin_id.trim().is_empty());
         let price_available = price_amount.is_finite()
             && price_amount > 0.0
             && !price_currency.trim().is_empty()
             && price_per_amount.is_finite()
             && price_per_amount > 0.0;
-        let checkout_enabled = marketplace_eligible && inventory_available && price_available;
+        let checkout_enabled =
+            marketplace_eligible && inventory_available && primary_bin_available && price_available;
         let mut reason_codes = Vec::new();
         if !protocol_valid {
             reason_codes.push("listing_protocol_invalid".to_owned());
@@ -1106,6 +1110,9 @@ impl MarketReadinessView {
             reason_codes.push("listing_checkout_disabled".to_owned());
             if !inventory_available {
                 reason_codes.push("listing_inventory_unavailable".to_owned());
+            }
+            if !primary_bin_available {
+                reason_codes.push("listing_primary_bin_missing".to_owned());
             }
             if !price_available {
                 reason_codes.push("listing_price_unavailable".to_owned());
@@ -1130,6 +1137,7 @@ mod market_readiness_tests {
     fn market_readiness_separates_protocol_marketplace_and_checkout_state() {
         let enabled = MarketReadinessView::from_market_projection(
             Some(LISTING_ADDR),
+            Some("bin-1"),
             Some("Eggs"),
             Some("eggs"),
             Some(1),
@@ -1144,6 +1152,7 @@ mod market_readiness_tests {
 
         let invalid = MarketReadinessView::from_market_projection(
             None,
+            Some("bin-1"),
             Some("Eggs"),
             Some("eggs"),
             Some(1),
@@ -1158,6 +1167,7 @@ mod market_readiness_tests {
 
         let ineligible = MarketReadinessView::from_market_projection(
             Some(LISTING_ADDR),
+            Some("bin-1"),
             Some(" "),
             Some("eggs"),
             Some(1),
@@ -1175,6 +1185,7 @@ mod market_readiness_tests {
 
         let checkout_disabled = MarketReadinessView::from_market_projection(
             Some(LISTING_ADDR),
+            Some("bin-1"),
             Some("Eggs"),
             Some("eggs"),
             Some(0),
@@ -1188,6 +1199,39 @@ mod market_readiness_tests {
         assert_eq!(
             checkout_disabled.reason_codes,
             vec!["listing_checkout_disabled", "listing_inventory_unavailable"]
+        );
+
+        let primary_bin_missing = MarketReadinessView::from_market_projection(
+            Some(LISTING_ADDR),
+            None,
+            Some("Eggs"),
+            Some("eggs"),
+            Some(1),
+            6.0,
+            "USD",
+            1.0,
+        );
+        assert!(primary_bin_missing.protocol_valid);
+        assert!(primary_bin_missing.marketplace_eligible);
+        assert!(!primary_bin_missing.checkout_enabled);
+        assert_eq!(
+            primary_bin_missing.reason_codes,
+            vec!["listing_checkout_disabled", "listing_primary_bin_missing"]
+        );
+
+        let primary_bin_blank = MarketReadinessView::from_market_projection(
+            Some(LISTING_ADDR),
+            Some(" "),
+            Some("Eggs"),
+            Some("eggs"),
+            Some(1),
+            6.0,
+            "USD",
+            1.0,
+        );
+        assert_eq!(
+            primary_bin_blank.reason_codes,
+            vec!["listing_checkout_disabled", "listing_primary_bin_missing"]
         );
     }
 }

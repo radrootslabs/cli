@@ -375,6 +375,22 @@ pub fn update_orderable_listing_available_amount(
         .expect("update listing available amount");
 }
 
+pub fn update_orderable_listing_primary_bin_id(
+    sandbox: &RadrootsCliSandbox,
+    listing_addr: &str,
+    primary_bin_id: Option<&str>,
+) {
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica db");
+    let params = serde_json::to_string(&serde_json::json!([primary_bin_id, listing_addr]))
+        .expect("update listing primary bin params");
+    executor
+        .exec(
+            "UPDATE trade_product SET primary_bin_id = ? WHERE listing_addr = ?;",
+            params.as_str(),
+        )
+        .expect("update listing primary bin");
+}
+
 pub fn replace_latest_listing_event_id(
     sandbox: &RadrootsCliSandbox,
     listing_addr: &str,
