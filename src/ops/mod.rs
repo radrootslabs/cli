@@ -1,14 +1,19 @@
 #![allow(dead_code)]
 
+mod adapter;
 mod context;
-mod contract;
 mod error;
-mod service;
+pub mod exec;
+mod request;
+mod result;
+mod target;
 
+pub use adapter::*;
 pub use context::*;
-pub use contract::*;
 pub use error::OperationAdapterError;
-pub use service::*;
+pub use request::*;
+pub use result::*;
+pub use target::*;
 
 #[cfg(test)]
 mod tests {

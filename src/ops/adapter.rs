@@ -1,7 +1,6 @@
-use super::contract::{
-    OperationRequest, OperationRequestPayload, OperationResult, OperationResultPayload,
-};
 use super::error::OperationAdapterError;
+use super::request::{OperationRequest, OperationRequestPayload};
+use super::result::{OperationResult, OperationResultPayload};
 
 pub trait OperationService<P: OperationRequestPayload> {
     type Result: OperationResultPayload;

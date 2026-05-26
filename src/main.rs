@@ -2,14 +2,6 @@
 
 mod cli;
 mod deferred_payment;
-mod operation_basket;
-mod operation_core;
-mod operation_farm;
-mod operation_listing;
-mod operation_market;
-mod operation_order;
-mod operation_runtime;
-mod operation_validation;
 mod ops;
 mod out;
 mod registry;
@@ -27,14 +19,11 @@ use serde_json::{Value, json};
 use crate::cli::input::runtime_invocation_args_from_target;
 use crate::cli::{TargetCliArgs, TargetOutputFormat};
 use crate::deferred_payment::{deferred_payment_message, is_deferred_payment_operation};
-use crate::operation_basket::BasketOperationService;
-use crate::operation_core::CoreOperationService;
-use crate::operation_farm::FarmOperationService;
-use crate::operation_listing::ListingOperationService;
-use crate::operation_market::MarketOperationService;
-use crate::operation_order::OrderOperationService;
-use crate::operation_runtime::RuntimeOperationService;
-use crate::operation_validation::ValidationOperationService;
+use crate::ops::exec::{
+    BasketOperationService, CoreOperationService, FarmOperationService, ListingOperationService,
+    MarketOperationService, OrderOperationService, RuntimeOperationService,
+    ValidationOperationService,
+};
 use crate::ops::{
     OperationAdapter, OperationAdapterError, OperationNetworkMode, OperationOutputFormat,
     OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
