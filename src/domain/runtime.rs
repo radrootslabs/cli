@@ -1095,7 +1095,8 @@ impl MarketReadinessView {
         let inventory_available = available_amount.is_some_and(|amount| amount > 0);
         let primary_bin_available =
             primary_bin_id.is_some_and(|primary_bin_id| !primary_bin_id.trim().is_empty());
-        let primary_bin_verified = primary_bin_available
+        let primary_bin_verified = protocol_valid
+            && primary_bin_available
             && primary_bin_id.is_some_and(|primary_bin_id| {
                 verified_primary_bin_id.is_some_and(|verified_primary_bin_id| {
                     verified_primary_bin_id.trim() == primary_bin_id.trim()
@@ -1178,7 +1179,7 @@ mod market_readiness_tests {
         assert!(!invalid.protocol_valid);
         assert!(!invalid.marketplace_eligible);
         assert!(!invalid.checkout_enabled);
-        assert!(invalid.primary_bin_verified);
+        assert!(!invalid.primary_bin_verified);
         assert_eq!(invalid.reason_codes, vec!["listing_protocol_invalid"]);
 
         let ineligible = MarketReadinessView::from_market_projection(

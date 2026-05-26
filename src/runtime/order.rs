@@ -234,6 +234,7 @@ struct ResolvedOrderEconomicsProduct {
     price_qty_amt_exact: Option<String>,
     price_qty_unit: String,
     primary_bin_id: Option<String>,
+    verified_primary_bin_id: Option<String>,
     notes: Option<String>,
 }
 
@@ -247,6 +248,7 @@ impl ResolvedOrderEconomicsProduct {
             price_qty_amt_exact: row.price_qty_amt_exact.clone(),
             price_qty_unit: row.price_qty_unit.clone(),
             primary_bin_id: row.primary_bin_id.clone(),
+            verified_primary_bin_id: row.verified_primary_bin_id.clone(),
             notes: row.notes.clone(),
         }
     }
@@ -260,6 +262,7 @@ impl ResolvedOrderEconomicsProduct {
             price_qty_amt_exact: row.price_qty_amt_exact,
             price_qty_unit: row.price_qty_unit,
             primary_bin_id: row.primary_bin_id,
+            verified_primary_bin_id: row.verified_primary_bin_id,
             notes: row.notes,
         }
     }
@@ -9112,6 +9115,22 @@ fn order_economics_from_resolved_listing(
     let Some(primary_bin_id) = product.primary_bin_id.as_deref().and_then(non_empty_ref) else {
         return Ok(None);
     };
+    let Some(verified_primary_bin_id) = product
+        .verified_primary_bin_id
+        .as_deref()
+        .and_then(non_empty_ref)
+    else {
+        return Err(RuntimeError::Config(format!(
+            "listing_primary_bin_invalid: listing `{}` primary bin `{primary_bin_id}` is not verified in the current local replica",
+            listing.listing_addr
+        )));
+    };
+    if verified_primary_bin_id != primary_bin_id {
+        return Err(RuntimeError::Config(format!(
+            "listing_primary_bin_invalid: listing `{}` primary bin `{primary_bin_id}` does not match verified primary bin `{verified_primary_bin_id}` in the current local replica",
+            listing.listing_addr
+        )));
+    }
     if items.is_empty()
         || items
             .iter()
@@ -10907,6 +10926,38 @@ fn order_submit_quantity_preflight_view(
             )],
         )));
     };
+    let Some(verified_primary_bin_id) = product
+        .verified_primary_bin_id
+        .as_deref()
+        .and_then(non_empty_ref)
+    else {
+        return Ok(Some(order_submit_invalid_quantity_view(
+            config,
+            loaded,
+            args,
+            "order listing bin identity is not verified in the local replica",
+            vec![issue_with_code(
+                "listing_primary_bin_invalid",
+                "inventory.primary_bin_id",
+                format!("current local replica primary bin `{primary_bin_id}` is not verified"),
+            )],
+        )));
+    };
+    if verified_primary_bin_id != primary_bin_id {
+        return Ok(Some(order_submit_invalid_quantity_view(
+            config,
+            loaded,
+            args,
+            "order listing bin identity is invalid in the local replica",
+            vec![issue_with_code(
+                "listing_primary_bin_invalid",
+                "inventory.primary_bin_id",
+                format!(
+                    "current local replica primary bin `{primary_bin_id}` does not match verified primary bin `{verified_primary_bin_id}`"
+                ),
+            )],
+        )));
+    }
 
     let mut bin_issues = Vec::new();
     for (index, item) in loaded.document.order.items.iter().enumerate() {
@@ -12670,6 +12721,7 @@ mod tests {
                 price_qty_amt_exact: Some("1".to_owned()),
                 price_qty_unit: "each".to_owned(),
                 primary_bin_id: Some("bin-1".to_owned()),
+                verified_primary_bin_id: Some("bin-1".to_owned()),
                 notes: Some(
                     serde_json::json!({
                         "listing_discounts": [{
@@ -12745,6 +12797,7 @@ mod tests {
                 price_qty_amt_exact: Some("1".to_owned()),
                 price_qty_unit: "each".to_owned(),
                 primary_bin_id: Some("bin-1".to_owned()),
+                verified_primary_bin_id: Some("bin-1".to_owned()),
                 notes: None,
             }),
         };
@@ -12786,6 +12839,7 @@ mod tests {
                 price_qty_amt_exact: Some("1".to_owned()),
                 price_qty_unit: "kg".to_owned(),
                 primary_bin_id: Some("bin-a".to_owned()),
+                verified_primary_bin_id: Some("bin-a".to_owned()),
                 notes: None,
             }),
         };

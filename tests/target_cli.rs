@@ -7229,6 +7229,102 @@ fn order_submit_rejects_unknown_local_listing_bin_before_publish() {
 }
 
 #[test]
+fn basket_quote_rejects_invalid_verified_primary_bin_before_order_write() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    seed_orderable_listing(&sandbox, LISTING_ADDR);
+    update_orderable_listing_primary_bin_id(&sandbox, LISTING_ADDR, Some("missing-bin"));
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "create",
+        "invalid_primary_bin",
+    ]);
+    let add = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "item",
+        "add",
+        "invalid_primary_bin",
+        "--listing-addr",
+        LISTING_ADDR,
+        "--bin-id",
+        "bin-1",
+        "--quantity",
+        "2",
+    ]);
+    assert_eq!(add["result"]["ready_for_quote"], false);
+    assert_eq!(
+        add["result"]["issues"][0]["code"],
+        "listing_primary_bin_invalid"
+    );
+
+    let validate = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "validate",
+        "invalid_primary_bin",
+    ]);
+    assert_eq!(validate["result"]["state"], "unconfigured");
+    assert_eq!(validate["result"]["ready_for_quote"], false);
+    assert_eq!(
+        validate["result"]["issues"][0]["code"],
+        "listing_primary_bin_invalid"
+    );
+
+    let quote = sandbox.json_success(&[
+        "--format",
+        "json",
+        "basket",
+        "quote",
+        "create",
+        "invalid_primary_bin",
+    ]);
+    assert_eq!(quote["result"]["state"], "unconfigured");
+    assert_eq!(quote["result"]["ready_for_quote"], false);
+    assert_eq!(
+        quote["result"]["issues"][0]["code"],
+        "listing_primary_bin_invalid"
+    );
+    assert!(!sandbox.root().join("data/apps/cli/orders/drafts").exists());
+}
+
+#[test]
+fn order_submit_rejects_stale_invalid_verified_primary_bin_before_relay_preflight() {
+    let sandbox = RadrootsCliSandbox::new();
+    let order_id = create_ready_order(&sandbox, "stale_invalid_bin");
+    update_orderable_listing_primary_bin_id(&sandbox, LISTING_ADDR, Some("missing-bin"));
+
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "order",
+        "submit",
+        &order_id,
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(10));
+    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["errors"][0]["code"], "validation_failed");
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["code"],
+        "listing_primary_bin_invalid"
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["issues"][0]["field"],
+        "inventory.primary_bin_id"
+    );
+    assert_no_removed_command_reference(&value, &["order", "submit", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&value, &["order", "submit", "--dry-run"]);
+}
+
+#[test]
 fn order_submit_dry_run_rejects_over_available_quantity_before_relay_preflight() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);

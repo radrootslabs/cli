@@ -4,6 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_events::trade::RadrootsTradeOrderEconomics;
+use radroots_replica_db::{ReplicaSql, trade_product};
+use radroots_replica_db_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
+use radroots_sql_core::SqliteExecutor;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -89,6 +92,7 @@ struct BasketQuote {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BasketIssue {
+    code: String,
     field: String,
     message: String,
 }
@@ -97,6 +101,12 @@ struct BasketIssue {
 struct LoadedBasket {
     file: PathBuf,
     document: BasketDocument,
+}
+
+#[derive(Debug, Clone)]
+struct BasketProductBinState {
+    primary_bin_id: Option<String>,
+    verified_primary_bin_id: Option<String>,
 }
 
 pub struct BasketOperationService<'a> {
@@ -150,7 +160,12 @@ impl OperationService<BasketCreateRequest> for BasketOperationService<'_> {
             quote: None,
         };
         save_basket(file.as_path(), &document)?;
-        json_operation_result::<BasketCreateResult>(basket_view(&document, file.as_path(), None))
+        json_operation_result::<BasketCreateResult>(basket_view(
+            self.config,
+            &document,
+            file.as_path(),
+            None,
+        )?)
     }
 }
 
@@ -169,10 +184,11 @@ impl OperationService<BasketGetRequest> for BasketOperationService<'_> {
             ));
         };
         json_operation_result::<BasketGetResult>(basket_view(
+            self.config,
             &loaded.document,
             loaded.file.as_path(),
             None,
-        ))
+        )?)
     }
 }
 
@@ -224,10 +240,11 @@ impl OperationService<BasketItemAddRequest> for BasketOperationService<'_> {
         loaded.document.quote = None;
         save_basket(loaded.file.as_path(), &loaded.document)?;
         json_operation_result::<BasketItemAddResult>(basket_view(
+            self.config,
             &loaded.document,
             loaded.file.as_path(),
             Some("updated"),
-        ))
+        )?)
     }
 }
 
@@ -272,10 +289,11 @@ impl OperationService<BasketItemUpdateRequest> for BasketOperationService<'_> {
         loaded.document.quote = None;
         save_basket(loaded.file.as_path(), &loaded.document)?;
         json_operation_result::<BasketItemUpdateResult>(basket_view(
+            self.config,
             &loaded.document,
             loaded.file.as_path(),
             Some("updated"),
-        ))
+        )?)
     }
 }
 
@@ -318,10 +336,11 @@ impl OperationService<BasketItemRemoveRequest> for BasketOperationService<'_> {
         loaded.document.quote = None;
         save_basket(loaded.file.as_path(), &loaded.document)?;
         json_operation_result::<BasketItemRemoveResult>(basket_view(
+            self.config,
             &loaded.document,
             loaded.file.as_path(),
             Some("updated"),
-        ))
+        )?)
     }
 }
 
@@ -363,10 +382,11 @@ impl OperationService<BasketAdjustmentAddRequest> for BasketOperationService<'_>
         loaded.document.quote = None;
         save_basket(loaded.file.as_path(), &loaded.document)?;
         json_operation_result::<BasketAdjustmentAddResult>(basket_view(
+            self.config,
             &loaded.document,
             loaded.file.as_path(),
             Some("updated"),
-        ))
+        )?)
     }
 }
 
@@ -408,10 +428,11 @@ impl OperationService<BasketAdjustmentRemoveRequest> for BasketOperationService<
         loaded.document.quote = None;
         save_basket(loaded.file.as_path(), &loaded.document)?;
         json_operation_result::<BasketAdjustmentRemoveResult>(basket_view(
+            self.config,
             &loaded.document,
             loaded.file.as_path(),
             Some("updated"),
-        ))
+        )?)
     }
 }
 
@@ -430,9 +451,10 @@ impl OperationService<BasketValidateRequest> for BasketOperationService<'_> {
             ));
         };
         json_operation_result::<BasketValidateResult>(basket_validation_view(
+            self.config,
             &loaded.document,
             loaded.file.as_path(),
-        ))
+        )?)
     }
 }
 
@@ -446,8 +468,9 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
         let basket_id = required_basket_id(&request)?;
         let mut loaded =
             load_required_basket(self.config, basket_id.as_str(), request.operation_id())?;
-        let issues = basket_issues(&loaded.document);
+        let issues = basket_issues(self.config, &loaded.document)?;
         if !issues.is_empty() {
+            let actions = basket_actions(&loaded.document, issues.as_slice());
             return json_operation_result::<BasketQuoteCreateResult>(json!({
                 "state": "unconfigured",
                 "source": BASKET_QUOTE_SOURCE,
@@ -455,7 +478,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
                 "file": loaded.file.display().to_string(),
                 "ready_for_quote": false,
                 "issues": issues,
-                "actions": basket_actions(&loaded.document),
+                "actions": actions,
             }));
         }
 
@@ -685,8 +708,16 @@ where
     })
 }
 
-fn basket_view(document: &BasketDocument, file: &Path, state: Option<&str>) -> Value {
-    json!({
+fn basket_view(
+    config: &RuntimeConfig,
+    document: &BasketDocument,
+    file: &Path,
+    state: Option<&str>,
+) -> Result<Value, OperationAdapterError> {
+    let issues = basket_issues(config, document)?;
+    let ready_for_quote = issues.is_empty();
+    let actions = basket_actions(document, issues.as_slice());
+    Ok(json!({
         "state": state.unwrap_or("ready"),
         "source": BASKET_SOURCE,
         "basket_id": document.basket.basket_id,
@@ -696,25 +727,31 @@ fn basket_view(document: &BasketDocument, file: &Path, state: Option<&str>) -> V
         "adjustment_count": document.basket.adjustments.len(),
         "adjustments": document.basket.adjustments,
         "quote": document.quote,
-        "ready_for_quote": basket_issues(document).is_empty(),
-        "issues": basket_issues(document),
-        "actions": basket_actions(document),
-    })
+        "ready_for_quote": ready_for_quote,
+        "issues": issues,
+        "actions": actions,
+    }))
 }
 
-fn basket_validation_view(document: &BasketDocument, file: &Path) -> Value {
-    let issues = basket_issues(document);
-    json!({
-        "state": if issues.is_empty() { "ready" } else { "unconfigured" },
+fn basket_validation_view(
+    config: &RuntimeConfig,
+    document: &BasketDocument,
+    file: &Path,
+) -> Result<Value, OperationAdapterError> {
+    let issues = basket_issues(config, document)?;
+    let ready_for_quote = issues.is_empty();
+    let actions = basket_actions(document, issues.as_slice());
+    Ok(json!({
+        "state": if ready_for_quote { "ready" } else { "unconfigured" },
         "source": BASKET_SOURCE,
         "basket_id": document.basket.basket_id,
         "file": file.display().to_string(),
-        "ready_for_quote": issues.is_empty(),
+        "ready_for_quote": ready_for_quote,
         "item_count": document.basket.items.len(),
         "adjustment_count": document.basket.adjustments.len(),
         "issues": issues,
-        "actions": basket_actions(document),
-    })
+        "actions": actions,
+    }))
 }
 
 fn missing_basket_view(config: &RuntimeConfig, lookup: &str) -> Value {
@@ -749,13 +786,16 @@ fn list_basket_summaries(config: &RuntimeConfig) -> Result<Vec<Value>, Operation
             continue;
         }
         let loaded = load_basket_path(path.as_path())?;
+        let issues = basket_issues(config, &loaded.document)?;
+        let ready_for_quote = issues.is_empty();
         baskets.push(json!({
             "basket_id": loaded.document.basket.basket_id,
-            "state": if basket_issues(&loaded.document).is_empty() { "ready" } else { "unconfigured" },
+            "state": if ready_for_quote { "ready" } else { "unconfigured" },
             "file": loaded.file.display().to_string(),
             "item_count": loaded.document.basket.items.len(),
             "adjustment_count": loaded.document.basket.adjustments.len(),
-            "ready_for_quote": basket_issues(&loaded.document).is_empty(),
+            "ready_for_quote": ready_for_quote,
+            "issues": issues,
             "quote": loaded.document.quote,
             "updated_at_unix": loaded.document.basket.updated_at_unix,
         }));
@@ -774,49 +814,218 @@ fn list_basket_summaries(config: &RuntimeConfig) -> Result<Vec<Value>, Operation
     Ok(baskets)
 }
 
-fn basket_issues(document: &BasketDocument) -> Vec<BasketIssue> {
+fn basket_issues(
+    config: &RuntimeConfig,
+    document: &BasketDocument,
+) -> Result<Vec<BasketIssue>, OperationAdapterError> {
     let mut issues = Vec::new();
     if document.basket.items.is_empty() {
-        issues.push(BasketIssue {
-            field: "basket.items".to_owned(),
-            message: "basket must contain one item before quote creation".to_owned(),
-        });
+        issues.push(basket_issue(
+            "basket_items_missing",
+            "basket.items",
+            "basket must contain one item before quote creation",
+        ));
     }
     if document.basket.items.len() > 1 {
-        issues.push(BasketIssue {
-            field: "basket.items".to_owned(),
-            message: "basket quotes support exactly one item".to_owned(),
-        });
+        issues.push(basket_issue(
+            "basket_items_unsupported",
+            "basket.items",
+            "basket quotes support exactly one item",
+        ));
     }
     for item in &document.basket.items {
         if item.listing.is_none() && item.listing_addr.is_none() {
-            issues.push(BasketIssue {
-                field: format!("basket.items.{}.listing", item.item_id),
-                message: "item must include listing or listing_addr".to_owned(),
-            });
+            issues.push(basket_issue(
+                "basket_item_listing_missing",
+                format!("basket.items.{}.listing", item.item_id),
+                "item must include listing or listing_addr",
+            ));
         }
         if item.bin_id.trim().is_empty() {
-            issues.push(BasketIssue {
-                field: format!("basket.items.{}.bin_id", item.item_id),
-                message: "item must include bin_id".to_owned(),
-            });
+            issues.push(basket_issue(
+                "basket_item_bin_missing",
+                format!("basket.items.{}.bin_id", item.item_id),
+                "item must include bin_id",
+            ));
         }
         if item.quantity == 0 {
-            issues.push(BasketIssue {
-                field: format!("basket.items.{}.quantity", item.item_id),
-                message: "item quantity must be greater than 0".to_owned(),
-            });
+            issues.push(basket_issue(
+                "basket_item_quantity_invalid",
+                format!("basket.items.{}.quantity", item.item_id),
+                "item quantity must be greater than 0",
+            ));
         }
     }
-    issues
+    if issues.is_empty() {
+        issues.extend(basket_market_issues(config, document)?);
+    }
+    Ok(issues)
 }
 
-fn basket_actions(document: &BasketDocument) -> Vec<String> {
+fn basket_market_issues(
+    config: &RuntimeConfig,
+    document: &BasketDocument,
+) -> Result<Vec<BasketIssue>, OperationAdapterError> {
+    if !config.local.replica_db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let executor = SqliteExecutor::open(&config.local.replica_db_path).map_err(|error| {
+        OperationAdapterError::Runtime(format!(
+            "open local replica {}: {error}",
+            config.local.replica_db_path.display()
+        ))
+    })?;
+    let mut issues = Vec::new();
+    for item in &document.basket.items {
+        let Some(product) = basket_product_bin_state(config, &executor, item)? else {
+            continue;
+        };
+        let Some(primary_bin_id) = product.primary_bin_id.as_deref().and_then(non_empty_ref) else {
+            issues.push(basket_issue(
+                "listing_primary_bin_missing",
+                format!("basket.items.{}.bin_id", item.item_id),
+                "current local replica listing primary bin is required before quote creation",
+            ));
+            continue;
+        };
+        let Some(verified_primary_bin_id) = product
+            .verified_primary_bin_id
+            .as_deref()
+            .and_then(non_empty_ref)
+        else {
+            issues.push(basket_issue(
+                "listing_primary_bin_invalid",
+                format!("basket.items.{}.bin_id", item.item_id),
+                format!("current local replica primary bin `{primary_bin_id}` is not verified"),
+            ));
+            continue;
+        };
+        if verified_primary_bin_id != primary_bin_id {
+            issues.push(basket_issue(
+                "listing_primary_bin_invalid",
+                format!("basket.items.{}.bin_id", item.item_id),
+                format!(
+                    "current local replica primary bin `{primary_bin_id}` does not match verified primary bin `{verified_primary_bin_id}`"
+                ),
+            ));
+            continue;
+        }
+        if item.bin_id != primary_bin_id {
+            issues.push(basket_issue(
+                "order_bin_unknown",
+                format!("basket.items.{}.bin_id", item.item_id),
+                format!(
+                    "basket bin `{}` is not in the current local listing bin set; expected primary bin `{primary_bin_id}`",
+                    item.bin_id
+                ),
+            ));
+        }
+    }
+    Ok(issues)
+}
+
+fn basket_product_bin_state(
+    config: &RuntimeConfig,
+    executor: &SqliteExecutor,
+    item: &BasketItem,
+) -> Result<Option<BasketProductBinState>, OperationAdapterError> {
+    if let Some(listing_addr) = item.listing_addr.as_deref().and_then(non_empty_ref) {
+        let product_rows = trade_product::find_many(
+            executor,
+            &ITradeProductFindMany {
+                filter: Some(trade_product_listing_addr_filter(listing_addr)),
+            },
+        )
+        .map_err(|error| {
+            OperationAdapterError::Runtime(format!("resolve listing product state: {error:?}"))
+        })?
+        .results;
+        let [product] = product_rows.as_slice() else {
+            return Ok(None);
+        };
+        return Ok(Some(BasketProductBinState {
+            primary_bin_id: product.primary_bin_id.clone(),
+            verified_primary_bin_id: product.verified_primary_bin_id.clone(),
+        }));
+    }
+
+    let Some(listing_lookup) = item.listing.as_deref().and_then(non_empty_ref) else {
+        return Ok(None);
+    };
+    let lookup_executor = SqliteExecutor::open(&config.local.replica_db_path).map_err(|error| {
+        OperationAdapterError::Runtime(format!(
+            "open local replica {}: {error}",
+            config.local.replica_db_path.display()
+        ))
+    })?;
+    let rows = ReplicaSql::new(lookup_executor)
+        .trade_product_lookup(listing_lookup)
+        .map_err(|error| {
+            OperationAdapterError::Runtime(format!("resolve listing product state: {error:?}"))
+        })?;
+    let [product] = rows.as_slice() else {
+        return Ok(None);
+    };
+    Ok(Some(BasketProductBinState {
+        primary_bin_id: product.primary_bin_id.clone(),
+        verified_primary_bin_id: product.verified_primary_bin_id.clone(),
+    }))
+}
+
+fn basket_issue(
+    code: impl Into<String>,
+    field: impl Into<String>,
+    message: impl Into<String>,
+) -> BasketIssue {
+    BasketIssue {
+        code: code.into(),
+        field: field.into(),
+        message: message.into(),
+    }
+}
+
+fn trade_product_listing_addr_filter(listing_addr: &str) -> ITradeProductFieldsFilter {
+    ITradeProductFieldsFilter {
+        id: None,
+        created_at: None,
+        updated_at: None,
+        key: None,
+        category: None,
+        title: None,
+        summary: None,
+        process: None,
+        lot: None,
+        profile: None,
+        year: None,
+        qty_amt: None,
+        qty_amt_exact: None,
+        qty_unit: None,
+        qty_label: None,
+        qty_avail: None,
+        price_amt: None,
+        price_amt_exact: None,
+        price_currency: None,
+        price_qty_amt: None,
+        price_qty_amt_exact: None,
+        price_qty_unit: None,
+        listing_addr: Some(listing_addr.to_owned()),
+        primary_bin_id: None,
+        verified_primary_bin_id: None,
+        notes: None,
+    }
+}
+
+fn non_empty_ref(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() { None } else { Some(value) }
+}
+
+fn basket_actions(document: &BasketDocument, issues: &[BasketIssue]) -> Vec<String> {
     let basket_id = document.basket.basket_id.as_str();
     if document.basket.items.is_empty() {
         return vec![format!("radroots basket item add {basket_id}")];
     }
-    if basket_issues(document).is_empty() {
+    if issues.is_empty() {
         vec![
             format!("radroots basket validate {basket_id}"),
             format!("radroots basket quote create {basket_id}"),
@@ -841,6 +1050,7 @@ fn quote_issues_from_order(order: &OrderNewView) -> Vec<BasketIssue> {
         .issues
         .iter()
         .map(|issue| BasketIssue {
+            code: issue.code.clone(),
             field: issue.field.clone(),
             message: issue.message.clone(),
         })
