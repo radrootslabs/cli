@@ -2972,6 +2972,8 @@ pub struct ListingGetView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_bin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
@@ -3165,6 +3167,8 @@ pub struct FindResultView {
     pub readiness: MarketReadinessView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_bin_id: Option<String>,
     pub title: String,
     pub category: String,
     #[serde(skip_serializing_if = "Option::is_none")]
