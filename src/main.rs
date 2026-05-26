@@ -24,7 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use serde_json::{Value, json};
 
-use crate::cli::global::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
+use crate::cli::input::runtime_invocation_args_from_target;
 use crate::cli::{TargetCliArgs, TargetOutputFormat};
 use crate::deferred_payment::{deferred_payment_message, is_deferred_payment_operation};
 use crate::operation_basket::BasketOperationService;
@@ -73,7 +73,7 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
         render_envelope(&envelope, args.format)?;
         return Ok(envelope_exit_code(&envelope));
     }
-    let config = RuntimeConfig::from_system(&runtime_args_from_target(&args))?;
+    let config = RuntimeConfig::from_system(&runtime_invocation_args_from_target(&args))?;
     let logging = initialize_logging(&config.logging)?;
     let envelope = match validate_request_contract(&request, &config) {
         Ok(()) => execute_request(request, &config, &logging),
@@ -81,40 +81,6 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
     };
     render_envelope(&envelope, args.format)?;
     Ok(envelope_exit_code(&envelope))
-}
-
-fn runtime_args_from_target(args: &TargetCliArgs) -> RuntimeInvocationArgs {
-    RuntimeInvocationArgs {
-        output_format: Some(match args.format {
-            TargetOutputFormat::Human => RuntimeOutputFormatArg::Human,
-            TargetOutputFormat::Json => RuntimeOutputFormatArg::Json,
-            TargetOutputFormat::Ndjson => RuntimeOutputFormatArg::Ndjson,
-        }),
-        json: false,
-        ndjson: false,
-        env_file: None,
-        quiet: args.quiet,
-        verbose: args.verbose,
-        trace: args.trace,
-        dry_run: args.dry_run,
-        no_color: args.no_color,
-        no_input: args.no_input,
-        yes: false,
-        log_filter: None,
-        log_dir: None,
-        log_stdout: false,
-        no_log_stdout: false,
-        account: args.account_id.clone(),
-        identity_path: None,
-        signer: None,
-        publish_mode: args.publish_mode.map(|mode| mode.as_str().to_owned()),
-        relay: args.relay.clone(),
-        myc_executable: None,
-        myc_status_timeout_ms: None,
-        hyf_enabled: false,
-        no_hyf_enabled: false,
-        hyf_executable: None,
-    }
 }
 
 fn execute_request(
