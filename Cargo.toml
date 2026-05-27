@@ -15,6 +15,7 @@ name = "radroots"
 path = "src/main.rs"
 
 [workspace]
+resolver = "2"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
