@@ -7,10 +7,12 @@ use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrEventId, RadrootsNostrFilter, RadrootsNostrKind,
     radroots_event_from_nostr, radroots_nostr_filter_tag,
 };
+#[cfg(feature = "sp1-verify")]
+use radroots_sp1_host_trade::verify_order_acceptance_validation_receipt_inline_sp1_proof;
 use radroots_sp1_host_trade::{
     RadrootsSp1TradeHostError, RadrootsSp1TradeProofMode, RadrootsSp1TradeProverBackend,
     RadrootsSp1TradeWorkerResultPayload, RadrootsSp1TradeWorkerResultStatus,
-    RadrootsSp1TradeWorkerRole, verify_order_acceptance_validation_receipt_inline_sp1_proof,
+    RadrootsSp1TradeWorkerRole,
 };
 use radroots_trade::validation_receipt::{
     RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
@@ -1098,6 +1100,7 @@ fn proof_state_from_sp1_error(error: &RadrootsSp1TradeHostError) -> MappedSp1Pro
     }
 }
 
+#[cfg(feature = "sp1-verify")]
 fn verify_inline_sp1_receipt(
     receipt: &RadrootsTradeValidationReceipt,
 ) -> Result<(), RadrootsSp1TradeHostError> {
@@ -1110,6 +1113,15 @@ fn verify_inline_sp1_receipt(
             receipt,
         ))
         .map(|_| ())
+}
+
+#[cfg(not(feature = "sp1-verify"))]
+fn verify_inline_sp1_receipt(
+    _receipt: &RadrootsTradeValidationReceipt,
+) -> Result<(), RadrootsSp1TradeHostError> {
+    Err(RadrootsSp1TradeHostError::Sp1ProofVerificationFailed(
+        "SP1 inline proof verification is disabled for this build".to_owned(),
+    ))
 }
 
 fn proof_state_is_invalid(state: &str) -> bool {
