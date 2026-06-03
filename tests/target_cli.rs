@@ -566,10 +566,9 @@ fn seed_app_order_record_variant_with_record_id(
             "order_updated_at": "2026-05-24T12:00:10Z",
             "created_at_ms": 1_779_000_010_000_i64,
         },
-        "no_payment": {
-            "payment_required": false,
-            "settlement_deferred": true,
-            "payment_state": "not_applicable",
+        "payment_display": {
+            "state": "not_recorded",
+            "allows_payment_action": false,
         },
         "document": {
             "version": 1,
