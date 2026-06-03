@@ -7,7 +7,6 @@ use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrEventId, RadrootsNostrFilter, RadrootsNostrKind,
     radroots_event_from_nostr, radroots_nostr_filter_tag,
 };
-#[cfg(feature = "sp1-verify")]
 use radroots_sp1_host_trade::verify_order_acceptance_validation_receipt_inline_sp1_proof;
 use radroots_sp1_host_trade::{
     RadrootsSp1TradeHostError, RadrootsSp1TradeProofMode, RadrootsSp1TradeProverBackend,
@@ -1091,6 +1090,12 @@ fn proof_state_from_sp1_error(error: &RadrootsSp1TradeHostError) -> MappedSp1Pro
             proof_metadata_binding: "mismatch",
             reason_code: "sp1_verifying_key_hash_mismatch",
         },
+        RadrootsSp1TradeHostError::Sp1ProofVerifierUnavailable => MappedSp1ProofError {
+            state: "sp1_verifier_unavailable",
+            public_values_hash_binding: "unverified",
+            proof_metadata_binding: "verifier_unavailable",
+            reason_code: "sp1_verifier_unavailable",
+        },
         _ => MappedSp1ProofError {
             state: "sp1_proof_invalid",
             public_values_hash_binding: "unverified",
@@ -1100,7 +1105,6 @@ fn proof_state_from_sp1_error(error: &RadrootsSp1TradeHostError) -> MappedSp1Pro
     }
 }
 
-#[cfg(feature = "sp1-verify")]
 fn verify_inline_sp1_receipt(
     receipt: &RadrootsTradeValidationReceipt,
 ) -> Result<(), RadrootsSp1TradeHostError> {
@@ -1113,15 +1117,6 @@ fn verify_inline_sp1_receipt(
             receipt,
         ))
         .map(|_| ())
-}
-
-#[cfg(not(feature = "sp1-verify"))]
-fn verify_inline_sp1_receipt(
-    _receipt: &RadrootsTradeValidationReceipt,
-) -> Result<(), RadrootsSp1TradeHostError> {
-    Err(RadrootsSp1TradeHostError::Sp1ProofVerificationFailed(
-        "SP1 inline proof verification is disabled for this build".to_owned(),
-    ))
 }
 
 fn proof_state_is_invalid(state: &str) -> bool {
@@ -1347,7 +1342,7 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
 mod tests {
     use super::{
         RawValidationReceiptWorkerResultPayload, ValidationReceiptWorkerEvidenceSelection,
-        ValidationReceiptWorkerEvidenceView, WorkerEvidenceReceiptBinding,
+        ValidationReceiptWorkerEvidenceView, WorkerEvidenceReceiptBinding, proof_state_is_invalid,
         proof_verification_view_for_receipt, validation_receipt_invalid_reason_code,
         worker_payload_binds_receipt,
     };
@@ -1614,6 +1609,7 @@ mod tests {
         assert_eq!(view.proof_metadata_binding, "reference_unresolved");
     }
 
+    #[cfg(feature = "sp1-verify")]
     #[test]
     fn invalid_inline_sp1_material_reports_invalid_proof_state() {
         let view = proof_verification_view_for_receipt(
@@ -1625,6 +1621,26 @@ mod tests {
         assert!(view.cryptographic_proof_required);
         assert!(!view.cryptographic_proof_verified);
         assert_eq!(view.reason_code.as_deref(), Some("sp1_proof_invalid"));
+    }
+
+    #[cfg(not(feature = "sp1-verify"))]
+    #[test]
+    fn inline_sp1_material_reports_unavailable_verifier_without_sp1_verify_feature() {
+        let view = proof_verification_view_for_receipt(
+            &receipt_with_proof(sp1_proof_with_material()),
+            ValidationReceiptWorkerEvidenceSelection::default(),
+        );
+
+        assert_eq!(view.state, "sp1_verifier_unavailable");
+        assert!(view.cryptographic_proof_required);
+        assert!(!view.cryptographic_proof_verified);
+        assert_eq!(view.public_values_hash_binding, "unverified");
+        assert_eq!(view.proof_metadata_binding, "verifier_unavailable");
+        assert_eq!(
+            view.reason_code.as_deref(),
+            Some("sp1_verifier_unavailable")
+        );
+        assert!(!proof_state_is_invalid(view.state.as_str()));
     }
 
     #[test]
