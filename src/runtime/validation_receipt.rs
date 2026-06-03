@@ -1096,6 +1096,12 @@ fn proof_state_from_sp1_error(error: &RadrootsSp1TradeHostError) -> MappedSp1Pro
             proof_metadata_binding: "verifier_unavailable",
             reason_code: "sp1_verifier_unavailable",
         },
+        RadrootsSp1TradeHostError::Sp1SetupFailed(_) => MappedSp1ProofError {
+            state: "sp1_verifier_setup_failed",
+            public_values_hash_binding: "unverified",
+            proof_metadata_binding: "verifier_setup_failed",
+            reason_code: "sp1_verifier_setup_failed",
+        },
         _ => MappedSp1ProofError {
             state: "sp1_proof_invalid",
             public_values_hash_binding: "unverified",
@@ -1342,11 +1348,12 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
 mod tests {
     use super::{
         RawValidationReceiptWorkerResultPayload, ValidationReceiptWorkerEvidenceSelection,
-        ValidationReceiptWorkerEvidenceView, WorkerEvidenceReceiptBinding, proof_state_is_invalid,
-        proof_verification_view_for_receipt, validation_receipt_invalid_reason_code,
-        worker_payload_binds_receipt,
+        ValidationReceiptWorkerEvidenceView, WorkerEvidenceReceiptBinding,
+        proof_state_from_sp1_error, proof_state_is_invalid, proof_verification_view_for_receipt,
+        validation_receipt_invalid_reason_code, worker_payload_binds_receipt,
     };
     use radroots_events::kinds::KIND_TRADE_VALIDATION_RECEIPT;
+    use radroots_sp1_host_trade::RadrootsSp1TradeHostError;
     use radroots_trade::validation_receipt::{
         RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
         RadrootsValidationReceiptProof, RadrootsValidationReceiptProofSystem,
@@ -1641,6 +1648,19 @@ mod tests {
             Some("sp1_verifier_unavailable")
         );
         assert!(!proof_state_is_invalid(view.state.as_str()));
+    }
+
+    #[test]
+    fn sp1_setup_failed_reports_verifier_setup_failure_without_invalid_proof_state() {
+        let mapped = proof_state_from_sp1_error(&RadrootsSp1TradeHostError::Sp1SetupFailed(
+            "runtime unavailable".to_owned(),
+        ));
+
+        assert_eq!(mapped.state, "sp1_verifier_setup_failed");
+        assert_eq!(mapped.public_values_hash_binding, "unverified");
+        assert_eq!(mapped.proof_metadata_binding, "verifier_setup_failed");
+        assert_eq!(mapped.reason_code, "sp1_verifier_setup_failed");
+        assert!(!proof_state_is_invalid(mapped.state));
     }
 
     #[test]
