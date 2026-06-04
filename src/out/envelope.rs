@@ -281,13 +281,13 @@ fn next_actions_from_actions_value(actions_value: Option<&Value>) -> Vec<NextAct
 
 fn next_action_from_action_string(action: &str) -> Option<NextAction> {
     let action = action.trim();
-    if action == "configure RADROOTS_RPC_BEARER_TOKEN" {
+    if action == "configure RADROOTS_CLI_RPC_BEARER_TOKEN" {
         return Some(NextAction {
             kind: NextActionKind::OperatorConfig,
             label: "configure rpc bearer token".to_owned(),
             command: None,
             description: Some(action.to_owned()),
-            env_var: Some("RADROOTS_RPC_BEARER_TOKEN".to_owned()),
+            env_var: Some("RADROOTS_CLI_RPC_BEARER_TOKEN".to_owned()),
             config_key: None,
         });
     }
@@ -611,9 +611,9 @@ mod tests {
         );
         error.detail = Some(json!({
             "actions": [
-                "configure RADROOTS_RPC_BEARER_TOKEN",
+                "configure RADROOTS_CLI_RPC_BEARER_TOKEN",
                 "configure signer.remote_nip46 signer_session_ref",
-                "configure RADROOTS_RPC_BEARER_TOKEN"
+                "configure RADROOTS_CLI_RPC_BEARER_TOKEN"
             ]
         }));
         let envelope = OutputEnvelope::failure(
@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(envelope.next_actions[0].command, None);
         assert_eq!(
             envelope.next_actions[0].env_var.as_deref(),
-            Some("RADROOTS_RPC_BEARER_TOKEN")
+            Some("RADROOTS_CLI_RPC_BEARER_TOKEN")
         );
         assert_eq!(
             envelope.next_actions[1].kind,

@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use radroots_local_events::{RelayUrlValidationError, normalize_relay_url};
+use radroots_runtime::{parse_bool_value, parse_strict_env_file, parse_u64_value};
 use radroots_runtime_paths::{
     RadrootsLegacyPathCandidate, RadrootsMigrationReport, RadrootsPathResolver,
     inspect_legacy_paths,
@@ -33,52 +34,46 @@ const CLI_DEFAULT_SECRET_BACKEND: &str = "host_vault";
 const CLI_DEFAULT_SECRET_FALLBACK: &str = "encrypted_file";
 const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] = &["host_vault", "encrypted_file"];
 const CLI_USES_PROTECTED_STORE: bool = true;
-const ENV_FILE_PATH: &str = "RADROOTS_ENV_FILE";
-const ENV_OUTPUT: &str = "RADROOTS_OUTPUT";
+const ENV_CLI_FILE_PATH: &str = "RADROOTS_CLI_ENV_FILE";
+const ENV_CLI_OUTPUT_FORMAT: &str = "RADROOTS_CLI_OUTPUT_FORMAT";
 const ENV_CLI_LOG_FILTER: &str = "RADROOTS_CLI_LOGGING_FILTER";
 const ENV_CLI_LOG_DIR: &str = "RADROOTS_CLI_LOGGING_OUTPUT_DIR";
 const ENV_CLI_LOG_STDOUT: &str = "RADROOTS_CLI_LOGGING_STDOUT";
-const ENV_LOG_FILTER: &str = "RADROOTS_LOG_FILTER";
-const ENV_LOG_DIR: &str = "RADROOTS_LOG_DIR";
-const ENV_LOG_STDOUT: &str = "RADROOTS_LOG_STDOUT";
-const ENV_ACCOUNT: &str = "RADROOTS_ACCOUNT";
-const ENV_ACCOUNT_SECRET_BACKEND: &str = "RADROOTS_ACCOUNT_SECRET_BACKEND";
-const ENV_ACCOUNT_SECRET_FALLBACK: &str = "RADROOTS_ACCOUNT_SECRET_FALLBACK";
-const ENV_IDENTITY_PATH: &str = "RADROOTS_IDENTITY_PATH";
-const ENV_SIGNER: &str = "RADROOTS_SIGNER";
-const ENV_PUBLISH_MODE: &str = "RADROOTS_PUBLISH_MODE";
-const ENV_RELAYS: &str = "RADROOTS_RELAYS";
-const ENV_MYC_EXECUTABLE: &str = "RADROOTS_MYC_EXECUTABLE";
-const ENV_MYC_STATUS_TIMEOUT_MS: &str = "RADROOTS_MYC_STATUS_TIMEOUT_MS";
-const ENV_HYF_ENABLED: &str = "RADROOTS_HYF_ENABLED";
-const ENV_HYF_EXECUTABLE: &str = "RADROOTS_HYF_EXECUTABLE";
-const ENV_RPC_URL: &str = "RADROOTS_RPC_URL";
-const ENV_RPC_BEARER_TOKEN: &str = "RADROOTS_RPC_BEARER_TOKEN";
-const ENV_TRUSTED_RHI_WORKER_PUBKEYS: &str = "RADROOTS_TRUSTED_RHI_WORKER_PUBKEYS";
+const ENV_CLI_ACCOUNT_SELECTOR: &str = "RADROOTS_CLI_ACCOUNT_SELECTOR";
+const ENV_CLI_ACCOUNT_SECRET_BACKEND: &str = "RADROOTS_CLI_ACCOUNT_SECRET_BACKEND";
+const ENV_CLI_ACCOUNT_SECRET_FALLBACK: &str = "RADROOTS_CLI_ACCOUNT_SECRET_FALLBACK";
+const ENV_CLI_IDENTITY_PATH: &str = "RADROOTS_CLI_IDENTITY_PATH";
+const ENV_CLI_SIGNER_BACKEND: &str = "RADROOTS_CLI_SIGNER_BACKEND";
+const ENV_CLI_PUBLISH_MODE: &str = "RADROOTS_CLI_PUBLISH_MODE";
+const ENV_CLI_RELAYS_URLS: &str = "RADROOTS_CLI_RELAYS_URLS";
+const ENV_CLI_MYC_EXECUTABLE: &str = "RADROOTS_CLI_MYC_EXECUTABLE";
+const ENV_CLI_MYC_STATUS_TIMEOUT_MS: &str = "RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS";
+const ENV_CLI_HYF_ENABLED: &str = "RADROOTS_CLI_HYF_ENABLED";
+const ENV_CLI_HYF_EXECUTABLE: &str = "RADROOTS_CLI_HYF_EXECUTABLE";
+const ENV_CLI_RPC_URL: &str = "RADROOTS_CLI_RPC_URL";
+const ENV_CLI_RPC_BEARER_TOKEN: &str = "RADROOTS_CLI_RPC_BEARER_TOKEN";
+const ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS: &str = "RADROOTS_CLI_RHI_TRUSTED_WORKER_PUBKEYS";
 const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
-    ENV_OUTPUT,
+    ENV_CLI_OUTPUT_FORMAT,
     ENV_CLI_LOG_FILTER,
     ENV_CLI_LOG_DIR,
     ENV_CLI_LOG_STDOUT,
     ENV_CLI_PATHS_PROFILE,
     ENV_CLI_PATHS_REPO_LOCAL_ROOT,
-    ENV_LOG_FILTER,
-    ENV_LOG_DIR,
-    ENV_LOG_STDOUT,
-    ENV_ACCOUNT,
-    ENV_ACCOUNT_SECRET_BACKEND,
-    ENV_ACCOUNT_SECRET_FALLBACK,
-    ENV_IDENTITY_PATH,
-    ENV_SIGNER,
-    ENV_PUBLISH_MODE,
-    ENV_RELAYS,
-    ENV_MYC_EXECUTABLE,
-    ENV_MYC_STATUS_TIMEOUT_MS,
-    ENV_HYF_ENABLED,
-    ENV_HYF_EXECUTABLE,
-    ENV_RPC_URL,
-    ENV_RPC_BEARER_TOKEN,
-    ENV_TRUSTED_RHI_WORKER_PUBKEYS,
+    ENV_CLI_ACCOUNT_SELECTOR,
+    ENV_CLI_ACCOUNT_SECRET_BACKEND,
+    ENV_CLI_ACCOUNT_SECRET_FALLBACK,
+    ENV_CLI_IDENTITY_PATH,
+    ENV_CLI_SIGNER_BACKEND,
+    ENV_CLI_PUBLISH_MODE,
+    ENV_CLI_RELAYS_URLS,
+    ENV_CLI_MYC_EXECUTABLE,
+    ENV_CLI_MYC_STATUS_TIMEOUT_MS,
+    ENV_CLI_HYF_ENABLED,
+    ENV_CLI_HYF_EXECUTABLE,
+    ENV_CLI_RPC_URL,
+    ENV_CLI_RPC_BEARER_TOKEN,
+    ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -408,8 +403,13 @@ impl EnvFileValues {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct CliConfigFile {
-    relay: Option<RelayFileConfig>,
+    output: Option<OutputFileConfig>,
+    logging: Option<LoggingFileConfig>,
+    account: Option<AccountFileConfig>,
+    identity: Option<IdentityFileConfig>,
+    relays: Option<RelayFileConfig>,
     publish: Option<PublishFileConfig>,
     signer: Option<SignerFileConfig>,
     myc: Option<MycFileConfig>,
@@ -420,44 +420,86 @@ struct CliConfigFile {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct OutputFileConfig {
+    format: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct LoggingFileConfig {
+    filter: Option<String>,
+    output_dir: Option<PathBuf>,
+    stdout: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AccountFileConfig {
+    selector: Option<String>,
+    secret: Option<AccountSecretFileConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AccountSecretFileConfig {
+    backend: Option<String>,
+    fallback: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct IdentityFileConfig {
+    path: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct RelayFileConfig {
     urls: Option<Vec<String>>,
     publish_policy: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct PublishFileConfig {
     mode: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct RpcFileConfig {
     url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct RhiFileConfig {
     trusted_worker_pubkeys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct MycFileConfig {
     executable: Option<PathBuf>,
     status_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct SignerFileConfig {
-    mode: Option<String>,
+    backend: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct HyfFileConfig {
     enabled: Option<bool>,
     executable: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CapabilityBindingFileConfig {
     capability: String,
     provider: String,
@@ -547,41 +589,59 @@ impl RuntimeConfig {
             .transpose()?
             .flatten();
         let app_config = load_cli_config_file(paths.app_config_path.as_path())?;
-        let account_secret_backend = resolve_account_secret_backend(args, env, env_file)?
-            .unwrap_or(RadrootsSecretBackend::HostVault(
-                RadrootsHostVaultPolicy::desktop(),
-            ));
-        let account_secret_fallback = resolve_account_secret_fallback(args, env, env_file)?
-            .unwrap_or(match account_secret_backend {
-                RadrootsSecretBackend::HostVault(_) => Some(RadrootsSecretBackend::EncryptedFile),
-                _ => None,
-            });
+        let account_secret_backend = resolve_account_secret_backend(
+            env,
+            env_file,
+            app_config.as_ref(),
+            workspace_config.as_ref(),
+        )?
+        .unwrap_or(RadrootsSecretBackend::HostVault(
+            RadrootsHostVaultPolicy::desktop(),
+        ));
+        let account_secret_fallback = resolve_account_secret_fallback(
+            env,
+            env_file,
+            app_config.as_ref(),
+            workspace_config.as_ref(),
+        )?
+        .unwrap_or(match account_secret_backend {
+            RadrootsSecretBackend::HostVault(_) => Some(RadrootsSecretBackend::EncryptedFile),
+            _ => None,
+        });
         let output = OutputConfig {
-            format: resolve_output_format(args, env, env_file)?,
+            format: resolve_output_format(
+                args,
+                env,
+                env_file,
+                app_config.as_ref(),
+                workspace_config.as_ref(),
+            )?,
             verbosity: resolve_verbosity(args)?,
             color: !args.no_color,
             dry_run: args.dry_run,
         };
         let logging = LoggingConfig {
-            filter: args
-                .log_filter
-                .clone()
-                .or_else(|| env_value(env, env_file, &[ENV_CLI_LOG_FILTER, ENV_LOG_FILTER]))
-                .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_owned()),
-            directory: args.log_dir.clone().or_else(|| {
-                env_value(env, env_file, &[ENV_CLI_LOG_DIR, ENV_LOG_DIR])
-                    .map(PathBuf::from)
-                    .or_else(|| Some(paths.app_logs_root.clone()))
-            }),
-            stdout: resolve_bool_pair(
-                args.log_stdout,
-                args.no_log_stdout,
-                &[ENV_CLI_LOG_STDOUT, ENV_LOG_STDOUT],
-                false,
+            filter: resolve_logging_filter(
+                args,
                 env,
                 env_file,
-                "--log-stdout",
-                "--no-log-stdout",
+                app_config.as_ref(),
+                workspace_config.as_ref(),
+            ),
+            directory: resolve_logging_directory(
+                args,
+                env,
+                env_file,
+                app_config.as_ref(),
+                workspace_config.as_ref(),
+                paths.app_logs_root.as_path(),
+            ),
+            stdout: resolve_logging_stdout(
+                args,
+                env,
+                env_file,
+                app_config.as_ref(),
+                workspace_config.as_ref(),
             )?,
         };
         validate_logging_output_contract(&output, &logging)?;
@@ -599,7 +659,19 @@ impl RuntimeConfig {
                 selector: args
                     .account
                     .clone()
-                    .or_else(|| env_value(env, env_file, &[ENV_ACCOUNT])),
+                    .or_else(|| env_value(env, env_file, &[ENV_CLI_ACCOUNT_SELECTOR]))
+                    .or_else(|| {
+                        app_config
+                            .as_ref()
+                            .and_then(|config| config.account.as_ref())
+                            .and_then(|account| account.selector.clone())
+                    })
+                    .or_else(|| {
+                        workspace_config
+                            .as_ref()
+                            .and_then(|config| config.account.as_ref())
+                            .and_then(|account| account.selector.clone())
+                    }),
                 store_path: paths
                     .shared_accounts_data_root
                     .join(DEFAULT_SHARED_ACCOUNTS_STORE_FILE),
@@ -621,7 +693,21 @@ impl RuntimeConfig {
                 path: args
                     .identity_path
                     .clone()
-                    .or_else(|| env_value(env, env_file, &[ENV_IDENTITY_PATH]).map(PathBuf::from))
+                    .or_else(|| {
+                        env_value(env, env_file, &[ENV_CLI_IDENTITY_PATH]).map(PathBuf::from)
+                    })
+                    .or_else(|| {
+                        app_config
+                            .as_ref()
+                            .and_then(|config| config.identity.as_ref())
+                            .and_then(|identity| identity.path.clone())
+                    })
+                    .or_else(|| {
+                        workspace_config
+                            .as_ref()
+                            .and_then(|config| config.identity.as_ref())
+                            .and_then(|identity| identity.path.clone())
+                    })
                     .unwrap_or_else(|| paths.default_identity_path.clone()),
             },
             signer: resolve_signer_config(
@@ -828,7 +914,7 @@ fn resolve_rpc_config(
     user_config: Option<&CliConfigFile>,
     workspace_config: Option<&CliConfigFile>,
 ) -> Result<RpcConfig, RuntimeError> {
-    let url = env_value(env, env_file, &[ENV_RPC_URL])
+    let url = env_value(env, env_file, &[ENV_CLI_RPC_URL])
         .or_else(|| {
             user_config
                 .and_then(|config| config.rpc.as_ref())
@@ -843,7 +929,7 @@ fn resolve_rpc_config(
 
     Ok(RpcConfig {
         url: validate_rpc_url(url.as_str())?,
-        bridge_bearer_token: env_value(env, env_file, &[ENV_RPC_BEARER_TOKEN]),
+        bridge_bearer_token: env_value(env, env_file, &[ENV_CLI_RPC_BEARER_TOKEN]),
     })
 }
 
@@ -854,8 +940,8 @@ fn resolve_rhi_config(
     workspace_config: Option<&CliConfigFile>,
 ) -> Result<RhiConfig, RuntimeError> {
     let trusted_worker_pubkeys =
-        if let Some(value) = env_value(env, env_file, &[ENV_TRUSTED_RHI_WORKER_PUBKEYS]) {
-            parse_pubkey_env_value(value.as_str(), ENV_TRUSTED_RHI_WORKER_PUBKEYS)?
+        if let Some(value) = env_value(env, env_file, &[ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS]) {
+            parse_pubkey_env_value(value.as_str(), ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS)?
         } else if let Some(values) = user_config
             .and_then(|config| config.rhi.as_ref())
             .and_then(|rhi| rhi.trusted_worker_pubkeys.clone())
@@ -1050,28 +1136,28 @@ fn resolve_relay_config(
         });
     }
 
-    if let Some(value) = env_value(env, env_file, &[ENV_RELAYS]) {
+    if let Some(value) = env_value(env, env_file, &[ENV_CLI_RELAYS_URLS]) {
         return Ok(RelayConfig {
-            urls: parse_relay_env_value(value.as_str(), ENV_RELAYS)?,
+            urls: parse_relay_env_value(value.as_str(), ENV_CLI_RELAYS_URLS)?,
             publish_policy,
             source: RelayConfigSource::Environment,
         });
     }
 
-    if let Some(relay) = user_config.and_then(|config| config.relay.as_ref()) {
+    if let Some(relay) = user_config.and_then(|config| config.relays.as_ref()) {
         if let Some(urls) = relay.urls.clone() {
             return Ok(RelayConfig {
-                urls: normalize_relay_urls(urls, "user config [relay].urls")?,
+                urls: normalize_relay_urls(urls, "user config [relays].urls")?,
                 publish_policy,
                 source: RelayConfigSource::UserConfig,
             });
         }
     }
 
-    if let Some(relay) = workspace_config.and_then(|config| config.relay.as_ref()) {
+    if let Some(relay) = workspace_config.and_then(|config| config.relays.as_ref()) {
         if let Some(urls) = relay.urls.clone() {
             return Ok(RelayConfig {
-                urls: normalize_relay_urls(urls, "workspace config [relay].urls")?,
+                urls: normalize_relay_urls(urls, "workspace config [relays].urls")?,
                 publish_policy,
                 source: RelayConfigSource::WorkspaceConfig,
             });
@@ -1094,18 +1180,18 @@ fn resolve_signer_config(
 ) -> Result<SignerConfig, RuntimeError> {
     let backend = if let Some(value) = args.signer.clone() {
         parse_signer_mode("internal invocation signer mode", value)?
-    } else if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_SIGNER]) {
+    } else if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_SIGNER_BACKEND]) {
         parse_signer_mode(key.as_str(), value)?
     } else if let Some(value) = user_config
         .and_then(|config| config.signer.as_ref())
-        .and_then(|signer| signer.mode.clone())
+        .and_then(|signer| signer.backend.clone())
     {
-        parse_signer_mode("user config [signer].mode", value)?
+        parse_signer_mode("user config [signer].backend", value)?
     } else if let Some(value) = workspace_config
         .and_then(|config| config.signer.as_ref())
-        .and_then(|signer| signer.mode.clone())
+        .and_then(|signer| signer.backend.clone())
     {
-        parse_signer_mode("workspace config [signer].mode", value)?
+        parse_signer_mode("workspace config [signer].backend", value)?
     } else {
         SignerBackend::Local
     };
@@ -1127,7 +1213,7 @@ fn resolve_publish_config(
         });
     }
 
-    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_PUBLISH_MODE]) {
+    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_PUBLISH_MODE]) {
         return Ok(PublishConfig {
             mode: parse_publish_mode(key.as_str(), value)?,
             source: PublishModeSource::Environment,
@@ -1170,7 +1256,7 @@ fn resolve_myc_config(
     let executable = args
         .myc_executable
         .clone()
-        .or_else(|| env_value(env, env_file, &[ENV_MYC_EXECUTABLE]).map(PathBuf::from))
+        .or_else(|| env_value(env, env_file, &[ENV_CLI_MYC_EXECUTABLE]).map(PathBuf::from))
         .or_else(|| {
             user_config
                 .and_then(|config| config.myc.as_ref())
@@ -1206,10 +1292,9 @@ fn resolve_myc_status_timeout_ms(
         return validate_myc_status_timeout_ms("--myc-status-timeout-ms", value);
     }
 
-    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_MYC_STATUS_TIMEOUT_MS]) {
-        let parsed = value.trim().parse::<u64>().map_err(|err| {
-            RuntimeError::Config(format!("{key} must be an integer millisecond value: {err}"))
-        })?;
+    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_MYC_STATUS_TIMEOUT_MS]) {
+        let parsed = parse_u64_value(key.as_str(), value.as_str())
+            .map_err(|err| RuntimeError::Config(err.to_string()))?;
         return validate_myc_status_timeout_ms(key.as_str(), parsed);
     }
 
@@ -1257,7 +1342,7 @@ fn resolve_hyf_enabled(
         (false, false) => {}
     }
 
-    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_HYF_ENABLED]) {
+    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_HYF_ENABLED]) {
         return parse_bool_env(key.as_str(), value.as_str());
     }
 
@@ -1287,7 +1372,7 @@ fn resolve_hyf_executable(
 ) -> PathBuf {
     args.hyf_executable
         .clone()
-        .or_else(|| env_value(env, env_file, &[ENV_HYF_EXECUTABLE]).map(PathBuf::from))
+        .or_else(|| env_value(env, env_file, &[ENV_CLI_HYF_EXECUTABLE]).map(PathBuf::from))
         .or_else(|| {
             user_config
                 .and_then(|config| config.hyf.as_ref())
@@ -1306,14 +1391,14 @@ fn resolve_relay_publish_policy(
     workspace_config: Option<&CliConfigFile>,
 ) -> Result<Option<RelayPublishPolicy>, RuntimeError> {
     if let Some(value) = user_config
-        .and_then(|config| config.relay.as_ref())
+        .and_then(|config| config.relays.as_ref())
         .and_then(|relay| relay.publish_policy.as_deref())
     {
         return parse_relay_publish_policy(value).map(Some);
     }
 
     if let Some(value) = workspace_config
-        .and_then(|config| config.relay.as_ref())
+        .and_then(|config| config.relays.as_ref())
         .and_then(|relay| relay.publish_policy.as_deref())
     {
         return parse_relay_publish_policy(value).map(Some);
@@ -1326,7 +1411,7 @@ fn parse_relay_publish_policy(value: &str) -> Result<RelayPublishPolicy, Runtime
     match value.trim().to_ascii_lowercase().as_str() {
         "any" => Ok(RelayPublishPolicy::Any),
         other => Err(RuntimeError::Config(format!(
-            "[relay].publish_policy must be `any`, got `{other}`"
+            "[relays].publish_policy must be `any`, got `{other}`"
         ))),
     }
 }
@@ -1393,7 +1478,7 @@ fn validate_relay_url(value: &str, source: &str) -> Result<String, RuntimeError>
 fn resolve_env_file_path(args: &RuntimeInvocationArgs, env: &dyn Environment) -> Option<PathBuf> {
     args.env_file
         .clone()
-        .or_else(|| env.var(ENV_FILE_PATH).map(PathBuf::from))
+        .or_else(|| env.var(ENV_CLI_FILE_PATH).map(PathBuf::from))
         .or_else(|| {
             let default_path = PathBuf::from(DEFAULT_ENV_PATH);
             default_path.exists().then_some(default_path)
@@ -1404,6 +1489,8 @@ fn resolve_output_format(
     args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
 ) -> Result<OutputFormat, RuntimeError> {
     if args.output_format.is_some() && (args.json || args.ndjson) {
         return Err(RuntimeError::Config(
@@ -1423,8 +1510,22 @@ fn resolve_output_format(
         (None, false, false) => {}
         (Some(_), true, false) | (Some(_), false, true) => unreachable!(),
     }
-    match env_value(env, env_file, &[ENV_OUTPUT]) {
-        Some(value) => parse_output_format(value.as_str()),
+    if let Some(value) = env_value(env, env_file, &[ENV_CLI_OUTPUT_FORMAT]) {
+        return parse_output_format(value.as_str());
+    }
+
+    if let Some(value) = user_config
+        .and_then(|config| config.output.as_ref())
+        .and_then(|output| output.format.as_deref())
+    {
+        return parse_output_format(value);
+    }
+
+    match workspace_config
+        .and_then(|config| config.output.as_ref())
+        .and_then(|output| output.format.as_deref())
+    {
+        Some(value) => parse_output_format(value),
         None => Ok(OutputFormat::Human),
     }
 }
@@ -1470,13 +1571,85 @@ fn resolve_interaction_config(
     }
 }
 
+fn resolve_logging_filter(
+    args: &RuntimeInvocationArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> String {
+    args.log_filter
+        .clone()
+        .or_else(|| env_value(env, env_file, &[ENV_CLI_LOG_FILTER]))
+        .or_else(|| {
+            user_config
+                .and_then(|config| config.logging.as_ref())
+                .and_then(|logging| logging.filter.clone())
+        })
+        .or_else(|| {
+            workspace_config
+                .and_then(|config| config.logging.as_ref())
+                .and_then(|logging| logging.filter.clone())
+        })
+        .unwrap_or_else(|| DEFAULT_LOG_FILTER.to_owned())
+}
+
+fn resolve_logging_directory(
+    args: &RuntimeInvocationArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+    default_logs_root: &Path,
+) -> Option<PathBuf> {
+    args.log_dir
+        .clone()
+        .or_else(|| env_value(env, env_file, &[ENV_CLI_LOG_DIR]).map(PathBuf::from))
+        .or_else(|| {
+            user_config
+                .and_then(|config| config.logging.as_ref())
+                .and_then(|logging| logging.output_dir.clone())
+        })
+        .or_else(|| {
+            workspace_config
+                .and_then(|config| config.logging.as_ref())
+                .and_then(|logging| logging.output_dir.clone())
+        })
+        .or_else(|| Some(default_logs_root.to_path_buf()))
+}
+
+fn resolve_logging_stdout(
+    args: &RuntimeInvocationArgs,
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<bool, RuntimeError> {
+    resolve_bool_pair(
+        args.log_stdout,
+        args.no_log_stdout,
+        &[ENV_CLI_LOG_STDOUT],
+        user_config
+            .and_then(|config| config.logging.as_ref())
+            .and_then(|logging| logging.stdout),
+        workspace_config
+            .and_then(|config| config.logging.as_ref())
+            .and_then(|logging| logging.stdout),
+        false,
+        env,
+        env_file,
+        "--log-stdout",
+        "--no-log-stdout",
+    )
+}
+
 fn validate_logging_output_contract(
     output: &OutputConfig,
     logging: &LoggingConfig,
 ) -> Result<(), RuntimeError> {
     if logging.stdout && matches!(output.format, OutputFormat::Json | OutputFormat::Ndjson) {
         return Err(RuntimeError::Config(format!(
-            "stdout logging cannot be used with {} output; unset {ENV_CLI_LOG_STDOUT}/{ENV_LOG_STDOUT} or use --no-log-stdout",
+            "stdout logging cannot be used with {} output; unset {ENV_CLI_LOG_STDOUT} or use --no-log-stdout",
             output.format.as_str()
         )));
     }
@@ -1488,6 +1661,8 @@ fn resolve_bool_pair(
     positive_flag: bool,
     negative_flag: bool,
     env_keys: &[&str],
+    user_value: Option<bool>,
+    workspace_value: Option<bool>,
     default: bool,
     env: &dyn Environment,
     env_file: &EnvFileValues,
@@ -1502,7 +1677,7 @@ fn resolve_bool_pair(
         (false, true) => Ok(false),
         (false, false) => match env_value_entry(env, env_file, env_keys) {
             Some((key, value)) => parse_bool_env(key.as_str(), value.as_str()),
-            None => Ok(default),
+            None => Ok(user_value.or(workspace_value).unwrap_or(default)),
         },
     }
 }
@@ -1540,50 +1715,9 @@ fn load_env_file_values(path: Option<&Path>) -> Result<EnvFileValues, RuntimeErr
 }
 
 fn parse_env_file_values(raw: &str, path: &Path) -> Result<EnvFileValues, RuntimeError> {
-    let mut values = BTreeMap::new();
-
-    for (index, line) in raw.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = trimmed.split_once('=') else {
-            return Err(RuntimeError::Config(format!(
-                "invalid env file {} line {}: expected KEY=VALUE",
-                path.display(),
-                index + 1
-            )));
-        };
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(RuntimeError::Config(format!(
-                "invalid env file {} line {}: empty key",
-                path.display(),
-                index + 1
-            )));
-        }
-        if !SUPPORTED_ENV_FILE_KEYS.contains(&key) {
-            return Err(RuntimeError::Config(format!(
-                "invalid env file {} line {}: unknown environment variable `{key}`",
-                path.display(),
-                index + 1
-            )));
-        }
-        values.insert(key.to_owned(), normalize_env_value(value.trim()));
-    }
-
-    Ok(EnvFileValues(values))
-}
-
-fn normalize_env_value(value: &str) -> String {
-    if value.len() >= 2 {
-        let first = value.as_bytes()[0];
-        let last = value.as_bytes()[value.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            return value[1..value.len() - 1].to_owned();
-        }
-    }
-    value.to_owned()
+    parse_strict_env_file(raw, path, SUPPORTED_ENV_FILE_KEYS)
+        .map(|values| EnvFileValues(values.into_inner()))
+        .map_err(|err| RuntimeError::Config(err.to_string()))
 }
 
 fn parse_output_format(value: &str) -> Result<OutputFormat, RuntimeError> {
@@ -1592,7 +1726,7 @@ fn parse_output_format(value: &str) -> Result<OutputFormat, RuntimeError> {
         "json" => Ok(OutputFormat::Json),
         "ndjson" => Ok(OutputFormat::Ndjson),
         other => Err(RuntimeError::Config(format!(
-            "{ENV_OUTPUT} must be `human`, `json`, or `ndjson`, got `{other}`"
+            "{ENV_CLI_OUTPUT_FORMAT} must be `human`, `json`, or `ndjson`, got `{other}`"
         ))),
     }
 }
@@ -1620,22 +1754,60 @@ fn parse_publish_mode(source: &str, value: String) -> Result<PublishMode, Runtim
 }
 
 fn resolve_account_secret_backend(
-    _args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
 ) -> Result<Option<RadrootsSecretBackend>, RuntimeError> {
-    env_value_entry(env, env_file, &[ENV_ACCOUNT_SECRET_BACKEND])
-        .map(|(key, value)| parse_account_secret_backend(key.as_str(), value.as_str()))
+    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_ACCOUNT_SECRET_BACKEND]) {
+        return parse_account_secret_backend(key.as_str(), value.as_str()).map(Some);
+    }
+
+    if let Some(value) = user_config
+        .and_then(|config| config.account.as_ref())
+        .and_then(|account| account.secret.as_ref())
+        .and_then(|secret| secret.backend.as_deref())
+    {
+        return parse_account_secret_backend("user config [account.secret].backend", value)
+            .map(Some);
+    }
+
+    workspace_config
+        .and_then(|config| config.account.as_ref())
+        .and_then(|account| account.secret.as_ref())
+        .and_then(|secret| secret.backend.as_deref())
+        .map(|value| {
+            parse_account_secret_backend("workspace config [account.secret].backend", value)
+        })
         .transpose()
 }
 
 fn resolve_account_secret_fallback(
-    _args: &RuntimeInvocationArgs,
     env: &dyn Environment,
     env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
 ) -> Result<Option<Option<RadrootsSecretBackend>>, RuntimeError> {
-    env_value_entry(env, env_file, &[ENV_ACCOUNT_SECRET_FALLBACK])
-        .map(|(key, value)| parse_account_secret_fallback(key.as_str(), value.as_str()))
+    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_ACCOUNT_SECRET_FALLBACK]) {
+        return parse_account_secret_fallback(key.as_str(), value.as_str()).map(Some);
+    }
+
+    if let Some(value) = user_config
+        .and_then(|config| config.account.as_ref())
+        .and_then(|account| account.secret.as_ref())
+        .and_then(|secret| secret.fallback.as_deref())
+    {
+        return parse_account_secret_fallback("user config [account.secret].fallback", value)
+            .map(Some);
+    }
+
+    workspace_config
+        .and_then(|config| config.account.as_ref())
+        .and_then(|account| account.secret.as_ref())
+        .and_then(|secret| secret.fallback.as_deref())
+        .map(|value| {
+            parse_account_secret_fallback("workspace config [account.secret].fallback", value)
+        })
         .transpose()
 }
 
@@ -1671,23 +1843,19 @@ fn parse_account_secret_backend(
 }
 
 fn parse_bool_env(key: &str, value: &str) -> Result<bool, RuntimeError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        other => Err(RuntimeError::Config(format!(
-            "{key} must be a boolean value, got `{other}`"
-        ))),
-    }
+    parse_bool_value(key, value).map_err(|err| RuntimeError::Config(err.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
-        CapabilityBindingSource, CapabilityBindingTargetKind, EnvFileValues, Environment,
-        HyfConfig, INFERENCE_HYF_STDIO_CAPABILITY, InteractionConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfigSource,
-        RelayPublishPolicy, RuntimeConfig, SignerBackend, Verbosity, parse_env_file_values,
+        CapabilityBindingSource, CapabilityBindingTargetKind, DEFAULT_HYF_EXECUTABLE,
+        DEFAULT_LOG_FILTER, DEFAULT_MYC_STATUS_TIMEOUT_MS, DEFAULT_RPC_URL, EnvFileValues,
+        Environment, HyfConfig, INFERENCE_HYF_STDIO_CAPABILITY, InteractionConfig, OutputConfig,
+        OutputFormat, PathsConfig, PublishConfig, PublishMode, PublishModeSource,
+        RelayConfigSource, RelayPublishPolicy, RuntimeConfig, SignerBackend, Verbosity,
+        parse_env_file_values,
     };
     use crate::cli::global::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
     use radroots_runtime_paths::{RadrootsHostEnvironment, RadrootsPathResolver, RadrootsPlatform};
@@ -1805,23 +1973,35 @@ mod tests {
             ..runtime_args()
         };
         let env = MapEnvironment::new(BTreeMap::from([
-            ("RADROOTS_OUTPUT".to_owned(), "human".to_owned()),
-            ("RADROOTS_LOG_FILTER".to_owned(), "trace".to_owned()),
-            ("RADROOTS_LOG_STDOUT".to_owned(), "false".to_owned()),
+            ("RADROOTS_CLI_OUTPUT_FORMAT".to_owned(), "human".to_owned()),
+            ("RADROOTS_CLI_LOGGING_FILTER".to_owned(), "trace".to_owned()),
+            ("RADROOTS_CLI_LOGGING_STDOUT".to_owned(), "false".to_owned()),
             (
-                "RADROOTS_IDENTITY_PATH".to_owned(),
+                "RADROOTS_CLI_IDENTITY_PATH".to_owned(),
                 "env-identity.json".to_owned(),
             ),
-            ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
-            ("RADROOTS_PUBLISH_MODE".to_owned(), "radrootsd".to_owned()),
-            ("RADROOTS_RELAYS".to_owned(), "wss://relay.env".to_owned()),
-            ("RADROOTS_MYC_EXECUTABLE".to_owned(), "env-myc".to_owned()),
+            ("RADROOTS_CLI_SIGNER_BACKEND".to_owned(), "myc".to_owned()),
             (
-                "RADROOTS_MYC_STATUS_TIMEOUT_MS".to_owned(),
+                "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
+                "radrootsd".to_owned(),
+            ),
+            (
+                "RADROOTS_CLI_RELAYS_URLS".to_owned(),
+                "wss://relay.env".to_owned(),
+            ),
+            (
+                "RADROOTS_CLI_MYC_EXECUTABLE".to_owned(),
+                "env-myc".to_owned(),
+            ),
+            (
+                "RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS".to_owned(),
                 "9000".to_owned(),
             ),
-            ("RADROOTS_HYF_ENABLED".to_owned(), "false".to_owned()),
-            ("RADROOTS_HYF_EXECUTABLE".to_owned(), "env-hyfd".to_owned()),
+            ("RADROOTS_CLI_HYF_ENABLED".to_owned(), "false".to_owned()),
+            (
+                "RADROOTS_CLI_HYF_EXECUTABLE".to_owned(),
+                "env-hyfd".to_owned(),
+            ),
         ]));
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
@@ -1933,31 +2113,46 @@ mod tests {
     fn environment_values_fill_missing_flags() {
         let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([
-            ("RADROOTS_OUTPUT".to_owned(), "json".to_owned()),
+            ("RADROOTS_CLI_OUTPUT_FORMAT".to_owned(), "json".to_owned()),
             (
-                "RADROOTS_LOG_FILTER".to_owned(),
+                "RADROOTS_CLI_LOGGING_FILTER".to_owned(),
                 "debug,cli=trace".to_owned(),
             ),
-            ("RADROOTS_LOG_DIR".to_owned(), "logs/runtime".to_owned()),
-            ("RADROOTS_LOG_STDOUT".to_owned(), "false".to_owned()),
-            ("RADROOTS_ACCOUNT".to_owned(), "acct_demo".to_owned()),
             (
-                "RADROOTS_IDENTITY_PATH".to_owned(),
+                "RADROOTS_CLI_LOGGING_OUTPUT_DIR".to_owned(),
+                "logs/runtime".to_owned(),
+            ),
+            ("RADROOTS_CLI_LOGGING_STDOUT".to_owned(), "false".to_owned()),
+            (
+                "RADROOTS_CLI_ACCOUNT_SELECTOR".to_owned(),
+                "acct_demo".to_owned(),
+            ),
+            (
+                "RADROOTS_CLI_IDENTITY_PATH".to_owned(),
                 "state/identity.json".to_owned(),
             ),
-            ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
-            ("RADROOTS_PUBLISH_MODE".to_owned(), "radrootsd".to_owned()),
+            ("RADROOTS_CLI_SIGNER_BACKEND".to_owned(), "myc".to_owned()),
             (
-                "RADROOTS_RELAYS".to_owned(),
+                "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
+                "radrootsd".to_owned(),
+            ),
+            (
+                "RADROOTS_CLI_RELAYS_URLS".to_owned(),
                 "wss://relay.one,wss://relay.two".to_owned(),
             ),
-            ("RADROOTS_MYC_EXECUTABLE".to_owned(), "bin/myc".to_owned()),
             (
-                "RADROOTS_MYC_STATUS_TIMEOUT_MS".to_owned(),
+                "RADROOTS_CLI_MYC_EXECUTABLE".to_owned(),
+                "bin/myc".to_owned(),
+            ),
+            (
+                "RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS".to_owned(),
                 "3500".to_owned(),
             ),
-            ("RADROOTS_HYF_ENABLED".to_owned(), "true".to_owned()),
-            ("RADROOTS_HYF_EXECUTABLE".to_owned(), "bin/hyfd".to_owned()),
+            ("RADROOTS_CLI_HYF_ENABLED".to_owned(), "true".to_owned()),
+            (
+                "RADROOTS_CLI_HYF_EXECUTABLE".to_owned(),
+                "bin/hyfd".to_owned(),
+            ),
         ]));
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
@@ -2019,6 +2214,143 @@ mod tests {
                 enabled: true,
                 executable: PathBuf::from("bin/hyfd"),
             }
+        );
+    }
+
+    #[test]
+    fn old_process_environment_names_have_no_effect() {
+        let args = runtime_args();
+        let env = MapEnvironment::new(BTreeMap::from([
+            ("RADROOTS_OUTPUT".to_owned(), "json".to_owned()),
+            ("RADROOTS_LOG_FILTER".to_owned(), "trace".to_owned()),
+            ("RADROOTS_LOG_DIR".to_owned(), "logs/old".to_owned()),
+            ("RADROOTS_LOG_STDOUT".to_owned(), "true".to_owned()),
+            ("RADROOTS_ACCOUNT".to_owned(), "old_account".to_owned()),
+            (
+                "RADROOTS_ACCOUNT_SECRET_BACKEND".to_owned(),
+                "encrypted_file".to_owned(),
+            ),
+            (
+                "RADROOTS_ACCOUNT_SECRET_FALLBACK".to_owned(),
+                "none".to_owned(),
+            ),
+            (
+                "RADROOTS_IDENTITY_PATH".to_owned(),
+                "old-identity.json".to_owned(),
+            ),
+            ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
+            ("RADROOTS_PUBLISH_MODE".to_owned(), "radrootsd".to_owned()),
+            (
+                "RADROOTS_RELAYS".to_owned(),
+                "wss://old-relay.example".to_owned(),
+            ),
+            ("RADROOTS_MYC_EXECUTABLE".to_owned(), "old-myc".to_owned()),
+            (
+                "RADROOTS_MYC_STATUS_TIMEOUT_MS".to_owned(),
+                "9999".to_owned(),
+            ),
+            ("RADROOTS_HYF_ENABLED".to_owned(), "true".to_owned()),
+            ("RADROOTS_HYF_EXECUTABLE".to_owned(), "old-hyfd".to_owned()),
+            (
+                "RADROOTS_RPC_URL".to_owned(),
+                "http://127.0.0.1:9".to_owned(),
+            ),
+            (
+                "RADROOTS_RPC_BEARER_TOKEN".to_owned(),
+                "old-token".to_owned(),
+            ),
+            (
+                "RADROOTS_TRUSTED_RHI_WORKER_PUBKEYS".to_owned(),
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            ),
+        ]));
+
+        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect("resolve runtime config");
+
+        assert_eq!(resolved.output.format, OutputFormat::Human);
+        assert_eq!(resolved.logging.filter, DEFAULT_LOG_FILTER);
+        assert!(!resolved.logging.stdout);
+        assert_eq!(resolved.account.selector, None);
+        assert_eq!(
+            resolved.account.secret_backend,
+            RadrootsSecretBackend::HostVault(RadrootsHostVaultPolicy::desktop())
+        );
+        assert_eq!(
+            resolved.account.secret_fallback,
+            Some(RadrootsSecretBackend::EncryptedFile)
+        );
+        assert_eq!(resolved.signer.backend, SignerBackend::Local);
+        assert_eq!(resolved.publish.mode, PublishMode::NostrRelay);
+        assert_eq!(resolved.relay.urls, Vec::<String>::new());
+        assert_eq!(resolved.myc.executable, PathBuf::from("myc"));
+        assert_eq!(
+            resolved.myc.status_timeout_ms,
+            DEFAULT_MYC_STATUS_TIMEOUT_MS
+        );
+        assert!(!resolved.hyf.enabled);
+        assert_eq!(
+            resolved.hyf.executable,
+            PathBuf::from(DEFAULT_HYF_EXECUTABLE)
+        );
+        assert_eq!(resolved.rpc.url, DEFAULT_RPC_URL);
+        assert_eq!(resolved.rpc.bridge_bearer_token, None);
+        assert_eq!(resolved.rhi.trusted_worker_pubkeys, Vec::<String>::new());
+    }
+
+    #[test]
+    fn toml_output_logging_account_and_identity_config_resolve() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let app_config_dir = repo_local_root.join("config/apps/cli");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(&app_config_dir).expect("app config dir");
+        fs::write(
+            app_config_dir.join("config.toml"),
+            r#"
+[output]
+format = "json"
+
+[logging]
+filter = "debug,cli=trace"
+output_dir = "logs/from-toml"
+stdout = false
+
+[account]
+selector = "acct_from_toml"
+
+[account.secret]
+backend = "encrypted_file"
+fallback = "none"
+
+[identity]
+path = "identity/from-toml.json"
+"#,
+        )
+        .expect("write user config");
+
+        let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
+        let resolved =
+            RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
+                .expect("resolve toml config");
+
+        assert_eq!(resolved.output.format, OutputFormat::Json);
+        assert_eq!(resolved.logging.filter, "debug,cli=trace");
+        assert_eq!(
+            resolved.logging.directory,
+            Some(PathBuf::from("logs/from-toml"))
+        );
+        assert!(!resolved.logging.stdout);
+        assert_eq!(resolved.account.selector.as_deref(), Some("acct_from_toml"));
+        assert_eq!(
+            resolved.account.secret_backend,
+            RadrootsSecretBackend::EncryptedFile
+        );
+        assert_eq!(resolved.account.secret_fallback, None);
+        assert_eq!(
+            resolved.identity.path,
+            PathBuf::from("identity/from-toml.json")
         );
     }
 
@@ -2138,12 +2470,12 @@ mod tests {
                 .expect_err("json stdout logging from env should fail");
         let message = error.to_string();
         assert!(message.contains("RADROOTS_CLI_LOGGING_STDOUT"));
-        assert!(message.contains("RADROOTS_LOG_STDOUT"));
+        assert!(message.contains("RADROOTS_CLI_LOGGING_STDOUT"));
 
         let ndjson_env_args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([
-            ("RADROOTS_OUTPUT".to_owned(), "ndjson".to_owned()),
-            ("RADROOTS_LOG_STDOUT".to_owned(), "true".to_owned()),
+            ("RADROOTS_CLI_OUTPUT_FORMAT".to_owned(), "ndjson".to_owned()),
+            ("RADROOTS_CLI_LOGGING_STDOUT".to_owned(), "true".to_owned()),
         ]));
         let error =
             RuntimeConfig::resolve_with_env_file(&ndjson_env_args, &env, &EnvFileValues::default())
@@ -2159,7 +2491,7 @@ mod tests {
             ..runtime_args()
         };
         let env = MapEnvironment::new(BTreeMap::from([(
-            "RADROOTS_LOG_STDOUT".to_owned(),
+            "RADROOTS_CLI_LOGGING_STDOUT".to_owned(),
             "true".to_owned(),
         )]));
 
@@ -2173,28 +2505,32 @@ mod tests {
     fn invalid_environment_value_fails() {
         let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([(
-            "RADROOTS_LOG_STDOUT".to_owned(),
+            "RADROOTS_CLI_LOGGING_STDOUT".to_owned(),
             "maybe".to_owned(),
         )]));
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("invalid bool");
-        assert!(error.to_string().contains("RADROOTS_LOG_STDOUT"));
+        assert!(error.to_string().contains("RADROOTS_CLI_LOGGING_STDOUT"));
 
         let env = MapEnvironment::new(BTreeMap::from([(
-            "RADROOTS_MYC_STATUS_TIMEOUT_MS".to_owned(),
+            "RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS".to_owned(),
             "slow".to_owned(),
         )]));
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("invalid myc timeout");
-        assert!(error.to_string().contains("RADROOTS_MYC_STATUS_TIMEOUT_MS"));
+        assert!(
+            error
+                .to_string()
+                .contains("RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS")
+        );
 
         let env = MapEnvironment::new(BTreeMap::from([(
-            "RADROOTS_PUBLISH_MODE".to_owned(),
+            "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
             "relay".to_owned(),
         )]));
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("invalid publish mode");
-        assert!(error.to_string().contains("RADROOTS_PUBLISH_MODE"));
+        assert!(error.to_string().contains("RADROOTS_CLI_PUBLISH_MODE"));
         assert!(error.to_string().contains("nostr_relay"));
         assert!(error.to_string().contains("radrootsd"));
 
@@ -2214,19 +2550,19 @@ mod tests {
         let env = MapEnvironment::new(BTreeMap::new());
         let env_file = parse_env_file_values(
             r#"
-RADROOTS_OUTPUT=json
+RADROOTS_CLI_OUTPUT_FORMAT=json
 RADROOTS_CLI_LOGGING_FILTER="debug,radroots_cli=trace"
 RADROOTS_CLI_LOGGING_OUTPUT_DIR=/tmp/radroots-cli-logs
 RADROOTS_CLI_LOGGING_STDOUT=false
-RADROOTS_ACCOUNT=acct_env_file
-RADROOTS_IDENTITY_PATH=state/identity.json
-RADROOTS_SIGNER=myc
-RADROOTS_PUBLISH_MODE=radrootsd
-RADROOTS_RELAYS=wss://relay.env-file
-RADROOTS_MYC_EXECUTABLE=bin/myc
-RADROOTS_MYC_STATUS_TIMEOUT_MS=4500
-RADROOTS_HYF_ENABLED=true
-RADROOTS_HYF_EXECUTABLE=bin/hyfd
+RADROOTS_CLI_ACCOUNT_SELECTOR=acct_env_file
+RADROOTS_CLI_IDENTITY_PATH=state/identity.json
+RADROOTS_CLI_SIGNER_BACKEND=myc
+RADROOTS_CLI_PUBLISH_MODE=radrootsd
+RADROOTS_CLI_RELAYS_URLS=wss://relay.env-file
+RADROOTS_CLI_MYC_EXECUTABLE=bin/myc
+RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS=4500
+RADROOTS_CLI_HYF_ENABLED=true
+RADROOTS_CLI_HYF_EXECUTABLE=bin/hyfd
 "#,
             Path::new(".env.test"),
         )
@@ -2271,7 +2607,7 @@ RADROOTS_HYF_EXECUTABLE=bin/hyfd
             ..runtime_args()
         };
         let env = MapEnvironment::new(BTreeMap::from([(
-            "RADROOTS_OUTPUT".to_owned(),
+            "RADROOTS_CLI_OUTPUT_FORMAT".to_owned(),
             "json".to_owned(),
         )]));
 
@@ -2327,8 +2663,8 @@ RADROOTS_HYF_EXECUTABLE=bin/hyfd
     fn process_environment_overrides_env_file_values() {
         let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([
-            ("RADROOTS_LOG_FILTER".to_owned(), "info".to_owned()),
-            ("RADROOTS_LOG_STDOUT".to_owned(), "true".to_owned()),
+            ("RADROOTS_CLI_LOGGING_FILTER".to_owned(), "info".to_owned()),
+            ("RADROOTS_CLI_LOGGING_STDOUT".to_owned(), "true".to_owned()),
         ]));
         let env_file = parse_env_file_values(
             r#"
@@ -2357,12 +2693,12 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
             repo_local_root.join("config.toml"),
-            "[relay]\nurls = [\"wss://relay.workspace\"]\npublish_policy = \"any\"\n",
+            "[relays]\nurls = [\"wss://relay.workspace\"]\npublish_policy = \"any\"\n",
         )
         .expect("write workspace config");
         fs::write(
             app_config_dir.join("config.toml"),
-            "[relay]\nurls = [\"wss://relay.user\", \"wss://relay.workspace\"]\n",
+            "[relays]\nurls = [\"wss://relay.user\", \"wss://relay.workspace\"]\n",
         )
         .expect("write user config");
 
@@ -2427,7 +2763,10 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             workspace_root.clone(),
             repo_local_root.clone(),
             user_home.clone(),
-            BTreeMap::from([("RADROOTS_PUBLISH_MODE".to_owned(), "radrootsd".to_owned())]),
+            BTreeMap::from([(
+                "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
+                "radrootsd".to_owned(),
+            )]),
         );
         let args = RuntimeInvocationArgs {
             publish_mode: Some("nostr_relay".to_owned()),
@@ -2447,7 +2786,10 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             workspace_root.clone(),
             repo_local_root.clone(),
             user_home.clone(),
-            BTreeMap::from([("RADROOTS_PUBLISH_MODE".to_owned(), "radrootsd".to_owned())]),
+            BTreeMap::from([(
+                "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
+                "radrootsd".to_owned(),
+            )]),
         );
         let resolved =
             RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
@@ -2624,12 +2966,12 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
             repo_local_root.join("config.toml"),
-            "[signer]\nmode = \"myc\"\n",
+            "[signer]\nbackend = \"myc\"\n",
         )
         .expect("write workspace config");
         fs::write(
             app_config_dir.join("config.toml"),
-            "[signer]\nmode = \"local\"\n",
+            "[signer]\nbackend = \"local\"\n",
         )
         .expect("write user config");
 
@@ -2651,7 +2993,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
             app_config_dir.join("config.toml"),
-            "[signer]\nmode = \"local\"\n",
+            "[signer]\nbackend = \"local\"\n",
         )
         .expect("write user config");
 
@@ -2659,7 +3001,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             workspace_root,
             repo_local_root,
             user_home,
-            BTreeMap::from([("RADROOTS_SIGNER".to_owned(), "myc".to_owned())]),
+            BTreeMap::from([("RADROOTS_CLI_SIGNER_BACKEND".to_owned(), "myc".to_owned())]),
         );
         let args = runtime_args();
 
@@ -2677,7 +3019,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         fs::create_dir_all(&repo_local_root).expect("workspace config dir");
         fs::write(
             repo_local_root.join("config.toml"),
-            "[signer]\nmode = \"remote\"\n",
+            "[signer]\nbackend = \"remote\"\n",
         )
         .expect("write workspace config");
 
@@ -2687,7 +3029,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect_err("invalid signer mode");
         let message = error.to_string();
-        assert!(message.contains("workspace config [signer].mode"));
+        assert!(message.contains("workspace config [signer].backend"));
         assert!(!message.contains("--signer"));
     }
 
@@ -2889,7 +3231,7 @@ target = "workflow-default"
     #[test]
     fn relay_env_value_rejects_empty_entries() {
         let env = MapEnvironment::new(BTreeMap::from([(
-            super::ENV_RELAYS.to_owned(),
+            super::ENV_CLI_RELAYS_URLS.to_owned(),
             "wss://relay.example,,wss://relay-two.example".to_owned(),
         )]));
         let error =
@@ -3130,10 +3472,74 @@ RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT=.local/radroots/dev
     }
 
     #[test]
+    fn old_env_file_variable_fails() {
+        let error = parse_env_file_values("RADROOTS_OUTPUT=json\n", Path::new(".env.test"))
+            .expect_err("old env variable should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown environment variable `RADROOTS_OUTPUT`")
+        );
+    }
+
+    #[test]
+    fn duplicate_env_file_variable_fails() {
+        let error = parse_env_file_values(
+            "RADROOTS_CLI_OUTPUT_FORMAT=json\nRADROOTS_CLI_OUTPUT_FORMAT=human\n",
+            Path::new(".env.test"),
+        )
+        .expect_err("duplicate env variable should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate environment variable `RADROOTS_CLI_OUTPUT_FORMAT`")
+        );
+    }
+
+    #[test]
+    fn old_toml_groups_and_fields_fail() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(&repo_local_root).expect("workspace config dir");
+
+        for (raw, expected) in [
+            (
+                "[relay]\nurls = [\"wss://relay.old\"]\n",
+                "unknown field `relay`",
+            ),
+            ("[signer]\nmode = \"local\"\n", "unknown field `mode`"),
+            (
+                "[relays]\nurls = [\"wss://relay.example\"]\nextra = true\n",
+                "unknown field `extra`",
+            ),
+        ] {
+            fs::write(repo_local_root.join("config.toml"), raw).expect("write config");
+            let env = repo_local_env(
+                workspace_root.clone(),
+                repo_local_root.clone(),
+                user_home.clone(),
+                BTreeMap::new(),
+            );
+            let error = RuntimeConfig::resolve_with_env_file(
+                &runtime_args(),
+                &env,
+                &EnvFileValues::default(),
+            )
+            .expect_err("old toml shape should fail");
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected}, got {error}"
+            );
+        }
+    }
+
+    #[test]
     fn env_output_accepts_ndjson() {
         let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([(
-            "RADROOTS_OUTPUT".to_owned(),
+            "RADROOTS_CLI_OUTPUT_FORMAT".to_owned(),
             "ndjson".to_owned(),
         )]));
 

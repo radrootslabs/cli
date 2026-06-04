@@ -152,8 +152,8 @@ impl RadrootsCliSandbox {
     fn apply_base_env(&self, command: &mut Command) {
         command.env("RADROOTS_CLI_PATHS_PROFILE", "repo_local");
         command.env("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT", self.root.path());
-        command.env("RADROOTS_ACCOUNT_SECRET_BACKEND", "encrypted_file");
-        command.env("RADROOTS_ACCOUNT_SECRET_FALLBACK", "none");
+        command.env("RADROOTS_CLI_ACCOUNT_SECRET_BACKEND", "encrypted_file");
+        command.env("RADROOTS_CLI_ACCOUNT_SECRET_FALLBACK", "none");
     }
 }
 

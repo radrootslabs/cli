@@ -531,9 +531,9 @@ fn account_attach_secret_reports_structured_validation_failures() {
 
     let mut unavailable_command = sandbox.command();
     unavailable_command
-        .env("RADROOTS_ACCOUNT_SECRET_BACKEND", "host_vault")
-        .env("RADROOTS_ACCOUNT_SECRET_FALLBACK", "none")
-        .env("RADROOTS_ACCOUNT_HOST_VAULT_AVAILABLE", "false")
+        .env("RADROOTS_CLI_ACCOUNT_SECRET_BACKEND", "host_vault")
+        .env("RADROOTS_CLI_ACCOUNT_SECRET_FALLBACK", "none")
+        .env("RADROOTS_CLI_ACCOUNT_HOST_VAULT_AVAILABLE", "false")
         .args([
             "--format",
             "json",
@@ -2569,7 +2569,7 @@ fn myc_listing_publish_does_not_fallback_to_local_account() {
 
 fn configure_myc_mode(sandbox: &RadrootsCliSandbox, executable: &Path) {
     sandbox.write_app_config(&format!(
-        "[signer]\nmode = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
+        "[signer]\nbackend = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
         toml_string(executable.display().to_string().as_str())
     ));
 }

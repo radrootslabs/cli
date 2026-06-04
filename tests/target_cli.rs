@@ -984,7 +984,7 @@ fn config_get_radrootsd_with_bridge_auth_still_reports_deferred_publish_mode() {
 
     let mut command = sandbox.command();
     command
-        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
         .args(["--format", "json", "config", "get"]);
     let output = command.output().expect("run config get");
     let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
@@ -1034,7 +1034,7 @@ signer_session_ref = "session_ready"
 
     let mut command = sandbox.command();
     command
-        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
         .args(["--format", "json", "config", "get"]);
     let output = command.output().expect("run config get");
     let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
@@ -1146,7 +1146,7 @@ fn config_get_marks_relay_publish_ready_with_secret_backed_local_account() {
 fn config_get_marks_relay_publish_unavailable_with_deferred_signer_mode() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
-    sandbox.write_app_config("[signer]\nmode = \"myc\"\n");
+    sandbox.write_app_config("[signer]\nbackend = \"myc\"\n");
 
     let value = sandbox.json_success(&[
         "--format",
@@ -1207,7 +1207,7 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
     let sandbox = RadrootsCliSandbox::new();
     let missing_myc = sandbox.root().join("bin/missing-myc");
     sandbox.write_app_config(&format!(
-        "[publish]\nmode = \"radrootsd\"\n\n[signer]\nmode = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
+        "[publish]\nmode = \"radrootsd\"\n\n[signer]\nbackend = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
         toml_string(missing_myc.display().to_string().as_str())
     ));
 
@@ -1400,7 +1400,7 @@ signer_session_ref = "session_test"
     );
     let output = sandbox
         .command()
-        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
         .args([
             "--format",
             "json",
@@ -1457,8 +1457,8 @@ fn radrootsd_listing_publish_fails_closed_without_bridge_or_relay_side_effects()
 
     let output = sandbox
         .command()
-        .env("RADROOTS_RPC_URL", "http://127.0.0.1:9")
-        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RPC_URL", "http://127.0.0.1:9")
+        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
         .args([
             "--format",
             "json",
@@ -1514,8 +1514,8 @@ fn radrootsd_farm_publish_fails_closed_without_bridge_or_relay_side_effects() {
 
     let output = sandbox
         .command()
-        .env("RADROOTS_RPC_URL", "http://127.0.0.1:9")
-        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RPC_URL", "http://127.0.0.1:9")
+        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
         .args([
             "--format",
             "json",
@@ -1581,7 +1581,7 @@ fn radrootsd_farm_publish_ignores_signer_session_binding_and_fails_closed() {
 
     let dry_run_output = sandbox
         .command()
-        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
         .args(["--format", "json", "--dry-run", "farm", "publish"])
         .output()
         .expect("run radrootsd farm publish dry-run");
@@ -1596,7 +1596,7 @@ fn radrootsd_farm_publish_ignores_signer_session_binding_and_fails_closed() {
 
     let live_output = sandbox
         .command()
-        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
         .args([
             "--format",
             "json",
@@ -1646,7 +1646,7 @@ signer_session_ref = "session_test"
 
         let mut command = sandbox.command();
         command
-            .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+            .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
             .args([
                 "--format",
                 "json",
@@ -1700,7 +1700,7 @@ signer_session_ref = "session_test"
         );
         let mut command = sandbox.command();
         command
-            .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+            .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
             .args([
                 "--format",
                 "json",
@@ -1734,8 +1734,8 @@ fn radrootsd_listing_publish_does_not_surface_bridge_errors_before_guardrail() {
 
     let mut command = sandbox.command();
     command
-        .env("RADROOTS_RPC_URL", "http://127.0.0.1:9")
-        .env("RADROOTS_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RPC_URL", "http://127.0.0.1:9")
+        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
         .args([
             "--format",
             "json",
@@ -1782,7 +1782,7 @@ fn radrootsd_listing_publish_fails_closed_before_relay_or_myc_preflight() {
             .as_str()
             .expect("farm d tag"),
     );
-    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n\n[signer]\nmode = \"myc\"\n");
+    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n\n[signer]\nbackend = \"myc\"\n");
 
     let (output, value) = sandbox.json_output(&[
         "--format",

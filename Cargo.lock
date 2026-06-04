@@ -3535,6 +3535,7 @@ dependencies = [
  "radroots_replica_db",
  "radroots_replica_db_schema",
  "radroots_replica_sync",
+ "radroots_runtime",
  "radroots_runtime_paths",
  "radroots_sdk",
  "radroots_secret_vault",
