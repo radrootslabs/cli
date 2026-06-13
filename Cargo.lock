@@ -3765,7 +3765,7 @@ dependencies = [
 
 [[package]]
 name = "radroots_sdk"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
 dependencies = [
  "radroots_events",
  "radroots_events_codec",
@@ -3818,7 +3818,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
  "uuid",
 ]
 

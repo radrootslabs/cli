@@ -41,7 +41,7 @@ radroots_replica_db_schema = { path = "../lib/crates/replica_db_schema" }
 radroots_replica_sync = { path = "../lib/crates/replica_sync" }
 radroots_runtime = { path = "../lib/crates/runtime" }
 radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
-radroots_sdk = { path = "../lib/crates/sdk", features = ["radrootsd-client", "relay-client", "signing"] }
+radroots_sdk = { path = "../sdk/crates/sdk", features = ["radrootsd-client", "relay-client", "signing"] }
 radroots_secret_vault = { path = "../lib/crates/secret_vault", features = ["std", "os-keyring"] }
 radroots_sql_core = { path = "../lib/crates/sql_core", features = ["native"] }
 radroots_sp1_host_trade = { path = "../lib/crates/sp1_host_trade" }
