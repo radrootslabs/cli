@@ -13,8 +13,8 @@ use radroots_core::{
 };
 use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::ids::{
-    RadrootsEconomicsDigest, RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId,
-    RadrootsOrderQuoteId, RadrootsOrderRevisionId,
+    RadrootsEconomicsDigest, RadrootsEventId, RadrootsInventoryBinId, RadrootsListingAddress,
+    RadrootsOrderId, RadrootsOrderQuoteId, RadrootsOrderRevisionId, RadrootsPublicKey,
 };
 use radroots_events::kinds::{
     KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_FULFILLMENT_UPDATE,
@@ -190,6 +190,30 @@ fn protocol_economics_digest(
     })
 }
 
+fn protocol_event_id(value: &str, field: &str) -> Result<RadrootsEventId, RuntimeError> {
+    value
+        .parse()
+        .map_err(|error| RuntimeError::Config(format!("{field} is not a valid event id: {error}")))
+}
+
+fn protocol_pubkey(value: &str, field: &str) -> Result<RadrootsPublicKey, RuntimeError> {
+    value
+        .parse()
+        .map_err(|error| RuntimeError::Config(format!("{field} is not a valid pubkey: {error}")))
+}
+
+fn optional_string<T: ToString>(value: Option<T>) -> Option<String> {
+    value.map(|value| value.to_string())
+}
+
+fn required_order_context_event_id(
+    event_id: Option<RadrootsEventId>,
+    tag: &'static str,
+    message: &'static str,
+) -> Result<RadrootsEventId, RuntimeError> {
+    event_id.ok_or_else(|| RuntimeError::Config(format!("{message} is missing {tag}")))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OrderDraftDocument {
@@ -316,12 +340,12 @@ struct ResolvedTradeProductNotes {
 
 #[derive(Debug, Clone)]
 struct ResolvedSellerOrderRequest {
-    request_event_id: String,
+    request_event_id: RadrootsEventId,
     listing_event_id: Option<String>,
     order_id: RadrootsOrderId,
     listing_addr: RadrootsListingAddress,
-    buyer_pubkey: String,
-    seller_pubkey: String,
+    buyer_pubkey: RadrootsPublicKey,
+    seller_pubkey: RadrootsPublicKey,
     items: Vec<RadrootsOrderItem>,
     economics: RadrootsOrderEconomics,
 }
@@ -341,7 +365,7 @@ struct ResolvedAccountingRequest {
 
 #[derive(Debug, Clone)]
 struct ResolvedInventoryListing {
-    event_id: String,
+    event_id: RadrootsEventId,
     listing: RadrootsListing,
     bins: Vec<RadrootsListingInventoryBinAvailability>,
 }
@@ -2475,6 +2499,46 @@ fn order_status_reduction_from_receipt_inner(
             .then_with(|| left.message.cmp(&right.message))
     });
 
+    let reducer_order_id = match protocol_order_id(context.order_id, "order_id") {
+        Ok(order_id) => order_id,
+        Err(error) => {
+            let message = error.to_string();
+            let view = OrderStatusView {
+                state: "invalid".to_owned(),
+                source: ORDER_STATUS_SOURCE.to_owned(),
+                order_id: context.order_id.to_owned(),
+                actor_context_source: context.actor_context_source.to_owned(),
+                request_event_id: None,
+                decision_event_id: None,
+                agreement_event_id: None,
+                listing_event_id: None,
+                listing_addr: None,
+                buyer_pubkey: None,
+                seller_pubkey: None,
+                economics: None,
+                last_event_id: None,
+                revision: None,
+                inventory: None,
+                fulfillment: None,
+                lifecycle: None,
+                payment: None,
+                reducer_issues: vec![issue("order_id", message.clone())],
+                target_relays,
+                connected_relays,
+                failed_relays: relay_failures(failed_relays),
+                fetched_count,
+                decoded_count,
+                skipped_count,
+                reason: Some(message),
+                actions: Vec::new(),
+            };
+            return OrderStatusReduction {
+                view,
+                fulfillment_event_id: None,
+                fulfillment_status: None,
+            };
+        }
+    };
     let order_id = context.order_id;
     let revision_proposal_records = revision_proposals.clone();
     let revision_decision_records = revision_decisions.clone();
@@ -2482,7 +2546,7 @@ fn order_status_reduction_from_receipt_inner(
     let cancellation_records = cancellations.clone();
     let receipt_records = receipts.clone();
     let projection = reduce_order_events(
-        order_id,
+        &reducer_order_id,
         requests,
         decisions.clone(),
         revision_proposals,
@@ -2574,34 +2638,34 @@ fn order_status_reduction_from_receipt_inner(
     let inventory = order_status_inventory_view(
         &projection.status,
         listing_event_id.clone(),
-        projection.decision_event_id.as_deref(),
+        projection.decision_event_id.as_ref(),
         &decisions,
         reducer_issues.as_slice(),
     );
     let fulfillment = order_status_fulfillment_view(
         &projection.status,
-        projection.request_event_id.clone(),
-        projection.decision_event_id.clone(),
-        fulfillment_event_id.clone(),
-        fulfillment_root_event_id.clone(),
-        fulfillment_prev_event_id.clone(),
+        optional_string(projection.request_event_id.clone()),
+        optional_string(projection.decision_event_id.clone()),
+        optional_string(fulfillment_event_id.clone()),
+        optional_string(fulfillment_root_event_id.clone()),
+        optional_string(fulfillment_prev_event_id.clone()),
         fulfillment_status,
         reducer_issues.as_slice(),
     );
     let lifecycle = order_status_lifecycle_view(
         &projection.status,
-        projection.request_event_id.clone(),
-        projection.last_event_id.clone(),
+        optional_string(projection.request_event_id.clone()),
+        optional_string(projection.last_event_id.clone()),
         projection.fulfillment_status,
-        projection.cancellation_event_id.clone(),
-        cancellation_root_event_id,
-        cancellation_prev_event_id,
+        optional_string(projection.cancellation_event_id.clone()),
+        optional_string(cancellation_root_event_id),
+        optional_string(cancellation_prev_event_id),
         cancellation_reason,
         false,
         None,
-        projection.receipt_event_id.clone(),
-        receipt_root_event_id,
-        receipt_prev_event_id,
+        optional_string(projection.receipt_event_id.clone()),
+        optional_string(receipt_root_event_id),
+        optional_string(receipt_prev_event_id),
         projection.receipt_received.map(|received| {
             (
                 received,
@@ -2612,8 +2676,8 @@ fn order_status_reduction_from_receipt_inner(
         reducer_issues.as_slice(),
     );
     let revision = order_status_revision_view(
-        projection.last_event_id.as_deref(),
-        projection.agreement_event_id.as_deref(),
+        projection.last_event_id.as_ref(),
+        projection.agreement_event_id.as_ref(),
         &revision_proposal_records,
         &revision_decision_records,
     );
@@ -2623,17 +2687,17 @@ fn order_status_reduction_from_receipt_inner(
     let view = OrderStatusView {
         state,
         source: ORDER_STATUS_SOURCE.to_owned(),
-        order_id: projection.order_id,
+        order_id: projection.order_id.to_string(),
         actor_context_source: context.actor_context_source.to_owned(),
-        request_event_id: projection.request_event_id,
-        decision_event_id: projection.decision_event_id,
-        agreement_event_id: projection.agreement_event_id,
+        request_event_id: optional_string(projection.request_event_id),
+        decision_event_id: optional_string(projection.decision_event_id),
+        agreement_event_id: optional_string(projection.agreement_event_id),
         listing_event_id,
-        listing_addr: projection.listing_addr,
-        buyer_pubkey: projection.buyer_pubkey,
-        seller_pubkey: projection.seller_pubkey,
+        listing_addr: optional_string(projection.listing_addr),
+        buyer_pubkey: optional_string(projection.buyer_pubkey),
+        seller_pubkey: optional_string(projection.seller_pubkey),
         economics: projection.economics,
-        last_event_id: projection.last_event_id,
+        last_event_id: optional_string(projection.last_event_id),
         revision,
         inventory,
         fulfillment,
@@ -2651,7 +2715,7 @@ fn order_status_reduction_from_receipt_inner(
     };
     OrderStatusReduction {
         view,
-        fulfillment_event_id,
+        fulfillment_event_id: optional_string(fulfillment_event_id),
         fulfillment_status,
     }
 }
@@ -2660,19 +2724,35 @@ fn order_status_request_matches_context(
     record: &RadrootsOrderRequestRecord,
     context: OrderStatusContext<'_>,
 ) -> bool {
-    if record.payload.order_id != context.order_id {
+    if record.payload.order_id.to_string() != context.order_id {
         return false;
     }
     order_status_context_is_network_only(context)
-        || context
-            .buyer_pubkey
-            .is_some_and(|pubkey| record.payload.buyer_pubkey.eq_ignore_ascii_case(pubkey))
-        || context
-            .seller_pubkey
-            .is_some_and(|pubkey| record.payload.seller_pubkey.eq_ignore_ascii_case(pubkey))
+        || context.buyer_pubkey.is_some_and(|pubkey| {
+            record
+                .payload
+                .buyer_pubkey
+                .to_string()
+                .eq_ignore_ascii_case(pubkey)
+        })
+        || context.seller_pubkey.is_some_and(|pubkey| {
+            record
+                .payload
+                .seller_pubkey
+                .to_string()
+                .eq_ignore_ascii_case(pubkey)
+        })
         || context.selected_account_pubkey.is_some_and(|pubkey| {
-            record.payload.buyer_pubkey.eq_ignore_ascii_case(pubkey)
-                || record.payload.seller_pubkey.eq_ignore_ascii_case(pubkey)
+            record
+                .payload
+                .buyer_pubkey
+                .to_string()
+                .eq_ignore_ascii_case(pubkey)
+                || record
+                    .payload
+                    .seller_pubkey
+                    .to_string()
+                    .eq_ignore_ascii_case(pubkey)
         })
 }
 
@@ -2697,7 +2777,7 @@ fn enrich_order_status_inventory(
     else {
         return Ok(());
     };
-    if listing.event_id != listing_event_id {
+    if listing.event_id.to_string() != listing_event_id {
         return Ok(());
     }
 
@@ -2705,7 +2785,7 @@ fn enrich_order_status_inventory(
         config,
         seller_pubkey.as_str(),
         listing_addr.as_str(),
-        listing.event_id.as_str(),
+        listing.event_id.to_string().as_str(),
     )?;
     let mut request_order_ids = requests
         .iter()
@@ -2740,8 +2820,8 @@ fn enrich_order_status_inventory(
             .filter(|record| request_order_ids.contains(&record.payload.order_id))
             .collect::<Vec<_>>();
     let projection = reduce_listing_inventory_accounting(
-        listing_addr.as_str(),
-        listing.event_id.as_str(),
+        &protocol_listing_addr(listing_addr.as_str(), "listing_addr")?,
+        &listing.event_id,
         listing.bins,
         requests,
         decisions,
@@ -2966,7 +3046,12 @@ fn listing_inventory_issue_involves_order(
         RadrootsListingInventoryAccountingIssue::InvalidOrder {
             order_id: issue_order_id,
             event_ids: issue_event_ids,
-        } => issue_order_id == order_id || issue_event_ids.iter().any(|id| event_ids.contains(id)),
+        } => {
+            issue_order_id.to_string() == order_id
+                || issue_event_ids
+                    .iter()
+                    .any(|id| event_ids.contains(&id.to_string()))
+        }
         RadrootsListingInventoryAccountingIssue::ArithmeticOverflow {
             event_ids: issue_event_ids,
             ..
@@ -2978,7 +3063,9 @@ fn listing_inventory_issue_involves_order(
         | RadrootsListingInventoryAccountingIssue::OverReserved {
             event_ids: issue_event_ids,
             ..
-        } => issue_event_ids.iter().any(|id| event_ids.contains(id)),
+        } => issue_event_ids
+            .iter()
+            .any(|id| event_ids.contains(&id.to_string())),
     }
 }
 
@@ -3030,6 +3117,8 @@ fn order_status_record_from_event(
     match event_kind_u32(event) {
         KIND_ORDER_REQUEST => {
             let event = radroots_event_from_nostr(event);
+            let event_id = protocol_event_id(event.id.as_str(), "request_event_id")?;
+            let author_pubkey = protocol_pubkey(event.author.as_str(), "request_author_pubkey")?;
             let envelope =
                 order_envelope_from_event::<RadrootsOrderRequest>(&event).map_err(|error| {
                     RuntimeError::Config(format!("decode active order request event: {error}"))
@@ -3055,7 +3144,7 @@ fn order_status_record_from_event(
                         "active order request listing_addr is invalid: {error}"
                     ))
                 })?;
-            if listing_addr.seller_pubkey != envelope.payload.seller_pubkey {
+            if listing_addr.seller_pubkey != envelope.payload.seller_pubkey.to_string() {
                 return Err(RuntimeError::Config(
                     "active order request listing_addr is outside seller authority".to_owned(),
                 ));
@@ -3063,14 +3152,16 @@ fn order_status_record_from_event(
             Ok(OrderStatusRecord::Request {
                 listing_event_id: context.listing_event.as_ref().map(|event| event.id.clone()),
                 record: RadrootsOrderRequestRecord {
-                    event_id: event.id,
-                    author_pubkey: event.author,
+                    event_id,
+                    author_pubkey,
                     payload: envelope.payload,
                 },
             })
         }
         KIND_ORDER_DECISION => {
             let event = radroots_event_from_nostr(event);
+            let event_id = protocol_event_id(event.id.as_str(), "decision_event_id")?;
+            let author_pubkey = protocol_pubkey(event.author.as_str(), "decision_author_pubkey")?;
             let envelope =
                 order_envelope_from_event::<RadrootsOrderDecision>(&event).map_err(|error| {
                     RuntimeError::Config(format!("decode active order decision event: {error}"))
@@ -3086,16 +3177,26 @@ fn order_status_record_from_event(
                     RuntimeError::Config(format!("decode active order decision tags: {error}"))
                 })?;
             Ok(OrderStatusRecord::Decision(RadrootsOrderDecisionRecord {
-                event_id: event.id,
-                author_pubkey: event.author,
+                event_id,
+                author_pubkey,
                 counterparty_pubkey: context.counterparty_pubkey,
-                root_event_id: context.root_event_id.unwrap_or_default(),
-                prev_event_id: context.prev_event_id.unwrap_or_default(),
+                root_event_id: required_order_context_event_id(
+                    context.root_event_id,
+                    "e_root",
+                    "active order decision",
+                )?,
+                prev_event_id: required_order_context_event_id(
+                    context.prev_event_id,
+                    "e_prev",
+                    "active order decision",
+                )?,
                 payload: envelope.payload,
             }))
         }
         KIND_ORDER_REVISION_PROPOSAL => {
             let event = radroots_event_from_nostr(event);
+            let event_id = protocol_event_id(event.id.as_str(), "revision_event_id")?;
+            let author_pubkey = protocol_pubkey(event.author.as_str(), "revision_author_pubkey")?;
             let envelope = order_revision_proposal_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!(
                     "decode active order revision proposal event: {error}"
@@ -3112,17 +3213,28 @@ fn order_status_record_from_event(
             })?;
             Ok(OrderStatusRecord::RevisionProposal(
                 RadrootsOrderRevisionProposalRecord {
-                    event_id: event.id,
-                    author_pubkey: event.author,
+                    event_id,
+                    author_pubkey,
                     counterparty_pubkey: context.counterparty_pubkey,
-                    root_event_id: context.root_event_id.unwrap_or_default(),
-                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    root_event_id: required_order_context_event_id(
+                        context.root_event_id,
+                        "e_root",
+                        "active order revision proposal",
+                    )?,
+                    prev_event_id: required_order_context_event_id(
+                        context.prev_event_id,
+                        "e_prev",
+                        "active order revision proposal",
+                    )?,
                     payload: envelope.payload,
                 },
             ))
         }
         KIND_ORDER_REVISION_DECISION => {
             let event = radroots_event_from_nostr(event);
+            let event_id = protocol_event_id(event.id.as_str(), "revision_decision_event_id")?;
+            let author_pubkey =
+                protocol_pubkey(event.author.as_str(), "revision_decision_author_pubkey")?;
             let envelope = order_revision_decision_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!(
                     "decode active order revision decision event: {error}"
@@ -3139,17 +3251,28 @@ fn order_status_record_from_event(
             })?;
             Ok(OrderStatusRecord::RevisionDecision(
                 RadrootsOrderRevisionDecisionRecord {
-                    event_id: event.id,
-                    author_pubkey: event.author,
+                    event_id,
+                    author_pubkey,
                     counterparty_pubkey: context.counterparty_pubkey,
-                    root_event_id: context.root_event_id.unwrap_or_default(),
-                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    root_event_id: required_order_context_event_id(
+                        context.root_event_id,
+                        "e_root",
+                        "active order revision decision",
+                    )?,
+                    prev_event_id: required_order_context_event_id(
+                        context.prev_event_id,
+                        "e_prev",
+                        "active order revision decision",
+                    )?,
                     payload: envelope.payload,
                 },
             ))
         }
         KIND_ORDER_FULFILLMENT_UPDATE => {
             let event = radroots_event_from_nostr(event);
+            let event_id = protocol_event_id(event.id.as_str(), "fulfillment_event_id")?;
+            let author_pubkey =
+                protocol_pubkey(event.author.as_str(), "fulfillment_author_pubkey")?;
             let envelope = order_fulfillment_update_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!("decode active fulfillment update event: {error}"))
             })?;
@@ -3162,17 +3285,28 @@ fn order_status_record_from_event(
             })?;
             Ok(OrderStatusRecord::Fulfillment(
                 RadrootsOrderFulfillmentRecord {
-                    event_id: event.id,
-                    author_pubkey: event.author,
+                    event_id,
+                    author_pubkey,
                     counterparty_pubkey: context.counterparty_pubkey,
-                    root_event_id: context.root_event_id.unwrap_or_default(),
-                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    root_event_id: required_order_context_event_id(
+                        context.root_event_id,
+                        "e_root",
+                        "active fulfillment update",
+                    )?,
+                    prev_event_id: required_order_context_event_id(
+                        context.prev_event_id,
+                        "e_prev",
+                        "active fulfillment update",
+                    )?,
                     payload: envelope.payload,
                 },
             ))
         }
         KIND_ORDER_CANCELLATION => {
             let event = radroots_event_from_nostr(event);
+            let event_id = protocol_event_id(event.id.as_str(), "cancellation_event_id")?;
+            let author_pubkey =
+                protocol_pubkey(event.author.as_str(), "cancellation_author_pubkey")?;
             let envelope = order_cancellation_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!("decode active order cancellation event: {error}"))
             })?;
@@ -3185,17 +3319,27 @@ fn order_status_record_from_event(
                     })?;
             Ok(OrderStatusRecord::Cancellation(
                 RadrootsOrderCancellationRecord {
-                    event_id: event.id,
-                    author_pubkey: event.author,
+                    event_id,
+                    author_pubkey,
                     counterparty_pubkey: context.counterparty_pubkey,
-                    root_event_id: context.root_event_id.unwrap_or_default(),
-                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    root_event_id: required_order_context_event_id(
+                        context.root_event_id,
+                        "e_root",
+                        "active order cancellation",
+                    )?,
+                    prev_event_id: required_order_context_event_id(
+                        context.prev_event_id,
+                        "e_prev",
+                        "active order cancellation",
+                    )?,
                     payload: envelope.payload,
                 },
             ))
         }
         KIND_ORDER_RECEIPT => {
             let event = radroots_event_from_nostr(event);
+            let event_id = protocol_event_id(event.id.as_str(), "receipt_event_id")?;
+            let author_pubkey = protocol_pubkey(event.author.as_str(), "receipt_author_pubkey")?;
             let envelope = order_receipt_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!("decode active buyer receipt event: {error}"))
             })?;
@@ -3205,16 +3349,26 @@ fn order_status_record_from_event(
                         RuntimeError::Config(format!("decode active buyer receipt tags: {error}"))
                     })?;
             Ok(OrderStatusRecord::Receipt(RadrootsOrderReceiptRecord {
-                event_id: event.id,
-                author_pubkey: event.author,
+                event_id,
+                author_pubkey,
                 counterparty_pubkey: context.counterparty_pubkey,
-                root_event_id: context.root_event_id.unwrap_or_default(),
-                prev_event_id: context.prev_event_id.unwrap_or_default(),
+                root_event_id: required_order_context_event_id(
+                    context.root_event_id,
+                    "e_root",
+                    "active buyer receipt",
+                )?,
+                prev_event_id: required_order_context_event_id(
+                    context.prev_event_id,
+                    "e_prev",
+                    "active buyer receipt",
+                )?,
                 payload: envelope.payload,
             }))
         }
         KIND_ORDER_PAYMENT_RECORD => {
             let event = radroots_event_from_nostr(event);
+            let event_id = protocol_event_id(event.id.as_str(), "payment_event_id")?;
+            let author_pubkey = protocol_pubkey(event.author.as_str(), "payment_author_pubkey")?;
             let envelope = order_payment_record_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!("decode active payment recorded event: {error}"))
             })?;
@@ -3227,17 +3381,27 @@ fn order_status_record_from_event(
                     })?;
             Ok(OrderStatusRecord::Payment(
                 RadrootsOrderPaymentEventRecord {
-                    event_id: event.id,
-                    author_pubkey: event.author,
+                    event_id,
+                    author_pubkey,
                     counterparty_pubkey: context.counterparty_pubkey,
-                    root_event_id: context.root_event_id.unwrap_or_default(),
-                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    root_event_id: required_order_context_event_id(
+                        context.root_event_id,
+                        "e_root",
+                        "active payment recorded",
+                    )?,
+                    prev_event_id: required_order_context_event_id(
+                        context.prev_event_id,
+                        "e_prev",
+                        "active payment recorded",
+                    )?,
                     payload: envelope.payload,
                 },
             ))
         }
         KIND_ORDER_SETTLEMENT_DECISION => {
             let event = radroots_event_from_nostr(event);
+            let event_id = protocol_event_id(event.id.as_str(), "settlement_event_id")?;
+            let author_pubkey = protocol_pubkey(event.author.as_str(), "settlement_author_pubkey")?;
             let envelope = order_settlement_decision_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!("decode active settlement decision event: {error}"))
             })?;
@@ -3250,11 +3414,19 @@ fn order_status_record_from_event(
             })?;
             Ok(OrderStatusRecord::Settlement(
                 RadrootsOrderSettlementRecord {
-                    event_id: event.id,
-                    author_pubkey: event.author,
+                    event_id,
+                    author_pubkey,
                     counterparty_pubkey: context.counterparty_pubkey,
-                    root_event_id: context.root_event_id.unwrap_or_default(),
-                    prev_event_id: context.prev_event_id.unwrap_or_default(),
+                    root_event_id: required_order_context_event_id(
+                        context.root_event_id,
+                        "e_root",
+                        "active settlement decision",
+                    )?,
+                    prev_event_id: required_order_context_event_id(
+                        context.prev_event_id,
+                        "e_prev",
+                        "active settlement decision",
+                    )?,
                     payload: envelope.payload,
                 },
             ))
@@ -3377,7 +3549,7 @@ fn active_order_status_reason(status: &RadrootsOrderStatus, order_id: &str) -> O
 fn order_status_inventory_view(
     status: &RadrootsOrderStatus,
     listing_event_id: Option<String>,
-    decision_event_id: Option<&str>,
+    decision_event_id: Option<&RadrootsEventId>,
     decisions: &[RadrootsOrderDecisionRecord],
     reducer_issues: &[OrderIssueView],
 ) -> Option<OrderInventoryView> {
@@ -3406,7 +3578,7 @@ fn order_status_inventory_view(
                 .and_then(|event_id| {
                     decisions
                         .iter()
-                        .find(|decision| decision.event_id == event_id)
+                        .find(|decision| decision.event_id == *event_id)
                 })
                 .map(|decision| inventory_bins_from_decision(&decision.payload.decision))
                 .unwrap_or_default();
@@ -3519,12 +3691,12 @@ fn order_status_payment_view(
     OrderStatusPaymentView {
         state: active_order_payment_state(&projection.state).to_owned(),
         settlement_state: active_order_settlement_state(&projection.settlement_state).to_owned(),
-        payment_event_id: projection.payment_event_id,
-        settlement_event_id: projection.settlement_event_id,
-        agreement_event_id: projection.agreement_event_id,
-        quote_id: projection.quote_id,
+        payment_event_id: optional_string(projection.payment_event_id),
+        settlement_event_id: optional_string(projection.settlement_event_id),
+        agreement_event_id: optional_string(projection.agreement_event_id),
+        quote_id: optional_string(projection.quote_id),
         quote_version: projection.quote_version,
-        economics_digest: projection.economics_digest,
+        economics_digest: optional_string(projection.economics_digest),
         amount: projection.amount,
         currency: projection.currency,
         method: projection.method,
@@ -3601,28 +3773,28 @@ fn order_status_lifecycle_view(
 }
 
 fn order_status_revision_view(
-    last_event_id: Option<&str>,
-    agreement_event_id: Option<&str>,
+    last_event_id: Option<&RadrootsEventId>,
+    agreement_event_id: Option<&RadrootsEventId>,
     proposals: &[RadrootsOrderRevisionProposalRecord],
     decisions: &[RadrootsOrderRevisionDecisionRecord],
 ) -> Option<OrderStatusRevisionView> {
     if let Some(proposal) = last_event_id
-        .and_then(|event_id| proposals.iter().find(|record| record.event_id == event_id))
+        .and_then(|event_id| proposals.iter().find(|record| record.event_id == *event_id))
     {
         return Some(OrderStatusRevisionView {
             state: "pending".to_owned(),
             revision_id: Some(proposal.payload.revision_id.to_string()),
-            proposal_event_id: Some(proposal.event_id.clone()),
+            proposal_event_id: Some(proposal.event_id.to_string()),
             decision_event_id: None,
-            root_event_id: Some(proposal.root_event_id.clone()),
-            prev_event_id: Some(proposal.prev_event_id.clone()),
+            root_event_id: Some(proposal.root_event_id.to_string()),
+            prev_event_id: Some(proposal.prev_event_id.to_string()),
             agreement_event_id: None,
             reason: Some(proposal.payload.reason.clone()),
         });
     }
 
     if let Some(decision) = last_event_id
-        .and_then(|event_id| decisions.iter().find(|record| record.event_id == event_id))
+        .and_then(|event_id| decisions.iter().find(|record| record.event_id == *event_id))
     {
         return Some(order_status_revision_view_from_decision(
             decision,
@@ -3631,13 +3803,13 @@ fn order_status_revision_view(
     }
 
     agreement_event_id
-        .and_then(|event_id| decisions.iter().find(|record| record.event_id == event_id))
+        .and_then(|event_id| decisions.iter().find(|record| record.event_id == *event_id))
         .map(|decision| order_status_revision_view_from_decision(decision, agreement_event_id))
 }
 
 fn order_status_revision_view_from_decision(
     decision: &RadrootsOrderRevisionDecisionRecord,
-    agreement_event_id: Option<&str>,
+    agreement_event_id: Option<&RadrootsEventId>,
 ) -> OrderStatusRevisionView {
     let (state, reason) = match &decision.payload.decision {
         RadrootsOrderRevisionOutcome::Accepted => ("accepted", None),
@@ -3646,11 +3818,11 @@ fn order_status_revision_view_from_decision(
     OrderStatusRevisionView {
         state: state.to_owned(),
         revision_id: Some(decision.payload.revision_id.to_string()),
-        proposal_event_id: Some(decision.prev_event_id.clone()),
-        decision_event_id: Some(decision.event_id.clone()),
-        root_event_id: Some(decision.root_event_id.clone()),
-        prev_event_id: Some(decision.prev_event_id.clone()),
-        agreement_event_id: agreement_event_id.map(str::to_owned),
+        proposal_event_id: Some(decision.prev_event_id.to_string()),
+        decision_event_id: Some(decision.event_id.to_string()),
+        root_event_id: Some(decision.root_event_id.to_string()),
+        prev_event_id: Some(decision.prev_event_id.to_string()),
+        agreement_event_id: agreement_event_id.map(ToString::to_string),
         reason,
     }
 }
@@ -5816,7 +5988,7 @@ fn order_decision_view_from_resolution(
         _ => {
             let event_ids = requests
                 .iter()
-                .map(|request| request.request_event_id.clone())
+                .map(|request| request.request_event_id.to_string())
                 .collect::<Vec<_>>();
             view.state = "invalid".to_owned();
             view.reason = Some(format!(
@@ -5857,12 +6029,12 @@ fn apply_order_decision_request(
 ) {
     view.order_id = request.order_id.to_string();
     view.listing_addr = Some(request.listing_addr.to_string());
-    view.buyer_pubkey = Some(request.buyer_pubkey.clone());
-    view.seller_pubkey = Some(request.seller_pubkey.clone());
-    view.request_event_id = Some(request.request_event_id.clone());
+    view.buyer_pubkey = Some(request.buyer_pubkey.to_string());
+    view.seller_pubkey = Some(request.seller_pubkey.to_string());
+    view.request_event_id = Some(request.request_event_id.to_string());
     view.listing_event_id = request.listing_event_id.clone();
-    view.root_event_id = Some(request.request_event_id.clone());
-    view.prev_event_id = Some(request.request_event_id.clone());
+    view.root_event_id = Some(request.request_event_id.to_string());
+    view.prev_event_id = Some(request.request_event_id.to_string());
 }
 
 fn apply_order_decision_status(view: &mut OrderDecisionView, status: &OrderStatusView) {
@@ -6127,7 +6299,7 @@ fn order_revision_preflight_view_from_status(
     let mut view = order_revision_base_view(config, args, state, config.output.dry_run);
     apply_order_revision_status(&mut view, status);
     if let Some(record) = pending_revision {
-        view.event_id = Some(record.event_id.clone());
+        view.event_id = Some(record.event_id.to_string());
         view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
         view.revision_id = Some(record.payload.revision_id.to_string());
     }
@@ -6262,7 +6434,7 @@ fn order_revision_decision_preflight_view_from_status(
     apply_order_revision_decision_status(&mut view, status);
     if let Some(record) = pending_revision {
         apply_order_revision_decision_proposal(&mut view, record);
-        view.event_id = Some(record.event_id.clone());
+        view.event_id = Some(record.event_id.to_string());
         view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
     }
     view.reason = Some(match state {
@@ -6357,7 +6529,7 @@ fn order_accept_inventory_preflight_view(
             });
         }
     };
-    if listing.event_id != request.listing_event_id.clone().unwrap_or_default() {
+    if Some(listing.event_id.to_string()) != request.listing_event_id {
         return Ok(OrderDecisionInventoryPreflight {
             invalid_view: Some(order_decision_inventory_invalid_view(
                 config,
@@ -6401,7 +6573,9 @@ fn order_accept_inventory_preflight_view(
     let accounting_requests = fetch_listing_accounting_requests(config, request, &listing)?;
     let mut requests = accounting_requests
         .into_iter()
-        .filter(|record| record.listing_event_id.as_deref() == Some(listing.event_id.as_str()))
+        .filter(|record| {
+            record.listing_event_id.as_deref() == Some(listing.event_id.to_string().as_str())
+        })
         .map(|record| record.record)
         .collect::<Vec<_>>();
     requests.push(active_request_record_from_resolved(request));
@@ -6441,8 +6615,8 @@ fn order_accept_inventory_preflight_view(
         .collect::<Vec<_>>();
 
     let projection = reduce_listing_inventory_accounting(
-        request.listing_addr.as_str(),
-        listing.event_id.as_str(),
+        &request.listing_addr,
+        &listing.event_id,
         listing.bins,
         requests,
         decisions,
@@ -6505,7 +6679,7 @@ fn order_inventory_view_from_listing_projection(
 ) -> OrderInventoryView {
     OrderInventoryView {
         state: state.to_owned(),
-        listing_event_id: Some(projection.listing_event_id.clone()),
+        listing_event_id: Some(projection.listing_event_id.to_string()),
         commitment_valid,
         bins: projection
             .bins
@@ -6627,7 +6801,8 @@ fn current_inventory_listing_from_parts(
             continue;
         }
         let bins = listing_inventory_bins(&listing)?;
-        candidates.push((event.created_at, event.id, listing, bins));
+        let event_id = protocol_event_id(event.id.as_str(), "listing_event_id")?;
+        candidates.push((event.created_at, event_id, listing, bins));
     }
     candidates.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
     Ok(candidates
@@ -6665,7 +6840,7 @@ fn listing_inventory_bins(
             )
         })?;
     Ok(vec![RadrootsListingInventoryBinAvailability {
-        bin_id: listing.primary_bin_id.to_string(),
+        bin_id: listing.primary_bin_id.clone(),
         available_count,
     }])
 }
@@ -6774,6 +6949,8 @@ fn listing_accounting_request_from_event(
     event: &RadrootsNostrEvent,
 ) -> Result<ResolvedAccountingRequest, RuntimeError> {
     let event = radroots_event_from_nostr(event);
+    let event_id = protocol_event_id(event.id.as_str(), "event_id")?;
+    let author_pubkey = protocol_pubkey(event.author.as_str(), "author_pubkey")?;
     let envelope = order_request_from_event(&event)
         .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
     let context =
@@ -6782,8 +6959,8 @@ fn listing_accounting_request_from_event(
     Ok(ResolvedAccountingRequest {
         listing_event_id: context.listing_event.as_ref().map(|event| event.id.clone()),
         record: RadrootsOrderRequestRecord {
-            event_id: event.id,
-            author_pubkey: event.author,
+            event_id,
+            author_pubkey,
             payload: envelope.payload,
         },
     })
@@ -6810,12 +6987,11 @@ fn proposed_accept_decision_record(
     request: &ResolvedSellerOrderRequest,
 ) -> Result<RadrootsOrderDecisionRecord, RuntimeError> {
     let payload = accepted_order_decision_payload_from_request(request);
-    let payload = canonicalize_order_decision_for_signer(payload, request.seller_pubkey.as_str())
-        .map_err(|error| {
-        RuntimeError::Config(format!("canonicalize order decision: {error}"))
-    })?;
+    let signer_pubkey = request.seller_pubkey.to_string();
+    let payload = canonicalize_order_decision_for_signer(payload, signer_pubkey.as_str())
+        .map_err(|error| RuntimeError::Config(format!("canonicalize order decision: {error}")))?;
     Ok(RadrootsOrderDecisionRecord {
-        event_id: format!("pending_accept:{}", request.order_id),
+        event_id: request.request_event_id.clone(),
         author_pubkey: request.seller_pubkey.clone(),
         counterparty_pubkey: request.buyer_pubkey.clone(),
         root_event_id: request.request_event_id.clone(),
@@ -7026,22 +7202,34 @@ fn order_revision_payload_from_status(
             })?,
             "listing_addr",
         )?,
-        buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("accepted order is missing buyer_pubkey".to_owned())
-        })?,
-        seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("accepted order is missing seller_pubkey".to_owned())
-        })?,
-        root_event_id: status.request_event_id.clone().ok_or_else(|| {
-            RuntimeError::Config("accepted order is missing request_event_id".to_owned())
-        })?,
-        prev_event_id: status
-            .last_event_id
-            .clone()
-            .or(status.decision_event_id.clone())
-            .ok_or_else(|| {
-                RuntimeError::Config("accepted order is missing previous event id".to_owned())
+        buyer_pubkey: protocol_pubkey(
+            status.buyer_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("accepted order is missing buyer_pubkey".to_owned())
             })?,
+            "buyer_pubkey",
+        )?,
+        seller_pubkey: protocol_pubkey(
+            status.seller_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("accepted order is missing seller_pubkey".to_owned())
+            })?,
+            "seller_pubkey",
+        )?,
+        root_event_id: protocol_event_id(
+            status.request_event_id.as_deref().ok_or_else(|| {
+                RuntimeError::Config("accepted order is missing request_event_id".to_owned())
+            })?,
+            "request_event_id",
+        )?,
+        prev_event_id: protocol_event_id(
+            status
+                .last_event_id
+                .as_deref()
+                .or(status.decision_event_id.as_deref())
+                .ok_or_else(|| {
+                    RuntimeError::Config("accepted order is missing previous event id".to_owned())
+                })?,
+            "prev_event_id",
+        )?,
         items,
         economics,
         reason: args.reason.trim().to_owned(),
@@ -7192,12 +7380,14 @@ fn order_revision_event_parts(
         .ok_or_else(|| {
             RuntimeError::Config("accepted order is missing previous event id".to_owned())
         })?;
+    let root_event_id = protocol_event_id(root_event_id, "request_event_id")?;
+    let prev_event_id = protocol_event_id(prev_event_id, "prev_event_id")?;
     if payload.root_event_id != root_event_id || payload.prev_event_id != prev_event_id {
         return Err(RuntimeError::Config(
             "order revision proposal payload chain does not match order status".to_owned(),
         ));
     }
-    order_revision_proposal_event_build(root_event_id, prev_event_id, payload).map_err(|error| {
+    order_revision_proposal_event_build(&root_event_id, &prev_event_id, payload).map_err(|error| {
         RuntimeError::Config(format!("encode order revision proposal event: {error}"))
     })
 }
@@ -7298,8 +7488,8 @@ fn apply_order_revision_payload(
     payload: &RadrootsOrderRevisionProposal,
 ) {
     view.revision_id = Some(payload.revision_id.to_string());
-    view.root_event_id = Some(payload.root_event_id.clone());
-    view.prev_event_id = Some(payload.prev_event_id.clone());
+    view.root_event_id = Some(payload.root_event_id.to_string());
+    view.prev_event_id = Some(payload.prev_event_id.to_string());
     view.items = payload
         .items
         .iter()
@@ -7316,9 +7506,9 @@ fn apply_order_revision_decision_proposal(
     proposal: &OrderRevisionProposalRecord,
 ) {
     view.revision_id = Some(proposal.payload.revision_id.to_string());
-    view.root_event_id = Some(proposal.payload.root_event_id.clone());
-    view.prev_event_id = Some(proposal.event_id.clone());
-    view.event_id = Some(proposal.event_id.clone());
+    view.root_event_id = Some(proposal.payload.root_event_id.to_string());
+    view.prev_event_id = Some(proposal.event_id.to_string());
+    view.event_id = Some(proposal.event_id.to_string());
     view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
     if view.decision.as_deref() == Some("accepted") {
         view.economics = Some(proposal.payload.economics.clone());
@@ -7331,8 +7521,8 @@ fn apply_order_revision_decision_payload(
     payload: &RadrootsOrderRevisionDecision,
 ) {
     view.revision_id = Some(payload.revision_id.to_string());
-    view.root_event_id = Some(payload.root_event_id.clone());
-    view.prev_event_id = Some(payload.prev_event_id.clone());
+    view.root_event_id = Some(payload.root_event_id.to_string());
+    view.prev_event_id = Some(payload.prev_event_id.to_string());
     view.decision = Some(
         match &payload.decision {
             RadrootsOrderRevisionOutcome::Accepted => "accepted",
@@ -7383,12 +7573,10 @@ fn order_revision_decision_payload_from_proposal(
 fn order_revision_decision_event_parts(
     payload: &RadrootsOrderRevisionDecision,
 ) -> Result<WireEventParts, RuntimeError> {
-    order_revision_decision_event_build(
-        payload.root_event_id.as_str(),
-        payload.prev_event_id.as_str(),
-        payload,
-    )
-    .map_err(|error| RuntimeError::Config(format!("encode order revision decision event: {error}")))
+    order_revision_decision_event_build(&payload.root_event_id, &payload.prev_event_id, payload)
+        .map_err(|error| {
+            RuntimeError::Config(format!("encode order revision decision event: {error}"))
+        })
 }
 
 fn order_fulfillment_payload_from_status(
@@ -7403,12 +7591,18 @@ fn order_fulfillment_payload_from_status(
             })?,
             "listing_addr",
         )?,
-        buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("accepted order is missing buyer_pubkey".to_owned())
-        })?,
-        seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("accepted order is missing seller_pubkey".to_owned())
-        })?,
+        buyer_pubkey: protocol_pubkey(
+            status.buyer_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("accepted order is missing buyer_pubkey".to_owned())
+            })?,
+            "buyer_pubkey",
+        )?,
+        seller_pubkey: protocol_pubkey(
+            status.seller_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("accepted order is missing seller_pubkey".to_owned())
+            })?,
+            "seller_pubkey",
+        )?,
         status: fulfillment_state,
     })
 }
@@ -7427,7 +7621,9 @@ fn order_fulfillment_event_parts(
         .ok_or_else(|| {
             RuntimeError::Config("accepted order is missing previous event id".to_owned())
         })?;
-    order_fulfillment_update_event_build(root_event_id, prev_event_id, payload)
+    let root_event_id = protocol_event_id(root_event_id, "request_event_id")?;
+    let prev_event_id = protocol_event_id(prev_event_id, "prev_event_id")?;
+    order_fulfillment_update_event_build(&root_event_id, &prev_event_id, payload)
         .map_err(|error| RuntimeError::Config(format!("encode fulfillment update event: {error}")))
 }
 
@@ -7443,12 +7639,18 @@ fn order_cancellation_payload_from_status(
             })?,
             "listing_addr",
         )?,
-        buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("cancellable order is missing buyer_pubkey".to_owned())
-        })?,
-        seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("cancellable order is missing seller_pubkey".to_owned())
-        })?,
+        buyer_pubkey: protocol_pubkey(
+            status.buyer_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("cancellable order is missing buyer_pubkey".to_owned())
+            })?,
+            "buyer_pubkey",
+        )?,
+        seller_pubkey: protocol_pubkey(
+            status.seller_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("cancellable order is missing seller_pubkey".to_owned())
+            })?,
+            "seller_pubkey",
+        )?,
         reason: args.reason.trim().to_owned(),
     })
 }
@@ -7463,7 +7665,9 @@ fn order_cancellation_event_parts(
     let prev_event_id = order_cancellation_prev_event_id(status).ok_or_else(|| {
         RuntimeError::Config("cancellable order is missing previous event id".to_owned())
     })?;
-    order_cancellation_event_build(root_event_id, prev_event_id.as_str(), payload)
+    let root_event_id = protocol_event_id(root_event_id, "request_event_id")?;
+    let prev_event_id = protocol_event_id(prev_event_id.as_str(), "prev_event_id")?;
+    order_cancellation_event_build(&root_event_id, &prev_event_id, payload)
         .map_err(|error| RuntimeError::Config(format!("encode order cancellation event: {error}")))
 }
 
@@ -7479,12 +7683,18 @@ fn order_receipt_payload_from_status(
             })?,
             "listing_addr",
         )?,
-        buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("receiptable order is missing buyer_pubkey".to_owned())
-        })?,
-        seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("receiptable order is missing seller_pubkey".to_owned())
-        })?,
+        buyer_pubkey: protocol_pubkey(
+            status.buyer_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("receiptable order is missing buyer_pubkey".to_owned())
+            })?,
+            "buyer_pubkey",
+        )?,
+        seller_pubkey: protocol_pubkey(
+            status.seller_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("receiptable order is missing seller_pubkey".to_owned())
+            })?,
+            "seller_pubkey",
+        )?,
         received: args.received,
         issue: if args.received {
             None
@@ -7518,7 +7728,9 @@ fn order_receipt_event_parts(
             "receiptable order is missing eligible fulfillment event id".to_owned(),
         )
     })?;
-    order_receipt_event_build(root_event_id, prev_event_id.as_str(), payload)
+    let root_event_id = protocol_event_id(root_event_id, "request_event_id")?;
+    let prev_event_id = protocol_event_id(prev_event_id.as_str(), "prev_event_id")?;
+    order_receipt_event_build(&root_event_id, &prev_event_id, payload)
         .map_err(|error| RuntimeError::Config(format!("encode buyer receipt event: {error}")))
 }
 
@@ -7553,19 +7765,35 @@ fn order_payment_payload_from_status(
             })?,
             "listing_addr",
         )?,
-        buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("payable order is missing buyer_pubkey".to_owned())
-        })?,
-        seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("payable order is missing seller_pubkey".to_owned())
-        })?,
-        root_event_id: status.request_event_id.clone().ok_or_else(|| {
-            RuntimeError::Config("payable order is missing request_event_id".to_owned())
-        })?,
-        previous_event_id: order_payment_prev_event_id(status).ok_or_else(|| {
-            RuntimeError::Config("payable order is missing payment previous event id".to_owned())
-        })?,
-        agreement_event_id,
+        buyer_pubkey: protocol_pubkey(
+            status.buyer_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("payable order is missing buyer_pubkey".to_owned())
+            })?,
+            "buyer_pubkey",
+        )?,
+        seller_pubkey: protocol_pubkey(
+            status.seller_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("payable order is missing seller_pubkey".to_owned())
+            })?,
+            "seller_pubkey",
+        )?,
+        root_event_id: protocol_event_id(
+            status.request_event_id.as_deref().ok_or_else(|| {
+                RuntimeError::Config("payable order is missing request_event_id".to_owned())
+            })?,
+            "request_event_id",
+        )?,
+        previous_event_id: protocol_event_id(
+            order_payment_prev_event_id(status)
+                .ok_or_else(|| {
+                    RuntimeError::Config(
+                        "payable order is missing payment previous event id".to_owned(),
+                    )
+                })?
+                .as_str(),
+            "prev_event_id",
+        )?,
+        agreement_event_id: protocol_event_id(agreement_event_id.as_str(), "agreement_event_id")?,
         quote_id: economics.quote_id.clone(),
         quote_version: economics.quote_version,
         economics_digest: protocol_economics_digest(
@@ -7597,7 +7825,9 @@ fn order_payment_event_parts(
     let prev_event_id = order_payment_prev_event_id(status).ok_or_else(|| {
         RuntimeError::Config("payable order is missing payment previous event id".to_owned())
     })?;
-    order_payment_record_event_build(root_event_id, prev_event_id.as_str(), payload)
+    let root_event_id = protocol_event_id(root_event_id, "request_event_id")?;
+    let prev_event_id = protocol_event_id(prev_event_id.as_str(), "prev_event_id")?;
+    order_payment_record_event_build(&root_event_id, &prev_event_id, payload)
         .map_err(|error| RuntimeError::Config(format!("encode payment recorded event: {error}")))
 }
 
@@ -7631,20 +7861,32 @@ fn order_settlement_payload_from_status(
             })?,
             "listing_addr",
         )?,
-        seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("settleable order is missing seller_pubkey".to_owned())
-        })?,
-        buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
-            RuntimeError::Config("settleable order is missing buyer_pubkey".to_owned())
-        })?,
-        root_event_id: status.request_event_id.clone().ok_or_else(|| {
-            RuntimeError::Config("settleable order is missing request_event_id".to_owned())
-        })?,
-        previous_event_id: payment_event_id.clone(),
-        agreement_event_id: payment.agreement_event_id.clone().ok_or_else(|| {
-            RuntimeError::Config("settleable order is missing agreement_event_id".to_owned())
-        })?,
-        payment_event_id,
+        seller_pubkey: protocol_pubkey(
+            status.seller_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("settleable order is missing seller_pubkey".to_owned())
+            })?,
+            "seller_pubkey",
+        )?,
+        buyer_pubkey: protocol_pubkey(
+            status.buyer_pubkey.as_deref().ok_or_else(|| {
+                RuntimeError::Config("settleable order is missing buyer_pubkey".to_owned())
+            })?,
+            "buyer_pubkey",
+        )?,
+        root_event_id: protocol_event_id(
+            status.request_event_id.as_deref().ok_or_else(|| {
+                RuntimeError::Config("settleable order is missing request_event_id".to_owned())
+            })?,
+            "request_event_id",
+        )?,
+        previous_event_id: protocol_event_id(payment_event_id.as_str(), "prev_event_id")?,
+        agreement_event_id: protocol_event_id(
+            payment.agreement_event_id.as_deref().ok_or_else(|| {
+                RuntimeError::Config("settleable order is missing agreement_event_id".to_owned())
+            })?,
+            "agreement_event_id",
+        )?,
+        payment_event_id: protocol_event_id(payment_event_id.as_str(), "payment_event_id")?,
         quote_id: protocol_quote_id(
             payment.quote_id.as_deref().ok_or_else(|| {
                 RuntimeError::Config("settleable order is missing quote_id".to_owned())
@@ -7690,14 +7932,15 @@ fn order_settlement_event_parts(
     let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
         RuntimeError::Config("settleable order is missing request_event_id".to_owned())
     })?;
-    order_settlement_decision_event_build(root_event_id, payload.payment_event_id.as_str(), payload)
+    let root_event_id = protocol_event_id(root_event_id, "request_event_id")?;
+    order_settlement_decision_event_build(&root_event_id, &payload.payment_event_id, payload)
         .map_err(|error| RuntimeError::Config(format!("encode settlement decision event: {error}")))
 }
 
 fn apply_order_payment_payload(view: &mut OrderPaymentView, payload: &RadrootsOrderPaymentRecord) {
-    view.root_event_id = Some(payload.root_event_id.clone());
-    view.prev_event_id = Some(payload.previous_event_id.clone());
-    view.agreement_event_id = Some(payload.agreement_event_id.clone());
+    view.root_event_id = Some(payload.root_event_id.to_string());
+    view.prev_event_id = Some(payload.previous_event_id.to_string());
+    view.agreement_event_id = Some(payload.agreement_event_id.to_string());
     view.quote_id = Some(payload.quote_id.to_string());
     view.quote_version = Some(payload.quote_version);
     view.economics_digest = Some(payload.economics_digest.to_string());
@@ -7712,10 +7955,10 @@ fn apply_order_settlement_payload(
     view: &mut OrderSettlementView,
     payload: &RadrootsOrderSettlementDecision,
 ) {
-    view.root_event_id = Some(payload.root_event_id.clone());
-    view.prev_event_id = Some(payload.previous_event_id.clone());
-    view.payment_event_id = Some(payload.payment_event_id.clone());
-    view.agreement_event_id = Some(payload.agreement_event_id.clone());
+    view.root_event_id = Some(payload.root_event_id.to_string());
+    view.prev_event_id = Some(payload.previous_event_id.to_string());
+    view.payment_event_id = Some(payload.payment_event_id.to_string());
+    view.agreement_event_id = Some(payload.agreement_event_id.to_string());
     view.quote_id = Some(payload.quote_id.to_string());
     view.quote_version = Some(payload.quote_version);
     view.economics_digest = Some(payload.economics_digest.to_string());
@@ -7872,8 +8115,8 @@ fn published_order_revision_decision_view(
     apply_order_revision_decision_status(&mut view, status);
     apply_order_revision_decision_payload(&mut view, proposal, payload);
     view.revision_id = Some(payload.revision_id.to_string());
-    view.root_event_id = Some(payload.root_event_id.clone());
-    view.prev_event_id = Some(payload.prev_event_id.clone());
+    view.root_event_id = Some(payload.root_event_id.to_string());
+    view.prev_event_id = Some(payload.prev_event_id.to_string());
     view.event_id = Some(event_id.clone());
     view.event_kind = Some(event_kind);
     if matches!(payload.decision, RadrootsOrderRevisionOutcome::Accepted) {
@@ -8316,19 +8559,23 @@ fn seller_order_request_from_event(
     }
 
     let event = radroots_event_from_nostr(event);
+    let event_id = protocol_event_id(event.id.as_str(), "request_event_id")?;
+    let seller_protocol_pubkey = protocol_pubkey(seller_pubkey, "seller_pubkey")?;
     let envelope = order_request_from_event(&event)
         .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
     let context =
         order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event.tags)
             .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
 
-    if envelope.order_id != order_id || envelope.payload.order_id != order_id {
+    if envelope.order_id.to_string() != order_id
+        || envelope.payload.order_id.to_string() != order_id
+    {
         return Err(RuntimeError::Config(
             "order request does not match requested order id".to_owned(),
         ));
     }
-    if context.counterparty_pubkey != seller_pubkey
-        || envelope.payload.seller_pubkey != seller_pubkey
+    if context.counterparty_pubkey != seller_protocol_pubkey
+        || envelope.payload.seller_pubkey != seller_protocol_pubkey
     {
         return Err(RuntimeError::Config(
             "order request is not targeted at the selected seller".to_owned(),
@@ -8346,7 +8593,7 @@ fn seller_order_request_from_event(
     let listing_event_id = context.listing_event.as_ref().map(|event| event.id.clone());
 
     Ok(ResolvedSellerOrderRequest {
-        request_event_id: event.id,
+        request_event_id: event_id,
         listing_event_id,
         order_id: envelope.payload.order_id,
         listing_addr: envelope.payload.listing_addr,
@@ -8367,8 +8614,8 @@ fn publish_order_decision(
     inventory: Option<OrderInventoryView>,
 ) -> Result<OrderDecisionView, RuntimeError> {
     let parts = order_decision_event_build(
-        request.request_event_id.as_str(),
-        request.request_event_id.as_str(),
+        &request.request_event_id,
+        &request.request_event_id,
         &payload,
     )
     .map_err(|error| RuntimeError::Config(format!("encode order decision event: {error}")))?;
@@ -8537,8 +8784,8 @@ fn order_event_list_entry_from_event(
         listing_addr: Some(envelope.listing_addr),
         listing_event_id,
         buyer_account_id: None,
-        buyer_pubkey: Some(envelope.payload.buyer_pubkey),
-        seller_pubkey: Some(envelope.payload.seller_pubkey),
+        buyer_pubkey: Some(envelope.payload.buyer_pubkey.to_string()),
+        seller_pubkey: Some(envelope.payload.seller_pubkey.to_string()),
         item_count: Some(envelope.payload.items.len()),
         created_at_unix: Some(created_at_unix),
         submitted_at_unix: Some(created_at_unix),
@@ -11540,8 +11787,11 @@ fn canonical_order_request_payload_from_loaded(
             loaded.document.order.listing_addr.as_str(),
             "listing_addr",
         )?,
-        buyer_pubkey: loaded.document.order.buyer_pubkey.clone(),
-        seller_pubkey: loaded.document.order.seller_pubkey.clone(),
+        buyer_pubkey: protocol_pubkey(loaded.document.order.buyer_pubkey.as_str(), "buyer_pubkey")?,
+        seller_pubkey: protocol_pubkey(
+            loaded.document.order.seller_pubkey.as_str(),
+            "seller_pubkey",
+        )?,
         items,
         economics,
     };
@@ -12213,8 +12463,12 @@ fn issue_with_events(
     code: impl Into<String>,
     field: impl Into<String>,
     message: impl Into<String>,
-    mut event_ids: Vec<String>,
+    event_ids: Vec<impl ToString>,
 ) -> OrderIssueView {
+    let mut event_ids = event_ids
+        .into_iter()
+        .map(|event_id| event_id.to_string())
+        .collect::<Vec<_>>();
     event_ids.sort();
     event_ids.dedup();
     OrderIssueView {
@@ -12425,8 +12679,8 @@ mod tests {
     };
     use radroots_events::RadrootsNostrEventPtr;
     use radroots_events::ids::{
-        RadrootsEconomicsDigest, RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId,
-        RadrootsOrderQuoteId, RadrootsOrderRevisionId,
+        RadrootsEconomicsDigest, RadrootsEventId, RadrootsInventoryBinId, RadrootsListingAddress,
+        RadrootsOrderId, RadrootsOrderQuoteId, RadrootsOrderRevisionId, RadrootsPublicKey,
     };
     use radroots_events::kinds::{
         KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_FULFILLMENT_UPDATE,
@@ -12534,6 +12788,18 @@ mod tests {
 
     fn test_economics_digest(value: &str) -> RadrootsEconomicsDigest {
         value.parse().expect("valid economics digest")
+    }
+
+    fn test_event_id(value: &str) -> RadrootsEventId {
+        value.parse().expect("valid event id")
+    }
+
+    fn test_event_id_char(value: char) -> RadrootsEventId {
+        test_event_id(value.to_string().repeat(64).as_str())
+    }
+
+    fn test_pubkey(value: &str) -> RadrootsPublicKey {
+        value.parse().expect("valid public key")
     }
 
     #[test]
@@ -12866,8 +13132,8 @@ mod tests {
         let payload = RadrootsOrderRequest {
             order_id: test_order_id("ord_AAAAAAAAAAAAAAAAAAAAAg"),
             listing_addr: test_listing_addr(listing_addr.as_str()),
-            buyer_pubkey: buyer_pubkey.clone(),
-            seller_pubkey: seller_pubkey.clone(),
+            buyer_pubkey: test_pubkey(buyer_pubkey.as_str()),
+            seller_pubkey: test_pubkey(seller_pubkey.as_str()),
             items: vec![RadrootsOrderItem {
                 bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,
@@ -14086,8 +14352,8 @@ mod tests {
         let payload = canonicalize_order_decision_for_signer(payload, seller_pubkey.as_str())
             .expect("canonical decision payload");
         let parts = order_decision_event_build(
-            request.request_event_id.as_str(),
-            request.request_event_id.as_str(),
+            &request.request_event_id,
+            &request.request_event_id,
             &payload,
         )
         .expect("decision event parts");
@@ -14193,8 +14459,8 @@ mod tests {
         let payload = canonicalize_order_decision_for_signer(payload, seller_pubkey.as_str())
             .expect("canonical decision payload");
         let parts = order_decision_event_build(
-            request.request_event_id.as_str(),
-            request.request_event_id.as_str(),
+            &request.request_event_id,
+            &request.request_event_id,
             &payload,
         )
         .expect("decision event parts");
@@ -17654,12 +17920,12 @@ mod tests {
             fixture.listing_event_id.as_str(),
         );
         let existing_request = ResolvedSellerOrderRequest {
-            request_event_id: existing_request_event.id.to_string(),
+            request_event_id: test_event_id(existing_request_event.id.to_string().as_str()),
             listing_event_id: Some(fixture.listing_event_id.clone()),
             order_id: test_order_id(existing_order_id),
             listing_addr: test_listing_addr(fixture.listing_addr.as_str()),
-            buyer_pubkey: fixture.buyer_pubkey.clone(),
-            seller_pubkey: fixture.seller_pubkey.clone(),
+            buyer_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
+            seller_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
             items: vec![RadrootsOrderItem {
                 bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,
@@ -17674,10 +17940,10 @@ mod tests {
         )
         .expect("canonical existing decision");
         let projection = reduce_listing_inventory_accounting(
-            fixture.listing_addr.as_str(),
-            fixture.listing_event_id.as_str(),
+            &test_listing_addr(fixture.listing_addr.as_str()),
+            &test_event_id(fixture.listing_event_id.as_str()),
             vec![RadrootsListingInventoryBinAvailability {
-                bin_id: "bin-1".to_owned(),
+                bin_id: test_inventory_bin_id("bin-1"),
                 available_count: 2,
             }],
             vec![
@@ -17686,9 +17952,9 @@ mod tests {
             ],
             vec![
                 RadrootsOrderDecisionRecord {
-                    event_id: "existing_decision".to_owned(),
-                    author_pubkey: fixture.seller_pubkey.clone(),
-                    counterparty_pubkey: fixture.buyer_pubkey.clone(),
+                    event_id: test_event_id_char('2'),
+                    author_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
+                    counterparty_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
                     root_event_id: existing_request.request_event_id.clone(),
                     prev_event_id: existing_request.request_event_id.clone(),
                     payload: existing_decision_payload,
@@ -17752,12 +18018,12 @@ mod tests {
             fixture.listing_event_id.as_str(),
         );
         let existing_request = ResolvedSellerOrderRequest {
-            request_event_id: existing_request_event.id.to_string(),
+            request_event_id: test_event_id(existing_request_event.id.to_string().as_str()),
             listing_event_id: Some(fixture.listing_event_id.clone()),
             order_id: test_order_id(existing_order_id),
             listing_addr: test_listing_addr(fixture.listing_addr.as_str()),
-            buyer_pubkey: fixture.buyer_pubkey.clone(),
-            seller_pubkey: fixture.seller_pubkey.clone(),
+            buyer_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
+            seller_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
             items: vec![RadrootsOrderItem {
                 bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,
@@ -17771,12 +18037,12 @@ mod tests {
             fixture.seller_pubkey.as_str(),
         )
         .expect("canonical existing decision");
-        let existing_decision_event_id = "existing_decision".to_owned();
+        let existing_decision_event_id = test_event_id_char('2');
         let projection = reduce_listing_inventory_accounting(
-            fixture.listing_addr.as_str(),
-            fixture.listing_event_id.as_str(),
+            &test_listing_addr(fixture.listing_addr.as_str()),
+            &test_event_id(fixture.listing_event_id.as_str()),
             vec![RadrootsListingInventoryBinAvailability {
-                bin_id: "bin-1".to_owned(),
+                bin_id: test_inventory_bin_id("bin-1"),
                 available_count: 2,
             }],
             vec![
@@ -17786,8 +18052,8 @@ mod tests {
             vec![
                 RadrootsOrderDecisionRecord {
                     event_id: existing_decision_event_id.clone(),
-                    author_pubkey: fixture.seller_pubkey.clone(),
-                    counterparty_pubkey: fixture.buyer_pubkey.clone(),
+                    author_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
+                    counterparty_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
                     root_event_id: existing_request.request_event_id.clone(),
                     prev_event_id: existing_request.request_event_id.clone(),
                     payload: existing_decision_payload,
@@ -17797,9 +18063,9 @@ mod tests {
             Vec::<RadrootsOrderRevisionProposalRecord>::new(),
             Vec::<RadrootsOrderRevisionDecisionRecord>::new(),
             vec![RadrootsOrderFulfillmentRecord {
-                event_id: "existing_fulfillment".to_owned(),
-                author_pubkey: fixture.seller_pubkey.clone(),
-                counterparty_pubkey: fixture.buyer_pubkey.clone(),
+                event_id: test_event_id_char('3'),
+                author_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
+                counterparty_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
                 root_event_id: existing_request.request_event_id.clone(),
                 prev_event_id: existing_decision_event_id,
                 payload: RadrootsOrderFulfillmentUpdate {
@@ -18615,19 +18881,15 @@ mod tests {
         let payload = RadrootsOrderDecision {
             order_id: test_order_id(order_id),
             listing_addr: test_listing_addr(listing_addr),
-            buyer_pubkey: buyer_pubkey.to_owned(),
-            seller_pubkey: seller_pubkey.to_owned(),
+            buyer_pubkey: test_pubkey(buyer_pubkey),
+            seller_pubkey: test_pubkey(seller_pubkey),
             decision,
         };
         let payload = canonicalize_order_decision_for_signer(payload, seller_pubkey)
             .expect("canonical order decision");
-        let request_event_id = request_event.id.to_string();
-        let parts = order_decision_event_build(
-            request_event_id.as_str(),
-            request_event_id.as_str(),
-            &payload,
-        )
-        .expect("order decision parts");
+        let request_event_id = test_event_id(request_event.id.to_string().as_str());
+        let parts = order_decision_event_build(&request_event_id, &request_event_id, &payload)
+            .expect("order decision parts");
         let mut tags = parts.tags;
         for tag in tags.iter_mut() {
             if tag.first().map(String::as_str) == Some("p") && tag.len() > 1 {
@@ -18658,10 +18920,10 @@ mod tests {
             revision_id: test_order_revision_id("rev_test"),
             order_id: test_order_id(order_id),
             listing_addr: test_listing_addr(listing_addr),
-            buyer_pubkey: buyer_pubkey.to_owned(),
-            seller_pubkey: seller_pubkey.to_owned(),
-            root_event_id: request_event.id.to_string(),
-            prev_event_id: decision_event.id.to_string(),
+            buyer_pubkey: test_pubkey(buyer_pubkey),
+            seller_pubkey: test_pubkey(seller_pubkey),
+            root_event_id: test_event_id(request_event.id.to_string().as_str()),
+            prev_event_id: test_event_id(decision_event.id.to_string().as_str()),
             items: vec![RadrootsOrderItem {
                 bin_id: test_inventory_bin_id("bin-1"),
                 bin_count,
@@ -18670,8 +18932,8 @@ mod tests {
             reason: "update count".to_owned(),
         };
         let parts = order_revision_proposal_event_build(
-            payload.root_event_id.as_str(),
-            payload.prev_event_id.as_str(),
+            &payload.root_event_id,
+            &payload.prev_event_id,
             &payload,
         )
         .expect("revision proposal parts");
@@ -18696,12 +18958,12 @@ mod tests {
             buyer_pubkey: envelope.payload.buyer_pubkey.clone(),
             seller_pubkey: envelope.payload.seller_pubkey.clone(),
             root_event_id: envelope.payload.root_event_id.clone(),
-            prev_event_id: proposal_event.id.to_string(),
+            prev_event_id: test_event_id(proposal_event.id.to_string().as_str()),
             decision,
         };
         let parts = order_revision_decision_event_build(
-            payload.root_event_id.as_str(),
-            payload.prev_event_id.as_str(),
+            &payload.root_event_id,
+            &payload.prev_event_id,
             &payload,
         )
         .expect("revision decision parts");
@@ -18724,18 +18986,15 @@ mod tests {
         let payload = RadrootsOrderFulfillmentUpdate {
             order_id: test_order_id(order_id),
             listing_addr: test_listing_addr(listing_addr),
-            buyer_pubkey: buyer_pubkey.to_owned(),
-            seller_pubkey: seller_pubkey.to_owned(),
+            buyer_pubkey: test_pubkey(buyer_pubkey),
+            seller_pubkey: test_pubkey(seller_pubkey),
             status,
         };
-        let request_event_id = request_event.id.to_string();
-        let prev_event_id = prev_event.id.to_string();
-        let parts = order_fulfillment_update_event_build(
-            request_event_id.as_str(),
-            prev_event_id.as_str(),
-            &payload,
-        )
-        .expect("fulfillment update parts");
+        let request_event_id = test_event_id(request_event.id.to_string().as_str());
+        let prev_event_id = test_event_id(prev_event.id.to_string().as_str());
+        let parts =
+            order_fulfillment_update_event_build(&request_event_id, &prev_event_id, &payload)
+                .expect("fulfillment update parts");
         radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
             .expect("nostr event builder")
             .sign_with_keys(seller.keys())
@@ -18755,18 +19014,14 @@ mod tests {
         let payload = RadrootsOrderCancellation {
             order_id: test_order_id(order_id),
             listing_addr: test_listing_addr(listing_addr),
-            buyer_pubkey: buyer_pubkey.to_owned(),
-            seller_pubkey: seller_pubkey.to_owned(),
+            buyer_pubkey: test_pubkey(buyer_pubkey),
+            seller_pubkey: test_pubkey(seller_pubkey),
             reason: reason.to_owned(),
         };
-        let request_event_id = request_event.id.to_string();
-        let prev_event_id = prev_event.id.to_string();
-        let parts = order_cancellation_event_build(
-            request_event_id.as_str(),
-            prev_event_id.as_str(),
-            &payload,
-        )
-        .expect("order cancellation parts");
+        let request_event_id = test_event_id(request_event.id.to_string().as_str());
+        let prev_event_id = test_event_id(prev_event.id.to_string().as_str());
+        let parts = order_cancellation_event_build(&request_event_id, &prev_event_id, &payload)
+            .expect("order cancellation parts");
         radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
             .expect("nostr event builder")
             .sign_with_keys(buyer.keys())
@@ -18787,17 +19042,16 @@ mod tests {
         let payload = RadrootsOrderReceipt {
             order_id: test_order_id(order_id),
             listing_addr: test_listing_addr(listing_addr),
-            buyer_pubkey: buyer_pubkey.to_owned(),
-            seller_pubkey: seller_pubkey.to_owned(),
+            buyer_pubkey: test_pubkey(buyer_pubkey),
+            seller_pubkey: test_pubkey(seller_pubkey),
             received,
             issue: issue.map(str::to_owned),
             received_at: 1_777_665_600,
         };
-        let request_event_id = request_event.id.to_string();
-        let prev_event_id = prev_event.id.to_string();
-        let parts =
-            order_receipt_event_build(request_event_id.as_str(), prev_event_id.as_str(), &payload)
-                .expect("buyer receipt parts");
+        let request_event_id = test_event_id(request_event.id.to_string().as_str());
+        let prev_event_id = test_event_id(prev_event.id.to_string().as_str());
+        let parts = order_receipt_event_build(&request_event_id, &prev_event_id, &payload)
+            .expect("buyer receipt parts");
         radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
             .expect("nostr event builder")
             .sign_with_keys(buyer.keys())
@@ -18818,11 +19072,11 @@ mod tests {
         let payload = RadrootsOrderPaymentRecord {
             order_id: test_order_id(order_id),
             listing_addr: test_listing_addr(listing_addr),
-            buyer_pubkey: buyer_pubkey.to_owned(),
-            seller_pubkey: seller_pubkey.to_owned(),
-            root_event_id: request_event.id.to_string(),
-            previous_event_id: prev_event.id.to_string(),
-            agreement_event_id: agreement_event.id.to_string(),
+            buyer_pubkey: test_pubkey(buyer_pubkey),
+            seller_pubkey: test_pubkey(seller_pubkey),
+            root_event_id: test_event_id(request_event.id.to_string().as_str()),
+            previous_event_id: test_event_id(prev_event.id.to_string().as_str()),
+            agreement_event_id: test_event_id(agreement_event.id.to_string().as_str()),
             quote_id: economics.quote_id.clone(),
             quote_version: economics.quote_version,
             economics_digest: test_economics_digest(
@@ -18837,8 +19091,8 @@ mod tests {
             paid_at: Some(1_777_666_000),
         };
         let parts = order_payment_record_event_build(
-            payload.root_event_id.as_str(),
-            payload.previous_event_id.as_str(),
+            &payload.root_event_id,
+            &payload.previous_event_id,
             &payload,
         )
         .expect("payment recorded parts");
@@ -18862,10 +19116,10 @@ mod tests {
             listing_addr: envelope.payload.listing_addr.clone(),
             seller_pubkey: envelope.payload.seller_pubkey.clone(),
             buyer_pubkey: envelope.payload.buyer_pubkey.clone(),
-            root_event_id: request_event.id.to_string(),
-            previous_event_id: payment_event.id.to_string(),
+            root_event_id: test_event_id(request_event.id.to_string().as_str()),
+            previous_event_id: test_event_id(payment_event.id.to_string().as_str()),
             agreement_event_id: envelope.payload.agreement_event_id.clone(),
-            payment_event_id: payment_event.id.to_string(),
+            payment_event_id: test_event_id(payment_event.id.to_string().as_str()),
             quote_id: envelope.payload.quote_id.clone(),
             quote_version: envelope.payload.quote_version,
             economics_digest: envelope.payload.economics_digest.clone(),
@@ -18876,8 +19130,8 @@ mod tests {
                 .then(|| "reference mismatch".to_owned()),
         };
         let parts = order_settlement_decision_event_build(
-            payload.root_event_id.as_str(),
-            payload.previous_event_id.as_str(),
+            &payload.root_event_id,
+            &payload.previous_event_id,
             &payload,
         )
         .expect("settlement decision parts");
@@ -18898,8 +19152,8 @@ mod tests {
         let payload = RadrootsOrderRequest {
             order_id: test_order_id(order_id),
             listing_addr: test_listing_addr(listing_addr),
-            buyer_pubkey: buyer_pubkey.to_owned(),
-            seller_pubkey: seller_pubkey.to_owned(),
+            buyer_pubkey: test_pubkey(buyer_pubkey),
+            seller_pubkey: test_pubkey(seller_pubkey),
             items: vec![RadrootsOrderItem {
                 bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,
@@ -18951,8 +19205,8 @@ mod tests {
         let payload = RadrootsOrderRequest {
             order_id: test_order_id(order_id),
             listing_addr: test_listing_addr(listing_addr),
-            buyer_pubkey: buyer_pubkey.to_owned(),
-            seller_pubkey: seller_pubkey.to_owned(),
+            buyer_pubkey: test_pubkey(buyer_pubkey),
+            seller_pubkey: test_pubkey(seller_pubkey),
             items: vec![RadrootsOrderItem {
                 bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,

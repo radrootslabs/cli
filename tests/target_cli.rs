@@ -8,7 +8,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use radroots_events::RadrootsNostrEventPtr;
-use radroots_events::ids::{RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId};
+use radroots_events::ids::{
+    RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId, RadrootsPublicKey,
+};
 use radroots_events::kinds::{KIND_FARM, KIND_ORDER_REQUEST, KIND_PROFILE};
 use radroots_events::order::{RadrootsOrderEconomics, RadrootsOrderItem, RadrootsOrderRequest};
 use radroots_events_codec::order::order_request_event_build;
@@ -52,6 +54,10 @@ fn test_listing_addr(value: &str) -> RadrootsListingAddress {
 
 fn test_inventory_bin_id(value: &str) -> RadrootsInventoryBinId {
     value.parse().expect("valid inventory bin id")
+}
+
+fn test_pubkey(value: &str) -> RadrootsPublicKey {
+    value.parse().expect("valid public key")
 }
 
 struct RelayPublishServer {
@@ -746,8 +752,8 @@ fn signed_app_order_request_event(
     let payload = RadrootsOrderRequest {
         order_id: test_order_id(order_id),
         listing_addr: test_listing_addr(listing_addr),
-        buyer_pubkey: buyer.public_key_hex(),
-        seller_pubkey: seller_pubkey.to_owned(),
+        buyer_pubkey: test_pubkey(buyer.public_key_hex().as_str()),
+        seller_pubkey: test_pubkey(seller_pubkey),
         items: vec![RadrootsOrderItem {
             bin_id: test_inventory_bin_id("bin-1"),
             bin_count,
@@ -6115,8 +6121,8 @@ fn signed_order_request_event_for_quote(
     let payload = RadrootsOrderRequest {
         order_id: test_order_id(order_id),
         listing_addr: test_listing_addr(LISTING_ADDR),
-        buyer_pubkey,
-        seller_pubkey,
+        buyer_pubkey: test_pubkey(buyer_pubkey.as_str()),
+        seller_pubkey: test_pubkey(seller_pubkey.as_str()),
         items: vec![RadrootsOrderItem {
             bin_id: test_inventory_bin_id("bin-1"),
             bin_count: 2,
