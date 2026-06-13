@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use radroots_events::RadrootsNostrEventPtr;
+use radroots_events::ids::{RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId};
 use radroots_events::kinds::{KIND_FARM, KIND_ORDER_REQUEST, KIND_PROFILE};
 use radroots_events::order::{RadrootsOrderEconomics, RadrootsOrderItem, RadrootsOrderRequest};
 use radroots_events_codec::order::order_request_event_build;
@@ -40,6 +41,18 @@ use support::{
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
 const SYNC_PUSH_FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
+
+fn test_order_id(value: &str) -> RadrootsOrderId {
+    value.parse().expect("valid order id")
+}
+
+fn test_listing_addr(value: &str) -> RadrootsListingAddress {
+    value.parse().expect("valid listing address")
+}
+
+fn test_inventory_bin_id(value: &str) -> RadrootsInventoryBinId {
+    value.parse().expect("valid inventory bin id")
+}
 
 struct RelayPublishServer {
     endpoint: String,
@@ -731,12 +744,12 @@ fn signed_app_order_request_event(
     bin_count: u32,
 ) -> RadrootsNostrEvent {
     let payload = RadrootsOrderRequest {
-        order_id: order_id.to_owned(),
-        listing_addr: listing_addr.to_owned(),
+        order_id: test_order_id(order_id),
+        listing_addr: test_listing_addr(listing_addr),
         buyer_pubkey: buyer.public_key_hex(),
         seller_pubkey: seller_pubkey.to_owned(),
         items: vec![RadrootsOrderItem {
-            bin_id: "bin-1".to_owned(),
+            bin_id: test_inventory_bin_id("bin-1"),
             bin_count,
         }],
         economics: app_order_economics(order_id, bin_count),
@@ -6100,12 +6113,12 @@ fn signed_order_request_event_for_quote(
     let buyer_pubkey = buyer.public_key_hex();
     let seller_pubkey = "1".repeat(64);
     let payload = RadrootsOrderRequest {
-        order_id: order_id.to_owned(),
-        listing_addr: LISTING_ADDR.to_owned(),
+        order_id: test_order_id(order_id),
+        listing_addr: test_listing_addr(LISTING_ADDR),
         buyer_pubkey,
         seller_pubkey,
         items: vec![RadrootsOrderItem {
-            bin_id: "bin-1".to_owned(),
+            bin_id: test_inventory_bin_id("bin-1"),
             bin_count: 2,
         }],
         economics,

@@ -12,6 +12,10 @@ use radroots_core::{
     convert_unit_decimal,
 };
 use radroots_events::RadrootsNostrEventPtr;
+use radroots_events::ids::{
+    RadrootsEconomicsDigest, RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId,
+    RadrootsOrderQuoteId, RadrootsOrderRevisionId,
+};
 use radroots_events::kinds::{
     KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_FULFILLMENT_UPDATE,
     KIND_ORDER_PAYMENT_RECORD, KIND_ORDER_RECEIPT, KIND_ORDER_REQUEST,
@@ -53,10 +57,10 @@ use radroots_nostr::prelude::{
     radroots_nostr_kind,
 };
 use radroots_replica_db::{
-    ReplicaSql, ReplicaTradeProductSummaryRow, nostr_event_state, trade_product,
+    ReplicaSql, ReplicaTradeProductSummaryRow, nostr_event_head, trade_product,
 };
-use radroots_replica_db_schema::nostr_event_state::{
-    INostrEventStateFindOne, INostrEventStateFindOneArgs, NostrEventStateQueryBindValues,
+use radroots_replica_db_schema::nostr_event_head::{
+    INostrEventHeadFindOne, INostrEventHeadFindOneArgs, NostrEventHeadQueryBindValues,
 };
 use radroots_replica_db_schema::trade_product::{
     ITradeProductFieldsFilter, ITradeProductFindMany, TradeProduct,
@@ -143,6 +147,48 @@ const APP_ORDER_ALREADY_SUBMITTED_ISSUE: &str = "app_order_already_submitted";
 const APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE: &str = "app_order_signed_evidence_conflict";
 
 static ORDER_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn protocol_order_id(value: &str, field: &str) -> Result<RadrootsOrderId, RuntimeError> {
+    value
+        .parse()
+        .map_err(|error| RuntimeError::Config(format!("{field} is not a valid order id: {error}")))
+}
+
+fn protocol_listing_addr(value: &str, field: &str) -> Result<RadrootsListingAddress, RuntimeError> {
+    value.parse().map_err(|error| {
+        RuntimeError::Config(format!("{field} is not a valid listing address: {error}"))
+    })
+}
+
+fn protocol_revision_id(value: &str, field: &str) -> Result<RadrootsOrderRevisionId, RuntimeError> {
+    value.parse().map_err(|error| {
+        RuntimeError::Config(format!("{field} is not a valid order revision id: {error}"))
+    })
+}
+
+fn protocol_quote_id(value: &str, field: &str) -> Result<RadrootsOrderQuoteId, RuntimeError> {
+    value.parse().map_err(|error| {
+        RuntimeError::Config(format!("{field} is not a valid order quote id: {error}"))
+    })
+}
+
+fn protocol_inventory_bin_id(
+    value: &str,
+    field: &str,
+) -> Result<RadrootsInventoryBinId, RuntimeError> {
+    value.parse().map_err(|error| {
+        RuntimeError::Config(format!("{field} is not a valid inventory bin id: {error}"))
+    })
+}
+
+fn protocol_economics_digest(
+    value: &str,
+    field: &str,
+) -> Result<RadrootsEconomicsDigest, RuntimeError> {
+    value.parse().map_err(|error| {
+        RuntimeError::Config(format!("{field} is not a valid economics digest: {error}"))
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -272,8 +318,8 @@ struct ResolvedTradeProductNotes {
 struct ResolvedSellerOrderRequest {
     request_event_id: String,
     listing_event_id: Option<String>,
-    order_id: String,
-    listing_addr: String,
+    order_id: RadrootsOrderId,
+    listing_addr: RadrootsListingAddress,
     buyer_pubkey: String,
     seller_pubkey: String,
     items: Vec<RadrootsOrderItem>,
@@ -1107,7 +1153,8 @@ fn rebind_inner(
     document.buyer_actor.pubkey = target_pubkey.clone();
     document.buyer_actor.source = ORDER_BUYER_ACTOR_SOURCE_REBIND.to_owned();
     if order_id_changed && let Some(economics) = document.order.economics.as_mut() {
-        economics.quote_id = format!("quote_{to_order_id}");
+        economics.quote_id =
+            protocol_quote_id(format!("quote_{to_order_id}").as_str(), "quote_id")?;
     }
 
     let output_file = if order_id_changed {
@@ -3564,7 +3611,7 @@ fn order_status_revision_view(
     {
         return Some(OrderStatusRevisionView {
             state: "pending".to_owned(),
-            revision_id: Some(proposal.payload.revision_id.clone()),
+            revision_id: Some(proposal.payload.revision_id.to_string()),
             proposal_event_id: Some(proposal.event_id.clone()),
             decision_event_id: None,
             root_event_id: Some(proposal.root_event_id.clone()),
@@ -3598,7 +3645,7 @@ fn order_status_revision_view_from_decision(
     };
     OrderStatusRevisionView {
         state: state.to_owned(),
-        revision_id: Some(decision.payload.revision_id.clone()),
+        revision_id: Some(decision.payload.revision_id.to_string()),
         proposal_event_id: Some(decision.prev_event_id.clone()),
         decision_event_id: Some(decision.event_id.clone()),
         root_event_id: Some(decision.root_event_id.clone()),
@@ -3663,7 +3710,7 @@ fn inventory_bins_from_decision(
             let mut bins = inventory_commitments
                 .iter()
                 .map(|commitment| OrderInventoryBinView {
-                    bin_id: commitment.bin_id.clone(),
+                    bin_id: commitment.bin_id.to_string(),
                     committed_count: u64::from(commitment.bin_count),
                     available_count: None,
                     remaining_count: None,
@@ -4929,7 +4976,7 @@ fn apply_order_payment_status(view: &mut OrderPaymentView, status: &OrderStatusV
     view.root_event_id = status.request_event_id.clone();
     view.prev_event_id = order_payment_prev_event_id(status);
     if let Some(economics) = status.economics.as_ref() {
-        view.quote_id = Some(economics.quote_id.clone());
+        view.quote_id = Some(economics.quote_id.to_string());
         view.quote_version = Some(economics.quote_version);
         view.economics_digest = radroots_order_economics_digest(economics).ok();
         view.amount = Some(economics.total.amount);
@@ -5808,8 +5855,8 @@ fn apply_order_decision_request(
     view: &mut OrderDecisionView,
     request: &ResolvedSellerOrderRequest,
 ) {
-    view.order_id = request.order_id.clone();
-    view.listing_addr = Some(request.listing_addr.clone());
+    view.order_id = request.order_id.to_string();
+    view.listing_addr = Some(request.listing_addr.to_string());
     view.buyer_pubkey = Some(request.buyer_pubkey.clone());
     view.seller_pubkey = Some(request.seller_pubkey.clone());
     view.request_event_id = Some(request.request_event_id.clone());
@@ -6082,7 +6129,7 @@ fn order_revision_preflight_view_from_status(
     if let Some(record) = pending_revision {
         view.event_id = Some(record.event_id.clone());
         view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
-        view.revision_id = Some(record.payload.revision_id.clone());
+        view.revision_id = Some(record.payload.revision_id.to_string());
     }
     view.reason = Some(match state {
         "missing" => format!("no active order events matched `{}`", args.key),
@@ -6464,7 +6511,7 @@ fn order_inventory_view_from_listing_projection(
             .bins
             .iter()
             .map(|bin| OrderInventoryBinView {
-                bin_id: bin.bin_id.clone(),
+                bin_id: bin.bin_id.to_string(),
                 committed_count: bin.accepted_reserved_count,
                 available_count: Some(bin.available_count),
                 remaining_count: Some(bin.remaining_count),
@@ -6618,7 +6665,7 @@ fn listing_inventory_bins(
             )
         })?;
     Ok(vec![RadrootsListingInventoryBinAvailability {
-        bin_id: listing.primary_bin_id.clone(),
+        bin_id: listing.primary_bin_id.to_string(),
         available_count,
     }])
 }
@@ -6957,11 +7004,11 @@ fn order_revision_payload_from_status(
     args: &OrderRevisionProposeArgs,
     status: &OrderStatusView,
 ) -> Result<RadrootsOrderRevisionProposal, RuntimeError> {
-    let revision_id = next_revision_id();
+    let revision_id = protocol_revision_id(next_revision_id().as_str(), "revision_id")?;
     let economics = status.economics.clone().ok_or_else(|| {
         RuntimeError::Config("accepted order is missing current agreement economics".to_owned())
     })?;
-    let economics = revised_order_economics(args, &revision_id, &economics)?;
+    let economics = revised_order_economics(args, revision_id.as_str(), &economics)?;
     let items = economics
         .items
         .iter()
@@ -6972,10 +7019,13 @@ fn order_revision_payload_from_status(
         .collect::<Vec<_>>();
     Ok(RadrootsOrderRevisionProposal {
         revision_id,
-        order_id: status.order_id.clone(),
-        listing_addr: status.listing_addr.clone().ok_or_else(|| {
-            RuntimeError::Config("accepted order is missing listing_addr".to_owned())
-        })?,
+        order_id: protocol_order_id(status.order_id.as_str(), "order_id")?,
+        listing_addr: protocol_listing_addr(
+            status.listing_addr.as_deref().ok_or_else(|| {
+                RuntimeError::Config("accepted order is missing listing_addr".to_owned())
+            })?,
+            "listing_addr",
+        )?,
         buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
             RuntimeError::Config("accepted order is missing buyer_pubkey".to_owned())
         })?,
@@ -7007,13 +7057,14 @@ fn revised_order_economics(
     current_canonical.canonicalize();
     let mut economics = current_canonical.clone();
     let mut changed = false;
-    economics.quote_id = format!("revision_{revision_id}");
+    economics.quote_id = protocol_quote_id(format!("revision_{revision_id}").as_str(), "quote_id")?;
     economics.quote_version = economics
         .quote_version
         .checked_add(1)
         .ok_or_else(|| RuntimeError::Config("revision quote_version overflowed".to_owned()))?;
 
     if let Some(bin_id) = args.bin_id.as_deref().and_then(non_empty_ref) {
+        let bin_id = protocol_inventory_bin_id(bin_id, "revision bin_id")?;
         let bin_count = args.bin_count.ok_or_else(|| {
             RuntimeError::Config("revision bin_count is required with bin_id".to_owned())
         })?;
@@ -7246,14 +7297,14 @@ fn apply_order_revision_payload(
     view: &mut OrderRevisionProposalView,
     payload: &RadrootsOrderRevisionProposal,
 ) {
-    view.revision_id = Some(payload.revision_id.clone());
+    view.revision_id = Some(payload.revision_id.to_string());
     view.root_event_id = Some(payload.root_event_id.clone());
     view.prev_event_id = Some(payload.prev_event_id.clone());
     view.items = payload
         .items
         .iter()
         .map(|item| OrderDraftItemView {
-            bin_id: item.bin_id.clone(),
+            bin_id: item.bin_id.to_string(),
             bin_count: item.bin_count,
         })
         .collect();
@@ -7264,7 +7315,7 @@ fn apply_order_revision_decision_proposal(
     view: &mut OrderRevisionDecisionView,
     proposal: &OrderRevisionProposalRecord,
 ) {
-    view.revision_id = Some(proposal.payload.revision_id.clone());
+    view.revision_id = Some(proposal.payload.revision_id.to_string());
     view.root_event_id = Some(proposal.payload.root_event_id.clone());
     view.prev_event_id = Some(proposal.event_id.clone());
     view.event_id = Some(proposal.event_id.clone());
@@ -7279,7 +7330,7 @@ fn apply_order_revision_decision_payload(
     proposal: &OrderRevisionProposalRecord,
     payload: &RadrootsOrderRevisionDecision,
 ) {
-    view.revision_id = Some(payload.revision_id.clone());
+    view.revision_id = Some(payload.revision_id.to_string());
     view.root_event_id = Some(payload.root_event_id.clone());
     view.prev_event_id = Some(payload.prev_event_id.clone());
     view.decision = Some(
@@ -7345,10 +7396,13 @@ fn order_fulfillment_payload_from_status(
     fulfillment_state: RadrootsOrderFulfillmentState,
 ) -> Result<RadrootsOrderFulfillmentUpdate, RuntimeError> {
     Ok(RadrootsOrderFulfillmentUpdate {
-        order_id: status.order_id.clone(),
-        listing_addr: status.listing_addr.clone().ok_or_else(|| {
-            RuntimeError::Config("accepted order is missing listing_addr".to_owned())
-        })?,
+        order_id: protocol_order_id(status.order_id.as_str(), "order_id")?,
+        listing_addr: protocol_listing_addr(
+            status.listing_addr.as_deref().ok_or_else(|| {
+                RuntimeError::Config("accepted order is missing listing_addr".to_owned())
+            })?,
+            "listing_addr",
+        )?,
         buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
             RuntimeError::Config("accepted order is missing buyer_pubkey".to_owned())
         })?,
@@ -7382,10 +7436,13 @@ fn order_cancellation_payload_from_status(
     status: &OrderStatusView,
 ) -> Result<RadrootsOrderCancellation, RuntimeError> {
     Ok(RadrootsOrderCancellation {
-        order_id: status.order_id.clone(),
-        listing_addr: status.listing_addr.clone().ok_or_else(|| {
-            RuntimeError::Config("cancellable order is missing listing_addr".to_owned())
-        })?,
+        order_id: protocol_order_id(status.order_id.as_str(), "order_id")?,
+        listing_addr: protocol_listing_addr(
+            status.listing_addr.as_deref().ok_or_else(|| {
+                RuntimeError::Config("cancellable order is missing listing_addr".to_owned())
+            })?,
+            "listing_addr",
+        )?,
         buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
             RuntimeError::Config("cancellable order is missing buyer_pubkey".to_owned())
         })?,
@@ -7415,10 +7472,13 @@ fn order_receipt_payload_from_status(
     status: &OrderStatusView,
 ) -> Result<RadrootsOrderReceipt, RuntimeError> {
     Ok(RadrootsOrderReceipt {
-        order_id: status.order_id.clone(),
-        listing_addr: status.listing_addr.clone().ok_or_else(|| {
-            RuntimeError::Config("receiptable order is missing listing_addr".to_owned())
-        })?,
+        order_id: protocol_order_id(status.order_id.as_str(), "order_id")?,
+        listing_addr: protocol_listing_addr(
+            status.listing_addr.as_deref().ok_or_else(|| {
+                RuntimeError::Config("receiptable order is missing listing_addr".to_owned())
+            })?,
+            "listing_addr",
+        )?,
         buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
             RuntimeError::Config("receiptable order is missing buyer_pubkey".to_owned())
         })?,
@@ -7486,10 +7546,13 @@ fn order_payment_payload_from_status(
         ));
     }
     Ok(RadrootsOrderPaymentRecord {
-        order_id: status.order_id.clone(),
-        listing_addr: status.listing_addr.clone().ok_or_else(|| {
-            RuntimeError::Config("payable order is missing listing_addr".to_owned())
-        })?,
+        order_id: protocol_order_id(status.order_id.as_str(), "order_id")?,
+        listing_addr: protocol_listing_addr(
+            status.listing_addr.as_deref().ok_or_else(|| {
+                RuntimeError::Config("payable order is missing listing_addr".to_owned())
+            })?,
+            "listing_addr",
+        )?,
         buyer_pubkey: status.buyer_pubkey.clone().ok_or_else(|| {
             RuntimeError::Config("payable order is missing buyer_pubkey".to_owned())
         })?,
@@ -7505,8 +7568,12 @@ fn order_payment_payload_from_status(
         agreement_event_id,
         quote_id: economics.quote_id.clone(),
         quote_version: economics.quote_version,
-        economics_digest: radroots_order_economics_digest(economics)
-            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        economics_digest: protocol_economics_digest(
+            radroots_order_economics_digest(economics)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?
+                .as_str(),
+            "economics_digest",
+        )?,
         amount,
         currency,
         method: parse_payment_method(args.method.as_str())?,
@@ -7557,10 +7624,13 @@ fn order_settlement_payload_from_status(
     }
     let decision = settlement_decision_protocol(args.decision);
     Ok(RadrootsOrderSettlementDecision {
-        order_id: status.order_id.clone(),
-        listing_addr: status.listing_addr.clone().ok_or_else(|| {
-            RuntimeError::Config("settleable order is missing listing_addr".to_owned())
-        })?,
+        order_id: protocol_order_id(status.order_id.as_str(), "order_id")?,
+        listing_addr: protocol_listing_addr(
+            status.listing_addr.as_deref().ok_or_else(|| {
+                RuntimeError::Config("settleable order is missing listing_addr".to_owned())
+            })?,
+            "listing_addr",
+        )?,
         seller_pubkey: status.seller_pubkey.clone().ok_or_else(|| {
             RuntimeError::Config("settleable order is missing seller_pubkey".to_owned())
         })?,
@@ -7575,15 +7645,21 @@ fn order_settlement_payload_from_status(
             RuntimeError::Config("settleable order is missing agreement_event_id".to_owned())
         })?,
         payment_event_id,
-        quote_id: payment.quote_id.clone().ok_or_else(|| {
-            RuntimeError::Config("settleable order is missing quote_id".to_owned())
-        })?,
+        quote_id: protocol_quote_id(
+            payment.quote_id.as_deref().ok_or_else(|| {
+                RuntimeError::Config("settleable order is missing quote_id".to_owned())
+            })?,
+            "quote_id",
+        )?,
         quote_version: payment.quote_version.ok_or_else(|| {
             RuntimeError::Config("settleable order is missing quote_version".to_owned())
         })?,
-        economics_digest: payment.economics_digest.clone().ok_or_else(|| {
-            RuntimeError::Config("settleable order is missing economics_digest".to_owned())
-        })?,
+        economics_digest: protocol_economics_digest(
+            payment.economics_digest.as_deref().ok_or_else(|| {
+                RuntimeError::Config("settleable order is missing economics_digest".to_owned())
+            })?,
+            "economics_digest",
+        )?,
         amount: payment
             .amount
             .ok_or_else(|| RuntimeError::Config("settleable order is missing amount".to_owned()))?,
@@ -7622,9 +7698,9 @@ fn apply_order_payment_payload(view: &mut OrderPaymentView, payload: &RadrootsOr
     view.root_event_id = Some(payload.root_event_id.clone());
     view.prev_event_id = Some(payload.previous_event_id.clone());
     view.agreement_event_id = Some(payload.agreement_event_id.clone());
-    view.quote_id = Some(payload.quote_id.clone());
+    view.quote_id = Some(payload.quote_id.to_string());
     view.quote_version = Some(payload.quote_version);
-    view.economics_digest = Some(payload.economics_digest.clone());
+    view.economics_digest = Some(payload.economics_digest.to_string());
     view.amount = Some(payload.amount);
     view.currency = Some(payload.currency);
     view.method = Some(payload.method);
@@ -7640,9 +7716,9 @@ fn apply_order_settlement_payload(
     view.prev_event_id = Some(payload.previous_event_id.clone());
     view.payment_event_id = Some(payload.payment_event_id.clone());
     view.agreement_event_id = Some(payload.agreement_event_id.clone());
-    view.quote_id = Some(payload.quote_id.clone());
+    view.quote_id = Some(payload.quote_id.to_string());
     view.quote_version = Some(payload.quote_version);
-    view.economics_digest = Some(payload.economics_digest.clone());
+    view.economics_digest = Some(payload.economics_digest.to_string());
     view.amount = Some(payload.amount);
     view.currency = Some(payload.currency);
     view.decision = Some(payload.decision);
@@ -7795,7 +7871,7 @@ fn published_order_revision_decision_view(
     let mut view = order_revision_decision_base_view(config, args, state, false);
     apply_order_revision_decision_status(&mut view, status);
     apply_order_revision_decision_payload(&mut view, proposal, payload);
-    view.revision_id = Some(payload.revision_id.clone());
+    view.revision_id = Some(payload.revision_id.to_string());
     view.root_event_id = Some(payload.root_event_id.clone());
     view.prev_event_id = Some(payload.prev_event_id.clone());
     view.event_id = Some(event_id.clone());
@@ -8272,7 +8348,7 @@ fn seller_order_request_from_event(
     Ok(ResolvedSellerOrderRequest {
         request_event_id: event.id,
         listing_event_id,
-        order_id: envelope.order_id,
+        order_id: envelope.payload.order_id,
         listing_addr: envelope.payload.listing_addr,
         buyer_pubkey: envelope.payload.buyer_pubkey,
         seller_pubkey: envelope.payload.seller_pubkey,
@@ -8768,10 +8844,10 @@ fn resolve_active_listing_event_id(
         "{}:{}:{}",
         parsed.kind, parsed.seller_pubkey, parsed.listing_id
     );
-    let state = nostr_event_state::find_one(
+    let state = nostr_event_head::find_one(
         &executor,
-        &INostrEventStateFindOne::On(INostrEventStateFindOneArgs {
-            on: NostrEventStateQueryBindValues::Key { key },
+        &INostrEventHeadFindOne::On(INostrEventHeadFindOneArgs {
+            on: NostrEventHeadQueryBindValues::Key { key },
         }),
     )
     .map_err(|error| RuntimeError::Config(format!("resolve listing event state: {error:?}")))?
@@ -8961,7 +9037,7 @@ fn order_economics_from_resolved_listing(
             unit_price_amount * quantity_amount * RadrootsCoreDecimal::from(item.bin_count);
         subtotal_amount = subtotal_amount + line_amount;
         economic_items.push(RadrootsOrderEconomicItem {
-            bin_id: item.bin_id.clone(),
+            bin_id: protocol_inventory_bin_id(item.bin_id.as_str(), "order item bin_id")?,
             bin_count: item.bin_count,
             quantity_amount,
             quantity_unit,
@@ -8982,7 +9058,7 @@ fn order_economics_from_resolved_listing(
     let adjustments = basket_adjustment_lines(adjustments)?;
     let zero = RadrootsCoreMoney::zero(currency);
     let mut economics = RadrootsOrderEconomics {
-        quote_id: format!("quote_{order_id}"),
+        quote_id: protocol_quote_id(format!("quote_{order_id}").as_str(), "quote_id")?,
         quote_version: 1,
         pricing_basis: RadrootsOrderPricingBasis::ListingEvent,
         currency,
@@ -11446,21 +11522,27 @@ fn canonical_order_request_payload_from_loaded(
         loaded.document.order.economics.clone().ok_or_else(|| {
             RuntimeError::Config("order draft is missing quote economics".to_owned())
         })?;
-    let payload = RadrootsOrderRequest {
-        order_id: loaded.document.order.order_id.clone(),
-        listing_addr: loaded.document.order.listing_addr.clone(),
-        buyer_pubkey: loaded.document.order.buyer_pubkey.clone(),
-        seller_pubkey: loaded.document.order.seller_pubkey.clone(),
-        items: loaded
-            .document
-            .order
-            .items
-            .iter()
-            .map(|item| RadrootsOrderItem {
-                bin_id: item.bin_id.clone(),
+    let items = loaded
+        .document
+        .order
+        .items
+        .iter()
+        .map(|item| {
+            Ok(RadrootsOrderItem {
+                bin_id: protocol_inventory_bin_id(item.bin_id.as_str(), "order item bin_id")?,
                 bin_count: item.bin_count,
             })
-            .collect(),
+        })
+        .collect::<Result<Vec<_>, RuntimeError>>()?;
+    let payload = RadrootsOrderRequest {
+        order_id: protocol_order_id(loaded.document.order.order_id.as_str(), "order_id")?,
+        listing_addr: protocol_listing_addr(
+            loaded.document.order.listing_addr.as_str(),
+            "listing_addr",
+        )?,
+        buyer_pubkey: loaded.document.order.buyer_pubkey.clone(),
+        seller_pubkey: loaded.document.order.seller_pubkey.clone(),
+        items,
         economics,
     };
     canonicalize_order_request_for_signer(payload, signer_pubkey)
@@ -12342,6 +12424,10 @@ mod tests {
         RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreMoney, RadrootsCoreUnit,
     };
     use radroots_events::RadrootsNostrEventPtr;
+    use radroots_events::ids::{
+        RadrootsEconomicsDigest, RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId,
+        RadrootsOrderQuoteId, RadrootsOrderRevisionId,
+    };
     use radroots_events::kinds::{
         KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_FULFILLMENT_UPDATE,
         KIND_ORDER_PAYMENT_RECORD, KIND_ORDER_RECEIPT, KIND_ORDER_REVISION_DECISION,
@@ -12425,6 +12511,30 @@ mod tests {
         RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::direct_relay::DirectRelayFetchReceipt;
+
+    fn test_order_id(value: &str) -> RadrootsOrderId {
+        value.parse().expect("valid order id")
+    }
+
+    fn test_listing_addr(value: &str) -> RadrootsListingAddress {
+        value.parse().expect("valid listing address")
+    }
+
+    fn test_inventory_bin_id(value: &str) -> RadrootsInventoryBinId {
+        value.parse().expect("valid inventory bin id")
+    }
+
+    fn test_order_quote_id(value: &str) -> RadrootsOrderQuoteId {
+        value.parse().expect("valid order quote id")
+    }
+
+    fn test_order_revision_id(value: &str) -> RadrootsOrderRevisionId {
+        value.parse().expect("valid order revision id")
+    }
+
+    fn test_economics_digest(value: &str) -> RadrootsEconomicsDigest {
+        value.parse().expect("valid economics digest")
+    }
 
     #[test]
     fn generated_order_id_uses_stable_prefix() {
@@ -12754,12 +12864,12 @@ mod tests {
         let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
         let listing_event_id = "1".repeat(64);
         let payload = RadrootsOrderRequest {
-            order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
-            listing_addr: listing_addr.clone(),
+            order_id: test_order_id("ord_AAAAAAAAAAAAAAAAAAAAAg"),
+            listing_addr: test_listing_addr(listing_addr.as_str()),
             buyer_pubkey: buyer_pubkey.clone(),
             seller_pubkey: seller_pubkey.clone(),
             items: vec![RadrootsOrderItem {
-                bin_id: "bin-1".to_owned(),
+                bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,
             }],
             economics: sample_order_economics("ord_AAAAAAAAAAAAAAAAAAAAAg", "bin-1", 2),
@@ -12834,7 +12944,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -12891,7 +13001,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -12955,7 +13065,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -13017,7 +13127,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -13083,7 +13193,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -13152,7 +13262,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -13227,7 +13337,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -13278,7 +13388,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -13392,7 +13502,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -13457,7 +13567,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -14303,7 +14413,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -14503,7 +14613,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -14647,7 +14757,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -14713,7 +14823,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -14811,7 +14921,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -14873,7 +14983,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -14931,7 +15041,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -14994,7 +15104,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15084,7 +15194,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15161,7 +15271,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15255,7 +15365,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15333,7 +15443,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15413,7 +15523,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15490,7 +15600,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15567,7 +15677,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15636,7 +15746,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15705,7 +15815,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15752,7 +15862,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15797,7 +15907,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15854,7 +15964,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15913,7 +16023,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -15971,7 +16081,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16022,7 +16132,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16109,7 +16219,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16188,7 +16298,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16250,7 +16360,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16307,7 +16417,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16378,7 +16488,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16434,7 +16544,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16492,7 +16602,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16555,7 +16665,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16618,7 +16728,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16692,7 +16802,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16765,7 +16875,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16818,7 +16928,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16886,7 +16996,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -16963,7 +17073,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -17042,7 +17152,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -17255,7 +17365,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -17333,7 +17443,7 @@ mod tests {
             wrong_buyer.public_key_hex().as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -17378,7 +17488,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -17445,7 +17555,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -17546,12 +17656,12 @@ mod tests {
         let existing_request = ResolvedSellerOrderRequest {
             request_event_id: existing_request_event.id.to_string(),
             listing_event_id: Some(fixture.listing_event_id.clone()),
-            order_id: existing_order_id.to_owned(),
-            listing_addr: fixture.listing_addr.clone(),
+            order_id: test_order_id(existing_order_id),
+            listing_addr: test_listing_addr(fixture.listing_addr.as_str()),
             buyer_pubkey: fixture.buyer_pubkey.clone(),
             seller_pubkey: fixture.seller_pubkey.clone(),
             items: vec![RadrootsOrderItem {
-                bin_id: "bin-1".to_owned(),
+                bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,
             }],
             economics: sample_order_economics(existing_order_id, "bin-1", 2),
@@ -17644,12 +17754,12 @@ mod tests {
         let existing_request = ResolvedSellerOrderRequest {
             request_event_id: existing_request_event.id.to_string(),
             listing_event_id: Some(fixture.listing_event_id.clone()),
-            order_id: existing_order_id.to_owned(),
-            listing_addr: fixture.listing_addr.clone(),
+            order_id: test_order_id(existing_order_id),
+            listing_addr: test_listing_addr(fixture.listing_addr.as_str()),
             buyer_pubkey: fixture.buyer_pubkey.clone(),
             seller_pubkey: fixture.seller_pubkey.clone(),
             items: vec![RadrootsOrderItem {
-                bin_id: "bin-1".to_owned(),
+                bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,
             }],
             economics: sample_order_economics(existing_order_id, "bin-1", 2),
@@ -17741,7 +17851,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 1,
                 }],
             },
@@ -17823,7 +17933,7 @@ mod tests {
             fixture.seller_pubkey.as_str(),
             RadrootsOrderDecisionOutcome::Accepted {
                 inventory_commitments: vec![RadrootsOrderInventoryCommitment {
-                    bin_id: "bin-1".to_owned(),
+                    bin_id: test_inventory_bin_id("bin-1"),
                     bin_count: 2,
                 }],
             },
@@ -18201,12 +18311,12 @@ mod tests {
         let unit_price_amount = RadrootsCoreDecimal::from(unit_price);
         let line_amount = unit_price_amount * RadrootsCoreDecimal::from(bin_count);
         RadrootsOrderEconomics {
-            quote_id: format!("quote_{order_id}"),
+            quote_id: test_order_quote_id(format!("quote_{order_id}").as_str()),
             quote_version: 1,
             pricing_basis: RadrootsOrderPricingBasis::ListingEvent,
             currency,
             items: vec![RadrootsOrderEconomicItem {
-                bin_id: bin_id.to_owned(),
+                bin_id: test_inventory_bin_id(bin_id),
                 bin_count,
                 quantity_amount: RadrootsCoreDecimal::ONE,
                 quantity_unit: RadrootsCoreUnit::Each,
@@ -18503,8 +18613,8 @@ mod tests {
         decision: RadrootsOrderDecisionOutcome,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let payload = RadrootsOrderDecision {
-            order_id: order_id.to_owned(),
-            listing_addr: listing_addr.to_owned(),
+            order_id: test_order_id(order_id),
+            listing_addr: test_listing_addr(listing_addr),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
             decision,
@@ -18541,19 +18651,19 @@ mod tests {
         bin_count: u32,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let mut economics = sample_order_economics(order_id, "bin-1", bin_count);
-        economics.quote_id = "revision_rev_test".to_owned();
+        economics.quote_id = test_order_quote_id("revision_rev_test");
         economics.quote_version = 2;
         economics.canonicalize();
         let payload = RadrootsOrderRevisionProposal {
-            revision_id: "rev_test".to_owned(),
-            order_id: order_id.to_owned(),
-            listing_addr: listing_addr.to_owned(),
+            revision_id: test_order_revision_id("rev_test"),
+            order_id: test_order_id(order_id),
+            listing_addr: test_listing_addr(listing_addr),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
             root_event_id: request_event.id.to_string(),
             prev_event_id: decision_event.id.to_string(),
             items: vec![RadrootsOrderItem {
-                bin_id: "bin-1".to_owned(),
+                bin_id: test_inventory_bin_id("bin-1"),
                 bin_count,
             }],
             economics,
@@ -18612,8 +18722,8 @@ mod tests {
         status: RadrootsOrderFulfillmentState,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let payload = RadrootsOrderFulfillmentUpdate {
-            order_id: order_id.to_owned(),
-            listing_addr: listing_addr.to_owned(),
+            order_id: test_order_id(order_id),
+            listing_addr: test_listing_addr(listing_addr),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
             status,
@@ -18643,8 +18753,8 @@ mod tests {
         reason: &str,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let payload = RadrootsOrderCancellation {
-            order_id: order_id.to_owned(),
-            listing_addr: listing_addr.to_owned(),
+            order_id: test_order_id(order_id),
+            listing_addr: test_listing_addr(listing_addr),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
             reason: reason.to_owned(),
@@ -18675,8 +18785,8 @@ mod tests {
         issue: Option<&str>,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let payload = RadrootsOrderReceipt {
-            order_id: order_id.to_owned(),
-            listing_addr: listing_addr.to_owned(),
+            order_id: test_order_id(order_id),
+            listing_addr: test_listing_addr(listing_addr),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
             received,
@@ -18706,8 +18816,8 @@ mod tests {
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let economics = sample_order_economics(order_id, "bin-1", 2);
         let payload = RadrootsOrderPaymentRecord {
-            order_id: order_id.to_owned(),
-            listing_addr: listing_addr.to_owned(),
+            order_id: test_order_id(order_id),
+            listing_addr: test_listing_addr(listing_addr),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
             root_event_id: request_event.id.to_string(),
@@ -18715,8 +18825,11 @@ mod tests {
             agreement_event_id: agreement_event.id.to_string(),
             quote_id: economics.quote_id.clone(),
             quote_version: economics.quote_version,
-            economics_digest: radroots_trade::order::radroots_order_economics_digest(&economics)
-                .expect("economics digest"),
+            economics_digest: test_economics_digest(
+                radroots_trade::order::radroots_order_economics_digest(&economics)
+                    .expect("economics digest")
+                    .as_str(),
+            ),
             amount: economics.total.amount,
             currency: economics.total.currency,
             method: RadrootsOrderPaymentMethod::ManualTransfer,
@@ -18783,12 +18896,12 @@ mod tests {
         listing_event_id: &str,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let payload = RadrootsOrderRequest {
-            order_id: order_id.to_owned(),
-            listing_addr: listing_addr.to_owned(),
+            order_id: test_order_id(order_id),
+            listing_addr: test_listing_addr(listing_addr),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
             items: vec![RadrootsOrderItem {
-                bin_id: "bin-1".to_owned(),
+                bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,
             }],
             economics: sample_order_economics(order_id, "bin-1", 2),
@@ -18836,12 +18949,12 @@ mod tests {
         economics: RadrootsOrderEconomics,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let payload = RadrootsOrderRequest {
-            order_id: order_id.to_owned(),
-            listing_addr: listing_addr.to_owned(),
+            order_id: test_order_id(order_id),
+            listing_addr: test_listing_addr(listing_addr),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
             items: vec![RadrootsOrderItem {
-                bin_id: "bin-1".to_owned(),
+                bin_id: test_inventory_bin_id("bin-1"),
                 bin_count: 2,
             }],
             economics,

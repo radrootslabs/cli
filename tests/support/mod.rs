@@ -420,7 +420,7 @@ pub fn replace_latest_listing_event_id(
     let params = serde_json::to_string(&vec![event_id, key.as_str()]).expect("update params");
     executor
         .exec(
-            "UPDATE nostr_event_state SET last_event_id = ? WHERE key = ?;",
+            "UPDATE nostr_event_head SET last_event_id = ? WHERE key = ?;",
             params.as_str(),
         )
         .expect("update latest listing event id");

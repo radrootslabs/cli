@@ -11,6 +11,7 @@ use radroots_core::{
 };
 use radroots_events::RadrootsNostrEvent;
 use radroots_events::farm::RadrootsFarmRef;
+use radroots_events::ids::{RadrootsDTag, RadrootsInventoryBinId};
 use radroots_events::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
 use radroots_events::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingBin,
@@ -76,6 +77,21 @@ const CANONICAL_OWNER_PUBKEY_REQUIRED_REASON: &str = "canonical hex pubkey requi
 const APP_RECORD_LIST_LIMIT: u32 = 500;
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn protocol_d_tag(value: &str, field: &str) -> Result<RadrootsDTag, RuntimeError> {
+    value
+        .parse()
+        .map_err(|error| RuntimeError::Config(format!("{field} is not a valid d tag: {error}")))
+}
+
+fn protocol_inventory_bin_id(
+    value: &str,
+    field: &str,
+) -> Result<RadrootsInventoryBinId, RuntimeError> {
+    value.parse().map_err(|error| {
+        RuntimeError::Config(format!("{field} is not a valid inventory bin id: {error}"))
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2206,9 +2222,25 @@ fn canonicalize_draft(
         draft.primary_bin.bin_id.trim(),
         price_currency,
     )?;
+    let primary_bin_id =
+        protocol_inventory_bin_id(draft.primary_bin.bin_id.trim(), "primary_bin.bin_id").map_err(
+            |error| {
+                issue_for_field(
+                    contents,
+                    "primary_bin.bin_id",
+                    format!("invalid primary_bin bin id: {error}"),
+                )
+            },
+        )?;
 
     let listing = RadrootsListing {
-        d_tag: listing_id.clone(),
+        d_tag: protocol_d_tag(listing_id.as_str(), "listing d_tag").map_err(|error| {
+            issue_for_field(
+                contents,
+                "listing.d_tag",
+                format!("invalid listing d_tag: {error}"),
+            )
+        })?,
         published_at: None,
         farm: RadrootsFarmRef {
             pubkey: seller_pubkey.clone(),
@@ -2225,9 +2257,9 @@ fn canonicalize_draft(
             profile: None,
             year: None,
         },
-        primary_bin_id: draft.primary_bin.bin_id.trim().to_owned(),
+        primary_bin_id: primary_bin_id.clone(),
         bins: vec![RadrootsListingBin {
-            bin_id: draft.primary_bin.bin_id.trim().to_owned(),
+            bin_id: primary_bin_id,
             quantity,
             price_per_canonical_unit: price,
             display_amount: None,
@@ -3410,7 +3442,7 @@ mod tests {
     use radroots_events_codec::d_tag::is_d_tag_base64url;
     use radroots_events_codec::wire::WireEventParts;
     use radroots_identity::RadrootsIdentity;
-    use radroots_nostr::prelude::radroots_nostr_build_event;
+    use radroots_nostr::prelude::{RadrootsNostrTimestamp, radroots_nostr_build_event};
 
     #[test]
     fn generated_listing_d_tag_is_valid_base64url() {
@@ -3513,6 +3545,7 @@ mod tests {
         let active = signed_test_listing_event_with_identity(
             &identity,
             test_listing_wire_parts(&seller_pubkey, listing_d_tag, "active", "Pasture Eggs"),
+            1_700_000_001,
         );
         let active_view =
             ingest_listing_event_into_local_replica(&replica, &active, Some(listing_addr.clone()));
@@ -3534,6 +3567,7 @@ mod tests {
         let updated = signed_test_listing_event_with_identity(
             &identity,
             test_listing_wire_parts(&seller_pubkey, listing_d_tag, "active", "Market Eggs"),
+            1_700_000_002,
         );
         let updated_view =
             ingest_listing_event_into_local_replica(&replica, &updated, Some(listing_addr.clone()));
@@ -3548,6 +3582,7 @@ mod tests {
         let archived = signed_test_listing_event_with_identity(
             &identity,
             test_listing_wire_parts(&seller_pubkey, listing_d_tag, "archived", "Market Eggs"),
+            1_700_000_003,
         );
         let archived_view =
             ingest_listing_event_into_local_replica(&replica, &archived, Some(listing_addr));
@@ -3697,15 +3732,17 @@ mod tests {
         parts: WireEventParts,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let identity = RadrootsIdentity::generate();
-        signed_test_listing_event_with_identity(&identity, parts)
+        signed_test_listing_event_with_identity(&identity, parts, 1_700_000_001)
     }
 
     fn signed_test_listing_event_with_identity(
         identity: &RadrootsIdentity,
         parts: WireEventParts,
+        created_at: u64,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
             .expect("event builder")
+            .custom_created_at(RadrootsNostrTimestamp::from_secs(created_at))
             .sign_with_keys(identity.keys())
             .expect("signed event")
     }

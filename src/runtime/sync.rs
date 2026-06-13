@@ -17,7 +17,7 @@ use radroots_nostr::prelude::{
 use radroots_replica_db::{ReplicaSql, migrations};
 use radroots_replica_sync::{
     RadrootsReplicaEventsError, RadrootsReplicaIngestOutcome, RadrootsReplicaPendingPublishEvent,
-    radroots_replica_ingest_event, radroots_replica_ingest_event_state,
+    radroots_replica_ingest_event, radroots_replica_ingest_event_head,
     radroots_replica_pending_publish_batch, radroots_replica_sync_status,
 };
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
@@ -439,12 +439,7 @@ where
                 push_unique_many(&mut acknowledged_relays, receipt.acknowledged_relays.iter());
                 failed_relays.extend(relay_failures(receipt.failed_relays));
                 let signed_event = radroots_event_from_nostr(&receipt.event);
-                radroots_replica_ingest_event_state(
-                    &executor,
-                    &signed_event,
-                    event.d_tag.as_str(),
-                    event.content_hash.as_str(),
-                )?;
+                radroots_replica_ingest_event_head(&executor, &signed_event)?;
                 counts.published_count += 1;
             }
             Err(error) => {

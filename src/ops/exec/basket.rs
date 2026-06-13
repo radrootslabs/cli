@@ -536,7 +536,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
         let quote = BasketQuote {
             quote_id: quote_economics
                 .as_ref()
-                .map(|economics| economics.quote_id.clone())
+                .map(|economics| economics.quote_id.to_string())
                 .unwrap_or_else(|| format!("quote_{}", loaded.document.basket.basket_id)),
             quote_version: quote_economics
                 .as_ref()
