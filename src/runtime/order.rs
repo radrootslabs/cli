@@ -13,38 +13,34 @@ use radroots_core::{
 };
 use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::kinds::{
-    KIND_LISTING, KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION,
-    KIND_TRADE_ORDER_REQUEST, KIND_TRADE_ORDER_REVISION, KIND_TRADE_ORDER_REVISION_RESPONSE,
-    KIND_TRADE_PAYMENT_RECORDED, KIND_TRADE_RECEIPT, KIND_TRADE_SETTLEMENT_DECISION,
+    KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_FULFILLMENT_UPDATE,
+    KIND_ORDER_PAYMENT_RECORD, KIND_ORDER_RECEIPT, KIND_ORDER_REQUEST,
+    KIND_ORDER_REVISION_DECISION, KIND_ORDER_REVISION_PROPOSAL, KIND_ORDER_SETTLEMENT_DECISION,
 };
 use radroots_events::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingStatus,
 };
-use radroots_events::trade::{
-    RadrootsActiveTradeFulfillmentState, RadrootsActiveTradeMessageType, RadrootsTradeBuyerReceipt,
-    RadrootsTradeEconomicActor, RadrootsTradeEconomicEffect, RadrootsTradeEconomicLineKind,
-    RadrootsTradeFulfillmentUpdated, RadrootsTradeInventoryCommitment, RadrootsTradeOrderCancelled,
-    RadrootsTradeOrderDecision, RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderEconomicItem,
-    RadrootsTradeOrderEconomicLine, RadrootsTradeOrderEconomics, RadrootsTradeOrderItem,
-    RadrootsTradeOrderRequested, RadrootsTradeOrderRevisionDecision,
-    RadrootsTradeOrderRevisionDecisionEvent, RadrootsTradeOrderRevisionProposed,
-    RadrootsTradePaymentMethod, RadrootsTradePaymentRecorded, RadrootsTradePricingBasis,
-    RadrootsTradeSettlementDecision, RadrootsTradeSettlementDecisionEvent,
+use radroots_events::order::{
+    RadrootsOrderCancellation, RadrootsOrderDecision, RadrootsOrderDecisionOutcome,
+    RadrootsOrderEconomicActor, RadrootsOrderEconomicEffect, RadrootsOrderEconomicItem,
+    RadrootsOrderEconomicLine, RadrootsOrderEconomicLineKind, RadrootsOrderEconomics,
+    RadrootsOrderEventType, RadrootsOrderFulfillmentState, RadrootsOrderFulfillmentUpdate,
+    RadrootsOrderInventoryCommitment, RadrootsOrderItem, RadrootsOrderPaymentMethod,
+    RadrootsOrderPaymentRecord, RadrootsOrderPricingBasis, RadrootsOrderReceipt,
+    RadrootsOrderRequest, RadrootsOrderRevisionDecision, RadrootsOrderRevisionOutcome,
+    RadrootsOrderRevisionProposal, RadrootsOrderSettlementDecision, RadrootsOrderSettlementOutcome,
 };
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::decode::listing_from_event;
-use radroots_events_codec::trade::{
-    RadrootsTradeListingAddress, active_trade_buyer_receipt_event_build,
-    active_trade_buyer_receipt_from_event, active_trade_envelope_from_event,
-    active_trade_event_context_from_tags, active_trade_fulfillment_update_event_build,
-    active_trade_fulfillment_update_from_event, active_trade_order_cancel_event_build,
-    active_trade_order_cancel_from_event, active_trade_order_decision_event_build,
-    active_trade_order_request_from_event, active_trade_order_revision_decision_event_build,
-    active_trade_order_revision_decision_from_event,
-    active_trade_order_revision_proposal_event_build,
-    active_trade_order_revision_proposal_from_event, active_trade_payment_recorded_event_build,
-    active_trade_payment_recorded_from_event, active_trade_settlement_decision_event_build,
-    active_trade_settlement_decision_from_event,
+use radroots_events_codec::order::{
+    RadrootsOrderListingAddress, order_cancellation_event_build, order_cancellation_from_event,
+    order_decision_event_build, order_envelope_from_event, order_event_context_from_tags,
+    order_fulfillment_update_event_build, order_fulfillment_update_from_event,
+    order_payment_record_event_build, order_payment_record_from_event, order_receipt_event_build,
+    order_receipt_from_event, order_request_from_event, order_revision_decision_event_build,
+    order_revision_decision_from_event, order_revision_proposal_event_build,
+    order_revision_proposal_from_event, order_settlement_decision_event_build,
+    order_settlement_decision_from_event,
 };
 use radroots_events_codec::wire::WireEventParts;
 use radroots_local_events::{
@@ -71,17 +67,15 @@ use radroots_sdk::{
 };
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
-    RadrootsActiveOrderCancellationRecord, RadrootsActiveOrderDecisionRecord,
-    RadrootsActiveOrderFulfillmentRecord, RadrootsActiveOrderPaymentProjection,
-    RadrootsActiveOrderPaymentRecord, RadrootsActiveOrderPaymentState,
-    RadrootsActiveOrderReceiptRecord, RadrootsActiveOrderReducerIssue,
-    RadrootsActiveOrderRequestRecord, RadrootsActiveOrderRevisionDecisionRecord,
-    RadrootsActiveOrderRevisionProposalRecord, RadrootsActiveOrderSettlementRecord,
-    RadrootsActiveOrderSettlementState, RadrootsActiveOrderStatus,
     RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryAccountingProjection,
-    RadrootsListingInventoryBinAvailability, canonicalize_active_order_decision_for_signer,
-    canonicalize_active_order_request_for_signer, radroots_trade_order_economics_digest,
-    reduce_active_order_events, reduce_listing_inventory_accounting,
+    RadrootsListingInventoryBinAvailability, RadrootsOrderCancellationRecord,
+    RadrootsOrderDecisionRecord, RadrootsOrderFulfillmentRecord, RadrootsOrderIssue,
+    RadrootsOrderPaymentEventRecord, RadrootsOrderPaymentProjection, RadrootsOrderPaymentState,
+    RadrootsOrderReceiptRecord, RadrootsOrderRequestRecord, RadrootsOrderRevisionDecisionRecord,
+    RadrootsOrderRevisionProposalRecord, RadrootsOrderSettlementRecord,
+    RadrootsOrderSettlementState, RadrootsOrderStatus, canonicalize_order_decision_for_signer,
+    canonicalize_order_request_for_signer, radroots_order_economics_digest,
+    reduce_listing_inventory_accounting, reduce_order_events,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -178,7 +172,7 @@ struct OrderDraft {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     items: Vec<OrderDraftItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    economics: Option<RadrootsTradeOrderEconomics>,
+    economics: Option<RadrootsOrderEconomics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,21 +276,21 @@ struct ResolvedSellerOrderRequest {
     listing_addr: String,
     buyer_pubkey: String,
     seller_pubkey: String,
-    items: Vec<RadrootsTradeOrderItem>,
-    economics: RadrootsTradeOrderEconomics,
+    items: Vec<RadrootsOrderItem>,
+    economics: RadrootsOrderEconomics,
 }
 
 #[derive(Debug, Clone)]
 struct ResolvedOrderSubmitRequest {
     request_event_id: String,
     listing_event_id: Option<String>,
-    payload: RadrootsTradeOrderRequested,
+    payload: RadrootsOrderRequest,
 }
 
 #[derive(Debug, Clone)]
 struct ResolvedAccountingRequest {
     listing_event_id: Option<String>,
-    record: RadrootsActiveOrderRequestRecord,
+    record: RadrootsOrderRequestRecord,
 }
 
 #[derive(Debug, Clone)]
@@ -1658,7 +1652,7 @@ pub fn fulfillment_update(
             let mut view =
                 order_fulfillment_base_view(config, args, "invalid", config.output.dry_run);
             view.fulfillment_state =
-                fulfillment_state_name(RadrootsActiveTradeFulfillmentState::AcceptedNotFulfilled)
+                fulfillment_state_name(RadrootsOrderFulfillmentState::AcceptedNotFulfilled)
                     .to_owned();
             view.reason = Some(
                 "`accepted_not_fulfilled` is derived from an accepted order and cannot be published"
@@ -2246,20 +2240,20 @@ pub fn status(
 enum OrderStatusRecord {
     Request {
         listing_event_id: Option<String>,
-        record: RadrootsActiveOrderRequestRecord,
+        record: RadrootsOrderRequestRecord,
     },
-    Decision(RadrootsActiveOrderDecisionRecord),
+    Decision(RadrootsOrderDecisionRecord),
     RevisionProposal(OrderRevisionProposalRecord),
     RevisionDecision(OrderRevisionDecisionRecord),
-    Fulfillment(RadrootsActiveOrderFulfillmentRecord),
-    Cancellation(RadrootsActiveOrderCancellationRecord),
-    Receipt(RadrootsActiveOrderReceiptRecord),
-    Payment(RadrootsActiveOrderPaymentRecord),
-    Settlement(RadrootsActiveOrderSettlementRecord),
+    Fulfillment(RadrootsOrderFulfillmentRecord),
+    Cancellation(RadrootsOrderCancellationRecord),
+    Receipt(RadrootsOrderReceiptRecord),
+    Payment(RadrootsOrderPaymentEventRecord),
+    Settlement(RadrootsOrderSettlementRecord),
 }
 
-type OrderRevisionProposalRecord = RadrootsActiveOrderRevisionProposalRecord;
-type OrderRevisionDecisionRecord = RadrootsActiveOrderRevisionDecisionRecord;
+type OrderRevisionProposalRecord = RadrootsOrderRevisionProposalRecord;
+type OrderRevisionDecisionRecord = RadrootsOrderRevisionDecisionRecord;
 
 #[derive(Debug, Clone)]
 struct OrderRevisionProposalCandidates {
@@ -2271,7 +2265,7 @@ struct OrderRevisionProposalCandidates {
 struct OrderStatusReduction {
     view: OrderStatusView,
     fulfillment_event_id: Option<String>,
-    fulfillment_status: Option<RadrootsActiveTradeFulfillmentState>,
+    fulfillment_status: Option<RadrootsOrderFulfillmentState>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2440,7 +2434,7 @@ fn order_status_reduction_from_receipt_inner(
     let fulfillment_records = fulfillments.clone();
     let cancellation_records = cancellations.clone();
     let receipt_records = receipts.clone();
-    let projection = reduce_active_order_events(
+    let projection = reduce_order_events(
         order_id,
         requests,
         decisions.clone(),
@@ -2616,7 +2610,7 @@ fn order_status_reduction_from_receipt_inner(
 }
 
 fn order_status_request_matches_context(
-    record: &RadrootsActiveOrderRequestRecord,
+    record: &RadrootsOrderRequestRecord,
     context: OrderStatusContext<'_>,
 ) -> bool {
     if record.payload.order_id != context.order_id {
@@ -2708,7 +2702,7 @@ fn enrich_order_status_inventory(
         revision_decisions,
         fulfillments,
         cancellations,
-        Vec::<RadrootsActiveOrderReceiptRecord>::new(),
+        Vec::<RadrootsOrderReceiptRecord>::new(),
     );
     let mut relevant_event_ids = Vec::new();
     relevant_event_ids.push(decision_event_id);
@@ -2786,13 +2780,13 @@ fn fetch_listing_accounting_requests_for_status(
     seller_pubkey: &str,
     listing_addr: &str,
     listing_event_id: &str,
-) -> Result<Vec<RadrootsActiveOrderRequestRecord>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderRequestRecord>, RuntimeError> {
     let filter = order_listing_request_filter(seller_pubkey, listing_addr)?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_ORDER_REQUEST
+        if event_kind_u32(&event) != KIND_ORDER_REQUEST
             || !event_matches_tag_value(&event, "a", listing_addr)
         {
             continue;
@@ -2809,13 +2803,13 @@ fn fetch_listing_accounting_requests_for_status(
 fn fetch_listing_accounting_decisions_for_status(
     config: &RuntimeConfig,
     listing_addr: &str,
-) -> Result<Vec<RadrootsActiveOrderDecisionRecord>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderDecisionRecord>, RuntimeError> {
     let filter = order_listing_decision_filter(listing_addr)?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_ORDER_DECISION
+        if event_kind_u32(&event) != KIND_ORDER_DECISION
             || !event_matches_tag_value(&event, "a", listing_addr)
         {
             continue;
@@ -2830,13 +2824,13 @@ fn fetch_listing_accounting_decisions_for_status(
 fn fetch_listing_accounting_revision_proposals_for_status(
     config: &RuntimeConfig,
     listing_addr: &str,
-) -> Result<Vec<RadrootsActiveOrderRevisionProposalRecord>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderRevisionProposalRecord>, RuntimeError> {
     let filter = order_listing_revision_proposal_filter(listing_addr)?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_ORDER_REVISION
+        if event_kind_u32(&event) != KIND_ORDER_REVISION_PROPOSAL
             || !event_matches_tag_value(&event, "a", listing_addr)
         {
             continue;
@@ -2853,13 +2847,13 @@ fn fetch_listing_accounting_revision_proposals_for_status(
 fn fetch_listing_accounting_revision_decisions_for_status(
     config: &RuntimeConfig,
     listing_addr: &str,
-) -> Result<Vec<RadrootsActiveOrderRevisionDecisionRecord>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderRevisionDecisionRecord>, RuntimeError> {
     let filter = order_listing_revision_decision_filter(listing_addr)?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_ORDER_REVISION_RESPONSE
+        if event_kind_u32(&event) != KIND_ORDER_REVISION_DECISION
             || !event_matches_tag_value(&event, "a", listing_addr)
         {
             continue;
@@ -2876,13 +2870,13 @@ fn fetch_listing_accounting_revision_decisions_for_status(
 fn fetch_listing_accounting_fulfillments_for_status(
     config: &RuntimeConfig,
     listing_addr: &str,
-) -> Result<Vec<RadrootsActiveOrderFulfillmentRecord>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderFulfillmentRecord>, RuntimeError> {
     let filter = order_listing_fulfillment_filter(listing_addr)?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_FULFILLMENT_UPDATE
+        if event_kind_u32(&event) != KIND_ORDER_FULFILLMENT_UPDATE
             || !event_matches_tag_value(&event, "a", listing_addr)
         {
             continue;
@@ -2897,13 +2891,13 @@ fn fetch_listing_accounting_fulfillments_for_status(
 fn fetch_listing_accounting_cancellations_for_status(
     config: &RuntimeConfig,
     listing_addr: &str,
-) -> Result<Vec<RadrootsActiveOrderCancellationRecord>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderCancellationRecord>, RuntimeError> {
     let filter = order_listing_cancellation_filter(listing_addr)?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_CANCEL
+        if event_kind_u32(&event) != KIND_ORDER_CANCELLATION
             || !event_matches_tag_value(&event, "a", listing_addr)
         {
             continue;
@@ -2922,7 +2916,7 @@ fn listing_inventory_issue_involves_order(
     event_ids: &[String],
 ) -> bool {
     match issue {
-        RadrootsListingInventoryAccountingIssue::InvalidActiveOrder {
+        RadrootsListingInventoryAccountingIssue::InvalidOrder {
             order_id: issue_order_id,
             event_ids: issue_event_ids,
         } => issue_order_id == order_id || issue_event_ids.iter().any(|id| event_ids.contains(id)),
@@ -2945,7 +2939,7 @@ fn order_status_request_candidate(
     event: &RadrootsNostrEvent,
     context: OrderStatusContext<'_>,
 ) -> bool {
-    if event_kind_u32(event) != KIND_TRADE_ORDER_REQUEST
+    if event_kind_u32(event) != KIND_ORDER_REQUEST
         || !event_matches_tag_value(event, "d", context.order_id)
     {
         return false;
@@ -2973,7 +2967,7 @@ fn order_request_candidate_matches(
     event: &RadrootsNostrEvent,
     context: OrderRequestCandidateContext<'_>,
 ) -> bool {
-    if event_kind_u32(event) != KIND_TRADE_ORDER_REQUEST
+    if event_kind_u32(event) != KIND_ORDER_REQUEST
         || !event_matches_tag_value(event, "d", context.order_id)
     {
         return false;
@@ -2987,24 +2981,22 @@ fn order_status_record_from_event(
     event: &RadrootsNostrEvent,
 ) -> Result<OrderStatusRecord, RuntimeError> {
     match event_kind_u32(event) {
-        KIND_TRADE_ORDER_REQUEST => {
+        KIND_ORDER_REQUEST => {
             let event = radroots_event_from_nostr(event);
-            let envelope = active_trade_envelope_from_event::<RadrootsTradeOrderRequested>(&event)
-                .map_err(|error| {
+            let envelope =
+                order_envelope_from_event::<RadrootsOrderRequest>(&event).map_err(|error| {
                     RuntimeError::Config(format!("decode active order request event: {error}"))
                 })?;
-            if envelope.message_type != RadrootsActiveTradeMessageType::TradeOrderRequested {
+            if envelope.message_type != RadrootsOrderEventType::OrderRequested {
                 return Err(RuntimeError::Config(
                     "active order request event used the wrong message type".to_owned(),
                 ));
             }
-            let context = active_trade_event_context_from_tags(
-                RadrootsActiveTradeMessageType::TradeOrderRequested,
-                &event.tags,
-            )
-            .map_err(|error| {
-                RuntimeError::Config(format!("decode active order request tags: {error}"))
-            })?;
+            let context =
+                order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event.tags)
+                    .map_err(|error| {
+                        RuntimeError::Config(format!("decode active order request tags: {error}"))
+                    })?;
             if context.counterparty_pubkey != envelope.payload.seller_pubkey {
                 return Err(RuntimeError::Config(
                     "active order request p tag does not match seller_pubkey".to_owned(),
@@ -3023,53 +3015,47 @@ fn order_status_record_from_event(
             }
             Ok(OrderStatusRecord::Request {
                 listing_event_id: context.listing_event.as_ref().map(|event| event.id.clone()),
-                record: RadrootsActiveOrderRequestRecord {
+                record: RadrootsOrderRequestRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
                     payload: envelope.payload,
                 },
             })
         }
-        KIND_TRADE_ORDER_DECISION => {
+        KIND_ORDER_DECISION => {
             let event = radroots_event_from_nostr(event);
             let envelope =
-                active_trade_envelope_from_event::<RadrootsTradeOrderDecisionEvent>(&event)
-                    .map_err(|error| {
-                        RuntimeError::Config(format!("decode active order decision event: {error}"))
-                    })?;
-            if envelope.message_type != RadrootsActiveTradeMessageType::TradeOrderDecision {
+                order_envelope_from_event::<RadrootsOrderDecision>(&event).map_err(|error| {
+                    RuntimeError::Config(format!("decode active order decision event: {error}"))
+                })?;
+            if envelope.message_type != RadrootsOrderEventType::OrderDecision {
                 return Err(RuntimeError::Config(
                     "active order decision event used the wrong message type".to_owned(),
                 ));
             }
-            let context = active_trade_event_context_from_tags(
-                RadrootsActiveTradeMessageType::TradeOrderDecision,
-                &event.tags,
-            )
-            .map_err(|error| {
-                RuntimeError::Config(format!("decode active order decision tags: {error}"))
-            })?;
-            Ok(OrderStatusRecord::Decision(
-                RadrootsActiveOrderDecisionRecord {
-                    event_id: event.id,
-                    author_pubkey: event.author,
-                    counterparty_pubkey: context.counterparty_pubkey,
-                    root_event_id: context.root_event_id.unwrap_or_default(),
-                    prev_event_id: context.prev_event_id.unwrap_or_default(),
-                    payload: envelope.payload,
-                },
-            ))
-        }
-        KIND_TRADE_ORDER_REVISION => {
-            let event = radroots_event_from_nostr(event);
-            let envelope =
-                active_trade_order_revision_proposal_from_event(&event).map_err(|error| {
-                    RuntimeError::Config(format!(
-                        "decode active order revision proposal event: {error}"
-                    ))
+            let context =
+                order_event_context_from_tags(RadrootsOrderEventType::OrderDecision, &event.tags)
+                    .map_err(|error| {
+                    RuntimeError::Config(format!("decode active order decision tags: {error}"))
                 })?;
-            let context = active_trade_event_context_from_tags(
-                RadrootsActiveTradeMessageType::TradeOrderRevisionProposed,
+            Ok(OrderStatusRecord::Decision(RadrootsOrderDecisionRecord {
+                event_id: event.id,
+                author_pubkey: event.author,
+                counterparty_pubkey: context.counterparty_pubkey,
+                root_event_id: context.root_event_id.unwrap_or_default(),
+                prev_event_id: context.prev_event_id.unwrap_or_default(),
+                payload: envelope.payload,
+            }))
+        }
+        KIND_ORDER_REVISION_PROPOSAL => {
+            let event = radroots_event_from_nostr(event);
+            let envelope = order_revision_proposal_from_event(&event).map_err(|error| {
+                RuntimeError::Config(format!(
+                    "decode active order revision proposal event: {error}"
+                ))
+            })?;
+            let context = order_event_context_from_tags(
+                RadrootsOrderEventType::OrderRevisionProposed,
                 &event.tags,
             )
             .map_err(|error| {
@@ -3078,7 +3064,7 @@ fn order_status_record_from_event(
                 ))
             })?;
             Ok(OrderStatusRecord::RevisionProposal(
-                RadrootsActiveOrderRevisionProposalRecord {
+                RadrootsOrderRevisionProposalRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
                     counterparty_pubkey: context.counterparty_pubkey,
@@ -3088,16 +3074,15 @@ fn order_status_record_from_event(
                 },
             ))
         }
-        KIND_TRADE_ORDER_REVISION_RESPONSE => {
+        KIND_ORDER_REVISION_DECISION => {
             let event = radroots_event_from_nostr(event);
-            let envelope =
-                active_trade_order_revision_decision_from_event(&event).map_err(|error| {
-                    RuntimeError::Config(format!(
-                        "decode active order revision decision event: {error}"
-                    ))
-                })?;
-            let context = active_trade_event_context_from_tags(
-                RadrootsActiveTradeMessageType::TradeOrderRevisionDecision,
+            let envelope = order_revision_decision_from_event(&event).map_err(|error| {
+                RuntimeError::Config(format!(
+                    "decode active order revision decision event: {error}"
+                ))
+            })?;
+            let context = order_event_context_from_tags(
+                RadrootsOrderEventType::OrderRevisionDecision,
                 &event.tags,
             )
             .map_err(|error| {
@@ -3106,7 +3091,7 @@ fn order_status_record_from_event(
                 ))
             })?;
             Ok(OrderStatusRecord::RevisionDecision(
-                RadrootsActiveOrderRevisionDecisionRecord {
+                RadrootsOrderRevisionDecisionRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
                     counterparty_pubkey: context.counterparty_pubkey,
@@ -3116,20 +3101,20 @@ fn order_status_record_from_event(
                 },
             ))
         }
-        KIND_TRADE_FULFILLMENT_UPDATE => {
+        KIND_ORDER_FULFILLMENT_UPDATE => {
             let event = radroots_event_from_nostr(event);
-            let envelope = active_trade_fulfillment_update_from_event(&event).map_err(|error| {
+            let envelope = order_fulfillment_update_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!("decode active fulfillment update event: {error}"))
             })?;
-            let context = active_trade_event_context_from_tags(
-                RadrootsActiveTradeMessageType::TradeFulfillmentUpdated,
+            let context = order_event_context_from_tags(
+                RadrootsOrderEventType::FulfillmentUpdated,
                 &event.tags,
             )
             .map_err(|error| {
                 RuntimeError::Config(format!("decode active fulfillment update tags: {error}"))
             })?;
             Ok(OrderStatusRecord::Fulfillment(
-                RadrootsActiveOrderFulfillmentRecord {
+                RadrootsOrderFulfillmentRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
                     counterparty_pubkey: context.counterparty_pubkey,
@@ -3139,20 +3124,20 @@ fn order_status_record_from_event(
                 },
             ))
         }
-        KIND_TRADE_CANCEL => {
+        KIND_ORDER_CANCELLATION => {
             let event = radroots_event_from_nostr(event);
-            let envelope = active_trade_order_cancel_from_event(&event).map_err(|error| {
+            let envelope = order_cancellation_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!("decode active order cancellation event: {error}"))
             })?;
-            let context = active_trade_event_context_from_tags(
-                RadrootsActiveTradeMessageType::TradeOrderCancelled,
-                &event.tags,
-            )
-            .map_err(|error| {
-                RuntimeError::Config(format!("decode active order cancellation tags: {error}"))
-            })?;
+            let context =
+                order_event_context_from_tags(RadrootsOrderEventType::OrderCancelled, &event.tags)
+                    .map_err(|error| {
+                        RuntimeError::Config(format!(
+                            "decode active order cancellation tags: {error}"
+                        ))
+                    })?;
             Ok(OrderStatusRecord::Cancellation(
-                RadrootsActiveOrderCancellationRecord {
+                RadrootsOrderCancellationRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
                     counterparty_pubkey: context.counterparty_pubkey,
@@ -3162,43 +3147,39 @@ fn order_status_record_from_event(
                 },
             ))
         }
-        KIND_TRADE_RECEIPT => {
+        KIND_ORDER_RECEIPT => {
             let event = radroots_event_from_nostr(event);
-            let envelope = active_trade_buyer_receipt_from_event(&event).map_err(|error| {
+            let envelope = order_receipt_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!("decode active buyer receipt event: {error}"))
             })?;
-            let context = active_trade_event_context_from_tags(
-                RadrootsActiveTradeMessageType::TradeBuyerReceipt,
-                &event.tags,
-            )
-            .map_err(|error| {
-                RuntimeError::Config(format!("decode active buyer receipt tags: {error}"))
-            })?;
-            Ok(OrderStatusRecord::Receipt(
-                RadrootsActiveOrderReceiptRecord {
-                    event_id: event.id,
-                    author_pubkey: event.author,
-                    counterparty_pubkey: context.counterparty_pubkey,
-                    root_event_id: context.root_event_id.unwrap_or_default(),
-                    prev_event_id: context.prev_event_id.unwrap_or_default(),
-                    payload: envelope.payload,
-                },
-            ))
+            let context =
+                order_event_context_from_tags(RadrootsOrderEventType::BuyerReceipt, &event.tags)
+                    .map_err(|error| {
+                        RuntimeError::Config(format!("decode active buyer receipt tags: {error}"))
+                    })?;
+            Ok(OrderStatusRecord::Receipt(RadrootsOrderReceiptRecord {
+                event_id: event.id,
+                author_pubkey: event.author,
+                counterparty_pubkey: context.counterparty_pubkey,
+                root_event_id: context.root_event_id.unwrap_or_default(),
+                prev_event_id: context.prev_event_id.unwrap_or_default(),
+                payload: envelope.payload,
+            }))
         }
-        KIND_TRADE_PAYMENT_RECORDED => {
+        KIND_ORDER_PAYMENT_RECORD => {
             let event = radroots_event_from_nostr(event);
-            let envelope = active_trade_payment_recorded_from_event(&event).map_err(|error| {
+            let envelope = order_payment_record_from_event(&event).map_err(|error| {
                 RuntimeError::Config(format!("decode active payment recorded event: {error}"))
             })?;
-            let context = active_trade_event_context_from_tags(
-                RadrootsActiveTradeMessageType::TradePaymentRecorded,
-                &event.tags,
-            )
-            .map_err(|error| {
-                RuntimeError::Config(format!("decode active payment recorded tags: {error}"))
-            })?;
+            let context =
+                order_event_context_from_tags(RadrootsOrderEventType::PaymentRecorded, &event.tags)
+                    .map_err(|error| {
+                        RuntimeError::Config(format!(
+                            "decode active payment recorded tags: {error}"
+                        ))
+                    })?;
             Ok(OrderStatusRecord::Payment(
-                RadrootsActiveOrderPaymentRecord {
+                RadrootsOrderPaymentEventRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
                     counterparty_pubkey: context.counterparty_pubkey,
@@ -3208,23 +3189,20 @@ fn order_status_record_from_event(
                 },
             ))
         }
-        KIND_TRADE_SETTLEMENT_DECISION => {
+        KIND_ORDER_SETTLEMENT_DECISION => {
             let event = radroots_event_from_nostr(event);
-            let envelope =
-                active_trade_settlement_decision_from_event(&event).map_err(|error| {
-                    RuntimeError::Config(format!(
-                        "decode active settlement decision event: {error}"
-                    ))
-                })?;
-            let context = active_trade_event_context_from_tags(
-                RadrootsActiveTradeMessageType::TradeSettlementDecision,
+            let envelope = order_settlement_decision_from_event(&event).map_err(|error| {
+                RuntimeError::Config(format!("decode active settlement decision event: {error}"))
+            })?;
+            let context = order_event_context_from_tags(
+                RadrootsOrderEventType::SettlementDecision,
                 &event.tags,
             )
             .map_err(|error| {
                 RuntimeError::Config(format!("decode active settlement decision tags: {error}"))
             })?;
             Ok(OrderStatusRecord::Settlement(
-                RadrootsActiveOrderSettlementRecord {
+                RadrootsOrderSettlementRecord {
                     event_id: event.id,
                     author_pubkey: event.author,
                     counterparty_pubkey: context.counterparty_pubkey,
@@ -3247,7 +3225,7 @@ fn order_revision_proposals_from_events(
     let mut records = Vec::new();
     let mut issues = Vec::new();
     for event in events {
-        if event_kind_u32(event) != KIND_TRADE_ORDER_REVISION
+        if event_kind_u32(event) != KIND_ORDER_REVISION_PROPOSAL
             || !event_matches_tag_value(event, "d", order_id)
         {
             continue;
@@ -3274,44 +3252,44 @@ fn order_revision_proposals_from_events(
     OrderRevisionProposalCandidates { records, issues }
 }
 
-fn active_order_status_state(status: &RadrootsActiveOrderStatus) -> &'static str {
+fn active_order_status_state(status: &RadrootsOrderStatus) -> &'static str {
     match status {
-        RadrootsActiveOrderStatus::Missing => "missing",
-        RadrootsActiveOrderStatus::Requested => "requested",
-        RadrootsActiveOrderStatus::Accepted => "accepted",
-        RadrootsActiveOrderStatus::Declined => "declined",
-        RadrootsActiveOrderStatus::Cancelled => "cancelled",
-        RadrootsActiveOrderStatus::Completed => "completed",
-        RadrootsActiveOrderStatus::Disputed => "disputed",
-        RadrootsActiveOrderStatus::Invalid => "invalid",
+        RadrootsOrderStatus::Missing => "missing",
+        RadrootsOrderStatus::Requested => "requested",
+        RadrootsOrderStatus::Accepted => "accepted",
+        RadrootsOrderStatus::Declined => "declined",
+        RadrootsOrderStatus::Cancelled => "cancelled",
+        RadrootsOrderStatus::Completed => "completed",
+        RadrootsOrderStatus::Disputed => "disputed",
+        RadrootsOrderStatus::Invalid => "invalid",
     }
 }
 
-fn active_order_payment_state(status: &RadrootsActiveOrderPaymentState) -> &'static str {
+fn active_order_payment_state(status: &RadrootsOrderPaymentState) -> &'static str {
     match status {
-        RadrootsActiveOrderPaymentState::NotRecorded => "not_recorded",
-        RadrootsActiveOrderPaymentState::Recorded => "recorded",
-        RadrootsActiveOrderPaymentState::Settled => "settled",
-        RadrootsActiveOrderPaymentState::Rejected => "rejected",
-        RadrootsActiveOrderPaymentState::Invalid => "invalid",
+        RadrootsOrderPaymentState::NotRecorded => "not_recorded",
+        RadrootsOrderPaymentState::Recorded => "recorded",
+        RadrootsOrderPaymentState::Settled => "settled",
+        RadrootsOrderPaymentState::Rejected => "rejected",
+        RadrootsOrderPaymentState::Invalid => "invalid",
     }
 }
 
-fn active_order_settlement_state(status: &RadrootsActiveOrderSettlementState) -> &'static str {
+fn active_order_settlement_state(status: &RadrootsOrderSettlementState) -> &'static str {
     match status {
-        RadrootsActiveOrderSettlementState::NotRequired => "not_required",
-        RadrootsActiveOrderSettlementState::Pending => "pending",
-        RadrootsActiveOrderSettlementState::Accepted => "accepted",
-        RadrootsActiveOrderSettlementState::Rejected => "rejected",
-        RadrootsActiveOrderSettlementState::Invalid => "invalid",
+        RadrootsOrderSettlementState::NotRequired => "not_required",
+        RadrootsOrderSettlementState::Pending => "pending",
+        RadrootsOrderSettlementState::Accepted => "accepted",
+        RadrootsOrderSettlementState::Rejected => "rejected",
+        RadrootsOrderSettlementState::Invalid => "invalid",
     }
 }
 
-fn parse_payment_method(value: &str) -> Result<RadrootsTradePaymentMethod, RuntimeError> {
+fn parse_payment_method(value: &str) -> Result<RadrootsOrderPaymentMethod, RuntimeError> {
     match value.trim() {
-        "cash" => Ok(RadrootsTradePaymentMethod::Cash),
-        "manual_transfer" => Ok(RadrootsTradePaymentMethod::ManualTransfer),
-        "other" => Ok(RadrootsTradePaymentMethod::Other),
+        "cash" => Ok(RadrootsOrderPaymentMethod::Cash),
+        "manual_transfer" => Ok(RadrootsOrderPaymentMethod::ManualTransfer),
+        "other" => Ok(RadrootsOrderPaymentMethod::Other),
         other => Err(RuntimeError::Config(format!(
             "unsupported payment method `{other}`"
         ))),
@@ -3337,15 +3315,12 @@ fn parse_payment_currency(value: &str) -> Result<RadrootsCoreCurrency, RuntimeEr
         .map_err(|error| RuntimeError::Config(format!("payment currency is invalid: {error}")))
 }
 
-fn active_order_status_reason(
-    status: &RadrootsActiveOrderStatus,
-    order_id: &str,
-) -> Option<String> {
+fn active_order_status_reason(status: &RadrootsOrderStatus, order_id: &str) -> Option<String> {
     match status {
-        RadrootsActiveOrderStatus::Missing => {
+        RadrootsOrderStatus::Missing => {
             Some(format!("no active order events matched `{order_id}`"))
         }
-        RadrootsActiveOrderStatus::Invalid => Some(format!(
+        RadrootsOrderStatus::Invalid => Some(format!(
             "active order events for `{order_id}` failed reducer validation"
         )),
         _ => None,
@@ -3353,10 +3328,10 @@ fn active_order_status_reason(
 }
 
 fn order_status_inventory_view(
-    status: &RadrootsActiveOrderStatus,
+    status: &RadrootsOrderStatus,
     listing_event_id: Option<String>,
     decision_event_id: Option<&str>,
-    decisions: &[RadrootsActiveOrderDecisionRecord],
+    decisions: &[RadrootsOrderDecisionRecord],
     reducer_issues: &[OrderIssueView],
 ) -> Option<OrderInventoryView> {
     let inventory_issues = reducer_issues
@@ -3377,9 +3352,9 @@ fn order_status_inventory_view(
         .collect::<Vec<_>>();
 
     match status {
-        RadrootsActiveOrderStatus::Accepted
-        | RadrootsActiveOrderStatus::Completed
-        | RadrootsActiveOrderStatus::Disputed => {
+        RadrootsOrderStatus::Accepted
+        | RadrootsOrderStatus::Completed
+        | RadrootsOrderStatus::Disputed => {
             let bins = decision_event_id
                 .and_then(|event_id| {
                     decisions
@@ -3400,7 +3375,7 @@ fn order_status_inventory_view(
                 issues: inventory_issues,
             })
         }
-        RadrootsActiveOrderStatus::Cancelled => Some(OrderInventoryView {
+        RadrootsOrderStatus::Cancelled => Some(OrderInventoryView {
             state: if decision_event_id.is_some() {
                 "released".to_owned()
             } else {
@@ -3411,34 +3386,32 @@ fn order_status_inventory_view(
             bins: Vec::new(),
             issues: inventory_issues,
         }),
-        RadrootsActiveOrderStatus::Declined => Some(OrderInventoryView {
+        RadrootsOrderStatus::Declined => Some(OrderInventoryView {
             state: "not_reserved".to_owned(),
             listing_event_id,
             commitment_valid: true,
             bins: Vec::new(),
             issues: inventory_issues,
         }),
-        RadrootsActiveOrderStatus::Invalid if !inventory_issues.is_empty() => {
-            Some(OrderInventoryView {
-                state: "invalid".to_owned(),
-                listing_event_id,
-                commitment_valid: false,
-                bins: Vec::new(),
-                issues: inventory_issues,
-            })
-        }
+        RadrootsOrderStatus::Invalid if !inventory_issues.is_empty() => Some(OrderInventoryView {
+            state: "invalid".to_owned(),
+            listing_event_id,
+            commitment_valid: false,
+            bins: Vec::new(),
+            issues: inventory_issues,
+        }),
         _ => None,
     }
 }
 
 fn order_status_fulfillment_view(
-    status: &RadrootsActiveOrderStatus,
+    status: &RadrootsOrderStatus,
     request_event_id: Option<String>,
     decision_event_id: Option<String>,
     fulfillment_event_id: Option<String>,
     fulfillment_root_event_id: Option<String>,
     fulfillment_prev_event_id: Option<String>,
-    fulfillment_status: Option<RadrootsActiveTradeFulfillmentState>,
+    fulfillment_status: Option<RadrootsOrderFulfillmentState>,
     reducer_issues: &[OrderIssueView],
 ) -> Option<OrderStatusFulfillmentView> {
     let issues = reducer_issues
@@ -3459,21 +3432,20 @@ fn order_status_fulfillment_view(
     }
     if !matches!(
         status,
-        RadrootsActiveOrderStatus::Accepted
-            | RadrootsActiveOrderStatus::Completed
-            | RadrootsActiveOrderStatus::Disputed
+        RadrootsOrderStatus::Accepted
+            | RadrootsOrderStatus::Completed
+            | RadrootsOrderStatus::Disputed
     ) {
         return None;
     }
     let fulfillment_status = fulfillment_status?;
     let terminal = matches!(
         fulfillment_status,
-        RadrootsActiveTradeFulfillmentState::Delivered
-            | RadrootsActiveTradeFulfillmentState::SellerCancelled
+        RadrootsOrderFulfillmentState::Delivered | RadrootsOrderFulfillmentState::SellerCancelled
     );
     let inventory_released = matches!(
         fulfillment_status,
-        RadrootsActiveTradeFulfillmentState::SellerCancelled
+        RadrootsOrderFulfillmentState::SellerCancelled
     );
     let prev_event_id = fulfillment_prev_event_id.or_else(|| {
         if fulfillment_event_id.is_none() {
@@ -3494,7 +3466,7 @@ fn order_status_fulfillment_view(
 }
 
 fn order_status_payment_view(
-    projection: RadrootsActiveOrderPaymentProjection,
+    projection: RadrootsOrderPaymentProjection,
     reducer_issues: &[OrderIssueView],
 ) -> OrderStatusPaymentView {
     OrderStatusPaymentView {
@@ -3517,10 +3489,10 @@ fn order_status_payment_view(
 }
 
 fn order_status_lifecycle_view(
-    status: &RadrootsActiveOrderStatus,
+    status: &RadrootsOrderStatus,
     request_event_id: Option<String>,
     last_event_id: Option<String>,
-    fulfillment_status: Option<RadrootsActiveTradeFulfillmentState>,
+    fulfillment_status: Option<RadrootsOrderFulfillmentState>,
     cancellation_event_id: Option<String>,
     cancellation_root_event_id: Option<String>,
     cancellation_prev_event_id: Option<String>,
@@ -3536,10 +3508,10 @@ fn order_status_lifecycle_view(
     let phase = order_status_lifecycle_phase(status, fulfillment_status).to_owned();
     let terminal = matches!(
         status,
-        RadrootsActiveOrderStatus::Cancelled
-            | RadrootsActiveOrderStatus::Completed
-            | RadrootsActiveOrderStatus::Disputed
-            | RadrootsActiveOrderStatus::Invalid
+        RadrootsOrderStatus::Cancelled
+            | RadrootsOrderStatus::Completed
+            | RadrootsOrderStatus::Disputed
+            | RadrootsOrderStatus::Invalid
     );
     let cancellation =
         cancellation_event_id
@@ -3584,8 +3556,8 @@ fn order_status_lifecycle_view(
 fn order_status_revision_view(
     last_event_id: Option<&str>,
     agreement_event_id: Option<&str>,
-    proposals: &[RadrootsActiveOrderRevisionProposalRecord],
-    decisions: &[RadrootsActiveOrderRevisionDecisionRecord],
+    proposals: &[RadrootsOrderRevisionProposalRecord],
+    decisions: &[RadrootsOrderRevisionDecisionRecord],
 ) -> Option<OrderStatusRevisionView> {
     if let Some(proposal) = last_event_id
         .and_then(|event_id| proposals.iter().find(|record| record.event_id == event_id))
@@ -3617,14 +3589,12 @@ fn order_status_revision_view(
 }
 
 fn order_status_revision_view_from_decision(
-    decision: &RadrootsActiveOrderRevisionDecisionRecord,
+    decision: &RadrootsOrderRevisionDecisionRecord,
     agreement_event_id: Option<&str>,
 ) -> OrderStatusRevisionView {
     let (state, reason) = match &decision.payload.decision {
-        RadrootsTradeOrderRevisionDecision::Accepted => ("accepted", None),
-        RadrootsTradeOrderRevisionDecision::Declined { reason } => {
-            ("declined", Some(reason.clone()))
-        }
+        RadrootsOrderRevisionOutcome::Accepted => ("accepted", None),
+        RadrootsOrderRevisionOutcome::Declined { reason } => ("declined", Some(reason.clone())),
     };
     OrderStatusRevisionView {
         state: state.to_owned(),
@@ -3639,29 +3609,27 @@ fn order_status_revision_view_from_decision(
 }
 
 fn order_status_lifecycle_phase(
-    status: &RadrootsActiveOrderStatus,
-    fulfillment_status: Option<RadrootsActiveTradeFulfillmentState>,
+    status: &RadrootsOrderStatus,
+    fulfillment_status: Option<RadrootsOrderFulfillmentState>,
 ) -> &'static str {
     match status {
-        RadrootsActiveOrderStatus::Missing => "missing",
-        RadrootsActiveOrderStatus::Requested => "requested",
-        RadrootsActiveOrderStatus::Accepted => match fulfillment_status {
-            Some(RadrootsActiveTradeFulfillmentState::Preparing)
-            | Some(RadrootsActiveTradeFulfillmentState::OutForDelivery) => {
-                "fulfillment_in_progress"
-            }
+        RadrootsOrderStatus::Missing => "missing",
+        RadrootsOrderStatus::Requested => "requested",
+        RadrootsOrderStatus::Accepted => match fulfillment_status {
+            Some(RadrootsOrderFulfillmentState::Preparing)
+            | Some(RadrootsOrderFulfillmentState::OutForDelivery) => "fulfillment_in_progress",
             Some(
-                RadrootsActiveTradeFulfillmentState::ReadyForPickup
-                | RadrootsActiveTradeFulfillmentState::Delivered
-                | RadrootsActiveTradeFulfillmentState::SellerCancelled,
+                RadrootsOrderFulfillmentState::ReadyForPickup
+                | RadrootsOrderFulfillmentState::Delivered
+                | RadrootsOrderFulfillmentState::SellerCancelled,
             ) => "fulfilled",
-            Some(RadrootsActiveTradeFulfillmentState::AcceptedNotFulfilled) | None => "accepted",
+            Some(RadrootsOrderFulfillmentState::AcceptedNotFulfilled) | None => "accepted",
         },
-        RadrootsActiveOrderStatus::Declined => "declined",
-        RadrootsActiveOrderStatus::Cancelled => "cancelled",
-        RadrootsActiveOrderStatus::Completed => "completed",
-        RadrootsActiveOrderStatus::Disputed => "disputed",
-        RadrootsActiveOrderStatus::Invalid => "invalid",
+        RadrootsOrderStatus::Declined => "declined",
+        RadrootsOrderStatus::Cancelled => "cancelled",
+        RadrootsOrderStatus::Completed => "completed",
+        RadrootsOrderStatus::Disputed => "disputed",
+        RadrootsOrderStatus::Invalid => "invalid",
     }
 }
 
@@ -3686,10 +3654,10 @@ fn fulfillment_issue_code(code: &str) -> bool {
 }
 
 fn inventory_bins_from_decision(
-    decision: &RadrootsTradeOrderDecision,
+    decision: &RadrootsOrderDecisionOutcome,
 ) -> Vec<OrderInventoryBinView> {
     match decision {
-        RadrootsTradeOrderDecision::Accepted {
+        RadrootsOrderDecisionOutcome::Accepted {
             inventory_commitments,
         } => {
             let mut bins = inventory_commitments
@@ -3705,152 +3673,138 @@ fn inventory_bins_from_decision(
             bins.sort_by(|left, right| left.bin_id.cmp(&right.bin_id));
             bins
         }
-        RadrootsTradeOrderDecision::Declined { .. } => Vec::new(),
+        RadrootsOrderDecisionOutcome::Declined { .. } => Vec::new(),
     }
 }
 
-fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue) -> OrderIssueView {
+fn active_order_reducer_issue_view(issue_value: RadrootsOrderIssue) -> OrderIssueView {
     match issue_value {
-        RadrootsActiveOrderReducerIssue::MissingRequest => issue_with_code(
+        RadrootsOrderIssue::MissingRequest => issue_with_code(
             "missing_request",
             "request_event_id",
             "active order reducer reported missing request",
         ),
-        RadrootsActiveOrderReducerIssue::MultipleRequests { event_ids } => issue_with_events(
+        RadrootsOrderIssue::MultipleRequests { event_ids } => issue_with_events(
             "multiple_requests",
             "request_event_id",
             "active order reducer reported multiple request events",
             event_ids,
         ),
-        RadrootsActiveOrderReducerIssue::RequestPayloadInvalid { event_id } => issue_with_events(
+        RadrootsOrderIssue::RequestPayloadInvalid { event_id } => issue_with_events(
             "invalid_request_payload",
             "request_payload",
             "active order reducer reported invalid request payload",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::RequestOrderIdMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::RequestOrderIdMismatch { event_id } => issue_with_events(
             "request_order_id_mismatch",
             "order_id",
             "active order reducer reported request order id mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::RequestAuthorMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::RequestAuthorMismatch { event_id } => issue_with_events(
             "request_author_mismatch",
             "buyer_pubkey",
             "active order reducer reported request author mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::RequestListingAddressInvalid { event_id } => {
-            issue_with_events(
-                "invalid_request_listing_address",
-                "listing_addr",
-                "active order reducer reported invalid request listing address",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RequestSellerListingMismatch { event_id } => {
-            issue_with_events(
-                "request_seller_listing_mismatch",
-                "seller_pubkey",
-                "active order reducer reported request seller/listing mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::DecisionPayloadInvalid { event_id } => issue_with_events(
+        RadrootsOrderIssue::RequestListingAddressInvalid { event_id } => issue_with_events(
+            "invalid_request_listing_address",
+            "listing_addr",
+            "active order reducer reported invalid request listing address",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RequestSellerListingMismatch { event_id } => issue_with_events(
+            "request_seller_listing_mismatch",
+            "seller_pubkey",
+            "active order reducer reported request seller/listing mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::DecisionPayloadInvalid { event_id } => issue_with_events(
             "invalid_decision_payload",
             "decision_payload",
             "active order reducer reported invalid decision payload",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::DecisionOrderIdMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::DecisionOrderIdMismatch { event_id } => issue_with_events(
             "decision_order_id_mismatch",
             "order_id",
             "active order reducer reported decision order id mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::DecisionAuthorMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::DecisionAuthorMismatch { event_id } => issue_with_events(
             "decision_author_mismatch",
             "seller_pubkey",
             "active order reducer reported decision author mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::DecisionCounterpartyMismatch { event_id } => {
-            issue_with_events(
-                "decision_counterparty_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported decision counterparty mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::DecisionBuyerMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::DecisionCounterpartyMismatch { event_id } => issue_with_events(
+            "decision_counterparty_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported decision counterparty mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::DecisionBuyerMismatch { event_id } => issue_with_events(
             "decision_buyer_mismatch",
             "buyer_pubkey",
             "active order reducer reported decision buyer mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::DecisionSellerMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::DecisionSellerMismatch { event_id } => issue_with_events(
             "decision_seller_mismatch",
             "seller_pubkey",
             "active order reducer reported decision seller mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::DecisionListingAddressInvalid { event_id } => {
-            issue_with_events(
-                "invalid_decision_listing_address",
-                "listing_addr",
-                "active order reducer reported invalid decision listing address",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::DecisionListingMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::DecisionListingAddressInvalid { event_id } => issue_with_events(
+            "invalid_decision_listing_address",
+            "listing_addr",
+            "active order reducer reported invalid decision listing address",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::DecisionListingMismatch { event_id } => issue_with_events(
             "decision_listing_mismatch",
             "listing_addr",
             "active order reducer reported decision listing mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::DecisionRootMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::DecisionRootMismatch { event_id } => issue_with_events(
             "decision_root_mismatch",
             "root_event_id",
             "active order reducer reported decision root mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::DecisionPreviousMismatch { event_id } => {
-            issue_with_events(
-                "decision_previous_mismatch",
-                "prev_event_id",
-                "active order reducer reported decision previous mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::DecisionMissingInventoryCommitments { event_id } => {
-            issue_with_events(
-                "missing_decision_inventory_commitments",
-                "inventory_commitments",
-                "active order reducer reported missing decision inventory commitments",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::DecisionInventoryCommitmentMismatch { event_id } => {
-            issue_with_events(
-                "decision_inventory_commitment_mismatch",
-                "inventory_commitments",
-                "active order reducer reported decision inventory commitment mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::DecisionMissingReason { event_id } => issue_with_events(
+        RadrootsOrderIssue::DecisionPreviousMismatch { event_id } => issue_with_events(
+            "decision_previous_mismatch",
+            "prev_event_id",
+            "active order reducer reported decision previous mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::DecisionMissingInventoryCommitments { event_id } => issue_with_events(
+            "missing_decision_inventory_commitments",
+            "inventory_commitments",
+            "active order reducer reported missing decision inventory commitments",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::DecisionInventoryCommitmentMismatch { event_id } => issue_with_events(
+            "decision_inventory_commitment_mismatch",
+            "inventory_commitments",
+            "active order reducer reported decision inventory commitment mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::DecisionMissingReason { event_id } => issue_with_events(
             "missing_decision_decline_reason",
             "reason",
             "active order reducer reported missing decision decline reason",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::ConflictingDecisions { event_ids } => issue_with_events(
+        RadrootsOrderIssue::ConflictingDecisions { event_ids } => issue_with_events(
             "conflicting_decisions",
             "decision_event_id",
             "active order reducer reported conflicting decisions",
             event_ids,
         ),
-        RadrootsActiveOrderReducerIssue::RevisionProposalWithoutAcceptedDecision { event_id } => {
+        RadrootsOrderIssue::RevisionProposalWithoutAcceptedDecision { event_id } => {
             issue_with_events(
                 "revision_proposal_without_accepted_decision",
                 "revision_event_id",
@@ -3858,55 +3812,43 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
                 vec![event_id],
             )
         }
-        RadrootsActiveOrderReducerIssue::RevisionProposalPayloadInvalid { event_id } => {
-            issue_with_events(
-                "invalid_revision_proposal_payload",
-                "revision_payload",
-                "active order reducer reported invalid revision proposal payload",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionProposalOrderIdMismatch { event_id } => {
-            issue_with_events(
-                "revision_proposal_order_id_mismatch",
-                "order_id",
-                "active order reducer reported revision proposal order id mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionProposalAuthorMismatch { event_id } => {
-            issue_with_events(
-                "revision_proposal_author_mismatch",
-                "seller_pubkey",
-                "active order reducer reported revision proposal author mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionProposalCounterpartyMismatch { event_id } => {
-            issue_with_events(
-                "revision_proposal_counterparty_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported revision proposal counterparty mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionProposalBuyerMismatch { event_id } => {
-            issue_with_events(
-                "revision_proposal_buyer_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported revision proposal buyer mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionProposalSellerMismatch { event_id } => {
-            issue_with_events(
-                "revision_proposal_seller_mismatch",
-                "seller_pubkey",
-                "active order reducer reported revision proposal seller mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionProposalListingAddressInvalid { event_id } => {
+        RadrootsOrderIssue::RevisionProposalPayloadInvalid { event_id } => issue_with_events(
+            "invalid_revision_proposal_payload",
+            "revision_payload",
+            "active order reducer reported invalid revision proposal payload",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionProposalOrderIdMismatch { event_id } => issue_with_events(
+            "revision_proposal_order_id_mismatch",
+            "order_id",
+            "active order reducer reported revision proposal order id mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionProposalAuthorMismatch { event_id } => issue_with_events(
+            "revision_proposal_author_mismatch",
+            "seller_pubkey",
+            "active order reducer reported revision proposal author mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionProposalCounterpartyMismatch { event_id } => issue_with_events(
+            "revision_proposal_counterparty_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported revision proposal counterparty mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionProposalBuyerMismatch { event_id } => issue_with_events(
+            "revision_proposal_buyer_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported revision proposal buyer mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionProposalSellerMismatch { event_id } => issue_with_events(
+            "revision_proposal_seller_mismatch",
+            "seller_pubkey",
+            "active order reducer reported revision proposal seller mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionProposalListingAddressInvalid { event_id } => {
             issue_with_events(
                 "invalid_revision_proposal_listing_address",
                 "listing_addr",
@@ -3914,87 +3856,67 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
                 vec![event_id],
             )
         }
-        RadrootsActiveOrderReducerIssue::RevisionProposalListingMismatch { event_id } => {
-            issue_with_events(
-                "revision_proposal_listing_mismatch",
-                "listing_addr",
-                "active order reducer reported revision proposal listing mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionProposalRootMismatch { event_id } => {
-            issue_with_events(
-                "revision_proposal_root_mismatch",
-                "root_event_id",
-                "active order reducer reported revision proposal root mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionProposalPreviousMismatch { event_id } => {
-            issue_with_events(
-                "revision_proposal_previous_mismatch",
-                "prev_event_id",
-                "active order reducer reported revision proposal previous mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionWithoutProposal { event_id } => {
-            issue_with_events(
-                "revision_decision_without_proposal",
-                "revision_decision_event_id",
-                "active order reducer reported revision decision without proposal",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionPayloadInvalid { event_id } => {
-            issue_with_events(
-                "invalid_revision_decision_payload",
-                "revision_decision_payload",
-                "active order reducer reported invalid revision decision payload",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionOrderIdMismatch { event_id } => {
-            issue_with_events(
-                "revision_decision_order_id_mismatch",
-                "order_id",
-                "active order reducer reported revision decision order id mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionAuthorMismatch { event_id } => {
-            issue_with_events(
-                "revision_decision_author_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported revision decision author mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionCounterpartyMismatch { event_id } => {
-            issue_with_events(
-                "revision_decision_counterparty_mismatch",
-                "seller_pubkey",
-                "active order reducer reported revision decision counterparty mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionBuyerMismatch { event_id } => {
-            issue_with_events(
-                "revision_decision_buyer_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported revision decision buyer mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionSellerMismatch { event_id } => {
-            issue_with_events(
-                "revision_decision_seller_mismatch",
-                "seller_pubkey",
-                "active order reducer reported revision decision seller mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionListingAddressInvalid { event_id } => {
+        RadrootsOrderIssue::RevisionProposalListingMismatch { event_id } => issue_with_events(
+            "revision_proposal_listing_mismatch",
+            "listing_addr",
+            "active order reducer reported revision proposal listing mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionProposalRootMismatch { event_id } => issue_with_events(
+            "revision_proposal_root_mismatch",
+            "root_event_id",
+            "active order reducer reported revision proposal root mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionProposalPreviousMismatch { event_id } => issue_with_events(
+            "revision_proposal_previous_mismatch",
+            "prev_event_id",
+            "active order reducer reported revision proposal previous mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionWithoutProposal { event_id } => issue_with_events(
+            "revision_decision_without_proposal",
+            "revision_decision_event_id",
+            "active order reducer reported revision decision without proposal",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionPayloadInvalid { event_id } => issue_with_events(
+            "invalid_revision_decision_payload",
+            "revision_decision_payload",
+            "active order reducer reported invalid revision decision payload",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionOrderIdMismatch { event_id } => issue_with_events(
+            "revision_decision_order_id_mismatch",
+            "order_id",
+            "active order reducer reported revision decision order id mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionAuthorMismatch { event_id } => issue_with_events(
+            "revision_decision_author_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported revision decision author mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionCounterpartyMismatch { event_id } => issue_with_events(
+            "revision_decision_counterparty_mismatch",
+            "seller_pubkey",
+            "active order reducer reported revision decision counterparty mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionBuyerMismatch { event_id } => issue_with_events(
+            "revision_decision_buyer_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported revision decision buyer mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionSellerMismatch { event_id } => issue_with_events(
+            "revision_decision_seller_mismatch",
+            "seller_pubkey",
+            "active order reducer reported revision decision seller mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionListingAddressInvalid { event_id } => {
             issue_with_events(
                 "invalid_revision_decision_listing_address",
                 "listing_addr",
@@ -4002,593 +3924,487 @@ fn active_order_reducer_issue_view(issue_value: RadrootsActiveOrderReducerIssue)
                 vec![event_id],
             )
         }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionListingMismatch { event_id } => {
-            issue_with_events(
-                "revision_decision_listing_mismatch",
-                "listing_addr",
-                "active order reducer reported revision decision listing mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionRootMismatch { event_id } => {
-            issue_with_events(
-                "revision_decision_root_mismatch",
-                "root_event_id",
-                "active order reducer reported revision decision root mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionPreviousMismatch { event_id } => {
-            issue_with_events(
-                "revision_decision_previous_mismatch",
-                "prev_event_id",
-                "active order reducer reported revision decision previous mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionDecisionRevisionIdMismatch { event_id } => {
-            issue_with_events(
-                "revision_decision_revision_id_mismatch",
-                "revision_id",
-                "active order reducer reported revision decision revision id mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentWithoutAcceptedDecision { event_id } => {
-            issue_with_events(
-                "fulfillment_without_accepted_decision",
-                "fulfillment_event_id",
-                "active order reducer reported fulfillment without accepted decision",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentPayloadInvalid { event_id } => {
-            issue_with_events(
-                "invalid_fulfillment_payload",
-                "fulfillment_payload",
-                "active order reducer reported invalid fulfillment payload",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentOrderIdMismatch { event_id } => {
-            issue_with_events(
-                "fulfillment_order_id_mismatch",
-                "order_id",
-                "active order reducer reported fulfillment order id mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentAuthorMismatch { event_id } => {
-            issue_with_events(
-                "fulfillment_author_mismatch",
-                "seller_pubkey",
-                "active order reducer reported fulfillment author mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentCounterpartyMismatch { event_id } => {
-            issue_with_events(
-                "fulfillment_counterparty_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported fulfillment counterparty mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentBuyerMismatch { event_id } => {
-            issue_with_events(
-                "fulfillment_buyer_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported fulfillment buyer mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentSellerMismatch { event_id } => {
-            issue_with_events(
-                "fulfillment_seller_mismatch",
-                "seller_pubkey",
-                "active order reducer reported fulfillment seller mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentListingAddressInvalid { event_id } => {
-            issue_with_events(
-                "invalid_fulfillment_listing_address",
-                "listing_addr",
-                "active order reducer reported invalid fulfillment listing address",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentListingMismatch { event_id } => {
-            issue_with_events(
-                "fulfillment_listing_mismatch",
-                "listing_addr",
-                "active order reducer reported fulfillment listing mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentRootMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::RevisionDecisionListingMismatch { event_id } => issue_with_events(
+            "revision_decision_listing_mismatch",
+            "listing_addr",
+            "active order reducer reported revision decision listing mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionRootMismatch { event_id } => issue_with_events(
+            "revision_decision_root_mismatch",
+            "root_event_id",
+            "active order reducer reported revision decision root mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionPreviousMismatch { event_id } => issue_with_events(
+            "revision_decision_previous_mismatch",
+            "prev_event_id",
+            "active order reducer reported revision decision previous mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionDecisionRevisionIdMismatch { event_id } => issue_with_events(
+            "revision_decision_revision_id_mismatch",
+            "revision_id",
+            "active order reducer reported revision decision revision id mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentWithoutAcceptedDecision { event_id } => issue_with_events(
+            "fulfillment_without_accepted_decision",
+            "fulfillment_event_id",
+            "active order reducer reported fulfillment without accepted decision",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentPayloadInvalid { event_id } => issue_with_events(
+            "invalid_fulfillment_payload",
+            "fulfillment_payload",
+            "active order reducer reported invalid fulfillment payload",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentOrderIdMismatch { event_id } => issue_with_events(
+            "fulfillment_order_id_mismatch",
+            "order_id",
+            "active order reducer reported fulfillment order id mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentAuthorMismatch { event_id } => issue_with_events(
+            "fulfillment_author_mismatch",
+            "seller_pubkey",
+            "active order reducer reported fulfillment author mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentCounterpartyMismatch { event_id } => issue_with_events(
+            "fulfillment_counterparty_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported fulfillment counterparty mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentBuyerMismatch { event_id } => issue_with_events(
+            "fulfillment_buyer_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported fulfillment buyer mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentSellerMismatch { event_id } => issue_with_events(
+            "fulfillment_seller_mismatch",
+            "seller_pubkey",
+            "active order reducer reported fulfillment seller mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentListingAddressInvalid { event_id } => issue_with_events(
+            "invalid_fulfillment_listing_address",
+            "listing_addr",
+            "active order reducer reported invalid fulfillment listing address",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentListingMismatch { event_id } => issue_with_events(
+            "fulfillment_listing_mismatch",
+            "listing_addr",
+            "active order reducer reported fulfillment listing mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentRootMismatch { event_id } => issue_with_events(
             "fulfillment_root_mismatch",
             "root_event_id",
             "active order reducer reported fulfillment root mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::FulfillmentPreviousMismatch { event_id } => {
-            issue_with_events(
-                "fulfillment_previous_mismatch",
-                "prev_event_id",
-                "active order reducer reported fulfillment previous mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentStatusNotPublishable { event_id } => {
-            issue_with_events(
-                "fulfillment_status_not_publishable",
-                "fulfillment_state",
-                "active order reducer reported non-publishable fulfillment status",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::FulfillmentUnsupportedTransition { event_id } => {
-            issue_with_events(
-                "fulfillment_unsupported_transition",
-                "fulfillment_state",
-                "active order reducer reported unsupported fulfillment transition",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::ForkedFulfillments { event_ids } => issue_with_events(
+        RadrootsOrderIssue::FulfillmentPreviousMismatch { event_id } => issue_with_events(
+            "fulfillment_previous_mismatch",
+            "prev_event_id",
+            "active order reducer reported fulfillment previous mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentStatusNotPublishable { event_id } => issue_with_events(
+            "fulfillment_status_not_publishable",
+            "fulfillment_state",
+            "active order reducer reported non-publishable fulfillment status",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::FulfillmentUnsupportedTransition { event_id } => issue_with_events(
+            "fulfillment_unsupported_transition",
+            "fulfillment_state",
+            "active order reducer reported unsupported fulfillment transition",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ForkedFulfillments { event_ids } => issue_with_events(
             "forked_fulfillments",
             "fulfillment_event_id",
             "active order reducer reported forked fulfillment updates",
             event_ids,
         ),
-        RadrootsActiveOrderReducerIssue::CancellationWithoutCancellableOrder { event_id } => {
-            issue_with_events(
-                "cancellation_without_cancellable_order",
-                "cancellation_event_id",
-                "active order reducer reported cancellation without cancellable order",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationPayloadInvalid { event_id } => {
-            issue_with_events(
-                "invalid_cancellation_payload",
-                "cancellation_payload",
-                "active order reducer reported invalid cancellation payload",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationOrderIdMismatch { event_id } => {
-            issue_with_events(
-                "cancellation_order_id_mismatch",
-                "order_id",
-                "active order reducer reported cancellation order id mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationAuthorMismatch { event_id } => {
-            issue_with_events(
-                "cancellation_author_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported cancellation author mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationCounterpartyMismatch { event_id } => {
-            issue_with_events(
-                "cancellation_counterparty_mismatch",
-                "seller_pubkey",
-                "active order reducer reported cancellation counterparty mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationBuyerMismatch { event_id } => {
-            issue_with_events(
-                "cancellation_buyer_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported cancellation buyer mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationSellerMismatch { event_id } => {
-            issue_with_events(
-                "cancellation_seller_mismatch",
-                "seller_pubkey",
-                "active order reducer reported cancellation seller mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationListingAddressInvalid { event_id } => {
-            issue_with_events(
-                "invalid_cancellation_listing_address",
-                "listing_addr",
-                "active order reducer reported invalid cancellation listing address",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationListingMismatch { event_id } => {
-            issue_with_events(
-                "cancellation_listing_mismatch",
-                "listing_addr",
-                "active order reducer reported cancellation listing mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationRootMismatch { event_id } => {
-            issue_with_events(
-                "cancellation_root_mismatch",
-                "root_event_id",
-                "active order reducer reported cancellation root mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationPreviousMismatch { event_id } => {
-            issue_with_events(
-                "cancellation_previous_mismatch",
-                "prev_event_id",
-                "active order reducer reported cancellation previous mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::CancellationAfterFulfillment { event_id } => {
-            issue_with_events(
-                "cancellation_after_fulfillment",
-                "fulfillment_event_id",
-                "active order reducer reported cancellation after fulfillment",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::ReceiptWithoutEligibleFulfillment { event_id } => {
-            issue_with_events(
-                "receipt_without_eligible_fulfillment",
-                "receipt_event_id",
-                "active order reducer reported receipt without eligible fulfillment",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::ReceiptPayloadInvalid { event_id } => issue_with_events(
+        RadrootsOrderIssue::CancellationWithoutCancellableOrder { event_id } => issue_with_events(
+            "cancellation_without_cancellable_order",
+            "cancellation_event_id",
+            "active order reducer reported cancellation without cancellable order",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationPayloadInvalid { event_id } => issue_with_events(
+            "invalid_cancellation_payload",
+            "cancellation_payload",
+            "active order reducer reported invalid cancellation payload",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationOrderIdMismatch { event_id } => issue_with_events(
+            "cancellation_order_id_mismatch",
+            "order_id",
+            "active order reducer reported cancellation order id mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationAuthorMismatch { event_id } => issue_with_events(
+            "cancellation_author_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported cancellation author mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationCounterpartyMismatch { event_id } => issue_with_events(
+            "cancellation_counterparty_mismatch",
+            "seller_pubkey",
+            "active order reducer reported cancellation counterparty mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationBuyerMismatch { event_id } => issue_with_events(
+            "cancellation_buyer_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported cancellation buyer mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationSellerMismatch { event_id } => issue_with_events(
+            "cancellation_seller_mismatch",
+            "seller_pubkey",
+            "active order reducer reported cancellation seller mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationListingAddressInvalid { event_id } => issue_with_events(
+            "invalid_cancellation_listing_address",
+            "listing_addr",
+            "active order reducer reported invalid cancellation listing address",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationListingMismatch { event_id } => issue_with_events(
+            "cancellation_listing_mismatch",
+            "listing_addr",
+            "active order reducer reported cancellation listing mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationRootMismatch { event_id } => issue_with_events(
+            "cancellation_root_mismatch",
+            "root_event_id",
+            "active order reducer reported cancellation root mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationPreviousMismatch { event_id } => issue_with_events(
+            "cancellation_previous_mismatch",
+            "prev_event_id",
+            "active order reducer reported cancellation previous mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::CancellationAfterFulfillment { event_id } => issue_with_events(
+            "cancellation_after_fulfillment",
+            "fulfillment_event_id",
+            "active order reducer reported cancellation after fulfillment",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ReceiptWithoutEligibleFulfillment { event_id } => issue_with_events(
+            "receipt_without_eligible_fulfillment",
+            "receipt_event_id",
+            "active order reducer reported receipt without eligible fulfillment",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ReceiptPayloadInvalid { event_id } => issue_with_events(
             "invalid_receipt_payload",
             "receipt_payload",
             "active order reducer reported invalid receipt payload",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::ReceiptOrderIdMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::ReceiptOrderIdMismatch { event_id } => issue_with_events(
             "receipt_order_id_mismatch",
             "order_id",
             "active order reducer reported receipt order id mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::ReceiptAuthorMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::ReceiptAuthorMismatch { event_id } => issue_with_events(
             "receipt_author_mismatch",
             "buyer_pubkey",
             "active order reducer reported receipt author mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::ReceiptCounterpartyMismatch { event_id } => {
-            issue_with_events(
-                "receipt_counterparty_mismatch",
-                "seller_pubkey",
-                "active order reducer reported receipt counterparty mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::ReceiptBuyerMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::ReceiptCounterpartyMismatch { event_id } => issue_with_events(
+            "receipt_counterparty_mismatch",
+            "seller_pubkey",
+            "active order reducer reported receipt counterparty mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ReceiptBuyerMismatch { event_id } => issue_with_events(
             "receipt_buyer_mismatch",
             "buyer_pubkey",
             "active order reducer reported receipt buyer mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::ReceiptSellerMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::ReceiptSellerMismatch { event_id } => issue_with_events(
             "receipt_seller_mismatch",
             "seller_pubkey",
             "active order reducer reported receipt seller mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::ReceiptListingAddressInvalid { event_id } => {
-            issue_with_events(
-                "invalid_receipt_listing_address",
-                "listing_addr",
-                "active order reducer reported invalid receipt listing address",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::ReceiptListingMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::ReceiptListingAddressInvalid { event_id } => issue_with_events(
+            "invalid_receipt_listing_address",
+            "listing_addr",
+            "active order reducer reported invalid receipt listing address",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ReceiptListingMismatch { event_id } => issue_with_events(
             "receipt_listing_mismatch",
             "listing_addr",
             "active order reducer reported receipt listing mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::ReceiptRootMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::ReceiptRootMismatch { event_id } => issue_with_events(
             "receipt_root_mismatch",
             "root_event_id",
             "active order reducer reported receipt root mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::ReceiptPreviousMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::ReceiptPreviousMismatch { event_id } => issue_with_events(
             "receipt_previous_mismatch",
             "prev_event_id",
             "active order reducer reported receipt previous mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentWithoutAcceptedAgreement { event_id } => {
-            issue_with_events(
-                "payment_without_accepted_agreement",
-                "payment_event_id",
-                "active order reducer reported payment without accepted agreement",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::PaymentPayloadInvalid { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentWithoutAcceptedAgreement { event_id } => issue_with_events(
+            "payment_without_accepted_agreement",
+            "payment_event_id",
+            "active order reducer reported payment without accepted agreement",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::PaymentPayloadInvalid { event_id } => issue_with_events(
             "invalid_payment_payload",
             "payment_payload",
             "active order reducer reported invalid payment payload",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentOrderIdMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentOrderIdMismatch { event_id } => issue_with_events(
             "payment_order_id_mismatch",
             "order_id",
             "active order reducer reported payment order id mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentAuthorMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentAuthorMismatch { event_id } => issue_with_events(
             "payment_author_mismatch",
             "buyer_pubkey",
             "active order reducer reported payment author mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentCounterpartyMismatch { event_id } => {
-            issue_with_events(
-                "payment_counterparty_mismatch",
-                "seller_pubkey",
-                "active order reducer reported payment counterparty mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::PaymentBuyerMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentCounterpartyMismatch { event_id } => issue_with_events(
+            "payment_counterparty_mismatch",
+            "seller_pubkey",
+            "active order reducer reported payment counterparty mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::PaymentBuyerMismatch { event_id } => issue_with_events(
             "payment_buyer_mismatch",
             "buyer_pubkey",
             "active order reducer reported payment buyer mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentSellerMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentSellerMismatch { event_id } => issue_with_events(
             "payment_seller_mismatch",
             "seller_pubkey",
             "active order reducer reported payment seller mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentListingAddressInvalid { event_id } => {
-            issue_with_events(
-                "invalid_payment_listing_address",
-                "listing_addr",
-                "active order reducer reported invalid payment listing address",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::PaymentListingMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentListingAddressInvalid { event_id } => issue_with_events(
+            "invalid_payment_listing_address",
+            "listing_addr",
+            "active order reducer reported invalid payment listing address",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::PaymentListingMismatch { event_id } => issue_with_events(
             "payment_listing_mismatch",
             "listing_addr",
             "active order reducer reported payment listing mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentRootMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentRootMismatch { event_id } => issue_with_events(
             "payment_root_mismatch",
             "root_event_id",
             "active order reducer reported payment root mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentPreviousMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentPreviousMismatch { event_id } => issue_with_events(
             "payment_previous_mismatch",
             "prev_event_id",
             "active order reducer reported payment previous mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentAgreementMismatch { event_id } => {
-            issue_with_events(
-                "payment_agreement_mismatch",
-                "agreement_event_id",
-                "active order reducer reported payment agreement mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::PaymentQuoteMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentAgreementMismatch { event_id } => issue_with_events(
+            "payment_agreement_mismatch",
+            "agreement_event_id",
+            "active order reducer reported payment agreement mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::PaymentQuoteMismatch { event_id } => issue_with_events(
             "payment_quote_mismatch",
             "quote_id",
             "active order reducer reported payment quote mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentQuoteVersionMismatch { event_id } => {
-            issue_with_events(
-                "payment_quote_version_mismatch",
-                "quote_version",
-                "active order reducer reported payment quote version mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::PaymentEconomicsDigestMismatch { event_id } => {
-            issue_with_events(
-                "payment_economics_digest_mismatch",
-                "economics_digest",
-                "active order reducer reported payment economics digest mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::PaymentAmountMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentQuoteVersionMismatch { event_id } => issue_with_events(
+            "payment_quote_version_mismatch",
+            "quote_version",
+            "active order reducer reported payment quote version mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::PaymentEconomicsDigestMismatch { event_id } => issue_with_events(
+            "payment_economics_digest_mismatch",
+            "economics_digest",
+            "active order reducer reported payment economics digest mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::PaymentAmountMismatch { event_id } => issue_with_events(
             "payment_amount_mismatch",
             "amount",
             "active order reducer reported payment amount mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentCurrencyMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentCurrencyMismatch { event_id } => issue_with_events(
             "payment_currency_mismatch",
             "currency",
             "active order reducer reported payment currency mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::PaymentAfterCancellation { event_id } => {
-            issue_with_events(
-                "payment_after_cancellation",
-                "payment_event_id",
-                "active order reducer reported payment after cancellation",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::RevisionAfterPayment { event_id } => issue_with_events(
+        RadrootsOrderIssue::PaymentAfterCancellation { event_id } => issue_with_events(
+            "payment_after_cancellation",
+            "payment_event_id",
+            "active order reducer reported payment after cancellation",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::RevisionAfterPayment { event_id } => issue_with_events(
             "revision_after_payment",
             "revision_event_id",
             "active order reducer reported revision after payment",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::DuplicatePayments { event_ids } => issue_with_events(
+        RadrootsOrderIssue::DuplicatePayments { event_ids } => issue_with_events(
             "duplicate_payments",
             "payment_event_id",
             "active order reducer reported duplicate payment events",
             event_ids,
         ),
-        RadrootsActiveOrderReducerIssue::SettlementWithoutValidPayment { event_id } => {
-            issue_with_events(
-                "settlement_without_valid_payment",
-                "settlement_event_id",
-                "active order reducer reported settlement without valid payment",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementPayloadInvalid { event_id } => {
-            issue_with_events(
-                "invalid_settlement_payload",
-                "settlement_payload",
-                "active order reducer reported invalid settlement payload",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementOrderIdMismatch { event_id } => {
-            issue_with_events(
-                "settlement_order_id_mismatch",
-                "order_id",
-                "active order reducer reported settlement order id mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementAuthorMismatch { event_id } => {
-            issue_with_events(
-                "settlement_author_mismatch",
-                "seller_pubkey",
-                "active order reducer reported settlement author mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementCounterpartyMismatch { event_id } => {
-            issue_with_events(
-                "settlement_counterparty_mismatch",
-                "buyer_pubkey",
-                "active order reducer reported settlement counterparty mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementBuyerMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::SettlementWithoutValidPayment { event_id } => issue_with_events(
+            "settlement_without_valid_payment",
+            "settlement_event_id",
+            "active order reducer reported settlement without valid payment",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementPayloadInvalid { event_id } => issue_with_events(
+            "invalid_settlement_payload",
+            "settlement_payload",
+            "active order reducer reported invalid settlement payload",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementOrderIdMismatch { event_id } => issue_with_events(
+            "settlement_order_id_mismatch",
+            "order_id",
+            "active order reducer reported settlement order id mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementAuthorMismatch { event_id } => issue_with_events(
+            "settlement_author_mismatch",
+            "seller_pubkey",
+            "active order reducer reported settlement author mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementCounterpartyMismatch { event_id } => issue_with_events(
+            "settlement_counterparty_mismatch",
+            "buyer_pubkey",
+            "active order reducer reported settlement counterparty mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementBuyerMismatch { event_id } => issue_with_events(
             "settlement_buyer_mismatch",
             "buyer_pubkey",
             "active order reducer reported settlement buyer mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::SettlementSellerMismatch { event_id } => {
-            issue_with_events(
-                "settlement_seller_mismatch",
-                "seller_pubkey",
-                "active order reducer reported settlement seller mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementListingAddressInvalid { event_id } => {
-            issue_with_events(
-                "invalid_settlement_listing_address",
-                "listing_addr",
-                "active order reducer reported invalid settlement listing address",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementListingMismatch { event_id } => {
-            issue_with_events(
-                "settlement_listing_mismatch",
-                "listing_addr",
-                "active order reducer reported settlement listing mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementRootMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::SettlementSellerMismatch { event_id } => issue_with_events(
+            "settlement_seller_mismatch",
+            "seller_pubkey",
+            "active order reducer reported settlement seller mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementListingAddressInvalid { event_id } => issue_with_events(
+            "invalid_settlement_listing_address",
+            "listing_addr",
+            "active order reducer reported invalid settlement listing address",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementListingMismatch { event_id } => issue_with_events(
+            "settlement_listing_mismatch",
+            "listing_addr",
+            "active order reducer reported settlement listing mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementRootMismatch { event_id } => issue_with_events(
             "settlement_root_mismatch",
             "root_event_id",
             "active order reducer reported settlement root mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::SettlementPreviousMismatch { event_id } => {
-            issue_with_events(
-                "settlement_previous_mismatch",
-                "prev_event_id",
-                "active order reducer reported settlement previous mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementPaymentEventMismatch { event_id } => {
-            issue_with_events(
-                "settlement_payment_event_mismatch",
-                "payment_event_id",
-                "active order reducer reported settlement payment event mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementAgreementMismatch { event_id } => {
-            issue_with_events(
-                "settlement_agreement_mismatch",
-                "agreement_event_id",
-                "active order reducer reported settlement agreement mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementQuoteMismatch { event_id } => issue_with_events(
+        RadrootsOrderIssue::SettlementPreviousMismatch { event_id } => issue_with_events(
+            "settlement_previous_mismatch",
+            "prev_event_id",
+            "active order reducer reported settlement previous mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementPaymentEventMismatch { event_id } => issue_with_events(
+            "settlement_payment_event_mismatch",
+            "payment_event_id",
+            "active order reducer reported settlement payment event mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementAgreementMismatch { event_id } => issue_with_events(
+            "settlement_agreement_mismatch",
+            "agreement_event_id",
+            "active order reducer reported settlement agreement mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementQuoteMismatch { event_id } => issue_with_events(
             "settlement_quote_mismatch",
             "quote_id",
             "active order reducer reported settlement quote mismatch",
             vec![event_id],
         ),
-        RadrootsActiveOrderReducerIssue::SettlementQuoteVersionMismatch { event_id } => {
-            issue_with_events(
-                "settlement_quote_version_mismatch",
-                "quote_version",
-                "active order reducer reported settlement quote version mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementEconomicsDigestMismatch { event_id } => {
-            issue_with_events(
-                "settlement_economics_digest_mismatch",
-                "economics_digest",
-                "active order reducer reported settlement economics digest mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementAmountMismatch { event_id } => {
-            issue_with_events(
-                "settlement_amount_mismatch",
-                "amount",
-                "active order reducer reported settlement amount mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::SettlementCurrencyMismatch { event_id } => {
-            issue_with_events(
-                "settlement_currency_mismatch",
-                "currency",
-                "active order reducer reported settlement currency mismatch",
-                vec![event_id],
-            )
-        }
-        RadrootsActiveOrderReducerIssue::DuplicateSettlements { event_ids } => issue_with_events(
+        RadrootsOrderIssue::SettlementQuoteVersionMismatch { event_id } => issue_with_events(
+            "settlement_quote_version_mismatch",
+            "quote_version",
+            "active order reducer reported settlement quote version mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementEconomicsDigestMismatch { event_id } => issue_with_events(
+            "settlement_economics_digest_mismatch",
+            "economics_digest",
+            "active order reducer reported settlement economics digest mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementAmountMismatch { event_id } => issue_with_events(
+            "settlement_amount_mismatch",
+            "amount",
+            "active order reducer reported settlement amount mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::SettlementCurrencyMismatch { event_id } => issue_with_events(
+            "settlement_currency_mismatch",
+            "currency",
+            "active order reducer reported settlement currency mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::DuplicateSettlements { event_ids } => issue_with_events(
             "duplicate_settlements",
             "settlement_event_id",
             "active order reducer reported duplicate settlement events",
             event_ids,
         ),
-        RadrootsActiveOrderReducerIssue::ForkedLifecycle { event_ids } => issue_with_events(
+        RadrootsOrderIssue::ForkedLifecycle { event_ids } => issue_with_events(
             "forked_lifecycle",
             "event_id",
             "active order reducer reported forked lifecycle events",
@@ -5030,10 +4846,10 @@ fn order_settlement_base_view(
 
 const fn settlement_decision_protocol(
     decision: OrderSettlementDecisionArg,
-) -> RadrootsTradeSettlementDecision {
+) -> RadrootsOrderSettlementOutcome {
     match decision {
-        OrderSettlementDecisionArg::Accept => RadrootsTradeSettlementDecision::Accepted,
-        OrderSettlementDecisionArg::Reject => RadrootsTradeSettlementDecision::Rejected,
+        OrderSettlementDecisionArg::Accept => RadrootsOrderSettlementOutcome::Accepted,
+        OrderSettlementDecisionArg::Reject => RadrootsOrderSettlementOutcome::Rejected,
     }
 }
 
@@ -5115,7 +4931,7 @@ fn apply_order_payment_status(view: &mut OrderPaymentView, status: &OrderStatusV
     if let Some(economics) = status.economics.as_ref() {
         view.quote_id = Some(economics.quote_id.clone());
         view.quote_version = Some(economics.quote_version);
-        view.economics_digest = radroots_trade_order_economics_digest(economics).ok();
+        view.economics_digest = radroots_order_economics_digest(economics).ok();
         view.amount = Some(economics.total.amount);
         view.currency = Some(economics.total.currency);
     }
@@ -5151,7 +4967,7 @@ fn apply_order_settlement_status(view: &mut OrderSettlementView, status: &OrderS
         view.event_kind = payment
             .settlement_event_id
             .as_ref()
-            .map(|_| KIND_TRADE_SETTLEMENT_DECISION);
+            .map(|_| KIND_ORDER_SETTLEMENT_DECISION);
         view.agreement_event_id = payment.agreement_event_id.clone();
         view.prev_event_id = payment.payment_event_id.clone();
         view.quote_id = payment.quote_id.clone();
@@ -5243,7 +5059,7 @@ fn order_cancellation_preflight_view_from_status(
             .lifecycle
             .as_ref()
             .and_then(|lifecycle| lifecycle.event_id.clone());
-        view.event_kind = Some(KIND_TRADE_CANCEL);
+        view.event_kind = Some(KIND_ORDER_CANCELLATION);
     }
     view.reason = Some(match state {
         "missing" => format!("no active order events matched `{}`", args.key),
@@ -5356,7 +5172,7 @@ fn order_receipt_preflight_view_from_status(
             .lifecycle
             .as_ref()
             .and_then(|lifecycle| lifecycle.event_id.clone());
-        view.event_kind = Some(KIND_TRADE_RECEIPT);
+        view.event_kind = Some(KIND_ORDER_RECEIPT);
         if let Some(receipt) = status
             .lifecycle
             .as_ref()
@@ -5527,7 +5343,7 @@ fn order_payment_preflight_view_from_status(
         view.event_kind = payment
             .payment_event_id
             .as_ref()
-            .map(|_| KIND_TRADE_PAYMENT_RECORDED);
+            .map(|_| KIND_ORDER_PAYMENT_RECORD);
         view.quote_id = payment.quote_id.clone().or(view.quote_id);
         view.quote_version = payment.quote_version.or(view.quote_version);
         view.economics_digest = payment.economics_digest.clone().or(view.economics_digest);
@@ -5820,7 +5636,7 @@ fn order_fulfillment_preflight_view_from_status(
     config: &RuntimeConfig,
     args: &OrderFulfillmentArgs,
     status: &OrderStatusView,
-    current_fulfillment_status: Option<RadrootsActiveTradeFulfillmentState>,
+    current_fulfillment_status: Option<RadrootsOrderFulfillmentState>,
     current_fulfillment_event_id: Option<&str>,
 ) -> Option<OrderFulfillmentView> {
     let state = match status.state.as_str() {
@@ -5828,8 +5644,8 @@ fn order_fulfillment_preflight_view_from_status(
             if matches!(
                 current_fulfillment_status,
                 Some(
-                    RadrootsActiveTradeFulfillmentState::Delivered
-                        | RadrootsActiveTradeFulfillmentState::SellerCancelled
+                    RadrootsOrderFulfillmentState::Delivered
+                        | RadrootsOrderFulfillmentState::SellerCancelled
                 )
             ) {
                 "invalid"
@@ -5859,8 +5675,8 @@ fn order_fulfillment_preflight_view_from_status(
             if matches!(
                 current_fulfillment_status,
                 Some(
-                    RadrootsActiveTradeFulfillmentState::Delivered
-                        | RadrootsActiveTradeFulfillmentState::SellerCancelled
+                    RadrootsOrderFulfillmentState::Delivered
+                        | RadrootsOrderFulfillmentState::SellerCancelled
                 )
             ) =>
         {
@@ -6078,7 +5894,7 @@ fn order_decision_preflight_view_from_status(
     apply_order_decision_status(&mut view, status);
     if let Some(decision_event_id) = &status.decision_event_id {
         view.event_id = Some(decision_event_id.clone());
-        view.event_kind = Some(KIND_TRADE_ORDER_DECISION);
+        view.event_kind = Some(KIND_ORDER_DECISION);
     }
     view.reason = Some(match status.state.as_str() {
         "accepted" | "declined" => format!(
@@ -6265,7 +6081,7 @@ fn order_revision_preflight_view_from_status(
     apply_order_revision_status(&mut view, status);
     if let Some(record) = pending_revision {
         view.event_id = Some(record.event_id.clone());
-        view.event_kind = Some(KIND_TRADE_ORDER_REVISION);
+        view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
         view.revision_id = Some(record.payload.revision_id.clone());
     }
     view.reason = Some(match state {
@@ -6400,7 +6216,7 @@ fn order_revision_decision_preflight_view_from_status(
     if let Some(record) = pending_revision {
         apply_order_revision_decision_proposal(&mut view, record);
         view.event_id = Some(record.event_id.clone());
-        view.event_kind = Some(KIND_TRADE_ORDER_REVISION);
+        view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
     }
     view.reason = Some(match state {
         "missing" if status.state == "accepted" => format!(
@@ -6587,7 +6403,7 @@ fn order_accept_inventory_preflight_view(
         revision_decisions,
         fulfillments,
         cancellations,
-        Vec::<RadrootsActiveOrderReceiptRecord>::new(),
+        Vec::<RadrootsOrderReceiptRecord>::new(),
     );
     Ok(order_accept_inventory_preflight_view_from_projection(
         config, args, request, resolution, status, projection,
@@ -6746,7 +6562,7 @@ fn current_inventory_listing_from_receipt(
 }
 
 fn current_inventory_listing_from_parts(
-    parsed: RadrootsTradeListingAddress,
+    parsed: RadrootsOrderListingAddress,
     receipt: DirectRelayFetchReceipt,
 ) -> Result<Option<ResolvedInventoryListing>, RuntimeError> {
     let mut candidates = Vec::new();
@@ -6829,7 +6645,7 @@ fn fetch_listing_accounting_requests(
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_ORDER_REQUEST
+        if event_kind_u32(&event) != KIND_ORDER_REQUEST
             || !event_matches_tag_value(&event, "a", request.listing_addr.as_str())
         {
             continue;
@@ -6846,13 +6662,13 @@ fn fetch_listing_accounting_requests(
 fn fetch_listing_accounting_decisions(
     config: &RuntimeConfig,
     request: &ResolvedSellerOrderRequest,
-) -> Result<Vec<RadrootsActiveOrderDecisionRecord>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderDecisionRecord>, RuntimeError> {
     let filter = order_listing_decision_filter(request.listing_addr.as_str())?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_ORDER_DECISION
+        if event_kind_u32(&event) != KIND_ORDER_DECISION
             || !event_matches_tag_value(&event, "a", request.listing_addr.as_str())
         {
             continue;
@@ -6867,13 +6683,13 @@ fn fetch_listing_accounting_decisions(
 fn fetch_listing_accounting_fulfillments(
     config: &RuntimeConfig,
     request: &ResolvedSellerOrderRequest,
-) -> Result<Vec<RadrootsActiveOrderFulfillmentRecord>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderFulfillmentRecord>, RuntimeError> {
     let filter = order_listing_fulfillment_filter(request.listing_addr.as_str())?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_FULFILLMENT_UPDATE
+        if event_kind_u32(&event) != KIND_ORDER_FULFILLMENT_UPDATE
             || !event_matches_tag_value(&event, "a", request.listing_addr.as_str())
         {
             continue;
@@ -6888,13 +6704,13 @@ fn fetch_listing_accounting_fulfillments(
 fn fetch_listing_accounting_cancellations(
     config: &RuntimeConfig,
     request: &ResolvedSellerOrderRequest,
-) -> Result<Vec<RadrootsActiveOrderCancellationRecord>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderCancellationRecord>, RuntimeError> {
     let filter = order_listing_cancellation_filter(request.listing_addr.as_str())?;
     let receipt = fetch_events_from_relays(&config.relay.urls, filter)
         .map_err(|error| RuntimeError::Network(error.to_string()))?;
     let mut records = Vec::new();
     for event in receipt.events {
-        if event_kind_u32(&event) != KIND_TRADE_CANCEL
+        if event_kind_u32(&event) != KIND_ORDER_CANCELLATION
             || !event_matches_tag_value(&event, "a", request.listing_addr.as_str())
         {
             continue;
@@ -6911,16 +6727,14 @@ fn listing_accounting_request_from_event(
     event: &RadrootsNostrEvent,
 ) -> Result<ResolvedAccountingRequest, RuntimeError> {
     let event = radroots_event_from_nostr(event);
-    let envelope = active_trade_order_request_from_event(&event)
+    let envelope = order_request_from_event(&event)
         .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
-    let context = active_trade_event_context_from_tags(
-        RadrootsActiveTradeMessageType::TradeOrderRequested,
-        &event.tags,
-    )
-    .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
+    let context =
+        order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event.tags)
+            .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
     Ok(ResolvedAccountingRequest {
         listing_event_id: context.listing_event.as_ref().map(|event| event.id.clone()),
-        record: RadrootsActiveOrderRequestRecord {
+        record: RadrootsOrderRequestRecord {
             event_id: event.id,
             author_pubkey: event.author,
             payload: envelope.payload,
@@ -6930,11 +6744,11 @@ fn listing_accounting_request_from_event(
 
 fn active_request_record_from_resolved(
     request: &ResolvedSellerOrderRequest,
-) -> RadrootsActiveOrderRequestRecord {
-    RadrootsActiveOrderRequestRecord {
+) -> RadrootsOrderRequestRecord {
+    RadrootsOrderRequestRecord {
         event_id: request.request_event_id.clone(),
         author_pubkey: request.buyer_pubkey.clone(),
-        payload: RadrootsTradeOrderRequested {
+        payload: RadrootsOrderRequest {
             order_id: request.order_id.clone(),
             listing_addr: request.listing_addr.clone(),
             buyer_pubkey: request.buyer_pubkey.clone(),
@@ -6947,14 +6761,13 @@ fn active_request_record_from_resolved(
 
 fn proposed_accept_decision_record(
     request: &ResolvedSellerOrderRequest,
-) -> Result<RadrootsActiveOrderDecisionRecord, RuntimeError> {
+) -> Result<RadrootsOrderDecisionRecord, RuntimeError> {
     let payload = accepted_order_decision_payload_from_request(request);
-    let payload =
-        canonicalize_active_order_decision_for_signer(payload, request.seller_pubkey.as_str())
-            .map_err(|error| {
-                RuntimeError::Config(format!("canonicalize order decision: {error}"))
-            })?;
-    Ok(RadrootsActiveOrderDecisionRecord {
+    let payload = canonicalize_order_decision_for_signer(payload, request.seller_pubkey.as_str())
+        .map_err(|error| {
+        RuntimeError::Config(format!("canonicalize order decision: {error}"))
+    })?;
+    Ok(RadrootsOrderDecisionRecord {
         event_id: format!("pending_accept:{}", request.order_id),
         author_pubkey: request.seller_pubkey.clone(),
         counterparty_pubkey: request.buyer_pubkey.clone(),
@@ -6986,7 +6799,7 @@ fn order_decision_inventory_invalid_view(
 fn deferred_payment_status_event(event: &RadrootsNostrEvent) -> bool {
     matches!(
         event_kind_u32(event),
-        KIND_TRADE_PAYMENT_RECORDED | KIND_TRADE_SETTLEMENT_DECISION
+        KIND_ORDER_PAYMENT_RECORD | KIND_ORDER_SETTLEMENT_DECISION
     )
 }
 
@@ -6994,7 +6807,7 @@ fn listing_inventory_accounting_issue_view(
     issue_value: RadrootsListingInventoryAccountingIssue,
 ) -> OrderIssueView {
     match issue_value {
-        RadrootsListingInventoryAccountingIssue::InvalidActiveOrder {
+        RadrootsListingInventoryAccountingIssue::InvalidOrder {
             order_id,
             event_ids,
         } => issue_with_events(
@@ -7096,7 +6909,7 @@ fn order_revision_dry_run_view(
     config: &RuntimeConfig,
     args: &OrderRevisionProposeArgs,
     status: &OrderStatusView,
-    payload: &RadrootsTradeOrderRevisionProposed,
+    payload: &RadrootsOrderRevisionProposal,
 ) -> OrderRevisionProposalView {
     let mut view = order_revision_base_view(config, args, "dry_run", true);
     apply_order_revision_status(&mut view, status);
@@ -7112,7 +6925,7 @@ fn order_revision_decision_dry_run_view(
     args: &OrderRevisionDecisionArgs,
     status: &OrderStatusView,
     proposal: &OrderRevisionProposalRecord,
-    payload: &RadrootsTradeOrderRevisionDecisionEvent,
+    payload: &RadrootsOrderRevisionDecision,
 ) -> OrderRevisionDecisionView {
     let mut view = order_revision_decision_base_view(config, args, "dry_run", true);
     apply_order_revision_decision_status(&mut view, status);
@@ -7129,7 +6942,7 @@ fn order_fulfillment_dry_run_view(
     config: &RuntimeConfig,
     args: &OrderFulfillmentArgs,
     status: &OrderStatusView,
-    fulfillment_state: RadrootsActiveTradeFulfillmentState,
+    fulfillment_state: RadrootsOrderFulfillmentState,
 ) -> OrderFulfillmentView {
     let mut view = order_fulfillment_base_view(config, args, "dry_run", true);
     apply_order_fulfillment_status(&mut view, status);
@@ -7143,7 +6956,7 @@ fn order_fulfillment_dry_run_view(
 fn order_revision_payload_from_status(
     args: &OrderRevisionProposeArgs,
     status: &OrderStatusView,
-) -> Result<RadrootsTradeOrderRevisionProposed, RuntimeError> {
+) -> Result<RadrootsOrderRevisionProposal, RuntimeError> {
     let revision_id = next_revision_id();
     let economics = status.economics.clone().ok_or_else(|| {
         RuntimeError::Config("accepted order is missing current agreement economics".to_owned())
@@ -7152,12 +6965,12 @@ fn order_revision_payload_from_status(
     let items = economics
         .items
         .iter()
-        .map(|item| RadrootsTradeOrderItem {
+        .map(|item| RadrootsOrderItem {
             bin_id: item.bin_id.clone(),
             bin_count: item.bin_count,
         })
         .collect::<Vec<_>>();
-    Ok(RadrootsTradeOrderRevisionProposed {
+    Ok(RadrootsOrderRevisionProposal {
         revision_id,
         order_id: status.order_id.clone(),
         listing_addr: status.listing_addr.clone().ok_or_else(|| {
@@ -7188,8 +7001,8 @@ fn order_revision_payload_from_status(
 fn revised_order_economics(
     args: &OrderRevisionProposeArgs,
     revision_id: &str,
-    current: &RadrootsTradeOrderEconomics,
-) -> Result<RadrootsTradeOrderEconomics, RuntimeError> {
+    current: &RadrootsOrderEconomics,
+) -> Result<RadrootsOrderEconomics, RuntimeError> {
     let mut current_canonical = current.clone();
     current_canonical.canonicalize();
     let mut economics = current_canonical.clone();
@@ -7253,7 +7066,7 @@ fn revised_order_economics(
 fn revision_adjustment_line(
     args: &OrderRevisionProposeArgs,
     expected_currency: RadrootsCoreCurrency,
-) -> Result<Option<RadrootsTradeOrderEconomicLine>, RuntimeError> {
+) -> Result<Option<RadrootsOrderEconomicLine>, RuntimeError> {
     let Some(id) = args.adjustment_id.as_deref().and_then(non_empty_ref) else {
         return Ok(None);
     };
@@ -7263,8 +7076,8 @@ fn revision_adjustment_line(
         .and_then(non_empty_ref)
         .ok_or_else(|| RuntimeError::Config("revision adjustment effect is required".to_owned()))?
     {
-        "increase" => RadrootsTradeEconomicEffect::Increase,
-        "decrease" => RadrootsTradeEconomicEffect::Decrease,
+        "increase" => RadrootsOrderEconomicEffect::Increase,
+        "decrease" => RadrootsOrderEconomicEffect::Decrease,
         other => {
             return Err(RuntimeError::Config(format!(
                 "revision adjustment effect `{other}` is invalid"
@@ -7304,10 +7117,10 @@ fn revision_adjustment_line(
         .as_deref()
         .and_then(non_empty_ref)
         .ok_or_else(|| RuntimeError::Config("revision adjustment reason is required".to_owned()))?;
-    Ok(Some(RadrootsTradeOrderEconomicLine {
+    Ok(Some(RadrootsOrderEconomicLine {
         id: id.to_owned(),
-        kind: RadrootsTradeEconomicLineKind::RevisionAdjustment,
-        actor: RadrootsTradeEconomicActor::Seller,
+        kind: RadrootsOrderEconomicLineKind::RevisionAdjustment,
+        actor: RadrootsOrderEconomicActor::Seller,
         effect,
         amount: RadrootsCoreMoney::new(amount, currency),
         reason: reason.to_owned(),
@@ -7316,7 +7129,7 @@ fn revision_adjustment_line(
 
 fn order_revision_event_parts(
     status: &OrderStatusView,
-    payload: &RadrootsTradeOrderRevisionProposed,
+    payload: &RadrootsOrderRevisionProposal,
 ) -> Result<WireEventParts, RuntimeError> {
     let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
         RuntimeError::Config("accepted order is missing request_event_id".to_owned())
@@ -7333,16 +7146,16 @@ fn order_revision_event_parts(
             "order revision proposal payload chain does not match order status".to_owned(),
         ));
     }
-    active_trade_order_revision_proposal_event_build(root_event_id, prev_event_id, payload).map_err(
-        |error| RuntimeError::Config(format!("encode order revision proposal event: {error}")),
-    )
+    order_revision_proposal_event_build(root_event_id, prev_event_id, payload).map_err(|error| {
+        RuntimeError::Config(format!("encode order revision proposal event: {error}"))
+    })
 }
 
 fn order_revision_inventory_preflight_view(
     config: &RuntimeConfig,
     args: &OrderRevisionProposeArgs,
     status: &OrderStatusView,
-    payload: &RadrootsTradeOrderRevisionProposed,
+    payload: &RadrootsOrderRevisionProposal,
 ) -> Option<OrderRevisionProposalView> {
     let issues = order_revision_inventory_issues(status, payload);
     if issues.is_empty() {
@@ -7361,7 +7174,7 @@ fn order_revision_inventory_preflight_view(
 
 fn order_revision_inventory_issues(
     status: &OrderStatusView,
-    payload: &RadrootsTradeOrderRevisionProposed,
+    payload: &RadrootsOrderRevisionProposal,
 ) -> Vec<OrderIssueView> {
     let Some(current) = status.economics.as_ref() else {
         return vec![issue_with_code(
@@ -7431,7 +7244,7 @@ fn order_revision_inventory_issues(
 
 fn apply_order_revision_payload(
     view: &mut OrderRevisionProposalView,
-    payload: &RadrootsTradeOrderRevisionProposed,
+    payload: &RadrootsOrderRevisionProposal,
 ) {
     view.revision_id = Some(payload.revision_id.clone());
     view.root_event_id = Some(payload.root_event_id.clone());
@@ -7455,7 +7268,7 @@ fn apply_order_revision_decision_proposal(
     view.root_event_id = Some(proposal.payload.root_event_id.clone());
     view.prev_event_id = Some(proposal.event_id.clone());
     view.event_id = Some(proposal.event_id.clone());
-    view.event_kind = Some(KIND_TRADE_ORDER_REVISION);
+    view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
     if view.decision.as_deref() == Some("accepted") {
         view.economics = Some(proposal.payload.economics.clone());
     }
@@ -7464,22 +7277,19 @@ fn apply_order_revision_decision_proposal(
 fn apply_order_revision_decision_payload(
     view: &mut OrderRevisionDecisionView,
     proposal: &OrderRevisionProposalRecord,
-    payload: &RadrootsTradeOrderRevisionDecisionEvent,
+    payload: &RadrootsOrderRevisionDecision,
 ) {
     view.revision_id = Some(payload.revision_id.clone());
     view.root_event_id = Some(payload.root_event_id.clone());
     view.prev_event_id = Some(payload.prev_event_id.clone());
     view.decision = Some(
         match &payload.decision {
-            RadrootsTradeOrderRevisionDecision::Accepted => "accepted",
-            RadrootsTradeOrderRevisionDecision::Declined { .. } => "declined",
+            RadrootsOrderRevisionOutcome::Accepted => "accepted",
+            RadrootsOrderRevisionOutcome::Declined { .. } => "declined",
         }
         .to_owned(),
     );
-    if matches!(
-        payload.decision,
-        RadrootsTradeOrderRevisionDecision::Accepted
-    ) {
+    if matches!(payload.decision, RadrootsOrderRevisionOutcome::Accepted) {
         view.agreement_event_id = view.event_id.clone();
         view.economics = Some(proposal.payload.economics.clone());
     }
@@ -7488,9 +7298,9 @@ fn apply_order_revision_decision_payload(
 fn order_revision_decision_payload_from_proposal(
     args: &OrderRevisionDecisionArgs,
     proposal: &OrderRevisionProposalRecord,
-) -> Result<RadrootsTradeOrderRevisionDecisionEvent, RuntimeError> {
+) -> Result<RadrootsOrderRevisionDecision, RuntimeError> {
     let decision = match args.decision {
-        OrderRevisionDecisionArg::Accept => RadrootsTradeOrderRevisionDecision::Accepted,
+        OrderRevisionDecisionArg::Accept => RadrootsOrderRevisionOutcome::Accepted,
         OrderRevisionDecisionArg::Decline => {
             let reason = args
                 .reason
@@ -7502,12 +7312,12 @@ fn order_revision_decision_payload_from_proposal(
                         "order revision decline requires a non-empty reason".to_owned(),
                     )
                 })?;
-            RadrootsTradeOrderRevisionDecision::Declined {
+            RadrootsOrderRevisionOutcome::Declined {
                 reason: reason.to_owned(),
             }
         }
     };
-    Ok(RadrootsTradeOrderRevisionDecisionEvent {
+    Ok(RadrootsOrderRevisionDecision {
         revision_id: proposal.payload.revision_id.clone(),
         order_id: proposal.payload.order_id.clone(),
         listing_addr: proposal.payload.listing_addr.clone(),
@@ -7520,9 +7330,9 @@ fn order_revision_decision_payload_from_proposal(
 }
 
 fn order_revision_decision_event_parts(
-    payload: &RadrootsTradeOrderRevisionDecisionEvent,
+    payload: &RadrootsOrderRevisionDecision,
 ) -> Result<WireEventParts, RuntimeError> {
-    active_trade_order_revision_decision_event_build(
+    order_revision_decision_event_build(
         payload.root_event_id.as_str(),
         payload.prev_event_id.as_str(),
         payload,
@@ -7532,9 +7342,9 @@ fn order_revision_decision_event_parts(
 
 fn order_fulfillment_payload_from_status(
     status: &OrderStatusView,
-    fulfillment_state: RadrootsActiveTradeFulfillmentState,
-) -> Result<RadrootsTradeFulfillmentUpdated, RuntimeError> {
-    Ok(RadrootsTradeFulfillmentUpdated {
+    fulfillment_state: RadrootsOrderFulfillmentState,
+) -> Result<RadrootsOrderFulfillmentUpdate, RuntimeError> {
+    Ok(RadrootsOrderFulfillmentUpdate {
         order_id: status.order_id.clone(),
         listing_addr: status.listing_addr.clone().ok_or_else(|| {
             RuntimeError::Config("accepted order is missing listing_addr".to_owned())
@@ -7551,7 +7361,7 @@ fn order_fulfillment_payload_from_status(
 
 fn order_fulfillment_event_parts(
     status: &OrderStatusView,
-    payload: &RadrootsTradeFulfillmentUpdated,
+    payload: &RadrootsOrderFulfillmentUpdate,
 ) -> Result<WireEventParts, RuntimeError> {
     let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
         RuntimeError::Config("accepted order is missing request_event_id".to_owned())
@@ -7563,15 +7373,15 @@ fn order_fulfillment_event_parts(
         .ok_or_else(|| {
             RuntimeError::Config("accepted order is missing previous event id".to_owned())
         })?;
-    active_trade_fulfillment_update_event_build(root_event_id, prev_event_id, payload)
+    order_fulfillment_update_event_build(root_event_id, prev_event_id, payload)
         .map_err(|error| RuntimeError::Config(format!("encode fulfillment update event: {error}")))
 }
 
 fn order_cancellation_payload_from_status(
     args: &OrderCancelArgs,
     status: &OrderStatusView,
-) -> Result<RadrootsTradeOrderCancelled, RuntimeError> {
-    Ok(RadrootsTradeOrderCancelled {
+) -> Result<RadrootsOrderCancellation, RuntimeError> {
+    Ok(RadrootsOrderCancellation {
         order_id: status.order_id.clone(),
         listing_addr: status.listing_addr.clone().ok_or_else(|| {
             RuntimeError::Config("cancellable order is missing listing_addr".to_owned())
@@ -7588,7 +7398,7 @@ fn order_cancellation_payload_from_status(
 
 fn order_cancellation_event_parts(
     status: &OrderStatusView,
-    payload: &RadrootsTradeOrderCancelled,
+    payload: &RadrootsOrderCancellation,
 ) -> Result<WireEventParts, RuntimeError> {
     let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
         RuntimeError::Config("cancellable order is missing request_event_id".to_owned())
@@ -7596,15 +7406,15 @@ fn order_cancellation_event_parts(
     let prev_event_id = order_cancellation_prev_event_id(status).ok_or_else(|| {
         RuntimeError::Config("cancellable order is missing previous event id".to_owned())
     })?;
-    active_trade_order_cancel_event_build(root_event_id, prev_event_id.as_str(), payload)
+    order_cancellation_event_build(root_event_id, prev_event_id.as_str(), payload)
         .map_err(|error| RuntimeError::Config(format!("encode order cancellation event: {error}")))
 }
 
 fn order_receipt_payload_from_status(
     args: &OrderReceiptArgs,
     status: &OrderStatusView,
-) -> Result<RadrootsTradeBuyerReceipt, RuntimeError> {
-    Ok(RadrootsTradeBuyerReceipt {
+) -> Result<RadrootsOrderReceipt, RuntimeError> {
+    Ok(RadrootsOrderReceipt {
         order_id: status.order_id.clone(),
         listing_addr: status.listing_addr.clone().ok_or_else(|| {
             RuntimeError::Config("receiptable order is missing listing_addr".to_owned())
@@ -7638,7 +7448,7 @@ fn order_receipt_payload_from_status(
 
 fn order_receipt_event_parts(
     status: &OrderStatusView,
-    payload: &RadrootsTradeBuyerReceipt,
+    payload: &RadrootsOrderReceipt,
 ) -> Result<WireEventParts, RuntimeError> {
     let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
         RuntimeError::Config("receiptable order is missing request_event_id".to_owned())
@@ -7648,14 +7458,14 @@ fn order_receipt_event_parts(
             "receiptable order is missing eligible fulfillment event id".to_owned(),
         )
     })?;
-    active_trade_buyer_receipt_event_build(root_event_id, prev_event_id.as_str(), payload)
+    order_receipt_event_build(root_event_id, prev_event_id.as_str(), payload)
         .map_err(|error| RuntimeError::Config(format!("encode buyer receipt event: {error}")))
 }
 
 fn order_payment_payload_from_status(
     args: &OrderPaymentArgs,
     status: &OrderStatusView,
-) -> Result<RadrootsTradePaymentRecorded, RuntimeError> {
+) -> Result<RadrootsOrderPaymentRecord, RuntimeError> {
     let economics = status
         .economics
         .as_ref()
@@ -7675,7 +7485,7 @@ fn order_payment_payload_from_status(
             "payment currency must match accepted agreement currency".to_owned(),
         ));
     }
-    Ok(RadrootsTradePaymentRecorded {
+    Ok(RadrootsOrderPaymentRecord {
         order_id: status.order_id.clone(),
         listing_addr: status.listing_addr.clone().ok_or_else(|| {
             RuntimeError::Config("payable order is missing listing_addr".to_owned())
@@ -7695,7 +7505,7 @@ fn order_payment_payload_from_status(
         agreement_event_id,
         quote_id: economics.quote_id.clone(),
         quote_version: economics.quote_version,
-        economics_digest: radroots_trade_order_economics_digest(economics)
+        economics_digest: radroots_order_economics_digest(economics)
             .map_err(|error| RuntimeError::Config(error.to_string()))?,
         amount,
         currency,
@@ -7712,7 +7522,7 @@ fn order_payment_payload_from_status(
 
 fn order_payment_event_parts(
     status: &OrderStatusView,
-    payload: &RadrootsTradePaymentRecorded,
+    payload: &RadrootsOrderPaymentRecord,
 ) -> Result<WireEventParts, RuntimeError> {
     let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
         RuntimeError::Config("payable order is missing request_event_id".to_owned())
@@ -7720,14 +7530,14 @@ fn order_payment_event_parts(
     let prev_event_id = order_payment_prev_event_id(status).ok_or_else(|| {
         RuntimeError::Config("payable order is missing payment previous event id".to_owned())
     })?;
-    active_trade_payment_recorded_event_build(root_event_id, prev_event_id.as_str(), payload)
+    order_payment_record_event_build(root_event_id, prev_event_id.as_str(), payload)
         .map_err(|error| RuntimeError::Config(format!("encode payment recorded event: {error}")))
 }
 
 fn order_settlement_payload_from_status(
     args: &OrderSettlementArgs,
     status: &OrderStatusView,
-) -> Result<RadrootsTradeSettlementDecisionEvent, RuntimeError> {
+) -> Result<RadrootsOrderSettlementDecision, RuntimeError> {
     let payment = status
         .payment
         .as_ref()
@@ -7746,7 +7556,7 @@ fn order_settlement_payload_from_status(
         ));
     }
     let decision = settlement_decision_protocol(args.decision);
-    Ok(RadrootsTradeSettlementDecisionEvent {
+    Ok(RadrootsOrderSettlementDecision {
         order_id: status.order_id.clone(),
         listing_addr: status.listing_addr.clone().ok_or_else(|| {
             RuntimeError::Config("settleable order is missing listing_addr".to_owned())
@@ -7799,23 +7609,16 @@ fn order_settlement_payload_from_status(
 
 fn order_settlement_event_parts(
     status: &OrderStatusView,
-    payload: &RadrootsTradeSettlementDecisionEvent,
+    payload: &RadrootsOrderSettlementDecision,
 ) -> Result<WireEventParts, RuntimeError> {
     let root_event_id = status.request_event_id.as_deref().ok_or_else(|| {
         RuntimeError::Config("settleable order is missing request_event_id".to_owned())
     })?;
-    active_trade_settlement_decision_event_build(
-        root_event_id,
-        payload.payment_event_id.as_str(),
-        payload,
-    )
-    .map_err(|error| RuntimeError::Config(format!("encode settlement decision event: {error}")))
+    order_settlement_decision_event_build(root_event_id, payload.payment_event_id.as_str(), payload)
+        .map_err(|error| RuntimeError::Config(format!("encode settlement decision event: {error}")))
 }
 
-fn apply_order_payment_payload(
-    view: &mut OrderPaymentView,
-    payload: &RadrootsTradePaymentRecorded,
-) {
+fn apply_order_payment_payload(view: &mut OrderPaymentView, payload: &RadrootsOrderPaymentRecord) {
     view.root_event_id = Some(payload.root_event_id.clone());
     view.prev_event_id = Some(payload.previous_event_id.clone());
     view.agreement_event_id = Some(payload.agreement_event_id.clone());
@@ -7831,7 +7634,7 @@ fn apply_order_payment_payload(
 
 fn apply_order_settlement_payload(
     view: &mut OrderSettlementView,
-    payload: &RadrootsTradeSettlementDecisionEvent,
+    payload: &RadrootsOrderSettlementDecision,
 ) {
     view.root_event_id = Some(payload.root_event_id.clone());
     view.prev_event_id = Some(payload.previous_event_id.clone());
@@ -7863,7 +7666,7 @@ fn order_receipt_dry_run_view(
     config: &RuntimeConfig,
     args: &OrderReceiptArgs,
     status: &OrderStatusView,
-    payload: &RadrootsTradeBuyerReceipt,
+    payload: &RadrootsOrderReceipt,
 ) -> OrderReceiptView {
     let mut view = order_receipt_base_view(config, args, "dry_run", true);
     apply_order_receipt_status(&mut view, status);
@@ -7879,7 +7682,7 @@ fn order_payment_dry_run_view(
     config: &RuntimeConfig,
     args: &OrderPaymentArgs,
     status: &OrderStatusView,
-    payload: &RadrootsTradePaymentRecorded,
+    payload: &RadrootsOrderPaymentRecord,
 ) -> OrderPaymentView {
     let mut view = order_payment_base_view(config, args, "dry_run", true);
     apply_order_payment_status(&mut view, status);
@@ -7893,7 +7696,7 @@ fn order_settlement_dry_run_view(
     config: &RuntimeConfig,
     args: &OrderSettlementArgs,
     status: &OrderStatusView,
-    payload: &RadrootsTradeSettlementDecisionEvent,
+    payload: &RadrootsOrderSettlementDecision,
 ) -> OrderSettlementView {
     let mut view = order_settlement_base_view(config, args, "dry_run", true);
     apply_order_settlement_status(&mut view, status);
@@ -7908,7 +7711,7 @@ fn publish_order_revision(
     args: &OrderRevisionProposeArgs,
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
-    payload: RadrootsTradeOrderRevisionProposed,
+    payload: RadrootsOrderRevisionProposal,
 ) -> Result<OrderRevisionProposalView, RuntimeError> {
     let parts = order_revision_event_parts(&status, &payload)?;
     let event_kind = parts.kind;
@@ -7925,7 +7728,7 @@ fn publish_order_revision_decision(
     status: OrderStatusView,
     proposal: &OrderRevisionProposalRecord,
     signing: account::AccountSigningIdentity,
-    payload: RadrootsTradeOrderRevisionDecisionEvent,
+    payload: RadrootsOrderRevisionDecision,
 ) -> Result<OrderRevisionDecisionView, RuntimeError> {
     let parts = order_revision_decision_event_parts(&payload)?;
     let event_kind = parts.kind;
@@ -7940,7 +7743,7 @@ fn published_order_revision_view(
     config: &RuntimeConfig,
     args: &OrderRevisionProposeArgs,
     status: &OrderStatusView,
-    payload: &RadrootsTradeOrderRevisionProposed,
+    payload: &RadrootsOrderRevisionProposal,
     event_kind: u32,
     receipt: DirectRelayPublishReceipt,
 ) -> OrderRevisionProposalView {
@@ -7971,7 +7774,7 @@ fn published_order_revision_decision_view(
     args: &OrderRevisionDecisionArgs,
     status: &OrderStatusView,
     proposal: &OrderRevisionProposalRecord,
-    payload: &RadrootsTradeOrderRevisionDecisionEvent,
+    payload: &RadrootsOrderRevisionDecision,
     event_kind: u32,
     receipt: DirectRelayPublishReceipt,
 ) -> OrderRevisionDecisionView {
@@ -7986,8 +7789,8 @@ fn published_order_revision_decision_view(
         failed_relays,
     } = receipt;
     let state = match payload.decision {
-        RadrootsTradeOrderRevisionDecision::Accepted => "accepted",
-        RadrootsTradeOrderRevisionDecision::Declined { .. } => "declined",
+        RadrootsOrderRevisionOutcome::Accepted => "accepted",
+        RadrootsOrderRevisionOutcome::Declined { .. } => "declined",
     };
     let mut view = order_revision_decision_base_view(config, args, state, false);
     apply_order_revision_decision_status(&mut view, status);
@@ -7997,10 +7800,7 @@ fn published_order_revision_decision_view(
     view.prev_event_id = Some(payload.prev_event_id.clone());
     view.event_id = Some(event_id.clone());
     view.event_kind = Some(event_kind);
-    if matches!(
-        payload.decision,
-        RadrootsTradeOrderRevisionDecision::Accepted
-    ) {
+    if matches!(payload.decision, RadrootsOrderRevisionOutcome::Accepted) {
         view.agreement_event_id = Some(event_id);
     }
     view.target_relays = target_relays;
@@ -8014,7 +7814,7 @@ fn publish_order_fulfillment(
     args: &OrderFulfillmentArgs,
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
-    payload: RadrootsTradeFulfillmentUpdated,
+    payload: RadrootsOrderFulfillmentUpdate,
 ) -> Result<OrderFulfillmentView, RuntimeError> {
     let parts = order_fulfillment_event_parts(&status, &payload)?;
     let event_kind = parts.kind;
@@ -8035,7 +7835,7 @@ fn publish_order_cancellation(
     args: &OrderCancelArgs,
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
-    payload: RadrootsTradeOrderCancelled,
+    payload: RadrootsOrderCancellation,
 ) -> Result<OrderCancellationView, RuntimeError> {
     let parts = order_cancellation_event_parts(&status, &payload)?;
     let event_kind = parts.kind;
@@ -8051,7 +7851,7 @@ fn publish_order_receipt(
     args: &OrderReceiptArgs,
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
-    payload: RadrootsTradeBuyerReceipt,
+    payload: RadrootsOrderReceipt,
 ) -> Result<OrderReceiptView, RuntimeError> {
     let parts = order_receipt_event_parts(&status, &payload)?;
     let event_kind = parts.kind;
@@ -8067,7 +7867,7 @@ fn publish_order_payment(
     args: &OrderPaymentArgs,
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
-    payload: RadrootsTradePaymentRecorded,
+    payload: RadrootsOrderPaymentRecord,
 ) -> Result<OrderPaymentView, RuntimeError> {
     let parts = order_payment_event_parts(&status, &payload)?;
     let event_kind = parts.kind;
@@ -8083,7 +7883,7 @@ fn publish_order_settlement(
     args: &OrderSettlementArgs,
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
-    payload: RadrootsTradeSettlementDecisionEvent,
+    payload: RadrootsOrderSettlementDecision,
 ) -> Result<OrderSettlementView, RuntimeError> {
     let parts = order_settlement_event_parts(&status, &payload)?;
     let event_kind = parts.kind;
@@ -8098,7 +7898,7 @@ fn published_order_fulfillment_view(
     config: &RuntimeConfig,
     args: &OrderFulfillmentArgs,
     status: &OrderStatusView,
-    fulfillment_state: RadrootsActiveTradeFulfillmentState,
+    fulfillment_state: RadrootsOrderFulfillmentState,
     event_kind: u32,
     receipt: DirectRelayPublishReceipt,
 ) -> OrderFulfillmentView {
@@ -8155,7 +7955,7 @@ fn published_order_receipt_view(
     config: &RuntimeConfig,
     args: &OrderReceiptArgs,
     status: &OrderStatusView,
-    payload: &RadrootsTradeBuyerReceipt,
+    payload: &RadrootsOrderReceipt,
     event_kind: u32,
     receipt: DirectRelayPublishReceipt,
 ) -> OrderReceiptView {
@@ -8191,7 +7991,7 @@ fn published_order_payment_view(
     config: &RuntimeConfig,
     args: &OrderPaymentArgs,
     status: &OrderStatusView,
-    payload: &RadrootsTradePaymentRecorded,
+    payload: &RadrootsOrderPaymentRecord,
     event_kind: u32,
     receipt: DirectRelayPublishReceipt,
 ) -> OrderPaymentView {
@@ -8220,7 +8020,7 @@ fn published_order_settlement_view(
     config: &RuntimeConfig,
     args: &OrderSettlementArgs,
     status: &OrderStatusView,
-    payload: &RadrootsTradeSettlementDecisionEvent,
+    payload: &RadrootsOrderSettlementDecision,
     event_kind: u32,
     receipt: DirectRelayPublishReceipt,
 ) -> OrderSettlementView {
@@ -8433,20 +8233,18 @@ fn seller_order_request_from_event(
     order_id: &str,
 ) -> Result<ResolvedSellerOrderRequest, RuntimeError> {
     let event_kind = event_kind_u32(event);
-    if event_kind != KIND_TRADE_ORDER_REQUEST {
+    if event_kind != KIND_ORDER_REQUEST {
         return Err(RuntimeError::Config(format!(
             "order decision received unexpected kind `{event_kind}`"
         )));
     }
 
     let event = radroots_event_from_nostr(event);
-    let envelope = active_trade_order_request_from_event(&event)
+    let envelope = order_request_from_event(&event)
         .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
-    let context = active_trade_event_context_from_tags(
-        RadrootsActiveTradeMessageType::TradeOrderRequested,
-        &event.tags,
-    )
-    .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
+    let context =
+        order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event.tags)
+            .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
 
     if envelope.order_id != order_id || envelope.payload.order_id != order_id {
         return Err(RuntimeError::Config(
@@ -8489,10 +8287,10 @@ fn publish_order_decision(
     request: ResolvedSellerOrderRequest,
     resolution: SellerOrderRequestResolution,
     signing: account::AccountSigningIdentity,
-    payload: RadrootsTradeOrderDecisionEvent,
+    payload: RadrootsOrderDecision,
     inventory: Option<OrderInventoryView>,
 ) -> Result<OrderDecisionView, RuntimeError> {
-    let parts = active_trade_order_decision_event_build(
+    let parts = order_decision_event_build(
         request.request_event_id.as_str(),
         request.request_event_id.as_str(),
         &payload,
@@ -8511,16 +8309,16 @@ fn canonical_order_decision_payload(
     args: &OrderDecisionArgs,
     request: &ResolvedSellerOrderRequest,
     signer_pubkey: &str,
-) -> Result<RadrootsTradeOrderDecisionEvent, RuntimeError> {
+) -> Result<RadrootsOrderDecision, RuntimeError> {
     let payload = order_decision_payload_from_request(args, request)?;
-    canonicalize_active_order_decision_for_signer(payload, signer_pubkey)
+    canonicalize_order_decision_for_signer(payload, signer_pubkey)
         .map_err(|error| RuntimeError::Config(format!("canonicalize order decision: {error}")))
 }
 
 fn order_decision_payload_from_request(
     args: &OrderDecisionArgs,
     request: &ResolvedSellerOrderRequest,
-) -> Result<RadrootsTradeOrderDecisionEvent, RuntimeError> {
+) -> Result<RadrootsOrderDecision, RuntimeError> {
     match args.decision {
         OrderDecisionArg::Accept => Ok(accepted_order_decision_payload_from_request(request)),
         OrderDecisionArg::Decline => {
@@ -8541,17 +8339,17 @@ fn order_decision_payload_from_request(
 
 fn accepted_order_decision_payload_from_request(
     request: &ResolvedSellerOrderRequest,
-) -> RadrootsTradeOrderDecisionEvent {
-    RadrootsTradeOrderDecisionEvent {
+) -> RadrootsOrderDecision {
+    RadrootsOrderDecision {
         order_id: request.order_id.clone(),
         listing_addr: request.listing_addr.clone(),
         buyer_pubkey: request.buyer_pubkey.clone(),
         seller_pubkey: request.seller_pubkey.clone(),
-        decision: RadrootsTradeOrderDecision::Accepted {
+        decision: RadrootsOrderDecisionOutcome::Accepted {
             inventory_commitments: request
                 .items
                 .iter()
-                .map(|item| RadrootsTradeInventoryCommitment {
+                .map(|item| RadrootsOrderInventoryCommitment {
                     bin_id: item.bin_id.clone(),
                     bin_count: item.bin_count,
                 })
@@ -8563,13 +8361,13 @@ fn accepted_order_decision_payload_from_request(
 fn declined_order_decision_payload_from_request(
     request: &ResolvedSellerOrderRequest,
     reason: &str,
-) -> RadrootsTradeOrderDecisionEvent {
-    RadrootsTradeOrderDecisionEvent {
+) -> RadrootsOrderDecision {
+    RadrootsOrderDecision {
         order_id: request.order_id.clone(),
         listing_addr: request.listing_addr.clone(),
         buyer_pubkey: request.buyer_pubkey.clone(),
         seller_pubkey: request.seller_pubkey.clone(),
-        decision: RadrootsTradeOrderDecision::Declined {
+        decision: RadrootsOrderDecisionOutcome::Declined {
             reason: reason.to_owned(),
         },
     }
@@ -8630,20 +8428,18 @@ fn order_event_list_entry_from_event(
     seller_pubkey: &str,
 ) -> Result<OrderEventListEntryView, RuntimeError> {
     let event_kind = event_kind_u32(event);
-    if event_kind != KIND_TRADE_ORDER_REQUEST {
+    if event_kind != KIND_ORDER_REQUEST {
         return Err(RuntimeError::Config(format!(
             "order event list received unexpected kind `{event_kind}`"
         )));
     }
 
     let event = radroots_event_from_nostr(event);
-    let envelope = active_trade_order_request_from_event(&event)
+    let envelope = order_request_from_event(&event)
         .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
-    let context = active_trade_event_context_from_tags(
-        RadrootsActiveTradeMessageType::TradeOrderRequested,
-        &event.tags,
-    )
-    .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
+    let context =
+        order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event.tags)
+            .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
 
     if context.counterparty_pubkey != seller_pubkey
         || envelope.payload.seller_pubkey != seller_pubkey
@@ -8682,7 +8478,7 @@ fn order_request_filter(
     order_id: Option<&str>,
 ) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
-        .kind(radroots_nostr_kind(KIND_TRADE_ORDER_REQUEST as u16))
+        .kind(radroots_nostr_kind(KIND_ORDER_REQUEST as u16))
         .limit(1_000);
     let filter = radroots_nostr_filter_tag(filter, "p", vec![seller_pubkey.to_owned()])
         .map_err(|error| RuntimeError::Config(format!("build order event filter: {error}")))?;
@@ -8694,7 +8490,7 @@ fn order_request_filter(
 }
 
 fn listing_event_filter(
-    listing_addr: &RadrootsTradeListingAddress,
+    listing_addr: &RadrootsOrderListingAddress,
 ) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
         .kind(radroots_nostr_kind(KIND_LISTING as u16))
@@ -8708,7 +8504,7 @@ fn order_listing_request_filter(
     listing_addr: &str,
 ) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
-        .kind(radroots_nostr_kind(KIND_TRADE_ORDER_REQUEST as u16))
+        .kind(radroots_nostr_kind(KIND_ORDER_REQUEST as u16))
         .limit(1_000);
     let filter = radroots_nostr_filter_tag(filter, "p", vec![seller_pubkey.to_owned()])
         .map_err(|error| RuntimeError::Config(format!("build order request filter: {error}")))?;
@@ -8718,7 +8514,7 @@ fn order_listing_request_filter(
 
 fn order_listing_decision_filter(listing_addr: &str) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
-        .kind(radroots_nostr_kind(KIND_TRADE_ORDER_DECISION as u16))
+        .kind(radroots_nostr_kind(KIND_ORDER_DECISION as u16))
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "a", vec![listing_addr.to_owned()])
         .map_err(|error| RuntimeError::Config(format!("build order decision filter: {error}")))
@@ -8728,7 +8524,7 @@ fn order_listing_revision_proposal_filter(
     listing_addr: &str,
 ) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
-        .kind(radroots_nostr_kind(KIND_TRADE_ORDER_REVISION as u16))
+        .kind(radroots_nostr_kind(KIND_ORDER_REVISION_PROPOSAL as u16))
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "a", vec![listing_addr.to_owned()])
         .map_err(|error| RuntimeError::Config(format!("build revision proposal filter: {error}")))
@@ -8738,9 +8534,7 @@ fn order_listing_revision_decision_filter(
     listing_addr: &str,
 ) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
-        .kind(radroots_nostr_kind(
-            KIND_TRADE_ORDER_REVISION_RESPONSE as u16,
-        ))
+        .kind(radroots_nostr_kind(KIND_ORDER_REVISION_DECISION as u16))
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "a", vec![listing_addr.to_owned()])
         .map_err(|error| RuntimeError::Config(format!("build revision decision filter: {error}")))
@@ -8750,7 +8544,7 @@ fn order_listing_fulfillment_filter(
     listing_addr: &str,
 ) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
-        .kind(radroots_nostr_kind(KIND_TRADE_FULFILLMENT_UPDATE as u16))
+        .kind(radroots_nostr_kind(KIND_ORDER_FULFILLMENT_UPDATE as u16))
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "a", vec![listing_addr.to_owned()])
         .map_err(|error| RuntimeError::Config(format!("build fulfillment filter: {error}")))
@@ -8760,7 +8554,7 @@ fn order_listing_cancellation_filter(
     listing_addr: &str,
 ) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
-        .kind(radroots_nostr_kind(KIND_TRADE_CANCEL as u16))
+        .kind(radroots_nostr_kind(KIND_ORDER_CANCELLATION as u16))
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "a", vec![listing_addr.to_owned()])
         .map_err(|error| RuntimeError::Config(format!("build cancellation filter: {error}")))
@@ -8769,13 +8563,13 @@ fn order_listing_cancellation_filter(
 fn order_status_filter(order_id: &str) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
         .kinds([
-            radroots_nostr_kind(KIND_TRADE_ORDER_REQUEST as u16),
-            radroots_nostr_kind(KIND_TRADE_ORDER_DECISION as u16),
-            radroots_nostr_kind(KIND_TRADE_ORDER_REVISION as u16),
-            radroots_nostr_kind(KIND_TRADE_ORDER_REVISION_RESPONSE as u16),
-            radroots_nostr_kind(KIND_TRADE_FULFILLMENT_UPDATE as u16),
-            radroots_nostr_kind(KIND_TRADE_CANCEL as u16),
-            radroots_nostr_kind(KIND_TRADE_RECEIPT as u16),
+            radroots_nostr_kind(KIND_ORDER_REQUEST as u16),
+            radroots_nostr_kind(KIND_ORDER_DECISION as u16),
+            radroots_nostr_kind(KIND_ORDER_REVISION_PROPOSAL as u16),
+            radroots_nostr_kind(KIND_ORDER_REVISION_DECISION as u16),
+            radroots_nostr_kind(KIND_ORDER_FULFILLMENT_UPDATE as u16),
+            radroots_nostr_kind(KIND_ORDER_CANCELLATION as u16),
+            radroots_nostr_kind(KIND_ORDER_RECEIPT as u16),
         ])
         .limit(1_000);
     radroots_nostr_filter_tag(filter, "d", vec![order_id.to_owned()])
@@ -8944,7 +8738,7 @@ fn resolve_trade_product_by_listing_addr(
 fn resolve_active_listing_event_id(
     config: &RuntimeConfig,
     listing_addr: &str,
-    parsed: &RadrootsTradeListingAddress,
+    parsed: &RadrootsOrderListingAddress,
 ) -> Result<Option<String>, RuntimeError> {
     if !config.local.replica_db_path.exists() {
         return Ok(None);
@@ -9105,7 +8899,7 @@ fn order_economics_from_resolved_listing(
     resolved_listing: Option<&ResolvedOrderListing>,
     items: &[OrderDraftItem],
     adjustments: &[crate::cli::global::OrderDraftAdjustmentArgs],
-) -> Result<Option<RadrootsTradeOrderEconomics>, RuntimeError> {
+) -> Result<Option<RadrootsOrderEconomics>, RuntimeError> {
     let Some(listing) = resolved_listing else {
         return Ok(None);
     };
@@ -9166,7 +8960,7 @@ fn order_economics_from_resolved_listing(
         let line_amount =
             unit_price_amount * quantity_amount * RadrootsCoreDecimal::from(item.bin_count);
         subtotal_amount = subtotal_amount + line_amount;
-        economic_items.push(RadrootsTradeOrderEconomicItem {
+        economic_items.push(RadrootsOrderEconomicItem {
             bin_id: item.bin_id.clone(),
             bin_count: item.bin_count,
             quantity_amount,
@@ -9187,10 +8981,10 @@ fn order_economics_from_resolved_listing(
     )?;
     let adjustments = basket_adjustment_lines(adjustments)?;
     let zero = RadrootsCoreMoney::zero(currency);
-    let mut economics = RadrootsTradeOrderEconomics {
+    let mut economics = RadrootsOrderEconomics {
         quote_id: format!("quote_{order_id}"),
         quote_version: 1,
-        pricing_basis: RadrootsTradePricingBasis::ListingEvent,
+        pricing_basis: RadrootsOrderPricingBasis::ListingEvent,
         currency,
         items: economic_items,
         discounts,
@@ -9213,7 +9007,7 @@ fn listing_discount_lines_from_product(
     items: &[OrderDraftItem],
     quantity_amount: RadrootsCoreDecimal,
     quantity_unit: RadrootsCoreUnit,
-) -> Result<Vec<RadrootsTradeOrderEconomicLine>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderEconomicLine>, RuntimeError> {
     let Some(notes) = product.notes.as_deref().and_then(non_empty_ref) else {
         return Ok(Vec::new());
     };
@@ -9231,11 +9025,11 @@ fn listing_discount_lines_from_product(
                 "listing discount amount must be greater than zero".to_owned(),
             ));
         }
-        lines.push(RadrootsTradeOrderEconomicLine {
+        lines.push(RadrootsOrderEconomicLine {
             id: format!("listing_discount_{}", index + 1),
-            kind: RadrootsTradeEconomicLineKind::ListingDiscount,
-            actor: RadrootsTradeEconomicActor::Seller,
-            effect: RadrootsTradeEconomicEffect::Decrease,
+            kind: RadrootsOrderEconomicLineKind::ListingDiscount,
+            actor: RadrootsOrderEconomicActor::Seller,
+            effect: RadrootsOrderEconomicEffect::Decrease,
             amount,
             reason: format!("listing discount {}", index + 1),
         });
@@ -9294,7 +9088,7 @@ fn listing_discount_amount(
 
 fn basket_adjustment_lines(
     adjustments: &[crate::cli::global::OrderDraftAdjustmentArgs],
-) -> Result<Vec<RadrootsTradeOrderEconomicLine>, RuntimeError> {
+) -> Result<Vec<RadrootsOrderEconomicLine>, RuntimeError> {
     adjustments
         .iter()
         .map(|adjustment| {
@@ -9307,8 +9101,8 @@ fn basket_adjustment_lines(
                 ));
             }
             let effect = match adjustment.effect.as_str() {
-                "increase" => RadrootsTradeEconomicEffect::Increase,
-                "decrease" => RadrootsTradeEconomicEffect::Decrease,
+                "increase" => RadrootsOrderEconomicEffect::Increase,
+                "decrease" => RadrootsOrderEconomicEffect::Decrease,
                 other => {
                     return Err(RuntimeError::Config(format!(
                         "basket adjustment effect `{other}` is invalid"
@@ -9325,10 +9119,10 @@ fn basket_adjustment_lines(
                     "basket adjustment reason must not be empty".to_owned(),
                 ));
             }
-            Ok(RadrootsTradeOrderEconomicLine {
+            Ok(RadrootsOrderEconomicLine {
                 id: adjustment.id.trim().to_owned(),
-                kind: RadrootsTradeEconomicLineKind::BasketAdjustment,
-                actor: RadrootsTradeEconomicActor::Buyer,
+                kind: RadrootsOrderEconomicLineKind::BasketAdjustment,
+                actor: RadrootsOrderEconomicActor::Buyer,
                 effect,
                 amount: RadrootsCoreMoney::new(amount, currency),
                 reason: adjustment.reason.trim().to_owned(),
@@ -9931,7 +9725,7 @@ fn is_visible_signed_order_request_record(record: &LocalEventRecord, order_id: &
     record.family == LocalRecordFamily::SignedEvent
         && record.status == LocalRecordStatus::Published
         && record.outbox_status == PublishOutboxStatus::Acknowledged
-        && record.event_kind == Some(i64::from(KIND_TRADE_ORDER_REQUEST))
+        && record.event_kind == Some(i64::from(KIND_ORDER_REQUEST))
         && signed_record_tag_values(record, "d")
             .iter()
             .any(|value| value == order_id)
@@ -10471,7 +10265,7 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
 
 fn order_items_match_economics(
     items: &[OrderDraftItem],
-    economics: &RadrootsTradeOrderEconomics,
+    economics: &RadrootsOrderEconomics,
 ) -> bool {
     let mut order_items = items
         .iter()
@@ -11101,7 +10895,7 @@ fn order_submit_app_signed_evidence_view(
             buyer_write_capable: None,
             seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
             event_id: issue.event_ids.first().cloned(),
-            event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+            event_kind: Some(KIND_ORDER_REQUEST),
             dry_run: config.output.dry_run,
             deduplicated: true,
             target_relays: Vec::new(),
@@ -11138,7 +10932,7 @@ fn order_submit_app_signed_evidence_view(
             buyer_write_capable: None,
             seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
             event_id: None,
-            event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+            event_kind: Some(KIND_ORDER_REQUEST),
             dry_run: config.output.dry_run,
             deduplicated: false,
             target_relays: Vec::new(),
@@ -11257,7 +11051,7 @@ fn order_submit_listing_provenance_preflight_view(
         buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
-        event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+        event_kind: Some(KIND_ORDER_REQUEST),
         dry_run: config.output.dry_run,
         deduplicated: false,
         target_relays,
@@ -11323,7 +11117,7 @@ fn order_submit_existing_request_preflight_view(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
     args: &OrderSubmitArgs,
-    payload: &RadrootsTradeOrderRequested,
+    payload: &RadrootsOrderRequest,
 ) -> Result<Option<OrderSubmitView>, RuntimeError> {
     let filter = order_request_filter(
         loaded.document.order.seller_pubkey.as_str(),
@@ -11350,7 +11144,7 @@ fn order_submit_existing_request_view_from_receipt(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
     args: &OrderSubmitArgs,
-    payload: &RadrootsTradeOrderRequested,
+    payload: &RadrootsOrderRequest,
     receipt: DirectRelayFetchReceipt,
 ) -> Result<Option<OrderSubmitView>, RuntimeError> {
     let DirectRelayFetchReceipt {
@@ -11460,13 +11254,11 @@ fn order_submit_request_from_event(
     loaded: &LoadedOrderDraft,
 ) -> Result<ResolvedOrderSubmitRequest, RuntimeError> {
     let event = radroots_event_from_nostr(event);
-    let envelope = active_trade_order_request_from_event(&event)
+    let envelope = order_request_from_event(&event)
         .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
-    let context = active_trade_event_context_from_tags(
-        RadrootsActiveTradeMessageType::TradeOrderRequested,
-        &event.tags,
-    )
-    .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
+    let context =
+        order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event.tags)
+            .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
 
     if envelope.order_id != loaded.document.order.order_id
         || envelope.payload.order_id != loaded.document.order.order_id
@@ -11489,11 +11281,8 @@ fn order_submit_request_from_event(
             "order request listing address is outside seller authority".to_owned(),
         ));
     }
-    let payload =
-        canonicalize_active_order_request_for_signer(envelope.payload, event.author.as_str())
-            .map_err(|error| {
-                RuntimeError::Config(format!("canonicalize order request: {error}"))
-            })?;
+    let payload = canonicalize_order_request_for_signer(envelope.payload, event.author.as_str())
+        .map_err(|error| RuntimeError::Config(format!("canonicalize order request: {error}")))?;
     let listing_event_id = context.listing_event.as_ref().map(|event| event.id.clone());
 
     Ok(ResolvedOrderSubmitRequest {
@@ -11506,7 +11295,7 @@ fn order_submit_request_from_event(
 fn order_submit_request_matches_draft(
     request: &ResolvedOrderSubmitRequest,
     loaded: &LoadedOrderDraft,
-    payload: &RadrootsTradeOrderRequested,
+    payload: &RadrootsOrderRequest,
 ) -> bool {
     request.payload == *payload
         && request.listing_event_id.as_deref()
@@ -11538,7 +11327,7 @@ fn order_submit_deduplicated_view(
         buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: Some(request.request_event_id.clone()),
-        event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+        event_kind: Some(KIND_ORDER_REQUEST),
         dry_run: config.output.dry_run,
         deduplicated: true,
         target_relays,
@@ -11628,7 +11417,7 @@ fn order_submit_invalid_existing_request_view(
         buyer_write_capable: None,
         seller_pubkey: non_empty_string(loaded.document.order.seller_pubkey.clone()),
         event_id: None,
-        event_kind: Some(KIND_TRADE_ORDER_REQUEST),
+        event_kind: Some(KIND_ORDER_REQUEST),
         dry_run: config.output.dry_run,
         deduplicated: false,
         target_relays,
@@ -11652,12 +11441,12 @@ fn order_submit_invalid_existing_request_view(
 fn canonical_order_request_payload_from_loaded(
     loaded: &LoadedOrderDraft,
     signer_pubkey: &str,
-) -> Result<RadrootsTradeOrderRequested, RuntimeError> {
+) -> Result<RadrootsOrderRequest, RuntimeError> {
     let economics =
         loaded.document.order.economics.clone().ok_or_else(|| {
             RuntimeError::Config("order draft is missing quote economics".to_owned())
         })?;
-    let payload = RadrootsTradeOrderRequested {
+    let payload = RadrootsOrderRequest {
         order_id: loaded.document.order.order_id.clone(),
         listing_addr: loaded.document.order.listing_addr.clone(),
         buyer_pubkey: loaded.document.order.buyer_pubkey.clone(),
@@ -11667,14 +11456,14 @@ fn canonical_order_request_payload_from_loaded(
             .order
             .items
             .iter()
-            .map(|item| RadrootsTradeOrderItem {
+            .map(|item| RadrootsOrderItem {
                 bin_id: item.bin_id.clone(),
                 bin_count: item.bin_count,
             })
             .collect(),
         economics,
     };
-    canonicalize_active_order_request_for_signer(payload, signer_pubkey)
+    canonicalize_order_request_for_signer(payload, signer_pubkey)
         .map_err(|error| RuntimeError::Config(format!("canonicalize order request: {error}")))
 }
 
@@ -11683,7 +11472,7 @@ fn publish_order_request(
     loaded: &LoadedOrderDraft,
     args: &OrderSubmitArgs,
     signing: account::AccountSigningIdentity,
-    payload: RadrootsTradeOrderRequested,
+    payload: RadrootsOrderRequest,
 ) -> Result<OrderSubmitView, RuntimeError> {
     let listing_event = order_listing_event_ptr(config, loaded)?;
     let client = order_relay_publish_client(config)?;
@@ -11694,7 +11483,7 @@ fn publish_order_request(
             RuntimeError::Network(format!("build relay order submit runtime: {error}"))
         })?;
     let receipt = runtime
-        .block_on(client.trade().publish_order_request_with_identity(
+        .block_on(client.order().publish_order_request_with_identity(
             &signing.identity,
             &listing_event,
             &payload,
@@ -12226,28 +12015,28 @@ fn resolve_local_order_revision_decision_signing_identity(
     Ok(signing)
 }
 
-fn parse_fulfillment_state(state: &str) -> Result<RadrootsActiveTradeFulfillmentState, String> {
+fn parse_fulfillment_state(state: &str) -> Result<RadrootsOrderFulfillmentState, String> {
     match state.trim() {
-        "accepted_not_fulfilled" => Ok(RadrootsActiveTradeFulfillmentState::AcceptedNotFulfilled),
-        "preparing" => Ok(RadrootsActiveTradeFulfillmentState::Preparing),
-        "ready_for_pickup" => Ok(RadrootsActiveTradeFulfillmentState::ReadyForPickup),
-        "out_for_delivery" => Ok(RadrootsActiveTradeFulfillmentState::OutForDelivery),
-        "delivered" => Ok(RadrootsActiveTradeFulfillmentState::Delivered),
-        "seller_cancelled" => Ok(RadrootsActiveTradeFulfillmentState::SellerCancelled),
+        "accepted_not_fulfilled" => Ok(RadrootsOrderFulfillmentState::AcceptedNotFulfilled),
+        "preparing" => Ok(RadrootsOrderFulfillmentState::Preparing),
+        "ready_for_pickup" => Ok(RadrootsOrderFulfillmentState::ReadyForPickup),
+        "out_for_delivery" => Ok(RadrootsOrderFulfillmentState::OutForDelivery),
+        "delivered" => Ok(RadrootsOrderFulfillmentState::Delivered),
+        "seller_cancelled" => Ok(RadrootsOrderFulfillmentState::SellerCancelled),
         other => Err(format!(
             "unsupported fulfillment state `{other}`; expected preparing, ready_for_pickup, out_for_delivery, delivered, or seller_cancelled"
         )),
     }
 }
 
-fn fulfillment_state_name(state: RadrootsActiveTradeFulfillmentState) -> &'static str {
+fn fulfillment_state_name(state: RadrootsOrderFulfillmentState) -> &'static str {
     match state {
-        RadrootsActiveTradeFulfillmentState::AcceptedNotFulfilled => "accepted_not_fulfilled",
-        RadrootsActiveTradeFulfillmentState::Preparing => "preparing",
-        RadrootsActiveTradeFulfillmentState::ReadyForPickup => "ready_for_pickup",
-        RadrootsActiveTradeFulfillmentState::OutForDelivery => "out_for_delivery",
-        RadrootsActiveTradeFulfillmentState::Delivered => "delivered",
-        RadrootsActiveTradeFulfillmentState::SellerCancelled => "seller_cancelled",
+        RadrootsOrderFulfillmentState::AcceptedNotFulfilled => "accepted_not_fulfilled",
+        RadrootsOrderFulfillmentState::Preparing => "preparing",
+        RadrootsOrderFulfillmentState::ReadyForPickup => "ready_for_pickup",
+        RadrootsOrderFulfillmentState::OutForDelivery => "out_for_delivery",
+        RadrootsOrderFulfillmentState::Delivered => "delivered",
+        RadrootsOrderFulfillmentState::SellerCancelled => "seller_cancelled",
     }
 }
 
@@ -12316,8 +12105,8 @@ fn draft_lookup_path(config: &RuntimeConfig, lookup: &str) -> PathBuf {
     drafts_dir(config).join(file_name)
 }
 
-fn parse_listing_addr(raw: &str) -> Result<RadrootsTradeListingAddress, String> {
-    RadrootsTradeListingAddress::parse(raw).map_err(|error| error.to_string())
+fn parse_listing_addr(raw: &str) -> Result<RadrootsOrderListingAddress, String> {
+    RadrootsOrderListingAddress::parse(raw).map_err(|error| error.to_string())
 }
 
 fn issue(field: impl Into<String>, message: impl Into<String>) -> OrderIssueView {
@@ -12554,39 +12343,36 @@ mod tests {
     };
     use radroots_events::RadrootsNostrEventPtr;
     use radroots_events::kinds::{
-        KIND_TRADE_CANCEL, KIND_TRADE_FULFILLMENT_UPDATE, KIND_TRADE_ORDER_DECISION,
-        KIND_TRADE_ORDER_REVISION, KIND_TRADE_ORDER_REVISION_RESPONSE, KIND_TRADE_PAYMENT_RECORDED,
-        KIND_TRADE_RECEIPT, KIND_TRADE_SETTLEMENT_DECISION,
+        KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_FULFILLMENT_UPDATE,
+        KIND_ORDER_PAYMENT_RECORD, KIND_ORDER_RECEIPT, KIND_ORDER_REVISION_DECISION,
+        KIND_ORDER_REVISION_PROPOSAL, KIND_ORDER_SETTLEMENT_DECISION,
     };
-    use radroots_events::trade::{
-        RadrootsActiveTradeFulfillmentState, RadrootsActiveTradeMessageType,
-        RadrootsTradeBuyerReceipt, RadrootsTradeFulfillmentUpdated,
-        RadrootsTradeInventoryCommitment, RadrootsTradeOrderCancelled, RadrootsTradeOrderDecision,
-        RadrootsTradeOrderDecisionEvent, RadrootsTradeOrderEconomicItem,
-        RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
-        RadrootsTradeOrderRevisionDecision, RadrootsTradeOrderRevisionDecisionEvent,
-        RadrootsTradeOrderRevisionProposed, RadrootsTradePaymentMethod,
-        RadrootsTradePaymentRecorded, RadrootsTradePricingBasis, RadrootsTradeSettlementDecision,
-        RadrootsTradeSettlementDecisionEvent,
+    use radroots_events::order::{
+        RadrootsOrderCancellation, RadrootsOrderDecision, RadrootsOrderDecisionOutcome,
+        RadrootsOrderEconomicItem, RadrootsOrderEconomics, RadrootsOrderEventType,
+        RadrootsOrderFulfillmentState, RadrootsOrderFulfillmentUpdate,
+        RadrootsOrderInventoryCommitment, RadrootsOrderItem, RadrootsOrderPaymentMethod,
+        RadrootsOrderPaymentRecord, RadrootsOrderPricingBasis, RadrootsOrderReceipt,
+        RadrootsOrderRequest, RadrootsOrderRevisionDecision, RadrootsOrderRevisionOutcome,
+        RadrootsOrderRevisionProposal, RadrootsOrderSettlementDecision,
+        RadrootsOrderSettlementOutcome,
     };
-    use radroots_events_codec::trade::{
-        active_trade_buyer_receipt_event_build, active_trade_event_context_from_tags,
-        active_trade_fulfillment_update_event_build, active_trade_order_cancel_event_build,
-        active_trade_order_decision_event_build, active_trade_order_decision_from_event,
-        active_trade_order_request_event_build, active_trade_order_revision_decision_event_build,
-        active_trade_order_revision_proposal_event_build,
-        active_trade_payment_recorded_event_build, active_trade_settlement_decision_event_build,
+    use radroots_events_codec::order::{
+        order_cancellation_event_build, order_decision_event_build, order_decision_from_event,
+        order_event_context_from_tags, order_fulfillment_update_event_build,
+        order_payment_record_event_build, order_receipt_event_build, order_request_event_build,
+        order_revision_decision_event_build, order_revision_proposal_event_build,
+        order_settlement_decision_event_build,
     };
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{radroots_event_from_nostr, radroots_nostr_build_event};
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_trade::order::{
-        RadrootsActiveOrderCancellationRecord, RadrootsActiveOrderDecisionRecord,
-        RadrootsActiveOrderFulfillmentRecord, RadrootsActiveOrderReceiptRecord,
-        RadrootsActiveOrderRevisionDecisionRecord, RadrootsActiveOrderRevisionProposalRecord,
-        RadrootsListingInventoryBinAvailability, canonicalize_active_order_decision_for_signer,
-        reduce_listing_inventory_accounting,
+        RadrootsListingInventoryBinAvailability, RadrootsOrderCancellationRecord,
+        RadrootsOrderDecisionRecord, RadrootsOrderFulfillmentRecord, RadrootsOrderReceiptRecord,
+        RadrootsOrderRevisionDecisionRecord, RadrootsOrderRevisionProposalRecord,
+        canonicalize_order_decision_for_signer, reduce_listing_inventory_accounting,
     };
     use tempfile::tempdir;
 
@@ -12967,18 +12753,18 @@ mod tests {
         let seller_pubkey = seller.public_key_hex();
         let listing_addr = format!("30402:{seller_pubkey}:AAAAAAAAAAAAAAAAAAAAAg");
         let listing_event_id = "1".repeat(64);
-        let payload = RadrootsTradeOrderRequested {
+        let payload = RadrootsOrderRequest {
             order_id: "ord_AAAAAAAAAAAAAAAAAAAAAg".to_owned(),
             listing_addr: listing_addr.clone(),
             buyer_pubkey: buyer_pubkey.clone(),
             seller_pubkey: seller_pubkey.clone(),
-            items: vec![RadrootsTradeOrderItem {
+            items: vec![RadrootsOrderItem {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
             economics: sample_order_economics("ord_AAAAAAAAAAAAAAAAAAAAAg", "bin-1", 2),
         };
-        let parts = active_trade_order_request_event_build(
+        let parts = order_request_event_build(
             &RadrootsNostrEventPtr {
                 id: listing_event_id.clone(),
                 relays: None,
@@ -13046,8 +12832,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -13068,8 +12854,8 @@ mod tests {
             order_revision_payload_from_status(&args, &status_view).expect("revision payload");
         let parts =
             order_revision_event_parts(&status_view, &payload).expect("revision event parts");
-        let context = active_trade_event_context_from_tags(
-            RadrootsActiveTradeMessageType::TradeOrderRevisionProposed,
+        let context = order_event_context_from_tags(
+            RadrootsOrderEventType::OrderRevisionProposed,
             &parts.tags,
         )
         .expect("revision context");
@@ -13082,7 +12868,7 @@ mod tests {
         assert_eq!(payload.economics.quote_version, 2);
         assert!(payload.economics.quote_id.starts_with("revision_rev_"));
         assert_eq!(payload.reason, "update count");
-        assert_eq!(parts.kind, KIND_TRADE_ORDER_REVISION);
+        assert_eq!(parts.kind, KIND_ORDER_REVISION_PROPOSAL);
         assert_eq!(
             context.root_event_id.as_deref(),
             Some(request_event_id.as_str())
@@ -13103,8 +12889,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -13134,15 +12920,15 @@ mod tests {
             .expect("revision decision payload");
         let parts =
             order_revision_decision_event_parts(&payload).expect("revision decision event parts");
-        let context = active_trade_event_context_from_tags(
-            RadrootsActiveTradeMessageType::TradeOrderRevisionDecision,
+        let context = order_event_context_from_tags(
+            RadrootsOrderEventType::OrderRevisionDecision,
             &parts.tags,
         )
         .expect("revision decision context");
 
         assert_eq!(payload.revision_id, proposal.payload.revision_id);
         assert_eq!(payload.prev_event_id, revision_event_id);
-        assert_eq!(parts.kind, KIND_TRADE_ORDER_REVISION_RESPONSE);
+        assert_eq!(parts.kind, KIND_ORDER_REVISION_DECISION);
         let request_event_id = fixture.request_event.id.to_string();
         assert_eq!(
             context.root_event_id.as_deref(),
@@ -13167,8 +12953,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -13229,8 +13015,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -13295,8 +13081,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -13315,7 +13101,7 @@ mod tests {
         let revision_decision_event = signed_order_revision_decision_event(
             &fixture.buyer,
             &revision_event,
-            RadrootsTradeOrderRevisionDecision::Accepted,
+            RadrootsOrderRevisionOutcome::Accepted,
         );
         let revision_decision_event_id = revision_decision_event.id.to_string();
 
@@ -13364,8 +13150,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -13385,7 +13171,7 @@ mod tests {
         let revision_decision_event = signed_order_revision_decision_event(
             &fixture.buyer,
             &revision_event,
-            RadrootsTradeOrderRevisionDecision::Declined {
+            RadrootsOrderRevisionOutcome::Declined {
                 reason: "keep original order".to_owned(),
             },
         );
@@ -13439,8 +13225,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -13490,8 +13276,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -13547,7 +13333,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Declined {
+            RadrootsOrderDecisionOutcome::Declined {
                 reason: "out of stock".to_owned(),
             },
         );
@@ -13604,8 +13390,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -13650,7 +13436,7 @@ mod tests {
 
         assert_eq!(view.state, "forked");
         assert_eq!(view.event_id.as_deref(), Some(revision_event_id.as_str()));
-        assert_eq!(view.event_kind, Some(KIND_TRADE_ORDER_REVISION));
+        assert_eq!(view.event_kind, Some(KIND_ORDER_REVISION_PROPOSAL));
         assert_eq!(view.issues.len(), 1);
         assert_eq!(view.issues[0].code, "pending_revision_exists");
         assert_eq!(view.issues[0].event_ids, vec![revision_event_id]);
@@ -13669,8 +13455,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -14145,7 +13931,7 @@ mod tests {
         assert_eq!(payload.listing_addr, listing_addr);
         assert_eq!(payload.buyer_pubkey, buyer_pubkey);
         assert_eq!(payload.seller_pubkey, seller_pubkey);
-        let RadrootsTradeOrderDecision::Accepted {
+        let RadrootsOrderDecisionOutcome::Accepted {
             inventory_commitments,
         } = payload.decision
         else {
@@ -14187,29 +13973,25 @@ mod tests {
             .expect("resolved request")
             .clone();
         let payload = accepted_order_decision_payload_from_request(&request);
-        let payload =
-            canonicalize_active_order_decision_for_signer(payload, seller_pubkey.as_str())
-                .expect("canonical decision payload");
-        let parts = active_trade_order_decision_event_build(
+        let payload = canonicalize_order_decision_for_signer(payload, seller_pubkey.as_str())
+            .expect("canonical decision payload");
+        let parts = order_decision_event_build(
             request.request_event_id.as_str(),
             request.request_event_id.as_str(),
             &payload,
         )
         .expect("decision event parts");
 
-        assert_eq!(parts.kind, KIND_TRADE_ORDER_DECISION);
+        assert_eq!(parts.kind, KIND_ORDER_DECISION);
         let event = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
             .expect("nostr event builder")
             .sign_with_keys(seller.keys())
             .expect("signed order decision");
         let event = radroots_event_from_nostr(&event);
-        let envelope =
-            active_trade_order_decision_from_event(&event).expect("decoded decision event");
-        let context = active_trade_event_context_from_tags(
-            RadrootsActiveTradeMessageType::TradeOrderDecision,
-            &event.tags,
-        )
-        .expect("decision event context");
+        let envelope = order_decision_from_event(&event).expect("decoded decision event");
+        let context =
+            order_event_context_from_tags(RadrootsOrderEventType::OrderDecision, &event.tags)
+                .expect("decision event context");
 
         assert_eq!(envelope.order_id, order_id);
         assert_eq!(envelope.payload.seller_pubkey, seller_pubkey);
@@ -14261,7 +14043,7 @@ mod tests {
         assert_eq!(payload.listing_addr, listing_addr);
         assert_eq!(payload.buyer_pubkey, buyer_pubkey);
         assert_eq!(payload.seller_pubkey, seller_pubkey);
-        let RadrootsTradeOrderDecision::Declined { reason } = payload.decision else {
+        let RadrootsOrderDecisionOutcome::Declined { reason } = payload.decision else {
             panic!("expected declined decision");
         };
         assert_eq!(reason, "out of stock");
@@ -14298,34 +14080,30 @@ mod tests {
             .expect("resolved request")
             .clone();
         let payload = declined_order_decision_payload_from_request(&request, " out of stock ");
-        let payload =
-            canonicalize_active_order_decision_for_signer(payload, seller_pubkey.as_str())
-                .expect("canonical decision payload");
-        let parts = active_trade_order_decision_event_build(
+        let payload = canonicalize_order_decision_for_signer(payload, seller_pubkey.as_str())
+            .expect("canonical decision payload");
+        let parts = order_decision_event_build(
             request.request_event_id.as_str(),
             request.request_event_id.as_str(),
             &payload,
         )
         .expect("decision event parts");
 
-        assert_eq!(parts.kind, KIND_TRADE_ORDER_DECISION);
+        assert_eq!(parts.kind, KIND_ORDER_DECISION);
         let event = radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
             .expect("nostr event builder")
             .sign_with_keys(seller.keys())
             .expect("signed order decision");
         let event = radroots_event_from_nostr(&event);
-        let envelope =
-            active_trade_order_decision_from_event(&event).expect("decoded decision event");
-        let context = active_trade_event_context_from_tags(
-            RadrootsActiveTradeMessageType::TradeOrderDecision,
-            &event.tags,
-        )
-        .expect("decision event context");
+        let envelope = order_decision_from_event(&event).expect("decoded decision event");
+        let context =
+            order_event_context_from_tags(RadrootsOrderEventType::OrderDecision, &event.tags)
+                .expect("decision event context");
 
         assert_eq!(envelope.order_id, order_id);
         assert_eq!(envelope.payload.seller_pubkey, seller_pubkey);
         assert_eq!(envelope.payload.buyer_pubkey, buyer_pubkey);
-        let RadrootsTradeOrderDecision::Declined { reason } = envelope.payload.decision else {
+        let RadrootsOrderDecisionOutcome::Declined { reason } = envelope.payload.decision else {
             panic!("expected declined decision");
         };
         assert_eq!(reason, "out of stock");
@@ -14523,8 +14301,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -14723,8 +14501,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -14819,7 +14597,7 @@ mod tests {
 
         assert_eq!(
             u32::from(cancellation_event.kind.as_u16()),
-            KIND_TRADE_CANCEL
+            KIND_ORDER_CANCELLATION
         );
         assert_eq!(view.state, "cancelled");
         assert_eq!(
@@ -14867,8 +14645,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -14933,8 +14711,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15008,13 +14786,13 @@ mod tests {
         let requested_parts = order_cancellation_event_parts(&requested_status, &requested_payload)
             .expect("requested cancellation parts");
         let request_event_id = fixture.request_event.id.to_string();
-        let requested_context = active_trade_event_context_from_tags(
-            RadrootsActiveTradeMessageType::TradeOrderCancelled,
+        let requested_context = order_event_context_from_tags(
+            RadrootsOrderEventType::OrderCancelled,
             &requested_parts.tags,
         )
         .expect("requested cancellation context");
 
-        assert_eq!(requested_parts.kind, KIND_TRADE_CANCEL);
+        assert_eq!(requested_parts.kind, KIND_ORDER_CANCELLATION);
         assert_eq!(
             requested_context.root_event_id.as_deref(),
             Some(request_event_id.as_str())
@@ -15031,8 +14809,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15062,13 +14840,13 @@ mod tests {
         let accepted_parts = order_cancellation_event_parts(&accepted_status, &accepted_payload)
             .expect("accepted cancellation parts");
         let decision_event_id = decision_event.id.to_string();
-        let accepted_context = active_trade_event_context_from_tags(
-            RadrootsActiveTradeMessageType::TradeOrderCancelled,
+        let accepted_context = order_event_context_from_tags(
+            RadrootsOrderEventType::OrderCancelled,
             &accepted_parts.tags,
         )
         .expect("accepted cancellation context");
 
-        assert_eq!(accepted_parts.kind, KIND_TRADE_CANCEL);
+        assert_eq!(accepted_parts.kind, KIND_ORDER_CANCELLATION);
         assert_eq!(
             accepted_context.root_event_id.as_deref(),
             Some(request_event_id.as_str())
@@ -15093,8 +14871,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15151,8 +14929,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15166,7 +14944,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+            RadrootsOrderFulfillmentState::ReadyForPickup,
         );
         let status_view = order_status_from_receipt(
             fixture.order_id.as_str(),
@@ -15214,8 +14992,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15304,8 +15082,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15319,7 +15097,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Delivered,
+            RadrootsOrderFulfillmentState::Delivered,
         );
         let receipt_event = signed_buyer_receipt_event(
             &fixture.buyer,
@@ -15381,8 +15159,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15396,7 +15174,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Delivered,
+            RadrootsOrderFulfillmentState::Delivered,
         );
         let receipt_event = signed_buyer_receipt_event(
             &fixture.buyer,
@@ -15430,7 +15208,7 @@ mod tests {
         let inventory = view.inventory.as_ref().expect("inventory view");
         let fulfillment = view.fulfillment.as_ref().expect("fulfillment view");
 
-        assert_eq!(u32::from(receipt_event.kind.as_u16()), KIND_TRADE_RECEIPT);
+        assert_eq!(u32::from(receipt_event.kind.as_u16()), KIND_ORDER_RECEIPT);
         assert_eq!(view.state, "completed");
         assert_eq!(
             view.last_event_id.as_deref(),
@@ -15475,8 +15253,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15490,7 +15268,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+            RadrootsOrderFulfillmentState::ReadyForPickup,
         );
         let receipt_event = signed_buyer_receipt_event(
             &fixture.buyer,
@@ -15553,8 +15331,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15568,7 +15346,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+            RadrootsOrderFulfillmentState::ReadyForPickup,
         );
         let delivered_fulfillment_event = signed_fulfillment_update_event(
             &fixture.seller,
@@ -15578,7 +15356,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Delivered,
+            RadrootsOrderFulfillmentState::Delivered,
         );
         let receipt_event = signed_buyer_receipt_event(
             &fixture.buyer,
@@ -15633,8 +15411,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15648,7 +15426,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+            RadrootsOrderFulfillmentState::ReadyForPickup,
         );
         let status_view = order_status_from_receipt(
             fixture.order_id.as_str(),
@@ -15679,15 +15457,13 @@ mod tests {
         let parts = order_receipt_event_parts(&status_view, &payload).expect("receipt parts");
         let request_event_id = fixture.request_event.id.to_string();
         let fulfillment_event_id = fulfillment_event.id.to_string();
-        let context = active_trade_event_context_from_tags(
-            RadrootsActiveTradeMessageType::TradeBuyerReceipt,
-            &parts.tags,
-        )
-        .expect("receipt context");
+        let context =
+            order_event_context_from_tags(RadrootsOrderEventType::BuyerReceipt, &parts.tags)
+                .expect("receipt context");
 
         assert_eq!(payload.received, true);
         assert!(payload.received_at > 0);
-        assert_eq!(parts.kind, KIND_TRADE_RECEIPT);
+        assert_eq!(parts.kind, KIND_ORDER_RECEIPT);
         assert_eq!(
             context.root_event_id.as_deref(),
             Some(request_event_id.as_str())
@@ -15712,8 +15488,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15727,7 +15503,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Delivered,
+            RadrootsOrderFulfillmentState::Delivered,
         );
         let status_view = order_status_from_receipt(
             fixture.order_id.as_str(),
@@ -15789,8 +15565,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15821,13 +15597,11 @@ mod tests {
         let parts = order_payment_event_parts(&status_view, &payload).expect("payment parts");
         let request_event_id = fixture.request_event.id.to_string();
         let decision_event_id = decision_event.id.to_string();
-        let context = active_trade_event_context_from_tags(
-            RadrootsActiveTradeMessageType::TradePaymentRecorded,
-            &parts.tags,
-        )
-        .expect("payment context");
+        let context =
+            order_event_context_from_tags(RadrootsOrderEventType::PaymentRecorded, &parts.tags)
+                .expect("payment context");
 
-        assert_eq!(parts.kind, KIND_TRADE_PAYMENT_RECORDED);
+        assert_eq!(parts.kind, KIND_ORDER_PAYMENT_RECORD);
         assert_eq!(
             context.root_event_id.as_deref(),
             Some(request_event_id.as_str())
@@ -15841,7 +15615,7 @@ mod tests {
         assert_eq!(payload.quote_version, 1);
         assert_eq!(payload.amount, RadrootsCoreDecimal::from(12u32));
         assert_eq!(payload.currency, RadrootsCoreCurrency::USD);
-        assert_eq!(payload.method, RadrootsTradePaymentMethod::ManualTransfer);
+        assert_eq!(payload.method, RadrootsOrderPaymentMethod::ManualTransfer);
         assert_eq!(payload.reference.as_deref(), Some("memo-1"));
         assert_eq!(payload.paid_at, Some(1_777_666_000));
     }
@@ -15860,8 +15634,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15905,7 +15679,7 @@ mod tests {
         assert_eq!(view.currency, Some(RadrootsCoreCurrency::USD));
         assert_eq!(
             view.method,
-            Some(RadrootsTradePaymentMethod::ManualTransfer)
+            Some(RadrootsOrderPaymentMethod::ManualTransfer)
         );
         assert_eq!(view.reference.as_deref(), Some("memo-1"));
         assert_eq!(view.paid_at, Some(1_777_666_000));
@@ -15929,8 +15703,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -15976,8 +15750,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16021,8 +15795,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16078,8 +15852,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16137,8 +15911,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16195,8 +15969,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16246,8 +16020,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16297,13 +16071,11 @@ mod tests {
         let parts = order_settlement_event_parts(&status_view, &payload).expect("settlement parts");
         let request_event_id = fixture.request_event.id.to_string();
         let decision_event_id = decision_event.id.to_string();
-        let context = active_trade_event_context_from_tags(
-            RadrootsActiveTradeMessageType::TradeSettlementDecision,
-            &parts.tags,
-        )
-        .expect("settlement context");
+        let context =
+            order_event_context_from_tags(RadrootsOrderEventType::SettlementDecision, &parts.tags)
+                .expect("settlement context");
 
-        assert_eq!(parts.kind, KIND_TRADE_SETTLEMENT_DECISION);
+        assert_eq!(parts.kind, KIND_ORDER_SETTLEMENT_DECISION);
         assert_eq!(
             context.root_event_id.as_deref(),
             Some(request_event_id.as_str())
@@ -16317,7 +16089,7 @@ mod tests {
         assert_eq!(payload.payment_event_id, payload.previous_event_id);
         assert_eq!(payload.amount, RadrootsCoreDecimal::from(12u32));
         assert_eq!(payload.currency, RadrootsCoreCurrency::USD);
-        assert_eq!(payload.decision, RadrootsTradeSettlementDecision::Accepted);
+        assert_eq!(payload.decision, RadrootsOrderSettlementOutcome::Accepted);
         assert_eq!(payload.reason, None);
     }
 
@@ -16335,8 +16107,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16389,7 +16161,7 @@ mod tests {
         assert_eq!(view.currency, Some(RadrootsCoreCurrency::USD));
         assert_eq!(
             view.decision,
-            Some(RadrootsTradeSettlementDecision::Rejected)
+            Some(RadrootsOrderSettlementOutcome::Rejected)
         );
         assert_eq!(
             view.settlement_reason.as_deref(),
@@ -16414,8 +16186,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16476,8 +16248,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16533,8 +16305,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16554,7 +16326,7 @@ mod tests {
             &fixture.seller,
             &fixture.request_event,
             &payment_event,
-            RadrootsTradeSettlementDecision::Accepted,
+            RadrootsOrderSettlementOutcome::Accepted,
         );
         let payment_event_id = payment_event.id.to_string();
         let status_view = order_status_from_receipt_with_deferred_payment(
@@ -16604,8 +16376,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16625,7 +16397,7 @@ mod tests {
             &fixture.seller,
             &fixture.request_event,
             &payment_event,
-            RadrootsTradeSettlementDecision::Accepted,
+            RadrootsOrderSettlementOutcome::Accepted,
         );
         let view = order_status_from_receipt(
             fixture.order_id.as_str(),
@@ -16660,8 +16432,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16681,7 +16453,7 @@ mod tests {
             &fixture.seller,
             &fixture.request_event,
             &payment_event,
-            RadrootsTradeSettlementDecision::Rejected,
+            RadrootsOrderSettlementOutcome::Rejected,
         );
         let view = order_status_from_receipt_with_deferred_payment(
             fixture.order_id.as_str(),
@@ -16718,8 +16490,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16733,7 +16505,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Preparing,
+            RadrootsOrderFulfillmentState::Preparing,
         );
         let status_view = order_status_from_receipt(
             fixture.order_id.as_str(),
@@ -16781,8 +16553,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16796,7 +16568,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Delivered,
+            RadrootsOrderFulfillmentState::Delivered,
         );
         let status_view = order_status_from_receipt(
             fixture.order_id.as_str(),
@@ -16844,8 +16616,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16859,7 +16631,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Delivered,
+            RadrootsOrderFulfillmentState::Delivered,
         );
         let receipt_event = signed_buyer_receipt_event(
             &fixture.buyer,
@@ -16899,7 +16671,7 @@ mod tests {
 
         assert_eq!(view.state, "terminal");
         assert_eq!(view.event_id.as_deref(), Some(receipt_event_id.as_str()));
-        assert_eq!(view.event_kind, Some(KIND_TRADE_RECEIPT));
+        assert_eq!(view.event_kind, Some(KIND_ORDER_RECEIPT));
         assert!(
             view.reason
                 .as_deref()
@@ -16918,8 +16690,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -16933,7 +16705,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+            RadrootsOrderFulfillmentState::ReadyForPickup,
         );
         let receipt = DirectRelayFetchReceipt {
             target_relays: vec!["ws://relay.test".to_owned()],
@@ -16953,7 +16725,7 @@ mod tests {
 
         assert_eq!(
             u32::from(fulfillment_event.kind.as_u16()),
-            KIND_TRADE_FULFILLMENT_UPDATE
+            KIND_ORDER_FULFILLMENT_UPDATE
         );
         assert_eq!(view.state, "accepted");
         assert_eq!(
@@ -16991,8 +16763,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -17006,7 +16778,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::SellerCancelled,
+            RadrootsOrderFulfillmentState::SellerCancelled,
         );
         let receipt = DirectRelayFetchReceipt {
             target_relays: vec!["ws://relay.test".to_owned()],
@@ -17044,8 +16816,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -17059,7 +16831,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Preparing,
+            RadrootsOrderFulfillmentState::Preparing,
         );
         let second_fulfillment_event = signed_fulfillment_update_event(
             &fixture.seller,
@@ -17069,7 +16841,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+            RadrootsOrderFulfillmentState::ReadyForPickup,
         );
         let mut expected_event_ids = vec![
             first_fulfillment_event.id.to_string(),
@@ -17112,8 +16884,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -17127,7 +16899,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Preparing,
+            RadrootsOrderFulfillmentState::Preparing,
         );
         let status_view = order_status_from_receipt(
             fixture.order_id.as_str(),
@@ -17152,7 +16924,7 @@ mod tests {
             &config,
             &args,
             &status_view,
-            RadrootsActiveTradeFulfillmentState::ReadyForPickup,
+            RadrootsOrderFulfillmentState::ReadyForPickup,
         );
         let request_event_id = fixture.request_event.id.to_string();
         let fulfillment_event_id = fulfillment_event.id.to_string();
@@ -17189,8 +16961,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -17204,7 +16976,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Delivered,
+            RadrootsOrderFulfillmentState::Delivered,
         );
         let fulfillment_event_id = fulfillment_event.id.to_string();
         let reduction = order_status_reduction_from_receipt_with_context(
@@ -17268,8 +17040,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -17283,7 +17055,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Delivered,
+            RadrootsOrderFulfillmentState::Delivered,
         );
         let receipt_event = signed_buyer_receipt_event(
             &fixture.buyer,
@@ -17434,7 +17206,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Declined {
+            RadrootsOrderDecisionOutcome::Declined {
                 reason: "out of stock".to_owned(),
             },
         );
@@ -17481,8 +17253,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -17495,7 +17267,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Declined {
+            RadrootsOrderDecisionOutcome::Declined {
                 reason: "out of stock".to_owned(),
             },
         );
@@ -17559,8 +17331,8 @@ mod tests {
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
             wrong_buyer.public_key_hex().as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -17604,8 +17376,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -17639,7 +17411,7 @@ mod tests {
 
         assert_eq!(view.state, "already_decided");
         assert_eq!(view.event_id.as_deref(), Some(decision_event_id.as_str()));
-        assert_eq!(view.event_kind, Some(KIND_TRADE_ORDER_DECISION));
+        assert_eq!(view.event_kind, Some(KIND_ORDER_DECISION));
         assert_eq!(
             view.request_event_id.as_deref(),
             Some(request.request_event_id.as_str())
@@ -17671,8 +17443,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -17687,7 +17459,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsActiveTradeFulfillmentState::Delivered,
+            RadrootsOrderFulfillmentState::Delivered,
         );
         let receipt_event = signed_buyer_receipt_event(
             &fixture.buyer,
@@ -17736,7 +17508,7 @@ mod tests {
             crate::view::runtime::CommandDisposition::ValidationFailed
         );
         assert_eq!(view.event_id.as_deref(), Some(decision_event_id.as_str()));
-        assert_eq!(view.event_kind, Some(KIND_TRADE_ORDER_DECISION));
+        assert_eq!(view.event_kind, Some(KIND_ORDER_DECISION));
         assert!(
             view.reason
                 .as_deref()
@@ -17778,7 +17550,7 @@ mod tests {
             listing_addr: fixture.listing_addr.clone(),
             buyer_pubkey: fixture.buyer_pubkey.clone(),
             seller_pubkey: fixture.seller_pubkey.clone(),
-            items: vec![RadrootsTradeOrderItem {
+            items: vec![RadrootsOrderItem {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
@@ -17786,7 +17558,7 @@ mod tests {
         };
         let existing_decision_payload =
             accepted_order_decision_payload_from_request(&existing_request);
-        let existing_decision_payload = canonicalize_active_order_decision_for_signer(
+        let existing_decision_payload = canonicalize_order_decision_for_signer(
             existing_decision_payload,
             fixture.seller_pubkey.as_str(),
         )
@@ -17803,7 +17575,7 @@ mod tests {
                 active_request_record_from_resolved(&request),
             ],
             vec![
-                RadrootsActiveOrderDecisionRecord {
+                RadrootsOrderDecisionRecord {
                     event_id: "existing_decision".to_owned(),
                     author_pubkey: fixture.seller_pubkey.clone(),
                     counterparty_pubkey: fixture.buyer_pubkey.clone(),
@@ -17813,11 +17585,11 @@ mod tests {
                 },
                 proposed_accept_decision_record(&request).expect("proposed accept decision"),
             ],
-            Vec::<RadrootsActiveOrderRevisionProposalRecord>::new(),
-            Vec::<RadrootsActiveOrderRevisionDecisionRecord>::new(),
-            Vec::<RadrootsActiveOrderFulfillmentRecord>::new(),
-            Vec::<RadrootsActiveOrderCancellationRecord>::new(),
-            Vec::<RadrootsActiveOrderReceiptRecord>::new(),
+            Vec::<RadrootsOrderRevisionProposalRecord>::new(),
+            Vec::<RadrootsOrderRevisionDecisionRecord>::new(),
+            Vec::<RadrootsOrderFulfillmentRecord>::new(),
+            Vec::<RadrootsOrderCancellationRecord>::new(),
+            Vec::<RadrootsOrderReceiptRecord>::new(),
         );
         let args = OrderDecisionArgs {
             key: fixture.order_id.clone(),
@@ -17876,7 +17648,7 @@ mod tests {
             listing_addr: fixture.listing_addr.clone(),
             buyer_pubkey: fixture.buyer_pubkey.clone(),
             seller_pubkey: fixture.seller_pubkey.clone(),
-            items: vec![RadrootsTradeOrderItem {
+            items: vec![RadrootsOrderItem {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
@@ -17884,7 +17656,7 @@ mod tests {
         };
         let existing_decision_payload =
             accepted_order_decision_payload_from_request(&existing_request);
-        let existing_decision_payload = canonicalize_active_order_decision_for_signer(
+        let existing_decision_payload = canonicalize_order_decision_for_signer(
             existing_decision_payload,
             fixture.seller_pubkey.as_str(),
         )
@@ -17902,7 +17674,7 @@ mod tests {
                 active_request_record_from_resolved(&request),
             ],
             vec![
-                RadrootsActiveOrderDecisionRecord {
+                RadrootsOrderDecisionRecord {
                     event_id: existing_decision_event_id.clone(),
                     author_pubkey: fixture.seller_pubkey.clone(),
                     counterparty_pubkey: fixture.buyer_pubkey.clone(),
@@ -17912,24 +17684,24 @@ mod tests {
                 },
                 proposed_accept_decision_record(&request).expect("proposed accept decision"),
             ],
-            Vec::<RadrootsActiveOrderRevisionProposalRecord>::new(),
-            Vec::<RadrootsActiveOrderRevisionDecisionRecord>::new(),
-            vec![RadrootsActiveOrderFulfillmentRecord {
+            Vec::<RadrootsOrderRevisionProposalRecord>::new(),
+            Vec::<RadrootsOrderRevisionDecisionRecord>::new(),
+            vec![RadrootsOrderFulfillmentRecord {
                 event_id: "existing_fulfillment".to_owned(),
                 author_pubkey: fixture.seller_pubkey.clone(),
                 counterparty_pubkey: fixture.buyer_pubkey.clone(),
                 root_event_id: existing_request.request_event_id.clone(),
                 prev_event_id: existing_decision_event_id,
-                payload: RadrootsTradeFulfillmentUpdated {
+                payload: RadrootsOrderFulfillmentUpdate {
                     order_id: existing_request.order_id.clone(),
                     listing_addr: existing_request.listing_addr.clone(),
                     buyer_pubkey: existing_request.buyer_pubkey.clone(),
                     seller_pubkey: existing_request.seller_pubkey.clone(),
-                    status: RadrootsActiveTradeFulfillmentState::SellerCancelled,
+                    status: RadrootsOrderFulfillmentState::SellerCancelled,
                 },
             }],
-            Vec::<RadrootsActiveOrderCancellationRecord>::new(),
-            Vec::<RadrootsActiveOrderReceiptRecord>::new(),
+            Vec::<RadrootsOrderCancellationRecord>::new(),
+            Vec::<RadrootsOrderReceiptRecord>::new(),
         );
         let args = OrderDecisionArgs {
             key: fixture.order_id.clone(),
@@ -17967,8 +17739,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 1,
                 }],
@@ -18010,7 +17782,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Declined {
+            RadrootsOrderDecisionOutcome::Declined {
                 reason: "out of stock".to_owned(),
             },
         );
@@ -18049,8 +17821,8 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Accepted {
-                inventory_commitments: vec![RadrootsTradeInventoryCommitment {
+            RadrootsOrderDecisionOutcome::Accepted {
+                inventory_commitments: vec![RadrootsOrderInventoryCommitment {
                     bin_id: "bin-1".to_owned(),
                     bin_count: 2,
                 }],
@@ -18063,7 +17835,7 @@ mod tests {
             fixture.listing_addr.as_str(),
             fixture.buyer_pubkey.as_str(),
             fixture.seller_pubkey.as_str(),
-            RadrootsTradeOrderDecision::Declined {
+            RadrootsOrderDecisionOutcome::Declined {
                 reason: "out of stock".to_owned(),
             },
         );
@@ -18415,7 +18187,7 @@ mod tests {
         order_id: &str,
         bin_id: &str,
         bin_count: u32,
-    ) -> RadrootsTradeOrderEconomics {
+    ) -> RadrootsOrderEconomics {
         sample_order_economics_with_unit_price(order_id, bin_id, bin_count, 6)
     }
 
@@ -18424,16 +18196,16 @@ mod tests {
         bin_id: &str,
         bin_count: u32,
         unit_price: u32,
-    ) -> RadrootsTradeOrderEconomics {
+    ) -> RadrootsOrderEconomics {
         let currency = RadrootsCoreCurrency::USD;
         let unit_price_amount = RadrootsCoreDecimal::from(unit_price);
         let line_amount = unit_price_amount * RadrootsCoreDecimal::from(bin_count);
-        RadrootsTradeOrderEconomics {
+        RadrootsOrderEconomics {
             quote_id: format!("quote_{order_id}"),
             quote_version: 1,
-            pricing_basis: RadrootsTradePricingBasis::ListingEvent,
+            pricing_basis: RadrootsOrderPricingBasis::ListingEvent,
             currency,
-            items: vec![RadrootsTradeOrderEconomicItem {
+            items: vec![RadrootsOrderEconomicItem {
                 bin_id: bin_id.to_owned(),
                 bin_count,
                 quantity_amount: RadrootsCoreDecimal::ONE,
@@ -18706,7 +18478,7 @@ mod tests {
         listing_addr: &str,
         buyer_pubkey: &str,
         seller_pubkey: &str,
-        decision: RadrootsTradeOrderDecision,
+        decision: RadrootsOrderDecisionOutcome,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         signed_order_decision_event_with_counterparty(
             seller,
@@ -18728,19 +18500,19 @@ mod tests {
         buyer_pubkey: &str,
         seller_pubkey: &str,
         counterparty_pubkey: &str,
-        decision: RadrootsTradeOrderDecision,
+        decision: RadrootsOrderDecisionOutcome,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
-        let payload = RadrootsTradeOrderDecisionEvent {
+        let payload = RadrootsOrderDecision {
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
             decision,
         };
-        let payload = canonicalize_active_order_decision_for_signer(payload, seller_pubkey)
+        let payload = canonicalize_order_decision_for_signer(payload, seller_pubkey)
             .expect("canonical order decision");
         let request_event_id = request_event.id.to_string();
-        let parts = active_trade_order_decision_event_build(
+        let parts = order_decision_event_build(
             request_event_id.as_str(),
             request_event_id.as_str(),
             &payload,
@@ -18772,7 +18544,7 @@ mod tests {
         economics.quote_id = "revision_rev_test".to_owned();
         economics.quote_version = 2;
         economics.canonicalize();
-        let payload = RadrootsTradeOrderRevisionProposed {
+        let payload = RadrootsOrderRevisionProposal {
             revision_id: "rev_test".to_owned(),
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
@@ -18780,14 +18552,14 @@ mod tests {
             seller_pubkey: seller_pubkey.to_owned(),
             root_event_id: request_event.id.to_string(),
             prev_event_id: decision_event.id.to_string(),
-            items: vec![RadrootsTradeOrderItem {
+            items: vec![RadrootsOrderItem {
                 bin_id: "bin-1".to_owned(),
                 bin_count,
             }],
             economics,
             reason: "update count".to_owned(),
         };
-        let parts = active_trade_order_revision_proposal_event_build(
+        let parts = order_revision_proposal_event_build(
             payload.root_event_id.as_str(),
             payload.prev_event_id.as_str(),
             &payload,
@@ -18802,15 +18574,12 @@ mod tests {
     fn signed_order_revision_decision_event(
         buyer: &RadrootsIdentity,
         proposal_event: &radroots_nostr::prelude::RadrootsNostrEvent,
-        decision: RadrootsTradeOrderRevisionDecision,
+        decision: RadrootsOrderRevisionOutcome,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let proposal = radroots_event_from_nostr(proposal_event);
-        let envelope =
-            radroots_events_codec::trade::active_trade_order_revision_proposal_from_event(
-                &proposal,
-            )
+        let envelope = radroots_events_codec::order::order_revision_proposal_from_event(&proposal)
             .expect("decoded revision proposal");
-        let payload = RadrootsTradeOrderRevisionDecisionEvent {
+        let payload = RadrootsOrderRevisionDecision {
             revision_id: envelope.payload.revision_id.clone(),
             order_id: envelope.payload.order_id.clone(),
             listing_addr: envelope.payload.listing_addr.clone(),
@@ -18820,7 +18589,7 @@ mod tests {
             prev_event_id: proposal_event.id.to_string(),
             decision,
         };
-        let parts = active_trade_order_revision_decision_event_build(
+        let parts = order_revision_decision_event_build(
             payload.root_event_id.as_str(),
             payload.prev_event_id.as_str(),
             &payload,
@@ -18840,9 +18609,9 @@ mod tests {
         listing_addr: &str,
         buyer_pubkey: &str,
         seller_pubkey: &str,
-        status: RadrootsActiveTradeFulfillmentState,
+        status: RadrootsOrderFulfillmentState,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
-        let payload = RadrootsTradeFulfillmentUpdated {
+        let payload = RadrootsOrderFulfillmentUpdate {
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
             buyer_pubkey: buyer_pubkey.to_owned(),
@@ -18851,7 +18620,7 @@ mod tests {
         };
         let request_event_id = request_event.id.to_string();
         let prev_event_id = prev_event.id.to_string();
-        let parts = active_trade_fulfillment_update_event_build(
+        let parts = order_fulfillment_update_event_build(
             request_event_id.as_str(),
             prev_event_id.as_str(),
             &payload,
@@ -18873,7 +18642,7 @@ mod tests {
         seller_pubkey: &str,
         reason: &str,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
-        let payload = RadrootsTradeOrderCancelled {
+        let payload = RadrootsOrderCancellation {
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
             buyer_pubkey: buyer_pubkey.to_owned(),
@@ -18882,7 +18651,7 @@ mod tests {
         };
         let request_event_id = request_event.id.to_string();
         let prev_event_id = prev_event.id.to_string();
-        let parts = active_trade_order_cancel_event_build(
+        let parts = order_cancellation_event_build(
             request_event_id.as_str(),
             prev_event_id.as_str(),
             &payload,
@@ -18905,7 +18674,7 @@ mod tests {
         received: bool,
         issue: Option<&str>,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
-        let payload = RadrootsTradeBuyerReceipt {
+        let payload = RadrootsOrderReceipt {
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
             buyer_pubkey: buyer_pubkey.to_owned(),
@@ -18916,12 +18685,9 @@ mod tests {
         };
         let request_event_id = request_event.id.to_string();
         let prev_event_id = prev_event.id.to_string();
-        let parts = active_trade_buyer_receipt_event_build(
-            request_event_id.as_str(),
-            prev_event_id.as_str(),
-            &payload,
-        )
-        .expect("buyer receipt parts");
+        let parts =
+            order_receipt_event_build(request_event_id.as_str(), prev_event_id.as_str(), &payload)
+                .expect("buyer receipt parts");
         radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
             .expect("nostr event builder")
             .sign_with_keys(buyer.keys())
@@ -18939,7 +18705,7 @@ mod tests {
         seller_pubkey: &str,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let economics = sample_order_economics(order_id, "bin-1", 2);
-        let payload = RadrootsTradePaymentRecorded {
+        let payload = RadrootsOrderPaymentRecord {
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
             buyer_pubkey: buyer_pubkey.to_owned(),
@@ -18949,17 +18715,15 @@ mod tests {
             agreement_event_id: agreement_event.id.to_string(),
             quote_id: economics.quote_id.clone(),
             quote_version: economics.quote_version,
-            economics_digest: radroots_trade::order::radroots_trade_order_economics_digest(
-                &economics,
-            )
-            .expect("economics digest"),
+            economics_digest: radroots_trade::order::radroots_order_economics_digest(&economics)
+                .expect("economics digest"),
             amount: economics.total.amount,
             currency: economics.total.currency,
-            method: RadrootsTradePaymentMethod::ManualTransfer,
+            method: RadrootsOrderPaymentMethod::ManualTransfer,
             reference: Some("memo-1".to_owned()),
             paid_at: Some(1_777_666_000),
         };
-        let parts = active_trade_payment_recorded_event_build(
+        let parts = order_payment_record_event_build(
             payload.root_event_id.as_str(),
             payload.previous_event_id.as_str(),
             &payload,
@@ -18975,13 +18739,12 @@ mod tests {
         seller: &RadrootsIdentity,
         request_event: &radroots_nostr::prelude::RadrootsNostrEvent,
         payment_event: &radroots_nostr::prelude::RadrootsNostrEvent,
-        decision: RadrootsTradeSettlementDecision,
+        decision: RadrootsOrderSettlementOutcome,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
         let payment = radroots_event_from_nostr(payment_event);
-        let envelope =
-            radroots_events_codec::trade::active_trade_payment_recorded_from_event(&payment)
-                .expect("decoded payment");
-        let payload = RadrootsTradeSettlementDecisionEvent {
+        let envelope = radroots_events_codec::order::order_payment_record_from_event(&payment)
+            .expect("decoded payment");
+        let payload = RadrootsOrderSettlementDecision {
             order_id: envelope.payload.order_id.clone(),
             listing_addr: envelope.payload.listing_addr.clone(),
             seller_pubkey: envelope.payload.seller_pubkey.clone(),
@@ -18996,10 +18759,10 @@ mod tests {
             amount: envelope.payload.amount,
             currency: envelope.payload.currency,
             decision,
-            reason: (decision == RadrootsTradeSettlementDecision::Rejected)
+            reason: (decision == RadrootsOrderSettlementOutcome::Rejected)
                 .then(|| "reference mismatch".to_owned()),
         };
-        let parts = active_trade_settlement_decision_event_build(
+        let parts = order_settlement_decision_event_build(
             payload.root_event_id.as_str(),
             payload.previous_event_id.as_str(),
             &payload,
@@ -19019,18 +18782,18 @@ mod tests {
         seller_pubkey: &str,
         listing_event_id: &str,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
-        let payload = RadrootsTradeOrderRequested {
+        let payload = RadrootsOrderRequest {
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
-            items: vec![RadrootsTradeOrderItem {
+            items: vec![RadrootsOrderItem {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
             economics: sample_order_economics(order_id, "bin-1", 2),
         };
-        let parts = active_trade_order_request_event_build(
+        let parts = order_request_event_build(
             &RadrootsNostrEventPtr {
                 id: listing_event_id.to_owned(),
                 relays: None,
@@ -19070,20 +18833,20 @@ mod tests {
         buyer_pubkey: &str,
         seller_pubkey: &str,
         listing_event_id: &str,
-        economics: RadrootsTradeOrderEconomics,
+        economics: RadrootsOrderEconomics,
     ) -> radroots_nostr::prelude::RadrootsNostrEvent {
-        let payload = RadrootsTradeOrderRequested {
+        let payload = RadrootsOrderRequest {
             order_id: order_id.to_owned(),
             listing_addr: listing_addr.to_owned(),
             buyer_pubkey: buyer_pubkey.to_owned(),
             seller_pubkey: seller_pubkey.to_owned(),
-            items: vec![RadrootsTradeOrderItem {
+            items: vec![RadrootsOrderItem {
                 bin_id: "bin-1".to_owned(),
                 bin_count: 2,
             }],
             economics,
         };
-        let parts = active_trade_order_request_event_build(
+        let parts = order_request_event_build(
             &RadrootsNostrEventPtr {
                 id: listing_event_id.to_owned(),
                 relays: None,

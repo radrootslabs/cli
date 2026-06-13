@@ -17,7 +17,7 @@ use radroots_events::listing::{
     RadrootsListingDeliveryMethod, RadrootsListingLocation, RadrootsListingProduct,
     RadrootsListingStatus,
 };
-use radroots_events::trade::RadrootsTradeListingValidationError;
+use radroots_events::trade_validation::RadrootsTradeValidationListingError;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_events_codec::wire::WireEventParts;
@@ -2209,6 +2209,7 @@ fn canonicalize_draft(
 
     let listing = RadrootsListing {
         d_tag: listing_id.clone(),
+        published_at: None,
         farm: RadrootsFarmRef {
             pubkey: seller_pubkey.clone(),
             d_tag: farm_d_tag.clone(),
@@ -3064,47 +3065,47 @@ fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
 }
 
 fn issue_from_trade_validation(
-    error: RadrootsTradeListingValidationError,
+    error: RadrootsTradeValidationListingError,
     contents: &str,
 ) -> ListingValidationIssueView {
     match error {
-        RadrootsTradeListingValidationError::InvalidSeller => issue_for_field(
+        RadrootsTradeValidationListingError::InvalidSeller => issue_for_field(
             contents,
             "seller_actor.pubkey",
             "listing author does not match the farm pubkey",
         ),
-        RadrootsTradeListingValidationError::MissingTitle => {
+        RadrootsTradeValidationListingError::MissingTitle => {
             issue_for_field(contents, "product.title", "missing listing title")
         }
-        RadrootsTradeListingValidationError::MissingDescription => {
+        RadrootsTradeValidationListingError::MissingDescription => {
             issue_for_field(contents, "product.summary", "missing listing description")
         }
-        RadrootsTradeListingValidationError::MissingProductType => {
+        RadrootsTradeValidationListingError::MissingProductType => {
             issue_for_field(contents, "product.category", "missing listing product type")
         }
-        RadrootsTradeListingValidationError::MissingBins
-        | RadrootsTradeListingValidationError::MissingPrimaryBin
-        | RadrootsTradeListingValidationError::InvalidBin => {
+        RadrootsTradeValidationListingError::MissingBins
+        | RadrootsTradeValidationListingError::MissingPrimaryBin
+        | RadrootsTradeValidationListingError::InvalidBin => {
             issue_for_field(contents, "primary_bin.bin_id", error.to_string())
         }
-        RadrootsTradeListingValidationError::InvalidPrice => issue_for_field(
+        RadrootsTradeValidationListingError::InvalidPrice => issue_for_field(
             contents,
             "primary_bin.price_amount",
             "invalid listing price",
         ),
-        RadrootsTradeListingValidationError::MissingInventory
-        | RadrootsTradeListingValidationError::InvalidInventory => {
+        RadrootsTradeValidationListingError::MissingInventory
+        | RadrootsTradeValidationListingError::InvalidInventory => {
             issue_for_field(contents, "inventory.available", error.to_string())
         }
-        RadrootsTradeListingValidationError::MissingAvailability => issue_for_field(
+        RadrootsTradeValidationListingError::MissingAvailability => issue_for_field(
             contents,
             "availability.status",
             "missing listing availability",
         ),
-        RadrootsTradeListingValidationError::MissingLocation => {
+        RadrootsTradeValidationListingError::MissingLocation => {
             issue_for_field(contents, "location.primary", "missing listing location")
         }
-        RadrootsTradeListingValidationError::MissingDeliveryMethod => issue_for_field(
+        RadrootsTradeValidationListingError::MissingDeliveryMethod => issue_for_field(
             contents,
             "delivery.method",
             "missing listing delivery method",

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use radroots_events::trade::RadrootsTradeOrderEconomics;
+use radroots_events::order::RadrootsOrderEconomics;
 use radroots_replica_db::{ReplicaSql, trade_product};
 use radroots_replica_db_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
 use radroots_sql_core::SqliteExecutor;
@@ -82,7 +82,7 @@ struct BasketQuote {
     order_id: String,
     order_file: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    economics: Option<RadrootsTradeOrderEconomics>,
+    economics: Option<RadrootsOrderEconomics>,
     ready_for_submit: bool,
     created_at_unix: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1316,7 +1316,7 @@ mod tests {
 
     use radroots_events::RadrootsNostrEvent;
     use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
-    use radroots_events_codec::trade::RadrootsTradeListingAddress;
+    use radroots_events_codec::order::RadrootsOrderListingAddress;
     use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
@@ -1770,7 +1770,7 @@ mod tests {
 
     fn seed_current_listing(config: &RuntimeConfig) {
         crate::runtime::store::init(config).expect("store init");
-        let parsed = RadrootsTradeListingAddress::parse(LISTING_ADDR).expect("listing addr");
+        let parsed = RadrootsOrderListingAddress::parse(LISTING_ADDR).expect("listing addr");
         let event = RadrootsNostrEvent {
             id: "2".repeat(64),
             author: parsed.seller_pubkey.clone(),

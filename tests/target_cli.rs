@@ -8,11 +8,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use radroots_events::RadrootsNostrEventPtr;
-use radroots_events::kinds::{KIND_FARM, KIND_PROFILE, KIND_TRADE_ORDER_REQUEST};
-use radroots_events::trade::{
-    RadrootsTradeOrderEconomics, RadrootsTradeOrderItem, RadrootsTradeOrderRequested,
-};
-use radroots_events_codec::trade::active_trade_order_request_event_build;
+use radroots_events::kinds::{KIND_FARM, KIND_ORDER_REQUEST, KIND_PROFILE};
+use radroots_events::order::{RadrootsOrderEconomics, RadrootsOrderItem, RadrootsOrderRequest};
+use radroots_events_codec::order::order_request_event_build;
 use radroots_local_events::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, CANONICAL_RELAY_SET_FINGERPRINT_VERSION,
     LocalEventRecordInput, LocalEventsStore, LocalRecordFamily, LocalRecordStatus,
@@ -681,7 +679,7 @@ fn seed_app_order_record_variant_with_record_id(
     record_id
 }
 
-fn app_order_economics(order_id: &str, bin_count: u32) -> RadrootsTradeOrderEconomics {
+fn app_order_economics(order_id: &str, bin_count: u32) -> RadrootsOrderEconomics {
     let line_total = (bin_count * 6).to_string();
     serde_json::from_value(json!({
         "quote_id": format!("app-order:{order_id}"),
@@ -732,18 +730,18 @@ fn signed_app_order_request_event(
     seller_pubkey: &str,
     bin_count: u32,
 ) -> RadrootsNostrEvent {
-    let payload = RadrootsTradeOrderRequested {
+    let payload = RadrootsOrderRequest {
         order_id: order_id.to_owned(),
         listing_addr: listing_addr.to_owned(),
         buyer_pubkey: buyer.public_key_hex(),
         seller_pubkey: seller_pubkey.to_owned(),
-        items: vec![RadrootsTradeOrderItem {
+        items: vec![RadrootsOrderItem {
             bin_id: "bin-1".to_owned(),
             bin_count,
         }],
         economics: app_order_economics(order_id, bin_count),
     };
-    let parts = active_trade_order_request_event_build(
+    let parts = order_request_event_build(
         &RadrootsNostrEventPtr {
             id: listing_event_id.to_owned(),
             relays: None,
@@ -792,7 +790,7 @@ fn append_app_signed_order_request_record(
             listing_addr: Some(listing_addr.to_owned()),
             local_work_json: None,
             event_id: Some(event_id),
-            event_kind: Some(i64::from(KIND_TRADE_ORDER_REQUEST)),
+            event_kind: Some(i64::from(KIND_ORDER_REQUEST)),
             event_pubkey: Some(event.pubkey.to_string()),
             event_created_at: Some(
                 i64::try_from(event.created_at.as_secs()).expect("event created_at"),
@@ -6097,22 +6095,22 @@ fn signed_order_request_event_for_quote(
     buyer: &radroots_identity::RadrootsIdentity,
     order_id: &str,
     listing_event_id: &str,
-    economics: RadrootsTradeOrderEconomics,
+    economics: RadrootsOrderEconomics,
 ) -> RadrootsNostrEvent {
     let buyer_pubkey = buyer.public_key_hex();
     let seller_pubkey = "1".repeat(64);
-    let payload = RadrootsTradeOrderRequested {
+    let payload = RadrootsOrderRequest {
         order_id: order_id.to_owned(),
         listing_addr: LISTING_ADDR.to_owned(),
         buyer_pubkey,
         seller_pubkey,
-        items: vec![RadrootsTradeOrderItem {
+        items: vec![RadrootsOrderItem {
             bin_id: "bin-1".to_owned(),
             bin_count: 2,
         }],
         economics,
     };
-    let parts = active_trade_order_request_event_build(
+    let parts = order_request_event_build(
         &RadrootsNostrEventPtr {
             id: listing_event_id.to_owned(),
             relays: None,
@@ -6670,7 +6668,7 @@ fn order_rebind_refuses_visible_published_request() {
     let order_id = quote["result"]["quote"]["order_id"]
         .as_str()
         .expect("order id");
-    let economics: RadrootsTradeOrderEconomics =
+    let economics: RadrootsOrderEconomics =
         serde_json::from_value(quote["result"]["quote"]["economics"].clone())
             .expect("quote economics");
     let event = signed_order_request_event_for_quote(
@@ -6758,7 +6756,7 @@ fn order_status_and_event_list_use_draft_context_after_account_override_drift() 
     let order_id = quote["result"]["quote"]["order_id"]
         .as_str()
         .expect("order id");
-    let economics: RadrootsTradeOrderEconomics =
+    let economics: RadrootsOrderEconomics =
         serde_json::from_value(quote["result"]["quote"]["economics"].clone())
             .expect("quote economics");
     let event = signed_order_request_event_for_quote(
@@ -6873,7 +6871,7 @@ fn order_cancel_uses_bound_buyer_after_default_account_drift() {
     let order_id = quote["result"]["quote"]["order_id"]
         .as_str()
         .expect("order id");
-    let economics: RadrootsTradeOrderEconomics =
+    let economics: RadrootsOrderEconomics =
         serde_json::from_value(quote["result"]["quote"]["economics"].clone())
             .expect("quote economics");
     let event = signed_order_request_event_for_quote(

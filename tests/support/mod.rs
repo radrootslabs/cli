@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use assert_cmd::prelude::*;
 use radroots_events::RadrootsNostrEvent;
 use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
-use radroots_events_codec::trade::RadrootsTradeListingAddress;
+use radroots_events_codec::order::RadrootsOrderListingAddress;
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
 use radroots_local_events::{
     LocalEventRecord, LocalEventRecordInput, LocalEventsStore, LocalRecordFamily,
@@ -240,7 +240,7 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
     let db_path = store["result"]["path"]
         .as_str()
         .expect("replica db path from store init");
-    let parsed = RadrootsTradeListingAddress::parse(listing_addr).expect("listing addr");
+    let parsed = RadrootsOrderListingAddress::parse(listing_addr).expect("listing addr");
     let seller_pubkey = parsed.seller_pubkey.clone();
     let listing_id = parsed.listing_id.clone();
     let event_id = "2".repeat(64);
@@ -411,7 +411,7 @@ pub fn replace_latest_listing_event_id(
     listing_addr: &str,
     event_id: &str,
 ) {
-    let parsed = RadrootsTradeListingAddress::parse(listing_addr).expect("listing addr");
+    let parsed = RadrootsOrderListingAddress::parse(listing_addr).expect("listing addr");
     let key = format!(
         "{}:{}:{}",
         KIND_LISTING, parsed.seller_pubkey, parsed.listing_id

@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use radroots_events::kinds::{
-    KIND_TRADE_VALIDATION_RECEIPT, KIND_WORKER_TRADE_TRANSITION_PROOF_RES,
-};
+use radroots_events::kinds::{KIND_TRADE_TRANSITION_PROOF_RESULT, KIND_TRADE_VALIDATION_RECEIPT};
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrEventId, RadrootsNostrFilter, RadrootsNostrKind,
     radroots_event_from_nostr, radroots_nostr_filter_tag,
@@ -1148,7 +1146,7 @@ fn validation_receipt_worker_result_filter(
     receipt_event_ids: Vec<String>,
 ) -> Result<RadrootsNostrFilter, String> {
     let filter = RadrootsNostrFilter::new().kind(RadrootsNostrKind::Custom(
-        KIND_WORKER_TRADE_TRANSITION_PROOF_RES as u16,
+        KIND_TRADE_TRANSITION_PROOF_RESULT as u16,
     ));
     radroots_nostr_filter_tag(filter, "e", receipt_event_ids)
         .map_err(|error| format!("build validation receipt worker result filter: {error}"))

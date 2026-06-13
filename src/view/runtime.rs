@@ -6,11 +6,11 @@ use radroots_core::{RadrootsCoreCurrency, RadrootsCoreDecimal};
 use radroots_events::farm::RadrootsFarm;
 use radroots_events::kinds::KIND_LISTING;
 use radroots_events::listing::RadrootsListingLocation;
-use radroots_events::profile::RadrootsProfile;
-use radroots_events::trade::{
-    RadrootsTradeOrderEconomics, RadrootsTradePaymentMethod, RadrootsTradeSettlementDecision,
+use radroots_events::order::{
+    RadrootsOrderEconomics, RadrootsOrderPaymentMethod, RadrootsOrderSettlementOutcome,
 };
-use radroots_events_codec::trade::RadrootsTradeListingAddress;
+use radroots_events::profile::RadrootsProfile;
+use radroots_events_codec::order::RadrootsOrderListingAddress;
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
 use serde::Serialize;
 
@@ -1086,7 +1086,7 @@ impl MarketReadinessView {
         price_per_amount: f64,
     ) -> Self {
         let protocol_valid = listing_addr.is_some_and(|listing_addr| {
-            RadrootsTradeListingAddress::parse(listing_addr)
+            RadrootsOrderListingAddress::parse(listing_addr)
                 .is_ok_and(|parsed| parsed.kind == KIND_LISTING)
         });
         let marketplace_eligible = protocol_valid
@@ -1407,7 +1407,7 @@ pub struct OrderNewView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<OrderDraftItemView>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub economics: Option<RadrootsTradeOrderEconomics>,
+    pub economics: Option<RadrootsOrderEconomics>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<OrderIssueView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1456,7 +1456,7 @@ pub struct OrderGetView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<OrderDraftItemView>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub economics: Option<RadrootsTradeOrderEconomics>,
+    pub economics: Option<RadrootsOrderEconomics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2022,7 +2022,7 @@ pub struct OrderRevisionProposalView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<OrderDraftItemView>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub economics: Option<RadrootsTradeOrderEconomics>,
+    pub economics: Option<RadrootsOrderEconomics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inventory: Option<OrderInventoryView>,
     #[serde(default)]
@@ -2097,7 +2097,7 @@ pub struct OrderRevisionDecisionView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_kind: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub economics: Option<RadrootsTradeOrderEconomics>,
+    pub economics: Option<RadrootsOrderEconomics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inventory: Option<OrderInventoryView>,
     #[serde(default)]
@@ -2177,7 +2177,7 @@ pub struct OrderPaymentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<RadrootsCoreCurrency>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub method: Option<RadrootsTradePaymentMethod>,
+    pub method: Option<RadrootsOrderPaymentMethod>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2261,7 +2261,7 @@ pub struct OrderSettlementView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<RadrootsCoreCurrency>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub decision: Option<RadrootsTradeSettlementDecision>,
+    pub decision: Option<RadrootsOrderSettlementOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settlement_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2327,7 +2327,7 @@ pub struct OrderStatusView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub economics: Option<RadrootsTradeOrderEconomics>,
+    pub economics: Option<RadrootsOrderEconomics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2417,7 +2417,7 @@ pub struct OrderStatusPaymentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<RadrootsCoreCurrency>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub method: Option<RadrootsTradePaymentMethod>,
+    pub method: Option<RadrootsOrderPaymentMethod>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2640,7 +2640,7 @@ pub struct OrderSummaryView {
     pub buyer_write_capable: Option<bool>,
     pub item_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub economics: Option<RadrootsTradeOrderEconomics>,
+    pub economics: Option<RadrootsOrderEconomics>,
     pub updated_at_unix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<OrderJobView>,
