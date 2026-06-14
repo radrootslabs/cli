@@ -7,8 +7,8 @@ use std::sync::Mutex;
 
 use assert_cmd::prelude::*;
 use radroots_events::RadrootsNostrEvent;
+use radroots_events::ids::RadrootsListingAddress;
 use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
-use radroots_events_codec::order::RadrootsOrderListingAddress;
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
 use radroots_local_events::{
     LocalEventRecord, LocalEventRecordInput, LocalEventsStore, LocalRecordFamily,
@@ -240,9 +240,7 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
     let db_path = store["result"]["path"]
         .as_str()
         .expect("replica db path from store init");
-    let parsed = RadrootsOrderListingAddress::parse(listing_addr).expect("listing addr");
-    let seller_pubkey = parsed.seller_pubkey.clone();
-    let listing_id = parsed.listing_id.clone();
+    let (seller_pubkey, listing_id) = listing_addr_parts(listing_addr);
     let event_id = "2".repeat(64);
     let event = RadrootsNostrEvent {
         id: event_id.clone(),
@@ -411,11 +409,8 @@ pub fn replace_latest_listing_event_id(
     listing_addr: &str,
     event_id: &str,
 ) {
-    let parsed = RadrootsOrderListingAddress::parse(listing_addr).expect("listing addr");
-    let key = format!(
-        "{}:{}:{}",
-        KIND_LISTING, parsed.seller_pubkey, parsed.listing_id
-    );
+    let (seller_pubkey, listing_id) = listing_addr_parts(listing_addr);
+    let key = format!("{KIND_LISTING}:{seller_pubkey}:{listing_id}");
     let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica db");
     let params = serde_json::to_string(&vec![event_id, key.as_str()]).expect("update params");
     executor
@@ -424,6 +419,13 @@ pub fn replace_latest_listing_event_id(
             params.as_str(),
         )
         .expect("update latest listing event id");
+}
+
+fn listing_addr_parts(listing_addr: &str) -> (String, String) {
+    let parsed = RadrootsListingAddress::parse(listing_addr).expect("listing addr");
+    let (_, rest) = parsed.as_str().split_once(':').expect("listing addr kind");
+    let (seller_pubkey, listing_id) = rest.split_once(':').expect("listing addr parts");
+    (seller_pubkey.to_owned(), listing_id.to_owned())
 }
 
 pub fn create_listing_draft(sandbox: &RadrootsCliSandbox, key: &str) -> PathBuf {

@@ -1315,8 +1315,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use radroots_events::RadrootsNostrEvent;
+    use radroots_events::ids::RadrootsListingAddress;
     use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
-    use radroots_events_codec::order::RadrootsOrderListingAddress;
     use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
@@ -1770,22 +1770,22 @@ mod tests {
 
     fn seed_current_listing(config: &RuntimeConfig) {
         crate::runtime::store::init(config).expect("store init");
-        let parsed = RadrootsOrderListingAddress::parse(LISTING_ADDR).expect("listing addr");
+        let (seller_pubkey, listing_id) = listing_addr_parts(LISTING_ADDR);
         let event = RadrootsNostrEvent {
             id: "2".repeat(64),
-            author: parsed.seller_pubkey.clone(),
+            author: seller_pubkey.clone(),
             created_at: 1,
             kind: KIND_LISTING,
             tags: vec![
-                vec!["d".to_owned(), parsed.listing_id],
+                vec!["d".to_owned(), listing_id],
                 vec![
                     "a".to_owned(),
                     format!(
                         "{}:{}:{}",
-                        KIND_FARM, parsed.seller_pubkey, "AAAAAAAAAAAAAAAAAAAAAA"
+                        KIND_FARM, seller_pubkey, "AAAAAAAAAAAAAAAAAAAAAA"
                     ),
                 ],
-                vec!["p".to_owned(), parsed.seller_pubkey],
+                vec!["p".to_owned(), seller_pubkey],
                 vec!["key".to_owned(), "pasture-eggs".to_owned()],
                 vec!["title".to_owned(), "Market Eggs".to_owned()],
                 vec!["category".to_owned(), "eggs".to_owned()],
@@ -1825,6 +1825,13 @@ mod tests {
             radroots_replica_ingest_event(&executor, &event).expect("ingest listing"),
             RadrootsReplicaIngestOutcome::Applied
         );
+    }
+
+    fn listing_addr_parts(listing_addr: &str) -> (String, String) {
+        let parsed = RadrootsListingAddress::parse(listing_addr).expect("listing addr");
+        let (_, rest) = parsed.as_str().split_once(':').expect("listing addr kind");
+        let (seller_pubkey, listing_id) = rest.split_once(':').expect("listing addr parts");
+        (seller_pubkey.to_owned(), listing_id.to_owned())
     }
 
     fn duplicate_current_listing_row(config: &RuntimeConfig) {

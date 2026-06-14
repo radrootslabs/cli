@@ -37,11 +37,11 @@ use radroots_events::order::{
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::decode::listing_from_event;
 use radroots_events_codec::order::{
-    RadrootsOrderListingAddress, order_cancellation_event_build, order_cancellation_from_event,
-    order_decision_event_build, order_envelope_from_event, order_event_context_from_tags,
-    order_fulfillment_update_event_build, order_fulfillment_update_from_event,
-    order_payment_record_event_build, order_payment_record_from_event, order_receipt_event_build,
-    order_receipt_from_event, order_request_from_event, order_revision_decision_event_build,
+    order_cancellation_event_build, order_cancellation_from_event, order_decision_event_build,
+    order_envelope_from_event, order_event_context_from_tags, order_fulfillment_update_event_build,
+    order_fulfillment_update_from_event, order_payment_record_event_build,
+    order_payment_record_from_event, order_receipt_event_build, order_receipt_from_event,
+    order_request_from_event, order_revision_decision_event_build,
     order_revision_decision_from_event, order_revision_proposal_event_build,
     order_revision_proposal_from_event, order_settlement_decision_event_build,
     order_settlement_decision_from_event,
@@ -6783,7 +6783,7 @@ fn current_inventory_listing_from_receipt(
 }
 
 fn current_inventory_listing_from_parts(
-    parsed: RadrootsOrderListingAddress,
+    parsed: ParsedListingAddress,
     receipt: DirectRelayFetchReceipt,
 ) -> Result<Option<ResolvedInventoryListing>, RuntimeError> {
     let mut candidates = Vec::new();
@@ -8813,7 +8813,7 @@ fn order_request_filter(
 }
 
 fn listing_event_filter(
-    listing_addr: &RadrootsOrderListingAddress,
+    listing_addr: &ParsedListingAddress,
 ) -> Result<RadrootsNostrFilter, RuntimeError> {
     let filter = RadrootsNostrFilter::new()
         .kind(radroots_nostr_kind(KIND_LISTING as u16))
@@ -9061,7 +9061,7 @@ fn resolve_trade_product_by_listing_addr(
 fn resolve_active_listing_event_id(
     config: &RuntimeConfig,
     listing_addr: &str,
-    parsed: &RadrootsOrderListingAddress,
+    parsed: &ParsedListingAddress,
 ) -> Result<Option<String>, RuntimeError> {
     if !config.local.replica_db_path.exists() {
         return Ok(None);
@@ -12437,8 +12437,30 @@ fn draft_lookup_path(config: &RuntimeConfig, lookup: &str) -> PathBuf {
     drafts_dir(config).join(file_name)
 }
 
-fn parse_listing_addr(raw: &str) -> Result<RadrootsOrderListingAddress, String> {
-    RadrootsOrderListingAddress::parse(raw).map_err(|error| error.to_string())
+#[derive(Debug, Clone)]
+struct ParsedListingAddress {
+    kind: u32,
+    seller_pubkey: String,
+    listing_id: String,
+}
+
+fn parse_listing_addr(raw: &str) -> Result<ParsedListingAddress, String> {
+    let parsed = RadrootsListingAddress::parse(raw).map_err(|error| error.to_string())?;
+    let (kind, rest) = parsed
+        .as_str()
+        .split_once(':')
+        .ok_or_else(|| "listing address has invalid format".to_owned())?;
+    let (seller_pubkey, listing_id) = rest
+        .split_once(':')
+        .ok_or_else(|| "listing address has invalid format".to_owned())?;
+    let kind = kind
+        .parse::<u32>()
+        .map_err(|_| "listing address kind is invalid".to_owned())?;
+    Ok(ParsedListingAddress {
+        kind,
+        seller_pubkey: seller_pubkey.to_owned(),
+        listing_id: listing_id.to_owned(),
+    })
 }
 
 fn issue(field: impl Into<String>, message: impl Into<String>) -> OrderIssueView {

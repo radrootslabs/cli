@@ -4,13 +4,13 @@ use std::process::ExitCode;
 
 use radroots_core::{RadrootsCoreCurrency, RadrootsCoreDecimal};
 use radroots_events::farm::RadrootsFarm;
+use radroots_events::ids::RadrootsListingAddress;
 use radroots_events::kinds::KIND_LISTING;
 use radroots_events::listing::RadrootsListingLocation;
 use radroots_events::order::{
     RadrootsOrderEconomics, RadrootsOrderPaymentMethod, RadrootsOrderSettlementOutcome,
 };
 use radroots_events::profile::RadrootsProfile;
-use radroots_events_codec::order::RadrootsOrderListingAddress;
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
 use serde::Serialize;
 
@@ -1086,8 +1086,13 @@ impl MarketReadinessView {
         price_per_amount: f64,
     ) -> Self {
         let protocol_valid = listing_addr.is_some_and(|listing_addr| {
-            RadrootsOrderListingAddress::parse(listing_addr)
-                .is_ok_and(|parsed| parsed.kind == KIND_LISTING)
+            RadrootsListingAddress::parse(listing_addr).is_ok_and(|parsed| {
+                parsed
+                    .as_str()
+                    .split_once(':')
+                    .and_then(|(kind, _)| kind.parse::<u32>().ok())
+                    == Some(KIND_LISTING)
+            })
         });
         let marketplace_eligible = protocol_valid
             && title.is_some_and(|title| !title.trim().is_empty())
