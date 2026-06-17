@@ -1,23 +1,36 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use radroots_replica_db::backup::export_database_backup_json;
 use radroots_replica_db::export::{ReplicaDbExportManifestRs, export_manifest};
 use radroots_replica_db::migrations;
 use radroots_replica_sync::radroots_replica_sync_status;
+use radroots_sdk::{
+    BackupReceipt, BackupRequest, IntegrityReceipt, IntegrityRequest, SdkBackupState,
+    SdkEventStoreStorageStatus, SdkOutboxStorageStatus, SdkSqliteStoreStatus, SdkStorageKind,
+    StorageStatusReceipt, StorageStatusRequest,
+};
 use radroots_sql_core::SqliteExecutor;
-use serde_json::json;
+use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::cli::global::LocalExportFormatArg;
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
+use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_storage_root};
 use crate::runtime::sync::ensure_sync_run_table;
 use crate::view::runtime::{
-    LocalBackupView, LocalExportView, LocalInitView, LocalReplicaCountsView, LocalReplicaSyncView,
-    LocalStatusView,
+    LocalBackupView, LocalExportView, LocalInitView, LocalLegacyReplicaStatusView,
+    LocalReplicaCountsView, LocalReplicaSyncView, LocalStatusView, SdkEventStoreStatusView,
+    SdkIntegrityView, SdkOutboxStatusView, SdkSqliteStatusView,
 };
 
-const LOCAL_SOURCE: &str = "local replica · local first";
+const LEGACY_REPLICA_SOURCE: &str = "legacy local replica · derived/migration source";
+const SDK_CANONICAL_SOURCE: &str = "SDK canonical event store and outbox";
+const SDK_CANONICAL_STORE: &str = "sdk";
+const SDK_BACKUP_KIND: &str = "sdk_canonical";
+const SDK_BACKUP_MANIFEST_FILE: &str = "manifest.json";
+const SDK_EVENT_STORE_FILE: &str = "event_store.sqlite";
+const SDK_OUTBOX_FILE: &str = "outbox.sqlite";
 
 pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
     let existed = config.local.replica_db_path.exists();
@@ -33,7 +46,7 @@ pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
         } else {
             "initialized".to_owned()
         },
-        source: LOCAL_SOURCE.to_owned(),
+        source: LEGACY_REPLICA_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "ready".to_owned(),
         path: config.local.replica_db_path.display().to_string(),
@@ -50,7 +63,7 @@ pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeEr
         let manifest = export_manifest(&executor)?;
         return Ok(LocalInitView {
             state: "ready".to_owned(),
-            source: LOCAL_SOURCE.to_owned(),
+            source: LEGACY_REPLICA_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
             replica_db: "ready".to_owned(),
             path: config.local.replica_db_path.display().to_string(),
@@ -61,7 +74,7 @@ pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeEr
 
     Ok(LocalInitView {
         state: "dry_run".to_owned(),
-        source: LOCAL_SOURCE.to_owned(),
+        source: LEGACY_REPLICA_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "missing".to_owned(),
         path: config.local.replica_db_path.display().to_string(),
@@ -70,12 +83,34 @@ pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeEr
     })
 }
 
-pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, RuntimeError> {
+pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterError> {
+    let sdk_root = sdk_storage_root(config);
+    let sdk_existed_before_open = sdk_storage_files_exist(sdk_root.as_path());
+    let legacy_replica = legacy_replica_status(config)?;
+    let session = CliSdkSession::connect(config)?;
+    let receipt = session.block_on(
+        session
+            .sdk()
+            .storage_status(StorageStatusRequest::default()),
+    )?;
+    let integrity = session.block_on(session.sdk().integrity(IntegrityRequest::default()))?;
+    Ok(sdk_status_view(
+        config,
+        sdk_root,
+        sdk_existed_before_open,
+        receipt,
+        integrity,
+        legacy_replica,
+    ))
+}
+
+fn legacy_replica_status(
+    config: &RuntimeConfig,
+) -> Result<LocalLegacyReplicaStatusView, RuntimeError> {
     if !config.local.replica_db_path.exists() {
-        return Ok(LocalStatusView {
+        return Ok(LocalLegacyReplicaStatusView {
             state: "unconfigured".to_owned(),
-            source: LOCAL_SOURCE.to_owned(),
-            local_root: config.local.root.display().to_string(),
+            source: LEGACY_REPLICA_SOURCE.to_owned(),
             replica_db: "missing".to_owned(),
             path: config.local.replica_db_path.display().to_string(),
             replica_db_version: String::new(),
@@ -102,10 +137,9 @@ pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, RuntimeError> {
     let manifest = export_manifest(&executor)?;
     let sync = radroots_replica_sync_status(&executor)?;
 
-    Ok(LocalStatusView {
+    Ok(LocalLegacyReplicaStatusView {
         state: "ready".to_owned(),
-        source: LOCAL_SOURCE.to_owned(),
-        local_root: config.local.root.display().to_string(),
+        source: LEGACY_REPLICA_SOURCE.to_owned(),
         replica_db: "ready".to_owned(),
         path: config.local.replica_db_path.display().to_string(),
         replica_db_version: manifest.replica_db_version.clone(),
@@ -121,52 +155,47 @@ pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, RuntimeError> {
     })
 }
 
-pub fn backup(config: &RuntimeConfig, output: &Path) -> Result<LocalBackupView, RuntimeError> {
-    if !config.local.replica_db_path.exists() {
-        return Ok(missing_backup_view(output));
-    }
-
-    ensure_safe_output_path(config, output)?;
-    create_parent_dir(output)?;
-
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
-    let backup_json = export_database_backup_json(&executor)?;
-    fs::write(output, backup_json)?;
-    let file_size = fs::metadata(output)?.len();
-    let manifest = export_manifest(&executor)?;
-
-    Ok(LocalBackupView {
-        state: "backup created".to_owned(),
-        source: LOCAL_SOURCE.to_owned(),
-        file: output.display().to_string(),
-        size_bytes: file_size,
-        backup_format_version: manifest.backup_format_version,
-        replica_db_version: manifest.replica_db_version,
-        reason: None,
-        actions: Vec::new(),
-    })
+pub fn backup(
+    config: &RuntimeConfig,
+    output: &Path,
+) -> Result<LocalBackupView, CliSdkAdapterError> {
+    ensure_safe_sdk_backup_destination(config, output)?;
+    let session = CliSdkSession::connect(config)?;
+    let receipt = session.block_on(session.sdk().backup(BackupRequest {
+        destination: output.to_path_buf(),
+        overwrite: false,
+    }))?;
+    sdk_backup_view(receipt)
 }
 
 pub fn backup_preflight(
     config: &RuntimeConfig,
     output: &Path,
-) -> Result<LocalBackupView, RuntimeError> {
-    if !config.local.replica_db_path.exists() {
-        return Ok(missing_backup_view(output));
-    }
-
-    ensure_safe_output_path(config, output)?;
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
-    let manifest = export_manifest(&executor)?;
-
+) -> Result<LocalBackupView, CliSdkAdapterError> {
+    ensure_safe_sdk_backup_destination(config, output)?;
+    let session = CliSdkSession::connect(config)?;
+    let status = session.block_on(
+        session
+            .sdk()
+            .storage_status(StorageStatusRequest::default()),
+    )?;
+    let integrity = session.block_on(session.sdk().integrity(IntegrityRequest::default()))?;
+    let manifest = sdk_backup_manifest_preview(output, &status, &integrity);
     Ok(LocalBackupView {
         state: "dry_run".to_owned(),
-        source: LOCAL_SOURCE.to_owned(),
-        file: output.display().to_string(),
+        source: SDK_CANONICAL_SOURCE.to_owned(),
+        backup_kind: SDK_BACKUP_KIND.to_owned(),
+        canonical_store: SDK_CANONICAL_STORE.to_owned(),
+        destination: output.display().to_string(),
+        file: output.join(SDK_BACKUP_MANIFEST_FILE).display().to_string(),
+        event_store_file: Some(output.join(SDK_EVENT_STORE_FILE).display().to_string()),
+        outbox_file: Some(output.join(SDK_OUTBOX_FILE).display().to_string()),
+        manifest_file: Some(output.join(SDK_BACKUP_MANIFEST_FILE).display().to_string()),
         size_bytes: 0,
-        backup_format_version: manifest.backup_format_version,
-        replica_db_version: manifest.replica_db_version,
-        reason: Some("dry run requested; backup file was not written".to_owned()),
+        manifest,
+        reason: Some(
+            "dry run requested; SDK canonical backup directory was not written".to_owned(),
+        ),
         actions: vec!["radroots store backup create".to_owned()],
     })
 }
@@ -179,7 +208,7 @@ pub fn export(
     if !config.local.replica_db_path.exists() {
         return Ok(LocalExportView {
             state: "unconfigured".to_owned(),
-            source: LOCAL_SOURCE.to_owned(),
+            source: LEGACY_REPLICA_SOURCE.to_owned(),
             format: format.as_str().to_owned(),
             file: output.display().to_string(),
             records: 0,
@@ -200,7 +229,7 @@ pub fn export(
         LocalExportFormatArg::Json => {
             let export = json!({
                 "kind": "local_export_manifest_v1",
-                "source": LOCAL_SOURCE,
+                "source": LEGACY_REPLICA_SOURCE,
                 "replica_db_version": manifest.replica_db_version,
                 "backup_format_version": manifest.backup_format_version,
                 "export_version": manifest.export_version,
@@ -219,7 +248,7 @@ pub fn export(
             lines.push(
                 json!({
                     "kind": "local_export_manifest",
-                    "source": LOCAL_SOURCE,
+                    "source": LEGACY_REPLICA_SOURCE,
                     "replica_db_version": manifest.replica_db_version,
                     "backup_format_version": manifest.backup_format_version,
                     "export_version": manifest.export_version,
@@ -252,7 +281,7 @@ pub fn export(
 
     Ok(LocalExportView {
         state: "exported".to_owned(),
-        source: LOCAL_SOURCE.to_owned(),
+        source: LEGACY_REPLICA_SOURCE.to_owned(),
         format: format.as_str().to_owned(),
         file: output.display().to_string(),
         records,
@@ -298,17 +327,238 @@ fn validate_directory_target(path: &Path) -> Result<(), RuntimeError> {
     }
 }
 
-fn missing_backup_view(output: &Path) -> LocalBackupView {
-    LocalBackupView {
-        state: "unconfigured".to_owned(),
-        source: LOCAL_SOURCE.to_owned(),
-        file: output.display().to_string(),
-        size_bytes: 0,
-        backup_format_version: String::new(),
-        replica_db_version: String::new(),
-        reason: Some("local replica database is not initialized".to_owned()),
-        actions: vec!["radroots store init".to_owned()],
+fn sdk_storage_files_exist(sdk_root: &Path) -> bool {
+    sdk_root.join(SDK_EVENT_STORE_FILE).exists() && sdk_root.join(SDK_OUTBOX_FILE).exists()
+}
+
+fn sdk_status_view(
+    config: &RuntimeConfig,
+    sdk_root: PathBuf,
+    sdk_existed_before_open: bool,
+    receipt: StorageStatusReceipt,
+    integrity: IntegrityReceipt,
+    legacy_replica: LocalLegacyReplicaStatusView,
+) -> LocalStatusView {
+    let event_store_path = receipt
+        .paths
+        .as_ref()
+        .map(|paths| paths.event_store_path.display().to_string());
+    let outbox_path = receipt
+        .paths
+        .as_ref()
+        .map(|paths| paths.outbox_path.display().to_string());
+    let state = sdk_status_state(&receipt, &integrity).to_owned();
+    let reason = sdk_status_reason(&state);
+    let actions = sdk_status_actions(&state);
+    LocalStatusView {
+        state,
+        source: SDK_CANONICAL_SOURCE.to_owned(),
+        local_root: config.local.root.display().to_string(),
+        canonical_store: SDK_CANONICAL_STORE.to_owned(),
+        sdk_storage: sdk_storage_kind_label(receipt.storage).to_owned(),
+        sdk_root: sdk_root.display().to_string(),
+        sdk_existed_before_open,
+        event_store: sdk_event_store_status_view(receipt.event_store, event_store_path),
+        outbox: sdk_outbox_status_view(receipt.outbox, outbox_path),
+        integrity: sdk_integrity_view(integrity),
+        legacy_replica,
+        reason,
+        actions,
     }
+}
+
+fn sdk_status_state(receipt: &StorageStatusReceipt, integrity: &IntegrityReceipt) -> &'static str {
+    if receipt.event_store.store.integrity_ok
+        && receipt.outbox.store.integrity_ok
+        && integrity.event_store_ok
+        && integrity.outbox_ok
+    {
+        "ready"
+    } else {
+        "needs_attention"
+    }
+}
+
+fn sdk_status_reason(state: &str) -> Option<String> {
+    match state {
+        "ready" => None,
+        _ => Some("SDK canonical store integrity check failed".to_owned()),
+    }
+}
+
+fn sdk_status_actions(state: &str) -> Vec<String> {
+    match state {
+        "ready" => Vec::new(),
+        _ => vec!["radroots store status get".to_owned()],
+    }
+}
+
+fn sdk_event_store_status_view(
+    status: SdkEventStoreStorageStatus,
+    path: Option<String>,
+) -> SdkEventStoreStatusView {
+    SdkEventStoreStatusView {
+        path,
+        store: sdk_sqlite_status_view(status.store),
+        total_events: status.total_events,
+        projection_eligible_events: status.projection_eligible_events,
+        relay_observations: status.relay_observations,
+        last_event_seq: status.last_event_seq,
+        last_event_updated_at_ms: status.last_event_updated_at_ms,
+    }
+}
+
+fn sdk_outbox_status_view(
+    status: SdkOutboxStorageStatus,
+    path: Option<String>,
+) -> SdkOutboxStatusView {
+    SdkOutboxStatusView {
+        path,
+        store: sdk_sqlite_status_view(status.store),
+        total_events: status.total_events,
+        pending_events: status.pending_events,
+        retryable_events: status.retryable_events,
+        terminal_events: status.terminal_events,
+        failed_terminal_events: status.failed_terminal_events,
+        ready_signed_events: status.ready_signed_events,
+        publishing_events: status.publishing_events,
+        last_attempt_at_ms: status.last_attempt_at_ms,
+        last_error: status.last_error,
+    }
+}
+
+fn sdk_sqlite_status_view(status: SdkSqliteStoreStatus) -> SdkSqliteStatusView {
+    SdkSqliteStatusView {
+        schema_version: status.schema_version,
+        journal_mode: status.journal_mode,
+        foreign_keys_enabled: status.foreign_keys_enabled,
+        busy_timeout_ms: status.busy_timeout_ms,
+        integrity_ok: status.integrity_ok,
+        integrity_result: status.integrity_result,
+    }
+}
+
+fn sdk_integrity_view(receipt: IntegrityReceipt) -> SdkIntegrityView {
+    SdkIntegrityView {
+        checked_paths: receipt
+            .checked_paths
+            .into_iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        event_store_ok: receipt.event_store_ok,
+        outbox_ok: receipt.outbox_ok,
+        event_store_result: receipt.event_store_result,
+        outbox_result: receipt.outbox_result,
+    }
+}
+
+fn ensure_safe_sdk_backup_destination(
+    config: &RuntimeConfig,
+    output: &Path,
+) -> Result<(), RuntimeError> {
+    let sdk_root = sdk_storage_root(config);
+    let sdk_event_store_path = sdk_root.join(SDK_EVENT_STORE_FILE);
+    let sdk_outbox_path = sdk_root.join(SDK_OUTBOX_FILE);
+    let forbidden_paths = [
+        sdk_root.as_path(),
+        config.local.replica_db_path.as_path(),
+        sdk_event_store_path.as_path(),
+        sdk_outbox_path.as_path(),
+    ];
+    if forbidden_paths.iter().any(|forbidden| output == *forbidden) {
+        return Err(RuntimeError::Config(format!(
+            "backup destination {} would overwrite canonical or legacy store data",
+            output.display()
+        )));
+    }
+    if output.starts_with(sdk_root.as_path()) {
+        return Err(RuntimeError::Config(format!(
+            "backup destination {} must not be inside the SDK canonical store directory",
+            output.display()
+        )));
+    }
+    Ok(())
+}
+
+fn sdk_backup_view(receipt: BackupReceipt) -> Result<LocalBackupView, CliSdkAdapterError> {
+    let event_store_file = receipt.event_store_path.as_ref().map(display_path);
+    let outbox_file = receipt.outbox_path.as_ref().map(display_path);
+    let manifest_file = receipt.manifest_path.as_ref().map(display_path);
+    let size_bytes = path_size(receipt.event_store_path.as_ref())?
+        + path_size(receipt.outbox_path.as_ref())?
+        + path_size(receipt.manifest_path.as_ref())?;
+    Ok(LocalBackupView {
+        state: sdk_backup_state_label(receipt.state).to_owned(),
+        source: SDK_CANONICAL_SOURCE.to_owned(),
+        backup_kind: SDK_BACKUP_KIND.to_owned(),
+        canonical_store: SDK_CANONICAL_STORE.to_owned(),
+        destination: display_path(&receipt.destination),
+        file: manifest_file
+            .clone()
+            .unwrap_or_else(|| receipt.destination.display().to_string()),
+        event_store_file,
+        outbox_file,
+        manifest_file,
+        size_bytes,
+        manifest: json_value(&receipt.manifest)?,
+        reason: None,
+        actions: Vec::new(),
+    })
+}
+
+fn sdk_backup_manifest_preview(
+    output: &Path,
+    status: &StorageStatusReceipt,
+    integrity: &IntegrityReceipt,
+) -> Value {
+    json!({
+        "manifest_kind": "sdk_canonical_backup_preview",
+        "destination": output.display().to_string(),
+        "source_storage": sdk_storage_kind_label(status.storage),
+        "source_paths": &status.paths,
+        "backup_paths": {
+            "event_store_path": output.join(SDK_EVENT_STORE_FILE).display().to_string(),
+            "outbox_path": output.join(SDK_OUTBOX_FILE).display().to_string(),
+        },
+        "source_status": status,
+        "backup_verification": {
+            "event_store_ok": integrity.event_store_ok,
+            "outbox_ok": integrity.outbox_ok,
+            "event_store_result": &integrity.event_store_result,
+            "outbox_result": &integrity.outbox_result,
+        },
+    })
+}
+
+fn sdk_storage_kind_label(kind: SdkStorageKind) -> &'static str {
+    match kind {
+        SdkStorageKind::Memory => "memory",
+        SdkStorageKind::Directory => "directory",
+        _ => "unknown",
+    }
+}
+
+fn sdk_backup_state_label(state: SdkBackupState) -> &'static str {
+    match state {
+        SdkBackupState::Planned => "planned",
+        SdkBackupState::Completed => "completed",
+        _ => "unknown",
+    }
+}
+
+fn json_value(value: impl Serialize) -> Result<Value, RuntimeError> {
+    serde_json::to_value(value).map_err(RuntimeError::from)
+}
+
+fn path_size(path: Option<&PathBuf>) -> Result<u64, RuntimeError> {
+    path.map(fs::metadata)
+        .transpose()?
+        .map(|metadata| metadata.len())
+        .ok_or_else(|| RuntimeError::Config("SDK backup did not report all file paths".to_owned()))
+}
+
+fn display_path(path: &PathBuf) -> String {
+    path.display().to_string()
 }
 
 fn create_parent_dir(path: &Path) -> Result<(), RuntimeError> {

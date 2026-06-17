@@ -1217,15 +1217,20 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
         &value["result"]["publish"]["reason"],
         "radrootsd publish mode is deferred",
     );
-    assert_eq!(value["result"]["actions"][0], "radroots store init");
-    assert_eq!(value["result"]["actions"][1], "radroots account create");
+    assert_eq!(value["result"]["store"]["state"], "ready");
     assert_eq!(
-        value["result"]["actions"][2],
+        value["result"]["store"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(value["result"]["store"]["canonical_store"], "sdk");
+    assert_eq!(value["result"]["signer"]["state"], "unavailable");
+    assert_eq!(value["result"]["actions"][0], "radroots account create");
+    assert_eq!(
+        value["result"]["actions"][1],
         "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
     );
-    assert_eq!(value["next_actions"][0]["command"], "radroots store init");
     assert_eq!(
-        value["next_actions"][1]["command"],
+        value["next_actions"][0]["command"],
         "radroots account create"
     );
     assert_direct_relay_next_action(
@@ -1259,11 +1264,12 @@ fn health_status_distinguishes_relay_ready_from_missing_signed_write_account() {
         &value["result"]["publish"]["reason"],
         "write-capable local account",
     );
-    assert_eq!(value["result"]["actions"][0], "radroots store init");
-    assert_eq!(value["result"]["actions"][1], "radroots account create");
-    assert_eq!(value["next_actions"][0]["command"], "radroots store init");
+    assert_eq!(value["result"]["store"]["state"], "ready");
+    assert_eq!(value["result"]["store"]["canonical_store"], "sdk");
+    assert_eq!(value["result"]["signer"]["state"], "unconfigured");
+    assert_eq!(value["result"]["actions"][0], "radroots account create");
     assert_eq!(
-        value["next_actions"][1]["command"],
+        value["next_actions"][0]["command"],
         "radroots account create"
     );
 }
@@ -1289,15 +1295,20 @@ fn health_check_exposes_publish_readiness() {
         &value["result"]["checks"]["publish"]["reason"],
         "radrootsd publish mode is deferred",
     );
-    assert_eq!(value["result"]["actions"][0], "radroots store init");
-    assert_eq!(value["result"]["actions"][1], "radroots account create");
+    assert_eq!(value["result"]["checks"]["store"]["state"], "ready");
     assert_eq!(
-        value["result"]["actions"][2],
+        value["result"]["checks"]["store"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(value["result"]["checks"]["store"]["canonical_store"], "sdk");
+    assert_eq!(value["result"]["checks"]["signer"]["state"], "unconfigured");
+    assert_eq!(value["result"]["actions"][0], "radroots account create");
+    assert_eq!(
+        value["result"]["actions"][1],
         "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
     );
-    assert_eq!(value["next_actions"][0]["command"], "radroots store init");
     assert_eq!(
-        value["next_actions"][1]["command"],
+        value["next_actions"][0]["command"],
         "radroots account create"
     );
     assert_direct_relay_next_action(
@@ -2619,7 +2630,6 @@ fn human_health_status_surfaces_publish_reason_and_actions() {
     assert!(stdout.contains("publish_mode: nostr_relay"));
     assert!(stdout.contains("publish_state: unconfigured"));
     assert!(stdout.contains("reason: nostr_relay publish mode requires a selected or default write-capable local account"));
-    assert!(stdout.contains("- radroots store init"));
     assert!(stdout.contains("- radroots account create"));
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }
@@ -3710,26 +3720,131 @@ fn store_export_dry_run_is_structured_unsupported() {
 #[test]
 fn store_backup_dry_run_preflights_initialized_store_without_writing_file() {
     let sandbox = RadrootsCliSandbox::new();
-    let (missing_output, missing_value) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "store", "backup", "create"]);
+    let sdk_root = sandbox.root().join("data/apps/cli/replica/sdk");
 
-    assert!(!missing_output.status.success());
-    assert_eq!(missing_value["operation_id"], "store.backup.create");
-    assert_eq!(missing_value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(missing_value["errors"][0]["exit_code"], 3);
+    assert!(!sdk_root.exists());
 
-    let init = sandbox.json_success(&["--format", "json", "store", "init"]);
-    assert_eq!(init["operation_id"], "store.init");
+    let status = sandbox.json_success(&["--format", "json", "store", "status", "get"]);
 
-    let backup =
+    assert_eq!(status["operation_id"], "store.status.get");
+    assert_eq!(status["result"]["state"], "ready");
+    assert_eq!(
+        status["result"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(status["result"]["canonical_store"], "sdk");
+    assert_eq!(status["result"]["sdk_storage"], "directory");
+    assert_eq!(status["result"]["sdk_existed_before_open"], false);
+    assert_eq!(
+        status["result"]["event_store"]["store"]["integrity_ok"],
+        true
+    );
+    assert_eq!(status["result"]["outbox"]["store"]["integrity_ok"], true);
+    assert_eq!(status["result"]["legacy_replica"]["state"], "unconfigured");
+    assert_eq!(
+        status["result"]["legacy_replica"]["source"],
+        "legacy local replica · derived/migration source"
+    );
+    assert!(sdk_root.join("event_store.sqlite").exists());
+    assert!(sdk_root.join("outbox.sqlite").exists());
+
+    let legacy = sandbox.json_success(&["--format", "json", "store", "init"]);
+    assert_eq!(legacy["operation_id"], "store.init");
+
+    let status_after_legacy = sandbox.json_success(&["--format", "json", "store", "status", "get"]);
+
+    assert_eq!(
+        status_after_legacy["result"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(
+        status_after_legacy["result"]["legacy_replica"]["state"],
+        "ready"
+    );
+    assert_eq!(
+        status_after_legacy["result"]["legacy_replica"]["source"],
+        "legacy local replica · derived/migration source"
+    );
+
+    let dry_run =
         sandbox.json_success(&["--format", "json", "--dry-run", "store", "backup", "create"]);
-    let file = backup["result"]["file"].as_str().expect("backup file");
+    let dry_run_destination = dry_run["result"]["destination"]
+        .as_str()
+        .expect("backup destination");
+    let dry_run_file = dry_run["result"]["file"].as_str().expect("backup file");
+
+    assert_eq!(dry_run["operation_id"], "store.backup.create");
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["result"]["state"], "dry_run");
+    assert_eq!(
+        dry_run["result"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(dry_run["result"]["backup_kind"], "sdk_canonical");
+    assert_eq!(dry_run["result"]["canonical_store"], "sdk");
+    assert_eq!(dry_run["result"]["size_bytes"], 0);
+    assert_eq!(
+        dry_run["result"]["manifest"]["manifest_kind"],
+        "sdk_canonical_backup_preview"
+    );
+    assert_eq!(
+        dry_run["result"]["manifest"]["backup_verification"]["event_store_ok"],
+        true
+    );
+    assert_eq!(
+        dry_run["result"]["manifest"]["backup_verification"]["outbox_ok"],
+        true
+    );
+    assert!(!Path::new(dry_run_destination).exists());
+    assert!(!Path::new(dry_run_file).exists());
+
+    let backup = sandbox.json_success(&["--format", "json", "store", "backup", "create"]);
+    let backup_destination = backup["result"]["destination"]
+        .as_str()
+        .expect("backup destination");
+    let event_store_file = backup["result"]["event_store_file"]
+        .as_str()
+        .expect("event store backup");
+    let outbox_file = backup["result"]["outbox_file"]
+        .as_str()
+        .expect("outbox backup");
+    let manifest_file = backup["result"]["manifest_file"]
+        .as_str()
+        .expect("manifest backup");
 
     assert_eq!(backup["operation_id"], "store.backup.create");
-    assert_eq!(backup["dry_run"], true);
-    assert_eq!(backup["result"]["state"], "dry_run");
-    assert_eq!(backup["result"]["size_bytes"], 0);
-    assert!(!Path::new(file).exists());
+    assert_eq!(backup["result"]["state"], "completed");
+    assert_eq!(
+        backup["result"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(backup["result"]["backup_kind"], "sdk_canonical");
+    assert_eq!(backup["result"]["canonical_store"], "sdk");
+    assert!(
+        backup["result"]["size_bytes"]
+            .as_u64()
+            .expect("backup size")
+            > 0
+    );
+    assert!(Path::new(backup_destination).exists());
+    assert!(Path::new(event_store_file).exists());
+    assert!(Path::new(outbox_file).exists());
+    assert!(Path::new(manifest_file).exists());
+    assert_eq!(
+        backup["result"]["manifest"]["backup_verification"]["event_store_ok"],
+        true
+    );
+    assert_eq!(
+        backup["result"]["manifest"]["backup_verification"]["outbox_ok"],
+        true
+    );
+    assert!(
+        backup["result"]["manifest"]["source_paths"]["event_store_path"]
+            .as_str()
+            .expect("source event store path")
+            .contains("data/apps/cli/replica/sdk/event_store.sqlite")
+    );
+    assert!(!event_store_file.ends_with("replica.sqlite"));
 }
 
 #[test]

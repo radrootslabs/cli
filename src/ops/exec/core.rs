@@ -31,6 +31,7 @@ use crate::runtime::config::{
     PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
 };
 use crate::runtime::logging::LoggingState;
+use crate::runtime::sdk::CliSdkAdapterError;
 use crate::view::runtime::{
     CommandDisposition, LocalBackupView, PublishProviderRuntimeView, PublishRelayRuntimeView,
     PublishRuntimeView,
@@ -99,17 +100,22 @@ impl OperationService<HealthStatusGetRequest> for CoreOperationService<'_> {
 
     fn execute(
         &self,
-        _request: OperationRequest<HealthStatusGetRequest>,
+        request: OperationRequest<HealthStatusGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let store = map_runtime(crate::runtime::store::status(self.config))?;
+        let store = map_sdk_adapter(
+            request.operation_id(),
+            crate::runtime::store::status(self.config),
+        )?;
         let account = map_runtime(resolve_account_resolution(self.config))?;
         let publish = publish_runtime_view(self.config, true, &account);
+        let signer = signer_health_view(self.config, &account);
         let state = health_status_state(&store.state, &publish);
         let actions = health_actions(self.config, store.state.as_str(), &account, &publish);
         json_operation_result::<HealthStatusGetResult>(json!({
             "state": state,
             "store": store,
             "account_resolution": account_resolution_view(&account),
+            "signer": signer,
             "publish": publish,
             "logging": {
                 "initialized": self.logging.initialized,
@@ -125,9 +131,12 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
 
     fn execute(
         &self,
-        _request: OperationRequest<HealthCheckRunRequest>,
+        request: OperationRequest<HealthCheckRunRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let store = map_runtime(crate::runtime::store::status(self.config))?;
+        let store = map_sdk_adapter(
+            request.operation_id(),
+            crate::runtime::store::status(self.config),
+        )?;
         let account = map_runtime(resolve_account_resolution(self.config))?;
         let account_reason = if account.resolved_account.is_some() {
             None
@@ -135,6 +144,7 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
             Some(map_runtime(unresolved_account_reason(self.config))?)
         };
         let publish = publish_runtime_view(self.config, true, &account);
+        let signer = signer_health_view(self.config, &account);
         let state = health_check_state(&store.state, account.resolved_account.is_some(), &publish);
         let actions = health_actions(self.config, store.state.as_str(), &account, &publish);
         json_operation_result::<HealthCheckRunResult>(json!({
@@ -147,12 +157,22 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
                 },
                 "store": {
                     "state": store.state,
+                    "source": store.source,
+                    "canonical_store": store.canonical_store,
+                    "sdk_storage": store.sdk_storage,
+                    "sdk_root": store.sdk_root,
+                    "sdk_existed_before_open": store.sdk_existed_before_open,
+                    "event_store": store.event_store,
+                    "outbox": store.outbox,
+                    "integrity": store.integrity,
+                    "legacy_replica": store.legacy_replica,
                     "reason": store.reason,
                 },
                 "account": {
                     "state": if account.resolved_account.is_some() { "ready" } else { "unconfigured" },
                     "reason": account_reason,
                 },
+                "signer": signer,
                 "publish": {
                     "state": publish.state,
                     "mode": publish.mode,
@@ -564,9 +584,12 @@ impl OperationService<StoreStatusGetRequest> for CoreOperationService<'_> {
 
     fn execute(
         &self,
-        _request: OperationRequest<StoreStatusGetRequest>,
+        request: OperationRequest<StoreStatusGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = map_runtime(crate::runtime::store::status(self.config))?;
+        let view = map_sdk_adapter(
+            request.operation_id(),
+            crate::runtime::store::status(self.config),
+        )?;
         serialized_operation_result::<StoreStatusGetResult, _>(&view)
     }
 }
@@ -614,16 +637,16 @@ impl OperationService<StoreBackupCreateRequest> for CoreOperationService<'_> {
         request: OperationRequest<StoreBackupCreateRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let output = optional_path(&request, "output")
-            .unwrap_or_else(|| self.config.local.backups_dir.join("store-backup.json"));
+            .unwrap_or_else(|| self.config.local.backups_dir.join("sdk-store-backup"));
         if request.context.dry_run {
-            let view = map_expected_runtime(
+            let view = map_sdk_adapter(
                 request.operation_id(),
                 crate::runtime::store::backup_preflight(self.config, output.as_path()),
             )?;
             return local_backup_result(request.operation_id(), &view);
         }
 
-        let view = map_expected_runtime(
+        let view = map_sdk_adapter(
             request.operation_id(),
             crate::runtime::store::backup(self.config, output.as_path()),
         )?;
@@ -648,6 +671,13 @@ where
 
 fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
     result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
+}
+
+fn map_sdk_adapter<T>(
+    operation_id: &str,
+    result: Result<T, CliSdkAdapterError>,
+) -> Result<T, OperationAdapterError> {
+    result.map_err(|error| OperationAdapterError::sdk_adapter_failure(operation_id, error))
 }
 
 fn account_secret_backend_ready(
@@ -824,6 +854,34 @@ fn radrootsd_publish_readiness(_config: &RuntimeConfig) -> (&'static str, bool, 
     )
 }
 
+fn signer_health_view(config: &RuntimeConfig, account: &AccountResolution) -> Value {
+    match config.signer.backend {
+        SignerBackend::Local => {
+            let write_capable = account
+                .resolved_account
+                .as_ref()
+                .map(|account| account.write_capable)
+                .unwrap_or(false);
+            json!({
+                "state": if write_capable { "ready" } else { "unconfigured" },
+                "backend": config.signer.backend.as_str(),
+                "write_capable_account": write_capable,
+                "reason": if write_capable {
+                    Value::Null
+                } else {
+                    json!("local signer requires a selected or default write-capable local account")
+                },
+            })
+        }
+        SignerBackend::Myc => json!({
+            "state": "unavailable",
+            "backend": config.signer.backend.as_str(),
+            "write_capable_account": false,
+            "reason": "signer mode `myc` is deferred for CLI writes",
+        }),
+    }
+}
+
 fn health_status_state(store_state: &str, publish: &PublishRuntimeView) -> &'static str {
     if store_state == "ready" && publish_runtime_ready(publish) {
         "ready"
@@ -856,7 +914,7 @@ fn health_actions(
 ) -> Vec<String> {
     let mut actions = Vec::new();
     if store_state != "ready" {
-        push_unique(&mut actions, "radroots store init");
+        push_unique(&mut actions, "radroots store status get");
     }
     if let Some(resolved) = account.resolved_account.as_ref() {
         if !resolved.write_capable {
@@ -1059,8 +1117,23 @@ mod tests {
             .expect("store status envelope");
 
         assert_eq!(envelope.operation_id, "store.status.get");
-        assert_eq!(envelope.result["state"], "unconfigured");
-        assert_eq!(envelope.result["replica_db"], "missing");
+        assert_eq!(envelope.result["state"], "ready");
+        assert_eq!(
+            envelope.result["source"],
+            "SDK canonical event store and outbox"
+        );
+        assert_eq!(envelope.result["canonical_store"], "sdk");
+        assert_eq!(envelope.result["sdk_storage"], "directory");
+        assert_eq!(
+            envelope.result["legacy_replica"]["source"],
+            "legacy local replica · derived/migration source"
+        );
+        assert_eq!(envelope.result["legacy_replica"]["state"], "unconfigured");
+        assert_eq!(
+            envelope.result["event_store"]["store"]["integrity_ok"],
+            true
+        );
+        assert_eq!(envelope.result["outbox"]["store"]["integrity_ok"], true);
     }
 
     #[test]

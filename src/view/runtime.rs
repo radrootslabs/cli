@@ -609,6 +609,85 @@ pub struct LocalStatusView {
     pub state: String,
     pub source: String,
     pub local_root: String,
+    pub canonical_store: String,
+    pub sdk_storage: String,
+    pub sdk_root: String,
+    pub sdk_existed_before_open: bool,
+    pub event_store: SdkEventStoreStatusView,
+    pub outbox: SdkOutboxStatusView,
+    pub integrity: SdkIntegrityView,
+    pub legacy_replica: LocalLegacyReplicaStatusView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl LocalStatusView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "needs_attention" => CommandDisposition::ValidationFailed,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SdkSqliteStatusView {
+    pub schema_version: i64,
+    pub journal_mode: String,
+    pub foreign_keys_enabled: bool,
+    pub busy_timeout_ms: i64,
+    pub integrity_ok: bool,
+    pub integrity_result: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SdkEventStoreStatusView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub store: SdkSqliteStatusView,
+    pub total_events: i64,
+    pub projection_eligible_events: i64,
+    pub relay_observations: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_seq: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SdkOutboxStatusView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub store: SdkSqliteStatusView,
+    pub total_events: i64,
+    pub pending_events: i64,
+    pub retryable_events: i64,
+    pub terminal_events: i64,
+    pub failed_terminal_events: i64,
+    pub ready_signed_events: i64,
+    pub publishing_events: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_attempt_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SdkIntegrityView {
+    pub checked_paths: Vec<String>,
+    pub event_store_ok: bool,
+    pub outbox_ok: bool,
+    pub event_store_result: String,
+    pub outbox_result: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalLegacyReplicaStatusView {
+    pub state: String,
+    pub source: String,
     pub replica_db: String,
     pub path: String,
     pub replica_db_version: String,
@@ -620,15 +699,6 @@ pub struct LocalStatusView {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
-}
-
-impl LocalStatusView {
-    pub fn disposition(&self) -> CommandDisposition {
-        match self.state.as_str() {
-            "unconfigured" => CommandDisposition::Unconfigured,
-            _ => CommandDisposition::Success,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3374,10 +3444,18 @@ pub struct SyncQueueView {
 pub struct LocalBackupView {
     pub state: String,
     pub source: String,
+    pub backup_kind: String,
+    pub canonical_store: String,
+    pub destination: String,
     pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_store_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outbox_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_file: Option<String>,
     pub size_bytes: u64,
-    pub backup_format_version: String,
-    pub replica_db_version: String,
+    pub manifest: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
