@@ -36,7 +36,6 @@ radroots_log = { path = "../lib/crates/log" }
 radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts", features = ["os-keyring"] }
 radroots_nostr = { path = "../lib/crates/nostr", features = ["client", "events"] }
 radroots_nostr_signer = { path = "../lib/crates/nostr_signer" }
-radroots_protected_store = { path = "../lib/crates/protected_store", features = ["std"] }
 radroots_replica_db = { path = "../lib/crates/replica_db" }
 radroots_replica_db_schema = { path = "../lib/crates/replica_db_schema" }
 radroots_replica_sync = { path = "../lib/crates/replica_sync" }
@@ -58,6 +57,7 @@ zeroize = "1.8"
 [dev-dependencies]
 assert_cmd = "2.0"
 flate2 = "1"
+radroots_protected_store = { path = "../lib/crates/protected_store", features = ["std"] }
 tar = "0.4"
 tempfile = "3.17"
 tungstenite = "0.26.2"

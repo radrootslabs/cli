@@ -171,6 +171,7 @@ pub fn sdk_relay_url_policy(config: &RuntimeConfig) -> SdkRelayUrlPolicy {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -187,6 +188,157 @@ mod tests {
         PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
         RelayPublishPolicy, RhiConfig, RpcConfig, SignerBackend, SignerConfig, Verbosity,
     };
+
+    struct DirectRrRsDependency {
+        section: &'static str,
+        name: &'static str,
+        owner: &'static str,
+        reason: &'static str,
+        lifecycle: &'static str,
+    }
+
+    const DIRECT_RR_RS_DEPENDENCIES: &[DirectRrRsDependency] = &[
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_authority",
+            owner: "cli-sdk-adapter",
+            reason: "local account signer materialization for SDK and remaining CLI-authored signing",
+            lifecycle: "retain until all signed mutation construction moves behind SDK signer requests",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_core",
+            owner: "cli-drafts-and-rendering",
+            reason: "CLI draft parsing, numeric validation, and display DTOs",
+            lifecycle: "retain while CLI owns TOML draft UX and command rendering",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_events",
+            owner: "cli-drafts-and-non-migrated-workflows",
+            reason: "event DTOs for local drafts, views, relay reads, and validation receipt surfaces",
+            lifecycle: "retain until the remaining event-authoring and inspection surfaces migrate",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_events_codec",
+            owner: "cli-drafts-and-non-migrated-workflows",
+            reason: "event encoding and decoding for farm, listing draft, order, sync pull, and validation inspection",
+            lifecycle: "retain until those command families are SDK-backed",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_identity",
+            owner: "cli-account-and-signer-ux",
+            reason: "account identity views, local signer materialization, and direct-relay workflows outside the migrated paths",
+            lifecycle: "retain while CLI owns account selection and local identity custody UX",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_local_events",
+            owner: "cli-app-interop",
+            reason: "shared local work and signed-event interop with the desktop app",
+            lifecycle: "retain until a shared local-events SDK boundary replaces direct CLI access",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_log",
+            owner: "cli-runtime-shell",
+            reason: "CLI logging initialization and file layout",
+            lifecycle: "permanent CLI runtime ownership",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_nostr",
+            owner: "non-migrated-direct-relay-workflows",
+            reason: "direct relay fetch/publish and event conversion for active non-migrated commands",
+            lifecycle: "retain until direct relay command families migrate or are retired",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_nostr_accounts",
+            owner: "cli-account-store",
+            reason: "CLI account selection, import, local signer status, and account persistence",
+            lifecycle: "retain while CLI owns local account UX and storage",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_nostr_signer",
+            owner: "cli-signer-readiness",
+            reason: "signer readiness reporting for active mutation command surfaces",
+            lifecycle: "retain until signer readiness is fully SDK-owned",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_replica_db",
+            owner: "legacy-replica-and-market-projection",
+            reason: "legacy derived replica status, export, market reads, sync pull, basket lookup, and order draft preflight",
+            lifecycle: "transitional until those derived projection surfaces migrate",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_replica_db_schema",
+            owner: "legacy-replica-and-market-projection",
+            reason: "typed query filters for legacy market, basket, and order lookup projections",
+            lifecycle: "transitional until those derived projection surfaces migrate",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_replica_sync",
+            owner: "legacy-sync-pull-and-derived-replica",
+            reason: "legacy relay ingest, sync pull, market refresh, and derived replica state reporting",
+            lifecycle: "transitional until relay ingest and projection repair move behind SDK APIs",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_runtime",
+            owner: "cli-config",
+            reason: "strict environment and config value parsing",
+            lifecycle: "permanent CLI configuration ownership unless a shared runtime config crate replaces it",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_runtime_paths",
+            owner: "cli-runtime-paths",
+            reason: "profile-aware CLI config, data, logs, and secrets path resolution",
+            lifecycle: "permanent CLI runtime ownership",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_secret_vault",
+            owner: "cli-account-store",
+            reason: "local account secret backend selection and readiness",
+            lifecycle: "retain while CLI owns local account custody UX",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_sp1_host_trade",
+            owner: "validation-receipts",
+            reason: "validation receipt SP1 proof inspection and verification",
+            lifecycle: "retain until validation receipt verification moves behind SDK APIs",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_sql_core",
+            owner: "legacy-replica-and-local-events",
+            reason: "SQLite executor for legacy derived replica and shared local-events storage",
+            lifecycle: "transitional until those storage surfaces move behind SDK or shared runtime APIs",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_trade",
+            owner: "cli-drafts-and-validation",
+            reason: "listing draft validation, order economics, order reducer helpers, and validation receipt parsing",
+            lifecycle: "retain until remaining trade validation and draft behavior migrates",
+        },
+        DirectRrRsDependency {
+            section: "dev-dependencies",
+            name: "radroots_protected_store",
+            owner: "account-tests",
+            reason: "unit coverage for protected file secret vault behavior",
+            lifecycle: "test-only",
+        },
+    ];
 
     #[test]
     fn maps_runtime_config_to_sdk_builder_inputs() {
@@ -262,20 +414,130 @@ mod tests {
             .join("../../../../domains/radroots/sdk/crates/sdk/src");
         let mut files = Vec::new();
         collect_rs_files(sdk_src.as_path(), &mut files);
+        let forbidden = [
+            ("radroots_cli", "CLI crate identity"),
+            ("domains/radroots/cli", "CLI mount path"),
+            ("approval_token", "CLI approval-token UX"),
+            ("OutputEnvelope", "CLI output envelope"),
+            ("next_actions", "CLI next-action rendering"),
+            ("exit_code", "CLI exit-code contract"),
+            ("docs/", "repository docs path"),
+            ("radroots store", "CLI command string"),
+            ("radroots sync", "CLI command string"),
+            ("radroots listing", "CLI command string"),
+            ("radroots order", "CLI command string"),
+        ];
 
         for file in files {
             let source = fs::read_to_string(&file).expect("read sdk source");
-            assert!(
-                !source.contains("radroots_cli"),
-                "SDK source imports CLI crate identity in {}",
-                file.display()
-            );
-            assert!(
-                !source.contains("domains/radroots/cli"),
-                "SDK source references CLI path in {}",
-                file.display()
-            );
+            for (needle, description) in forbidden {
+                assert!(
+                    !source.contains(needle),
+                    "SDK source contains {description} `{needle}` in {}",
+                    file.display()
+                );
+            }
         }
+    }
+
+    #[test]
+    fn cli_direct_rr_rs_dependencies_are_classified() {
+        let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let manifest = fs::read_to_string(&manifest_path).expect("read manifest");
+        let manifest = manifest.parse::<toml::Value>().expect("parse manifest");
+        let actual = direct_rr_rs_dependency_keys(&manifest);
+        let expected = DIRECT_RR_RS_DEPENDENCIES
+            .iter()
+            .map(direct_rr_rs_dependency_key)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(actual, expected);
+        for dependency in DIRECT_RR_RS_DEPENDENCIES {
+            assert!(!dependency.owner.trim().is_empty());
+            assert!(!dependency.reason.trim().is_empty());
+            assert!(!dependency.lifecycle.trim().is_empty());
+        }
+    }
+
+    #[test]
+    fn migrated_cli_paths_are_guarded_against_direct_relay_and_legacy_canonical_use() {
+        let listing = crate_source("src/runtime/listing.rs");
+        assert_migrated_path(
+            "listing publish",
+            source_segment(
+                &listing,
+                "pub fn publish_via_sdk(",
+                "fn sdk_listing_publish_input(",
+            ),
+            &[
+                "session.sdk().listings().prepare_publish",
+                "session.sdk().listings().enqueue_publish",
+                "session.sdk().sync().push_outbox",
+            ],
+        );
+
+        let sync = crate_source("src/runtime/sync.rs");
+        assert_migrated_path(
+            "sync status",
+            source_segment(
+                &sync,
+                "pub fn status(config: &RuntimeConfig) -> Result<SyncStatusView, CliSdkAdapterError>",
+                "pub fn pull(",
+            ),
+            &["session.sdk().sync().status"],
+        );
+        assert_migrated_path(
+            "sync push",
+            source_segment(
+                &sync,
+                "pub fn push(config: &RuntimeConfig) -> Result<SyncActionView, CliSdkAdapterError>",
+                "pub fn watch(",
+            ),
+            &["session.sdk().sync().push_outbox", "PushOutboxRequest::new"],
+        );
+
+        let order = crate_source("src/runtime/order.rs");
+        assert_migrated_path(
+            "order status",
+            source_segment(
+                &order,
+                "pub fn status(\n    config: &RuntimeConfig",
+                "fn relay_status(",
+            ),
+            &["OrderStatusRequest::parse", "session.sdk().orders().status"],
+        );
+
+        let store = crate_source("src/runtime/store.rs");
+        assert_migrated_path(
+            "store status",
+            source_segment(
+                &store,
+                "pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterError>",
+                "fn legacy_replica_status(",
+            ),
+            &[
+                "session.sdk()",
+                "storage_status(StorageStatusRequest::default())",
+                "integrity(IntegrityRequest::default())",
+            ],
+        );
+        assert_migrated_path(
+            "store backup",
+            source_segment(
+                &store,
+                "pub fn backup(\n    config: &RuntimeConfig",
+                "pub fn backup_preflight(",
+            ),
+            &["session.sdk().backup", "BackupRequest"],
+        );
+        assert_migrated_path(
+            "store backup preflight",
+            source_segment(&store, "pub fn backup_preflight(", "pub fn export("),
+            &[
+                "storage_status(StorageStatusRequest::default())",
+                "integrity(IntegrityRequest::default())",
+            ],
+        );
     }
 
     fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -286,6 +548,77 @@ mod tests {
             } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
                 files.push(path);
             }
+        }
+    }
+
+    fn direct_rr_rs_dependency_keys(manifest: &toml::Value) -> BTreeSet<String> {
+        ["dependencies", "dev-dependencies"]
+            .into_iter()
+            .flat_map(|section| {
+                manifest
+                    .get(section)
+                    .and_then(toml::Value::as_table)
+                    .into_iter()
+                    .flat_map(move |dependencies| {
+                        dependencies.iter().filter_map(move |(name, value)| {
+                            dependency_path(value)
+                                .filter(|path| path.contains("domains/radroots/lib/crates"))
+                                .map(|_| format!("{section}:{name}"))
+                        })
+                    })
+            })
+            .collect()
+    }
+
+    fn direct_rr_rs_dependency_key(dependency: &DirectRrRsDependency) -> String {
+        format!("{}:{}", dependency.section, dependency.name)
+    }
+
+    fn dependency_path(value: &toml::Value) -> Option<&str> {
+        value
+            .as_table()
+            .and_then(|table| table.get("path"))
+            .and_then(toml::Value::as_str)
+    }
+
+    fn crate_source(path: &str) -> String {
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path)).expect("read source")
+    }
+
+    fn source_segment<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let start_index = source.find(start).expect("source segment start");
+        let end_index = source[start_index..]
+            .find(end)
+            .map(|index| start_index + index)
+            .expect("source segment end");
+        &source[start_index..end_index]
+    }
+
+    fn assert_migrated_path(label: &str, source: &str, required_tokens: &[&str]) {
+        for token in required_tokens {
+            assert!(
+                source.contains(token),
+                "{label} does not contain required SDK token `{token}`"
+            );
+        }
+
+        for token in [
+            "fetch_events_from_relays",
+            "publish_parts_with_identity",
+            "publish_via_direct_relay",
+            "mutate_via_direct_relay",
+            "radroots_replica_pending_publish",
+            "radroots_replica_pending_publish_batch",
+            "radroots_replica_sync_status",
+            "ReplicaSql::new",
+            "SqliteExecutor::open(&config.local.replica_db_path)",
+            "outbox_idempotency_digest",
+            "canonical_target_relays",
+        ] {
+            assert!(
+                !source.contains(token),
+                "{label} contains disallowed migrated-path token `{token}`"
+            );
         }
     }
 
