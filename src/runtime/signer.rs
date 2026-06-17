@@ -146,11 +146,11 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     match crate::runtime::account::resolved_account_signing_status(config) {
         Ok(RadrootsNostrAccountStatus::Ready { account }) => {
             let capability = RadrootsNostrSignerCapability::LocalAccount(
-                RadrootsNostrLocalSignerCapability::new(
+                Box::new(RadrootsNostrLocalSignerCapability::new(
                     account.account_id.clone(),
                     account.public_identity.clone(),
                     RadrootsNostrLocalSignerAvailability::SecretBacked,
-                ),
+                )),
             );
             let local = capability
                 .local_account()

@@ -65,17 +65,20 @@ use radroots_replica_db_schema::nostr_event_head::{
 use radroots_replica_db_schema::trade_product::{
     ITradeProductFieldsFilter, ITradeProductFindMany, TradeProduct,
 };
-use radroots_sdk::{
-    RadrootsSdkClient, RadrootsSdkConfig, SdkEnvironment, SdkPublishError, SdkPublishReceipt,
-    SdkRelayFailure, SdkTransportMode, SdkTransportReceipt, SignerConfig as SdkSignerConfig,
+use radroots_sdk::client::{
+    RadrootsSdkClient, SdkPublishError, SdkPublishReceipt, SdkRelayFailure, SdkTransportReceipt,
+};
+use radroots_sdk::config::{
+    RadrootsSdkConfig, SdkEnvironment, SdkTransportMode, SignerConfig as SdkSignerConfig,
 };
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
     RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryAccountingProjection,
-    RadrootsListingInventoryBinAvailability, RadrootsOrderCancellationRecord,
-    RadrootsOrderDecisionRecord, RadrootsOrderFulfillmentRecord, RadrootsOrderIssue,
-    RadrootsOrderPaymentEventRecord, RadrootsOrderPaymentProjection, RadrootsOrderPaymentState,
-    RadrootsOrderReceiptRecord, RadrootsOrderRequestRecord, RadrootsOrderRevisionDecisionRecord,
+    RadrootsListingInventoryAccountingInputs, RadrootsListingInventoryBinAvailability,
+    RadrootsOrderCancellationRecord, RadrootsOrderDecisionRecord, RadrootsOrderFulfillmentRecord,
+    RadrootsOrderIssue, RadrootsOrderPaymentEventRecord, RadrootsOrderPaymentProjection,
+    RadrootsOrderPaymentState, RadrootsOrderReceiptRecord, RadrootsOrderReductionInputs,
+    RadrootsOrderRequestRecord, RadrootsOrderRevisionDecisionRecord,
     RadrootsOrderRevisionProposalRecord, RadrootsOrderSettlementRecord,
     RadrootsOrderSettlementState, RadrootsOrderStatus, canonicalize_order_decision_for_signer,
     canonicalize_order_request_for_signer, radroots_order_economics_digest,
@@ -2547,15 +2550,17 @@ fn order_status_reduction_from_receipt_inner(
     let receipt_records = receipts.clone();
     let projection = reduce_order_events(
         &reducer_order_id,
-        requests,
-        decisions.clone(),
-        revision_proposals,
-        revision_decisions,
-        fulfillments,
-        cancellations,
-        receipts,
-        payments,
-        settlements,
+        RadrootsOrderReductionInputs {
+            requests,
+            decisions: decisions.clone(),
+            revision_proposals,
+            revision_decisions,
+            fulfillments,
+            cancellations,
+            receipts,
+            payments,
+            settlements,
+        },
     );
     let fulfillment_event_id = projection.fulfillment_event_id.clone();
     let fulfillment_status = projection.fulfillment_status;
@@ -2822,14 +2827,16 @@ fn enrich_order_status_inventory(
     let projection = reduce_listing_inventory_accounting(
         &protocol_listing_addr(listing_addr.as_str(), "listing_addr")?,
         &listing.event_id,
-        listing.bins,
-        requests,
-        decisions,
-        revision_proposals,
-        revision_decisions,
-        fulfillments,
-        cancellations,
-        Vec::<RadrootsOrderReceiptRecord>::new(),
+        RadrootsListingInventoryAccountingInputs {
+            bins: listing.bins,
+            requests,
+            decisions,
+            revision_proposals,
+            revision_decisions,
+            fulfillments,
+            cancellations,
+            receipts: Vec::<RadrootsOrderReceiptRecord>::new(),
+        },
     );
     let mut relevant_event_ids = Vec::new();
     relevant_event_ids.push(decision_event_id);
@@ -6617,14 +6624,16 @@ fn order_accept_inventory_preflight_view(
     let projection = reduce_listing_inventory_accounting(
         &request.listing_addr,
         &listing.event_id,
-        listing.bins,
-        requests,
-        decisions,
-        revision_proposals,
-        revision_decisions,
-        fulfillments,
-        cancellations,
-        Vec::<RadrootsOrderReceiptRecord>::new(),
+        RadrootsListingInventoryAccountingInputs {
+            bins: listing.bins,
+            requests,
+            decisions,
+            revision_proposals,
+            revision_decisions,
+            fulfillments,
+            cancellations,
+            receipts: Vec::<RadrootsOrderReceiptRecord>::new(),
+        },
     );
     Ok(order_accept_inventory_preflight_view_from_projection(
         config, args, request, resolution, status, projection,
@@ -12731,8 +12740,9 @@ mod tests {
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_trade::order::{
-        RadrootsListingInventoryBinAvailability, RadrootsOrderCancellationRecord,
-        RadrootsOrderDecisionRecord, RadrootsOrderFulfillmentRecord, RadrootsOrderReceiptRecord,
+        RadrootsListingInventoryAccountingInputs, RadrootsListingInventoryBinAvailability,
+        RadrootsOrderCancellationRecord, RadrootsOrderDecisionRecord,
+        RadrootsOrderFulfillmentRecord, RadrootsOrderReceiptRecord,
         RadrootsOrderRevisionDecisionRecord, RadrootsOrderRevisionProposalRecord,
         canonicalize_order_decision_for_signer, reduce_listing_inventory_accounting,
     };
@@ -12877,14 +12887,17 @@ mod tests {
 
         assert_eq!(
             client.transport(),
-            radroots_sdk::SdkTransportMode::RelayDirect
+            radroots_sdk::config::SdkTransportMode::RelayDirect
         );
-        assert_eq!(client.signer(), radroots_sdk::SignerConfig::LocalIdentity);
+        assert_eq!(
+            client.signer(),
+            radroots_sdk::config::SignerConfig::LocalIdentity
+        );
         match client.resolved_transport_target() {
-            radroots_sdk::SdkResolvedTransportTarget::RelayDirect { relay_urls } => {
+            radroots_sdk::client::SdkResolvedTransportTarget::RelayDirect { relay_urls } => {
                 assert_eq!(relay_urls.as_slice(), ["ws://127.0.0.1:9001"]);
             }
-            radroots_sdk::SdkResolvedTransportTarget::Radrootsd { .. } => {
+            radroots_sdk::client::SdkResolvedTransportTarget::Radrootsd { .. } => {
                 panic!("order submit must use relay direct transport");
             }
         }
@@ -17964,30 +17977,32 @@ mod tests {
         let projection = reduce_listing_inventory_accounting(
             &test_listing_addr(fixture.listing_addr.as_str()),
             &test_event_id(fixture.listing_event_id.as_str()),
-            vec![RadrootsListingInventoryBinAvailability {
-                bin_id: test_inventory_bin_id("bin-1"),
-                available_count: 2,
-            }],
-            vec![
-                active_request_record_from_resolved(&existing_request),
-                active_request_record_from_resolved(&request),
-            ],
-            vec![
-                RadrootsOrderDecisionRecord {
-                    event_id: test_event_id_char('2'),
-                    author_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
-                    counterparty_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
-                    root_event_id: existing_request.request_event_id.clone(),
-                    prev_event_id: existing_request.request_event_id.clone(),
-                    payload: existing_decision_payload,
-                },
-                proposed_accept_decision_record(&request).expect("proposed accept decision"),
-            ],
-            Vec::<RadrootsOrderRevisionProposalRecord>::new(),
-            Vec::<RadrootsOrderRevisionDecisionRecord>::new(),
-            Vec::<RadrootsOrderFulfillmentRecord>::new(),
-            Vec::<RadrootsOrderCancellationRecord>::new(),
-            Vec::<RadrootsOrderReceiptRecord>::new(),
+            RadrootsListingInventoryAccountingInputs {
+                bins: vec![RadrootsListingInventoryBinAvailability {
+                    bin_id: test_inventory_bin_id("bin-1"),
+                    available_count: 2,
+                }],
+                requests: vec![
+                    active_request_record_from_resolved(&existing_request),
+                    active_request_record_from_resolved(&request),
+                ],
+                decisions: vec![
+                    RadrootsOrderDecisionRecord {
+                        event_id: test_event_id_char('2'),
+                        author_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
+                        counterparty_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
+                        root_event_id: existing_request.request_event_id.clone(),
+                        prev_event_id: existing_request.request_event_id.clone(),
+                        payload: existing_decision_payload,
+                    },
+                    proposed_accept_decision_record(&request).expect("proposed accept decision"),
+                ],
+                revision_proposals: Vec::<RadrootsOrderRevisionProposalRecord>::new(),
+                revision_decisions: Vec::<RadrootsOrderRevisionDecisionRecord>::new(),
+                fulfillments: Vec::<RadrootsOrderFulfillmentRecord>::new(),
+                cancellations: Vec::<RadrootsOrderCancellationRecord>::new(),
+                receipts: Vec::<RadrootsOrderReceiptRecord>::new(),
+            },
         );
         let args = OrderDecisionArgs {
             key: fixture.order_id.clone(),
@@ -18063,43 +18078,45 @@ mod tests {
         let projection = reduce_listing_inventory_accounting(
             &test_listing_addr(fixture.listing_addr.as_str()),
             &test_event_id(fixture.listing_event_id.as_str()),
-            vec![RadrootsListingInventoryBinAvailability {
-                bin_id: test_inventory_bin_id("bin-1"),
-                available_count: 2,
-            }],
-            vec![
-                active_request_record_from_resolved(&existing_request),
-                active_request_record_from_resolved(&request),
-            ],
-            vec![
-                RadrootsOrderDecisionRecord {
-                    event_id: existing_decision_event_id.clone(),
+            RadrootsListingInventoryAccountingInputs {
+                bins: vec![RadrootsListingInventoryBinAvailability {
+                    bin_id: test_inventory_bin_id("bin-1"),
+                    available_count: 2,
+                }],
+                requests: vec![
+                    active_request_record_from_resolved(&existing_request),
+                    active_request_record_from_resolved(&request),
+                ],
+                decisions: vec![
+                    RadrootsOrderDecisionRecord {
+                        event_id: existing_decision_event_id.clone(),
+                        author_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
+                        counterparty_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
+                        root_event_id: existing_request.request_event_id.clone(),
+                        prev_event_id: existing_request.request_event_id.clone(),
+                        payload: existing_decision_payload,
+                    },
+                    proposed_accept_decision_record(&request).expect("proposed accept decision"),
+                ],
+                revision_proposals: Vec::<RadrootsOrderRevisionProposalRecord>::new(),
+                revision_decisions: Vec::<RadrootsOrderRevisionDecisionRecord>::new(),
+                fulfillments: vec![RadrootsOrderFulfillmentRecord {
+                    event_id: test_event_id_char('3'),
                     author_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
                     counterparty_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
                     root_event_id: existing_request.request_event_id.clone(),
-                    prev_event_id: existing_request.request_event_id.clone(),
-                    payload: existing_decision_payload,
-                },
-                proposed_accept_decision_record(&request).expect("proposed accept decision"),
-            ],
-            Vec::<RadrootsOrderRevisionProposalRecord>::new(),
-            Vec::<RadrootsOrderRevisionDecisionRecord>::new(),
-            vec![RadrootsOrderFulfillmentRecord {
-                event_id: test_event_id_char('3'),
-                author_pubkey: test_pubkey(fixture.seller_pubkey.as_str()),
-                counterparty_pubkey: test_pubkey(fixture.buyer_pubkey.as_str()),
-                root_event_id: existing_request.request_event_id.clone(),
-                prev_event_id: existing_decision_event_id,
-                payload: RadrootsOrderFulfillmentUpdate {
-                    order_id: existing_request.order_id.clone(),
-                    listing_addr: existing_request.listing_addr.clone(),
-                    buyer_pubkey: existing_request.buyer_pubkey.clone(),
-                    seller_pubkey: existing_request.seller_pubkey.clone(),
-                    status: RadrootsOrderFulfillmentState::SellerCancelled,
-                },
-            }],
-            Vec::<RadrootsOrderCancellationRecord>::new(),
-            Vec::<RadrootsOrderReceiptRecord>::new(),
+                    prev_event_id: existing_decision_event_id,
+                    payload: RadrootsOrderFulfillmentUpdate {
+                        order_id: existing_request.order_id.clone(),
+                        listing_addr: existing_request.listing_addr.clone(),
+                        buyer_pubkey: existing_request.buyer_pubkey.clone(),
+                        seller_pubkey: existing_request.seller_pubkey.clone(),
+                        status: RadrootsOrderFulfillmentState::SellerCancelled,
+                    },
+                }],
+                cancellations: Vec::<RadrootsOrderCancellationRecord>::new(),
+                receipts: Vec::<RadrootsOrderReceiptRecord>::new(),
+            },
         );
         let args = OrderDecisionArgs {
             key: fixture.order_id.clone(),
