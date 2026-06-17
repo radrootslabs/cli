@@ -77,8 +77,8 @@ use radroots_sdk::{
 };
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
-    RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryAccountingProjection,
-    RadrootsListingInventoryAccountingInputs, RadrootsListingInventoryBinAvailability,
+    RadrootsListingInventoryAccountingInputs, RadrootsListingInventoryAccountingIssue,
+    RadrootsListingInventoryAccountingProjection, RadrootsListingInventoryBinAvailability,
     RadrootsOrderCancellationRecord, RadrootsOrderDecisionRecord, RadrootsOrderFulfillmentRecord,
     RadrootsOrderIssue, RadrootsOrderPaymentEventRecord, RadrootsOrderPaymentProjection,
     RadrootsOrderPaymentState, RadrootsOrderReceiptRecord, RadrootsOrderReductionInputs,
@@ -109,12 +109,12 @@ use crate::runtime::local_events::{
     get_shared_record, list_shared_records_before, list_shared_records_latest,
     shared_local_events_db_path,
 };
+use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession};
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope, freshness_requires_refresh, market_refresh,
     relay_provenance_relays_for_scope,
 };
-use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession};
 use crate::view::runtime::{
     OrderAppRecordExportView, OrderAppRecordListView, OrderAppRecordSummaryView,
     OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
@@ -2338,7 +2338,10 @@ fn sdk_order_status_view(receipt: OrderStatusReceipt) -> OrderStatusView {
     let reason = sdk_order_status_reason(receipt.status, receipt.order_id.as_str());
     let fulfillment = sdk_order_status_fulfillment_view(&receipt, reducer_issues.as_slice());
     let lifecycle = sdk_order_status_lifecycle_view(&receipt, reducer_issues.as_slice());
-    let payment = Some(sdk_order_status_payment_view(&receipt, reducer_issues.as_slice()));
+    let payment = Some(sdk_order_status_payment_view(
+        &receipt,
+        reducer_issues.as_slice(),
+    ));
 
     OrderStatusView {
         state,
@@ -2387,9 +2390,7 @@ fn sdk_order_status_state(status: OrderStatusKind) -> &'static str {
 
 fn sdk_order_status_reason(status: OrderStatusKind, order_id: &str) -> Option<String> {
     match status {
-        OrderStatusKind::Missing => {
-            Some(format!("no local SDK order events matched `{order_id}`"))
-        }
+        OrderStatusKind::Missing => Some(format!("no local SDK order events matched `{order_id}`")),
         OrderStatusKind::Invalid => Some(format!(
             "local SDK order events for `{order_id}` failed reducer validation"
         )),
@@ -2453,9 +2454,7 @@ fn sdk_order_status_payment_view(
 ) -> OrderStatusPaymentView {
     let payment_issues = issues
         .iter()
-        .filter(|issue| {
-            issue.code.starts_with("payment_") || issue.code.starts_with("settlement_")
-        })
+        .filter(|issue| issue.code.starts_with("payment_") || issue.code.starts_with("settlement_"))
         .cloned()
         .collect::<Vec<_>>();
     OrderStatusPaymentView {
@@ -2489,16 +2488,18 @@ fn sdk_order_status_lifecycle_view(
             reason: None,
         }
     });
-    let receipt_view = receipt.receipt_event_id.as_ref().map(|event_id| {
-        OrderStatusLifecycleReceiptView {
-            event_id: event_id.to_string(),
-            root_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
-            prev_event_id: sdk_event_id_string(receipt.fulfillment_event_id.as_ref()),
-            received: matches!(receipt.status, OrderStatusKind::Completed),
-            issue: None,
-            received_at: None,
-        }
-    });
+    let receipt_view =
+        receipt
+            .receipt_event_id
+            .as_ref()
+            .map(|event_id| OrderStatusLifecycleReceiptView {
+                event_id: event_id.to_string(),
+                root_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
+                prev_event_id: sdk_event_id_string(receipt.fulfillment_event_id.as_ref()),
+                received: matches!(receipt.status, OrderStatusKind::Completed),
+                issue: None,
+                received_at: None,
+            });
 
     OrderStatusLifecycleView {
         phase: sdk_order_status_lifecycle_phase(receipt).to_owned(),
@@ -13020,11 +13021,11 @@ mod tests {
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{radroots_event_from_nostr, radroots_nostr_build_event};
     use radroots_runtime_paths::RadrootsMigrationReport;
-    use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_sdk::{
         OrderPaymentStateKind, OrderSettlementStateKind, OrderStatusKind, OrderStatusReceipt,
         SdkOrderStatusIssue, SdkOrderStatusIssueKind, SdkOrderStatusSource,
     };
+    use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_trade::order::{
         RadrootsListingInventoryAccountingInputs, RadrootsListingInventoryBinAvailability,
         RadrootsOrderCancellationRecord, RadrootsOrderDecisionRecord,
@@ -14879,7 +14880,10 @@ mod tests {
             view.agreement_event_id.as_deref(),
             Some(decision_event_id.as_str())
         );
-        assert_eq!(view.last_event_id.as_deref(), Some(decision_event_id.as_str()));
+        assert_eq!(
+            view.last_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
         assert_eq!(view.fetched_count, 0);
         assert_eq!(view.decoded_count, 2);
         assert_eq!(view.skipped_count, 0);

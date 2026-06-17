@@ -3565,14 +3565,8 @@ fn order_status_get_uses_sdk_local_projection_without_relay_fetch() {
 #[test]
 fn order_status_get_invalid_order_id_uses_sdk_error_contract() {
     let sandbox = RadrootsCliSandbox::new();
-    let (output, value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "order",
-        "status",
-        "get",
-        "bad order id",
-    ]);
+    let (output, value) =
+        sandbox.json_output(&["--format", "json", "order", "status", "get", "bad order id"]);
 
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "order.status.get");
@@ -3581,7 +3575,10 @@ fn order_status_get_invalid_order_id_uses_sdk_error_contract() {
     assert_eq!(value["errors"][0]["exit_code"], 2);
     assert_eq!(value["errors"][0]["detail"]["class"], "request");
     assert_eq!(value["errors"][0]["detail"]["retryable"], false);
-    assert_eq!(value["errors"][0]["detail"]["detail"]["value"], "bad order id");
+    assert_eq!(
+        value["errors"][0]["detail"]["detail"]["value"],
+        "bad order id"
+    );
 }
 
 #[test]
