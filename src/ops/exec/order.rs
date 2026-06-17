@@ -554,7 +554,7 @@ impl OperationService<OrderStatusGetRequest> for OrderOperationService<'_> {
             key: required_order_key(&request)?,
         };
         let view = crate::runtime::order::status(self.config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         status_result::<OrderStatusGetResult>(request.operation_id(), &view)
     }
@@ -1996,7 +1996,7 @@ mod tests {
     }
 
     #[test]
-    fn order_status_get_requires_relay_configuration() {
+    fn order_status_get_uses_local_sdk_projection_without_relay() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(OrderOperationService::new(&config));
@@ -2005,26 +2005,24 @@ mod tests {
             OrderStatusGetRequest::from_data(data(&[("order_id", "ord_pending")])),
         )
         .expect("order status request");
-        let error = service.execute(status).expect_err("status unconfigured");
-        let output_error = error.to_output_error();
+        let envelope = service
+            .execute(status)
+            .expect("status result")
+            .to_envelope(OperationContext::default().envelope_context("req_order_status"))
+            .expect("status envelope");
 
-        assert_eq!(output_error.code, "operation_unavailable");
-        assert!(output_error.message.contains("configured relay"));
-        let detail = output_error.detail.as_ref().expect("status detail");
-        assert_eq!(detail["state"], "unconfigured");
-        assert_eq!(detail["order_id"], "ord_pending");
-        assert_eq!(detail["fetched_count"], 0);
-        assert_eq!(detail["decoded_count"], 0);
-        assert_eq!(detail["skipped_count"], 0);
-        let envelope = crate::out::envelope::OutputEnvelope::failure(
-            "order.status.get",
-            output_error,
-            OperationContext::default().envelope_context("req_order_status"),
-        );
+        assert_eq!(envelope.operation_id, "order.status.get");
+        assert_eq!(envelope.result["state"], "missing");
+        assert_eq!(envelope.result["source"], "SDK local order projection");
         assert_eq!(
-            envelope.next_actions[0].command.as_deref(),
-            Some("radroots --relay wss://relay.example.com order status get ord_pending")
+            envelope.result["actor_context_source"],
+            "sdk_local_projection"
         );
+        assert_eq!(envelope.result["order_id"], "ord_pending");
+        assert_eq!(envelope.result["fetched_count"], 0);
+        assert_eq!(envelope.result["decoded_count"], 0);
+        assert_eq!(envelope.result["skipped_count"], 0);
+        assert!(envelope.next_actions.is_empty());
     }
 
     #[test]

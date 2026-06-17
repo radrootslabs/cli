@@ -3386,19 +3386,6 @@ fn online_requires_relay_for_external_network_operations() {
             ["--format", "json", "--online", "order", "event", "list"].as_slice(),
         ),
         (
-            "order.status.get",
-            [
-                "--format",
-                "json",
-                "--online",
-                "order",
-                "status",
-                "get",
-                "ord_missing",
-            ]
-            .as_slice(),
-        ),
-        (
             "order.cancel",
             [
                 "--format",
@@ -3516,6 +3503,75 @@ fn online_requires_relay_for_external_network_operations() {
                 .contains("requires at least one configured relay")
         );
     }
+}
+
+#[test]
+fn order_status_get_uses_sdk_local_projection_without_relay_fetch() {
+    let sandbox = RadrootsCliSandbox::new();
+    let local = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--online",
+        "order",
+        "status",
+        "get",
+        "ord_missing",
+    ]);
+
+    assert_eq!(local["operation_id"], "order.status.get");
+    assert_eq!(local["result"]["state"], "missing");
+    assert_eq!(local["result"]["source"], "SDK local order projection");
+    assert_eq!(
+        local["result"]["actor_context_source"],
+        "sdk_local_projection"
+    );
+    assert_eq!(local["result"]["fetched_count"], 0);
+    assert_eq!(local["result"]["decoded_count"], 0);
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind closed relay");
+    let closed_relay = format!("ws://{}", listener.local_addr().expect("relay addr"));
+    drop(listener);
+    let with_closed_relay = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--relay",
+        closed_relay.as_str(),
+        "order",
+        "status",
+        "get",
+        "ord_missing",
+    ]);
+
+    assert_eq!(with_closed_relay["operation_id"], "order.status.get");
+    assert_eq!(with_closed_relay["result"]["state"], "missing");
+    assert_eq!(
+        with_closed_relay["result"]["source"],
+        "SDK local order projection"
+    );
+    assert_eq!(with_closed_relay["result"]["fetched_count"], 0);
+    assert_eq!(with_closed_relay["result"]["decoded_count"], 0);
+}
+
+#[test]
+fn order_status_get_invalid_order_id_uses_sdk_error_contract() {
+    let sandbox = RadrootsCliSandbox::new();
+    let (output, value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "order",
+        "status",
+        "get",
+        "bad order id",
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(value["operation_id"], "order.status.get");
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "invalid_order_id");
+    assert_eq!(value["errors"][0]["exit_code"], 2);
+    assert_eq!(value["errors"][0]["detail"]["class"], "request");
+    assert_eq!(value["errors"][0]["detail"]["retryable"], false);
+    assert_eq!(value["errors"][0]["detail"]["detail"]["value"], "bad order id");
 }
 
 #[test]
@@ -6911,26 +6967,26 @@ fn order_status_and_event_list_use_draft_context_after_account_override_drift() 
         .as_str()
         .expect("drift account id");
 
-    let status_relay = RelayFetchServer::with_events(vec![event.clone()]);
     let status = sandbox.json_success(&[
         "--format",
         "json",
         "--account-id",
         drift_account_id,
-        "--relay",
-        status_relay.endpoint(),
         "order",
         "status",
         "get",
         order_id,
     ]);
-    status_relay.join();
 
     assert_eq!(status["operation_id"], "order.status.get");
-    assert_eq!(status["result"]["actor_context_source"], "order_draft");
-    assert_eq!(status["result"]["state"], "requested");
-    assert_eq!(status["result"]["request_event_id"], event.id.to_string());
-    assert_eq!(status["result"]["buyer_pubkey"], buyer.public_key_hex());
+    assert_eq!(status["result"]["source"], "SDK local order projection");
+    assert_eq!(
+        status["result"]["actor_context_source"],
+        "sdk_local_projection"
+    );
+    assert_eq!(status["result"]["state"], "missing");
+    assert_eq!(status["result"]["fetched_count"], 0);
+    assert_eq!(status["result"]["decoded_count"], 0);
 
     let event_list_relay = RelayFetchServer::with_events(vec![event]);
     let events = sandbox.json_success(&[

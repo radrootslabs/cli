@@ -194,7 +194,6 @@ pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
         | "listing.update"
         | "listing.archive"
         | "order.submit"
-        | "order.status.get"
         | "order.event.list"
         | "validation.receipt.get"
         | "validation.receipt.list"
@@ -577,7 +576,6 @@ mod tests {
             "order.revision.decline",
             "order.fulfillment.update",
             "order.receipt.record",
-            "order.status.get",
             "order.event.list",
             "validation.receipt.get",
             "validation.receipt.list",

@@ -2225,15 +2225,20 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     assert_no_daemon_runtime_reference(&submit, &submit_args);
 
     let status_args = ["--format", "json", "order", "status", "get", "ord_missing"];
-    let (status_output, status) = sandbox.json_output(&status_args);
-    assert!(!status_output.status.success());
-    assert_eq!(status["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(status["errors"][0]["detail"]["state"], "unconfigured");
-    assert_eq!(status["errors"][0]["detail"]["order_id"], "ord_missing");
-    assert_eq!(status["errors"][0]["detail"]["fetched_count"], 0);
+    let status = sandbox.json_success(&status_args);
+    assert_eq!(status["operation_id"], "order.status.get");
+    assert_eq!(status["result"]["state"], "missing");
+    assert_eq!(status["result"]["source"], "SDK local order projection");
     assert_eq!(
-        status["next_actions"][0]["command"],
-        "radroots --relay wss://relay.example.com order status get ord_missing"
+        status["result"]["actor_context_source"],
+        "sdk_local_projection"
+    );
+    assert_eq!(status["result"]["order_id"], "ord_missing");
+    assert_eq!(status["result"]["fetched_count"], 0);
+    assert_eq!(status["result"]["decoded_count"], 0);
+    assert_eq!(
+        status["result"]["reason"],
+        "no local SDK order events matched `ord_missing`"
     );
     assert_no_daemon_runtime_reference(&status, &status_args);
 

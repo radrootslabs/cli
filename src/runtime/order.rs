@@ -71,6 +71,10 @@ use radroots_sdk::client::{
 use radroots_sdk::config::{
     RadrootsSdkConfig, SdkEnvironment, SdkTransportMode, SignerConfig as SdkSignerConfig,
 };
+use radroots_sdk::{
+    OrderFulfillmentStatusKind, OrderPaymentStateKind, OrderSettlementStateKind, OrderStatusKind,
+    OrderStatusReceipt, OrderStatusRequest, SdkOrderStatusIssue,
+};
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
     RadrootsListingInventoryAccountingIssue, RadrootsListingInventoryAccountingProjection,
@@ -110,6 +114,7 @@ use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope, freshness_requires_refresh, market_refresh,
     relay_provenance_relays_for_scope,
 };
+use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession};
 use crate::view::runtime::{
     OrderAppRecordExportView, OrderAppRecordListView, OrderAppRecordSummaryView,
     OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
@@ -137,6 +142,7 @@ const ORDER_PAYMENT_SOURCE: &str = "direct Nostr relay payment publish · local 
 const ORDER_SETTLEMENT_SOURCE: &str = "direct Nostr relay settlement publish · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
 const ORDER_STATUS_SOURCE: &str = "direct Nostr relay status fetch · active order reducer";
+const ORDER_STATUS_SDK_SOURCE: &str = "SDK local order projection";
 const ORDER_EVENT_LIST_RELAY_ACTION: &str =
     "radroots --relay wss://relay.example.com order event list";
 const ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
@@ -145,6 +151,7 @@ const ORDER_APP_RECORD_LIST_LIMIT: u32 = 500;
 const ORDER_ACTOR_CONTEXT_ORDER_DRAFT: &str = "order_draft";
 const ORDER_ACTOR_CONTEXT_RESOLVED_ACCOUNT: &str = "resolved_account";
 const ORDER_ACTOR_CONTEXT_NETWORK_ONLY: &str = "network_only";
+const ORDER_ACTOR_CONTEXT_SDK_LOCAL: &str = "sdk_local_projection";
 const ORDERS_DIR: &str = "orders/drafts";
 const APP_ORDER_ALREADY_SUBMITTED_ISSUE: &str = "app_order_already_submitted";
 const APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE: &str = "app_order_signed_evidence_conflict";
@@ -1352,7 +1359,7 @@ pub fn decide(
     }
     if resolution.requests.len() == 1 {
         let request = resolution.requests[0].clone();
-        let status_view = status(
+        let status_view = relay_status(
             config,
             &OrderStatusArgs {
                 key: args.key.clone(),
@@ -2219,6 +2226,16 @@ pub fn settlement_decision(
 pub fn status(
     config: &RuntimeConfig,
     args: &OrderStatusArgs,
+) -> Result<OrderStatusView, CliSdkAdapterError> {
+    let request = OrderStatusRequest::parse(args.key.as_str())?;
+    let session = CliSdkSession::connect(config)?;
+    let receipt = session.block_on(session.sdk().orders().status(request))?;
+    Ok(sdk_order_status_view(receipt))
+}
+
+fn relay_status(
+    config: &RuntimeConfig,
+    args: &OrderStatusArgs,
 ) -> Result<OrderStatusView, RuntimeError> {
     if config.relay.urls.is_empty() {
         return Ok(OrderStatusView {
@@ -2309,6 +2326,271 @@ pub fn status(
     );
     enrich_order_status_inventory(config, &mut view)?;
     Ok(view)
+}
+
+fn sdk_order_status_view(receipt: OrderStatusReceipt) -> OrderStatusView {
+    let state = sdk_order_status_state(receipt.status).to_owned();
+    let reducer_issues = receipt
+        .issues
+        .iter()
+        .map(sdk_order_status_issue_view)
+        .collect::<Vec<_>>();
+    let reason = sdk_order_status_reason(receipt.status, receipt.order_id.as_str());
+    let fulfillment = sdk_order_status_fulfillment_view(&receipt, reducer_issues.as_slice());
+    let lifecycle = sdk_order_status_lifecycle_view(&receipt, reducer_issues.as_slice());
+    let payment = Some(sdk_order_status_payment_view(&receipt, reducer_issues.as_slice()));
+
+    OrderStatusView {
+        state,
+        source: ORDER_STATUS_SDK_SOURCE.to_owned(),
+        order_id: receipt.order_id.to_string(),
+        actor_context_source: ORDER_ACTOR_CONTEXT_SDK_LOCAL.to_owned(),
+        request_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
+        decision_event_id: sdk_event_id_string(receipt.decision_event_id.as_ref()),
+        agreement_event_id: sdk_order_status_agreement_event_id(&receipt),
+        listing_event_id: None,
+        listing_addr: None,
+        buyer_pubkey: None,
+        seller_pubkey: None,
+        economics: None,
+        last_event_id: sdk_event_id_string(receipt.last_event_id.as_ref()),
+        revision: None,
+        inventory: None,
+        fulfillment,
+        lifecycle: Some(lifecycle),
+        payment,
+        reducer_issues,
+        target_relays: Vec::new(),
+        connected_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        fetched_count: 0,
+        decoded_count: receipt.event_count,
+        skipped_count: 0,
+        reason,
+        actions: Vec::new(),
+    }
+}
+
+fn sdk_order_status_state(status: OrderStatusKind) -> &'static str {
+    match status {
+        OrderStatusKind::Missing => "missing",
+        OrderStatusKind::Requested => "requested",
+        OrderStatusKind::Accepted => "accepted",
+        OrderStatusKind::Declined => "declined",
+        OrderStatusKind::Cancelled => "cancelled",
+        OrderStatusKind::Completed => "completed",
+        OrderStatusKind::Disputed => "disputed",
+        OrderStatusKind::Invalid => "invalid",
+        _ => "unknown",
+    }
+}
+
+fn sdk_order_status_reason(status: OrderStatusKind, order_id: &str) -> Option<String> {
+    match status {
+        OrderStatusKind::Missing => {
+            Some(format!("no local SDK order events matched `{order_id}`"))
+        }
+        OrderStatusKind::Invalid => Some(format!(
+            "local SDK order events for `{order_id}` failed reducer validation"
+        )),
+        _ => None,
+    }
+}
+
+fn sdk_order_status_agreement_event_id(receipt: &OrderStatusReceipt) -> Option<String> {
+    match receipt.status {
+        OrderStatusKind::Accepted
+        | OrderStatusKind::Cancelled
+        | OrderStatusKind::Completed
+        | OrderStatusKind::Disputed => sdk_event_id_string(receipt.decision_event_id.as_ref()),
+        _ => None,
+    }
+}
+
+fn sdk_order_status_fulfillment_view(
+    receipt: &OrderStatusReceipt,
+    issues: &[OrderIssueView],
+) -> Option<OrderStatusFulfillmentView> {
+    let fulfillment_issues = issues
+        .iter()
+        .filter(|issue| {
+            issue.code.starts_with("fulfillment_") || issue.code == "forked_fulfillments"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !fulfillment_issues.is_empty() {
+        return Some(OrderStatusFulfillmentView {
+            state: "invalid".to_owned(),
+            event_id: sdk_event_id_string(receipt.fulfillment_event_id.as_ref()),
+            root_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
+            prev_event_id: sdk_event_id_string(receipt.decision_event_id.as_ref()),
+            terminal: false,
+            inventory_released: false,
+            issues: fulfillment_issues,
+        });
+    }
+    let fulfillment_status = receipt.fulfillment_status?;
+    Some(OrderStatusFulfillmentView {
+        state: sdk_fulfillment_status_state(fulfillment_status).to_owned(),
+        event_id: sdk_event_id_string(receipt.fulfillment_event_id.as_ref()),
+        root_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
+        prev_event_id: sdk_event_id_string(receipt.decision_event_id.as_ref()),
+        terminal: matches!(
+            fulfillment_status,
+            OrderFulfillmentStatusKind::Delivered | OrderFulfillmentStatusKind::SellerCancelled
+        ),
+        inventory_released: matches!(
+            fulfillment_status,
+            OrderFulfillmentStatusKind::SellerCancelled
+        ),
+        issues: Vec::new(),
+    })
+}
+
+fn sdk_order_status_payment_view(
+    receipt: &OrderStatusReceipt,
+    issues: &[OrderIssueView],
+) -> OrderStatusPaymentView {
+    let payment_issues = issues
+        .iter()
+        .filter(|issue| {
+            issue.code.starts_with("payment_") || issue.code.starts_with("settlement_")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    OrderStatusPaymentView {
+        state: sdk_payment_state(receipt.payment_state).to_owned(),
+        settlement_state: sdk_settlement_state(receipt.settlement_state).to_owned(),
+        payment_event_id: None,
+        settlement_event_id: None,
+        agreement_event_id: sdk_order_status_agreement_event_id(receipt),
+        quote_id: None,
+        quote_version: None,
+        economics_digest: None,
+        amount: None,
+        currency: None,
+        method: None,
+        reference: None,
+        paid_at: None,
+        reason: None,
+        issues: payment_issues,
+    }
+}
+
+fn sdk_order_status_lifecycle_view(
+    receipt: &OrderStatusReceipt,
+    issues: &[OrderIssueView],
+) -> OrderStatusLifecycleView {
+    let cancellation = receipt.cancellation_event_id.as_ref().map(|event_id| {
+        OrderStatusLifecycleCancellationView {
+            event_id: event_id.to_string(),
+            root_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
+            prev_event_id: sdk_event_id_string(receipt.decision_event_id.as_ref()),
+            reason: None,
+        }
+    });
+    let receipt_view = receipt.receipt_event_id.as_ref().map(|event_id| {
+        OrderStatusLifecycleReceiptView {
+            event_id: event_id.to_string(),
+            root_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
+            prev_event_id: sdk_event_id_string(receipt.fulfillment_event_id.as_ref()),
+            received: matches!(receipt.status, OrderStatusKind::Completed),
+            issue: None,
+            received_at: None,
+        }
+    });
+
+    OrderStatusLifecycleView {
+        phase: sdk_order_status_lifecycle_phase(receipt).to_owned(),
+        terminal: receipt.lifecycle_terminal,
+        event_id: sdk_event_id_string(receipt.last_event_id.as_ref()),
+        root_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
+        prev_event_id: None,
+        cancellation,
+        receipt: receipt_view,
+        settlement_required: !matches!(
+            receipt.settlement_state,
+            OrderSettlementStateKind::NotRequired
+        ),
+        settlement_reason: None,
+        issues: issues.to_vec(),
+    }
+}
+
+fn sdk_order_status_lifecycle_phase(receipt: &OrderStatusReceipt) -> &'static str {
+    match receipt.status {
+        OrderStatusKind::Missing => "missing",
+        OrderStatusKind::Requested => "requested",
+        OrderStatusKind::Accepted => match receipt.fulfillment_status {
+            Some(OrderFulfillmentStatusKind::Preparing)
+            | Some(OrderFulfillmentStatusKind::OutForDelivery) => "fulfillment_in_progress",
+            Some(
+                OrderFulfillmentStatusKind::ReadyForPickup
+                | OrderFulfillmentStatusKind::Delivered
+                | OrderFulfillmentStatusKind::SellerCancelled,
+            ) => "fulfilled",
+            Some(OrderFulfillmentStatusKind::AcceptedNotFulfilled) | None => "accepted",
+            Some(_) => "accepted",
+        },
+        OrderStatusKind::Declined => "declined",
+        OrderStatusKind::Cancelled => "cancelled",
+        OrderStatusKind::Completed => "completed",
+        OrderStatusKind::Disputed => "disputed",
+        OrderStatusKind::Invalid => "invalid",
+        _ => "unknown",
+    }
+}
+
+fn sdk_fulfillment_status_state(status: OrderFulfillmentStatusKind) -> &'static str {
+    match status {
+        OrderFulfillmentStatusKind::AcceptedNotFulfilled => "accepted_not_fulfilled",
+        OrderFulfillmentStatusKind::Preparing => "preparing",
+        OrderFulfillmentStatusKind::ReadyForPickup => "ready_for_pickup",
+        OrderFulfillmentStatusKind::OutForDelivery => "out_for_delivery",
+        OrderFulfillmentStatusKind::Delivered => "delivered",
+        OrderFulfillmentStatusKind::SellerCancelled => "seller_cancelled",
+        _ => "unknown",
+    }
+}
+
+fn sdk_payment_state(state: OrderPaymentStateKind) -> &'static str {
+    match state {
+        OrderPaymentStateKind::NotRecorded => "not_recorded",
+        OrderPaymentStateKind::Recorded => "recorded",
+        OrderPaymentStateKind::Settled => "settled",
+        OrderPaymentStateKind::Rejected => "rejected",
+        OrderPaymentStateKind::Invalid => "invalid",
+        _ => "unknown",
+    }
+}
+
+fn sdk_settlement_state(state: OrderSettlementStateKind) -> &'static str {
+    match state {
+        OrderSettlementStateKind::NotRequired => "not_required",
+        OrderSettlementStateKind::Pending => "pending",
+        OrderSettlementStateKind::Accepted => "accepted",
+        OrderSettlementStateKind::Rejected => "rejected",
+        OrderSettlementStateKind::Invalid => "invalid",
+        _ => "unknown",
+    }
+}
+
+fn sdk_order_status_issue_view(issue: &SdkOrderStatusIssue) -> OrderIssueView {
+    let code = issue.code();
+    OrderIssueView {
+        code: code.clone(),
+        field: "sdk_order_status".to_owned(),
+        message: format!("SDK order status reported `{code}`"),
+        event_ids: issue
+            .event_ids
+            .iter()
+            .map(RadrootsEventId::to_string)
+            .collect(),
+    }
+}
+
+fn sdk_event_id_string(event_id: Option<&RadrootsEventId>) -> Option<String> {
+    event_id.map(RadrootsEventId::to_string)
 }
 
 enum OrderStatusRecord {
@@ -12739,6 +13021,10 @@ mod tests {
     use radroots_nostr::prelude::{radroots_event_from_nostr, radroots_nostr_build_event};
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
+    use radroots_sdk::{
+        OrderPaymentStateKind, OrderSettlementStateKind, OrderStatusKind, OrderStatusReceipt,
+        SdkOrderStatusIssue, SdkOrderStatusIssueKind, SdkOrderStatusSource,
+    };
     use radroots_trade::order::{
         RadrootsListingInventoryAccountingInputs, RadrootsListingInventoryBinAvailability,
         RadrootsOrderCancellationRecord, RadrootsOrderDecisionRecord,
@@ -12780,7 +13066,7 @@ mod tests {
         order_status_reduction_from_receipt_with_context, order_submit_dry_run_view,
         order_submit_existing_request_view_from_receipt,
         order_submit_listing_provenance_preflight_view, proposed_accept_decision_record,
-        resolve_local_order_fulfillment_signing_identity,
+        resolve_local_order_fulfillment_signing_identity, sdk_order_status_view,
         seller_order_request_resolution_from_receipt,
     };
     use crate::cli::global::{
@@ -14549,6 +14835,108 @@ mod tests {
         assert!(view.economics.is_none());
         assert!(view.fulfillment.is_none());
         assert!(view.reducer_issues.is_empty());
+    }
+
+    #[test]
+    fn sdk_order_status_view_reports_found_local_projection() {
+        let request_event_id = test_event_id_char('1');
+        let decision_event_id = test_event_id_char('2');
+        let receipt = OrderStatusReceipt {
+            order_id: test_order_id("ord_AAAAAAAAAAAAAAAAAAAAAg"),
+            source: SdkOrderStatusSource::LocalEventStore,
+            found: true,
+            event_count: 2,
+            limit_applied: 500,
+            status: OrderStatusKind::Accepted,
+            fulfillment_status: None,
+            payment_state: OrderPaymentStateKind::NotRecorded,
+            settlement_state: OrderSettlementStateKind::NotRequired,
+            lifecycle_terminal: false,
+            event_ids: vec![request_event_id.clone(), decision_event_id.clone()],
+            request_event_id: Some(request_event_id.clone()),
+            decision_event_id: Some(decision_event_id.clone()),
+            fulfillment_event_id: None,
+            cancellation_event_id: None,
+            receipt_event_id: None,
+            last_event_id: Some(decision_event_id.clone()),
+            issues: Vec::new(),
+        };
+
+        let view = sdk_order_status_view(receipt);
+
+        assert_eq!(view.state, "accepted");
+        assert_eq!(view.source, "SDK local order projection");
+        assert_eq!(view.actor_context_source, "sdk_local_projection");
+        assert_eq!(
+            view.request_event_id.as_deref(),
+            Some(request_event_id.as_str())
+        );
+        assert_eq!(
+            view.decision_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert_eq!(
+            view.agreement_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert_eq!(view.last_event_id.as_deref(), Some(decision_event_id.as_str()));
+        assert_eq!(view.fetched_count, 0);
+        assert_eq!(view.decoded_count, 2);
+        assert_eq!(view.skipped_count, 0);
+        assert!(view.target_relays.is_empty());
+        assert!(view.connected_relays.is_empty());
+        assert!(view.failed_relays.is_empty());
+        assert!(view.reducer_issues.is_empty());
+        let lifecycle = view.lifecycle.expect("lifecycle");
+        assert_eq!(lifecycle.phase, "accepted");
+        assert!(!lifecycle.terminal);
+        assert!(!lifecycle.settlement_required);
+    }
+
+    #[test]
+    fn sdk_order_status_view_maps_stable_issue_codes() {
+        let request_event_id = test_event_id_char('1');
+        let fork_event_id = test_event_id_char('3');
+        let receipt = OrderStatusReceipt {
+            order_id: test_order_id("ord_AAAAAAAAAAAAAAAAAAAAAg"),
+            source: SdkOrderStatusSource::LocalEventStore,
+            found: true,
+            event_count: 2,
+            limit_applied: 500,
+            status: OrderStatusKind::Invalid,
+            fulfillment_status: None,
+            payment_state: OrderPaymentStateKind::NotRecorded,
+            settlement_state: OrderSettlementStateKind::NotRequired,
+            lifecycle_terminal: false,
+            event_ids: vec![request_event_id, fork_event_id.clone()],
+            request_event_id: None,
+            decision_event_id: None,
+            fulfillment_event_id: None,
+            cancellation_event_id: None,
+            receipt_event_id: None,
+            last_event_id: Some(fork_event_id.clone()),
+            issues: vec![SdkOrderStatusIssue {
+                kind: SdkOrderStatusIssueKind::MultipleRequests,
+                event_ids: vec![fork_event_id.clone()],
+            }],
+        };
+
+        let view = sdk_order_status_view(receipt);
+
+        assert_eq!(view.state, "invalid");
+        assert_eq!(
+            view.reason.as_deref(),
+            Some(
+                "local SDK order events for `ord_AAAAAAAAAAAAAAAAAAAAAg` failed reducer validation"
+            )
+        );
+        assert_eq!(view.reducer_issues.len(), 1);
+        assert_eq!(view.reducer_issues[0].code, "multiple_requests");
+        assert_eq!(view.reducer_issues[0].field, "sdk_order_status");
+        assert_eq!(
+            view.reducer_issues[0].event_ids,
+            vec![fork_event_id.to_string()]
+        );
     }
 
     #[test]
