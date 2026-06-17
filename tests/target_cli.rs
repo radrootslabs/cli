@@ -20,12 +20,9 @@ use radroots_local_events::{
     PublishOutboxStatus, RelayDeliveryEvidence, SourceRuntime, canonical_relay_set_fingerprint,
 };
 use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
-use radroots_replica_db::{farm, farm_member_claim, migrations};
+use radroots_replica_db::{farm, migrations};
 use radroots_replica_db_schema::farm::IFarmFields;
-use radroots_replica_db_schema::farm_member_claim::IFarmMemberClaimFields;
-use radroots_replica_sync::{
-    RadrootsReplicaPendingPublishBatch, radroots_replica_pending_publish_batch,
-};
+use radroots_replica_sync::radroots_replica_pending_publish_batch;
 use radroots_sql_core::SqliteExecutor;
 use serde_json::Value;
 use serde_json::json;
@@ -42,7 +39,7 @@ use support::{
 
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
-const SYNC_PUSH_FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
+const LEGACY_SYNC_PUSH_FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
 
 fn test_order_id(value: &str) -> RadrootsOrderId {
     value.parse().expect("valid order id")
@@ -193,7 +190,7 @@ fn read_relay_event_message(websocket: &mut tungstenite::WebSocket<TcpStream>) -
     }
 }
 
-fn seed_sync_push_farm(sandbox: &RadrootsCliSandbox, d_tag: &str, pubkey: &str) {
+fn seed_legacy_replica_sync_farm(sandbox: &RadrootsCliSandbox, d_tag: &str, pubkey: &str) {
     let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
     migrations::run_all_up(&executor).expect("replica migrations");
     farm::create(
@@ -212,29 +209,7 @@ fn seed_sync_push_farm(sandbox: &RadrootsCliSandbox, d_tag: &str, pubkey: &str) 
             location_country: None,
         },
     )
-    .expect("seed sync push farm");
-}
-
-fn seed_sync_push_member_claim(
-    sandbox: &RadrootsCliSandbox,
-    member_pubkey: &str,
-    farm_pubkey: &str,
-) {
-    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
-    migrations::run_all_up(&executor).expect("replica migrations");
-    farm_member_claim::create(
-        &executor,
-        &IFarmMemberClaimFields {
-            member_pubkey: member_pubkey.to_owned(),
-            farm_pubkey: farm_pubkey.to_owned(),
-        },
-    )
-    .expect("seed sync push member claim");
-}
-
-fn sync_push_pending_batch(sandbox: &RadrootsCliSandbox) -> RadrootsReplicaPendingPublishBatch {
-    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
-    radroots_replica_pending_publish_batch(&executor).expect("sync push pending batch")
+    .expect("seed legacy replica sync farm");
 }
 
 fn seed_app_farm_record(
@@ -2330,10 +2305,12 @@ fn target_outputs_do_not_suggest_removed_command_families() {
     }
 
     let sync_args = ["--format", "json", "sync", "status", "get"];
-    let (output, value) = sandbox.json_output(&sync_args);
-    assert!(!output.status.success());
+    let value = sandbox.json_success(&sync_args);
     assert_eq!(value["operation_id"], "sync.status.get");
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(
+        value["result"]["source"],
+        "SDK canonical event store and outbox"
+    );
     assert_no_removed_command_reference(&value, &sync_args);
 }
 
@@ -5484,36 +5461,58 @@ fn listing_publish_failure_uses_sdk_outbox_without_legacy_local_event_record() {
 }
 
 #[test]
-fn sync_push_partial_mixed_author_queue_reports_error_envelope() {
+fn sync_push_sdk_outbox_failure_reports_network_unavailable() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
-    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
-    let selected_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Sync SDK Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_d_tag = farm["result"]["config"]["farm_d_tag"]
         .as_str()
-        .expect("selected public key");
-    sandbox.json_success(&["--format", "json", "store", "init"]);
-    let other_pubkey = identity_public(81).public_key_hex;
-    let other_pubkey_canonical = other_pubkey.to_ascii_lowercase();
-    seed_sync_push_farm(&sandbox, SYNC_PUSH_FARM_D_TAG, selected_pubkey);
-    seed_sync_push_member_claim(&sandbox, other_pubkey.as_str(), selected_pubkey);
-    let batch = sync_push_pending_batch(&sandbox);
-    let expected_publishable_count = batch
-        .pending_events
-        .iter()
-        .filter(|event| event.author.eq_ignore_ascii_case(selected_pubkey))
-        .count();
-    let expected_skipped_count = batch.pending_count - expected_publishable_count;
-    assert!(expected_publishable_count > 0);
-    assert!(expected_skipped_count > 0);
-    let relay =
-        RelayPublishServer::with_publish_outcomes(vec![(true, ""); expected_publishable_count]);
-    let relay_url = relay.endpoint().to_owned();
+        .expect("farm d tag");
+    let listing_file = create_listing_draft(&sandbox, "sync-sdk-push-eggs");
+    make_listing_publishable(&listing_file, farm_d_tag);
+    let relay = "ws://127.0.0.1:9";
+    let publish = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--offline",
+        "--relay",
+        relay,
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert_eq!(publish["operation_id"], "listing.publish");
+    assert_eq!(publish["result"]["state"], "queued");
+    let status = sandbox.json_success(&["--format", "json", "sync", "status", "get"]);
+    assert_eq!(
+        status["result"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(status["result"]["replica_db"], "legacy_derived_not_checked");
+    assert_eq!(status["result"]["queue"]["pending_count"], 1);
+    assert_eq!(status["result"]["queue"]["ready_signed_count"], 1);
 
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
         "--relay",
-        relay_url.as_str(),
+        relay,
         "--approval-token",
         "approve",
         "sync",
@@ -5524,56 +5523,48 @@ fn sync_push_partial_mixed_author_queue_reports_error_envelope() {
     assert_eq!(value["operation_id"], "sync.push");
     assert_eq!(value["result"], Value::Null);
     assert_eq!(value["errors"][0]["code"], "network_unavailable", "{value}");
-    assert_eq!(value["errors"][0]["detail"]["state"], "partial");
+    assert_eq!(value["errors"][0]["detail"]["state"], "unavailable");
+    assert_eq!(value["errors"][0]["detail"]["source"], "SDK outbox push");
     assert_eq!(
-        value["errors"][0]["detail"]["queue"]["pending_count"],
-        json!(expected_skipped_count)
+        value["errors"][0]["detail"]["replica_db"],
+        "legacy_derived_not_checked"
     );
+    assert_eq!(value["errors"][0]["detail"]["target_relays"][0], relay);
     assert_eq!(
-        value["errors"][0]["detail"]["published_count"],
-        json!(expected_publishable_count)
+        value["errors"][0]["detail"]["failed_relays"][0]["relay"],
+        relay
     );
+    assert_eq!(value["errors"][0]["detail"]["publishable_count"], 1);
+    assert_eq!(value["errors"][0]["detail"]["published_count"], 0);
+    assert_eq!(value["errors"][0]["detail"]["failed_count"], 1);
     assert_eq!(
-        value["errors"][0]["detail"]["skipped_count"],
-        json!(expected_skipped_count)
-    );
-    assert_contains(
-        &value["errors"][0]["detail"]["reason"],
-        "belong to another author",
-    );
-    assert_eq!(
-        value["errors"][0]["detail"]["actions"][1],
-        "radroots account list"
+        value["errors"][0]["detail"]["reason"],
+        "SDK outbox push did not reach accepted quorum for any ready event"
     );
     assert_eq!(
-        value["errors"][0]["detail"]["actions"][2],
-        format!("radroots --account-id {other_pubkey_canonical} sync push")
-    );
-    assert_eq!(
-        value["next_actions"][2]["command"],
-        format!("radroots --account-id {other_pubkey_canonical} sync push")
-    );
-    let requests = relay.take_requests(expected_publishable_count);
-    assert_eq!(requests.len(), expected_publishable_count);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request["pubkey"] == selected_pubkey)
+        value["errors"][0]["detail"]["actions"][0],
+        "radroots sync push"
     );
     assert_no_removed_command_reference(&value, &["sync", "push"]);
     assert_no_daemon_runtime_reference(&value, &["sync", "push"]);
 }
 
 #[test]
-fn sync_push_other_author_only_queue_reports_unconfigured_error_envelope() {
+fn sync_push_ignores_legacy_replica_pending_queue_for_sdk_canonical_push() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     sandbox.json_success(&["--format", "json", "store", "init"]);
-    let other_pubkey = identity_public(82).public_key_hex;
-    let other_pubkey_canonical = other_pubkey.to_ascii_lowercase();
-    seed_sync_push_farm(&sandbox, SYNC_PUSH_FARM_D_TAG, other_pubkey.as_str());
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    let selected_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
+        .as_str()
+        .expect("selected public key");
+    seed_legacy_replica_sync_farm(&sandbox, LEGACY_SYNC_PUSH_FARM_D_TAG, selected_pubkey);
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
+    let legacy_batch =
+        radroots_replica_pending_publish_batch(&executor).expect("legacy pending batch");
+    assert!(legacy_batch.pending_count > 0);
 
-    let (output, value) = sandbox.json_output(&[
+    let value = sandbox.json_success(&[
         "--format",
         "json",
         "--relay",
@@ -5584,36 +5575,18 @@ fn sync_push_other_author_only_queue_reports_unconfigured_error_envelope() {
         "push",
     ]);
 
-    assert!(!output.status.success(), "{value}");
     assert_eq!(value["operation_id"], "sync.push");
-    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["result"]["state"], "ready");
+    assert_eq!(value["result"]["source"], "SDK outbox push");
+    assert_eq!(value["result"]["replica_db"], "legacy_derived_not_checked");
+    assert_eq!(value["result"]["queue"]["pending_count"], 0);
+    assert_eq!(value["result"]["queue"]["total_count"], 0);
+    assert_eq!(value["result"]["publishable_count"], 0);
+    assert_eq!(value["result"]["published_count"], 0);
+    assert_eq!(value["result"]["failed_count"], 0);
     assert_eq!(
-        value["errors"][0]["code"], "operation_unavailable",
-        "{value}"
-    );
-    assert_eq!(value["errors"][0]["detail"]["state"], "unconfigured");
-    let pending_count = value["errors"][0]["detail"]["queue"]["pending_count"]
-        .as_u64()
-        .expect("pending count");
-    assert!(pending_count > 0);
-    assert_eq!(value["errors"][0]["detail"]["publishable_count"], 0);
-    assert_eq!(value["errors"][0]["detail"]["published_count"], 0);
-    assert_eq!(value["errors"][0]["detail"]["skipped_count"], pending_count);
-    assert_contains(
-        &value["errors"][0]["detail"]["reason"],
-        "belong to another author",
-    );
-    assert_eq!(
-        value["errors"][0]["detail"]["actions"][1],
-        "radroots account list"
-    );
-    assert_eq!(
-        value["errors"][0]["detail"]["actions"][2],
-        format!("radroots --account-id {other_pubkey_canonical} sync push")
-    );
-    assert_eq!(
-        value["next_actions"][2]["command"],
-        format!("radroots --account-id {other_pubkey_canonical} sync push")
+        value["result"]["reason"],
+        "SDK outbox had no ready signed events to push"
     );
     assert_no_removed_command_reference(&value, &["sync", "push"]);
     assert_no_daemon_runtime_reference(&value, &["sync", "push"]);
@@ -5639,14 +5612,19 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(sync_pull["errors"][0]["detail"]["state"], "unconfigured");
     assert_eq!(sync_pull["errors"][0]["detail"]["replica_db"], "missing");
 
-    let (sync_push_output, sync_push) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "sync", "push"]);
-    assert!(!sync_push_output.status.success());
+    let sync_push = sandbox.json_success(&["--format", "json", "--dry-run", "sync", "push"]);
     assert_eq!(sync_push["operation_id"], "sync.push");
     assert_eq!(sync_push["dry_run"], true);
-    assert_eq!(sync_push["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(sync_push["errors"][0]["detail"]["state"], "unconfigured");
-    assert_eq!(sync_push["errors"][0]["detail"]["replica_db"], "missing");
+    assert_eq!(sync_push["result"]["state"], "ready");
+    assert_eq!(sync_push["result"]["source"], "SDK outbox push");
+    assert_eq!(
+        sync_push["result"]["replica_db"],
+        "legacy_derived_not_checked"
+    );
+    assert_eq!(sync_push["result"]["queue"]["pending_count"], 0);
+    assert_eq!(sync_push["result"]["queue"]["total_count"], 0);
+    assert_eq!(sync_push["result"]["publishable_count"], 0);
+    assert_eq!(sync_push["result"]["published_count"], 0);
 
     sandbox.json_success(&["--format", "json", "store", "init"]);
     let relay_refresh = sandbox.json_success(&[
@@ -5680,6 +5658,11 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(sync_push_ready["operation_id"], "sync.push");
     assert_eq!(sync_push_ready["dry_run"], true);
     assert_eq!(sync_push_ready["result"]["state"], "ready");
+    assert_eq!(sync_push_ready["result"]["source"], "SDK outbox push");
+    assert_eq!(
+        sync_push_ready["result"]["replica_db"],
+        "legacy_derived_not_checked"
+    );
     assert_eq!(
         sync_push_ready["result"]["target_relays"][0],
         "ws://127.0.0.1:9"

@@ -54,7 +54,9 @@ impl OperationService<SyncStatusGetRequest> for RuntimeOperationService<'_> {
         &self,
         _request: OperationRequest<SyncStatusGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = map_runtime("sync.status.get", crate::runtime::sync::status(self.config))?;
+        let view = crate::runtime::sync::status(self.config).map_err(|error| {
+            OperationAdapterError::sdk_adapter_failure("sync.status.get", error)
+        })?;
         sync_status_result(&view)
     }
 }
@@ -84,7 +86,8 @@ impl OperationService<SyncPushRequest> for RuntimeOperationService<'_> {
         if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required("sync.push"));
         }
-        let view = map_runtime("sync.push", crate::runtime::sync::push(self.config))?;
+        let view = crate::runtime::sync::push(self.config)
+            .map_err(|error| OperationAdapterError::sdk_adapter_failure("sync.push", error))?;
         sync_action_result::<SyncPushResult>("sync.push", &view)
     }
 }
@@ -292,12 +295,22 @@ mod tests {
         let sync =
             OperationRequest::new(OperationContext::default(), SyncStatusGetRequest::default())
                 .expect("sync status request");
-        let error = service.execute(sync).expect_err("sync status unconfigured");
-        let output = error.to_output_error();
+        let envelope = service
+            .execute(sync)
+            .expect("sync status result")
+            .to_envelope(OperationContext::default().envelope_context("req_sync_status"))
+            .expect("sync status envelope");
 
-        assert_eq!(output.code, "operation_unavailable");
-        assert_eq!(output.exit_code, 3);
-        assert!(error.to_string().contains("sync.status.get"));
+        assert_eq!(envelope.operation_id, "sync.status.get");
+        assert_eq!(envelope.result["state"], "ready");
+        assert_eq!(
+            envelope.result["source"],
+            "SDK canonical event store and outbox"
+        );
+        assert_eq!(envelope.result["replica_db"], "legacy_derived_not_checked");
+        assert_eq!(envelope.result["queue"]["pending_count"], 0);
+        assert_eq!(envelope.result["queue"]["total_count"], 0);
+        assert_eq!(envelope.result["actions"][0], "radroots sync pull");
     }
 
     #[test]

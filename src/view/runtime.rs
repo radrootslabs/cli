@@ -3352,6 +3352,22 @@ pub struct SyncRunFreshnessView {
 pub struct SyncQueueView {
     pub expected_count: usize,
     pub pending_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retryable_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_terminal_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ready_signed_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publishing_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_attempt_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
