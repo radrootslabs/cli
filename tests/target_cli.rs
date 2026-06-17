@@ -3054,6 +3054,148 @@ fn offline_allows_supported_external_dry_run() {
 }
 
 #[test]
+fn offline_listing_publish_enqueues_sdk_outbox_without_direct_relay_push() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Offline Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_d_tag = farm["result"]["config"]["farm_d_tag"]
+        .as_str()
+        .expect("farm d tag");
+    let listing_file = create_listing_draft(&sandbox, "offline-sdk-enqueue");
+    make_listing_publishable(&listing_file, farm_d_tag);
+    let relay = "ws://127.0.0.1:9";
+    let local_event_records_before_publish = sandbox.local_event_records().len();
+
+    let publish = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--offline",
+        "--relay",
+        relay,
+        "--approval-token",
+        "approve",
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert_eq!(publish["operation_id"], "listing.publish");
+    assert_eq!(publish["result"]["state"], "queued");
+    assert_eq!(
+        publish["result"]["source"],
+        "SDK listing publish · local key"
+    );
+    assert_eq!(publish["result"]["target_relays"][0], relay);
+    assert_eq!(publish["result"]["actions"][0], "radroots sync push");
+    assert_eq!(
+        publish["result"]["event_id"]
+            .as_str()
+            .expect("sdk event id")
+            .len(),
+        64
+    );
+    assert!(
+        sandbox
+            .root()
+            .join("data/apps/cli/replica/sdk/outbox.sqlite")
+            .exists()
+    );
+    assert_eq!(
+        sandbox.local_event_records().len(),
+        local_event_records_before_publish
+    );
+}
+
+#[test]
+fn listing_publish_idempotency_conflict_maps_sdk_partial_mutation_recovery() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Conflict Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let farm_d_tag = farm["result"]["config"]["farm_d_tag"]
+        .as_str()
+        .expect("farm d tag");
+    let listing_file = create_listing_draft(&sandbox, "idem-conflict");
+    make_listing_publishable(&listing_file, farm_d_tag);
+    let relay = "ws://127.0.0.1:9";
+    let idempotency_key = "listing-idem-conflict";
+
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "--offline",
+        "--relay",
+        relay,
+        "--approval-token",
+        "approve",
+        "--idempotency-key",
+        idempotency_key,
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+    let raw = fs::read_to_string(&listing_file).expect("listing draft");
+    fs::write(
+        &listing_file,
+        raw.replace("title = \"Eggs\"", "title = \"Conflict Eggs\""),
+    )
+    .expect("rewrite listing draft");
+
+    let (output, conflict) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "--offline",
+        "--relay",
+        relay,
+        "--approval-token",
+        "approve",
+        "--idempotency-key",
+        idempotency_key,
+        "listing",
+        "publish",
+        listing_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(!output.status.success());
+    assert_eq!(conflict["operation_id"], "listing.publish");
+    assert_eq!(conflict["errors"][0]["code"], "partial_local_mutation");
+    assert_eq!(conflict["errors"][0]["detail"]["class"], "local_mutation");
+    assert_eq!(
+        conflict["errors"][0]["detail"]["detail"]["failure"],
+        "outbox_idempotency_conflict"
+    );
+    assert_eq!(
+        conflict["errors"][0]["detail"]["actions"][0],
+        "radroots listing publish"
+    );
+}
+
+#[test]
 fn offline_rejects_order_decision_dry_run() {
     for (operation_id, args) in [
         (
@@ -5271,7 +5413,7 @@ fn farm_publish_writes_acknowledged_signed_outbox_records() {
 }
 
 #[test]
-fn listing_publish_failure_writes_failed_signed_outbox_record() {
+fn listing_publish_failure_uses_sdk_outbox_without_legacy_local_event_record() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let farm = sandbox.json_success(&[
@@ -5293,14 +5435,14 @@ fn listing_publish_failure_writes_failed_signed_outbox_record() {
         .expect("farm d tag");
     let listing_file = create_listing_draft(&sandbox, "failed-outbox-eggs");
     make_listing_publishable(&listing_file, farm_d_tag);
-    let relay = RelayPublishServer::with_publish_outcomes(vec![(false, "rejected by test relay")]);
-    let relay_url = relay.endpoint().to_owned();
+    let relay_url = "ws://127.0.0.1:9";
+    let local_event_records_before_publish = sandbox.local_event_records().len();
 
     let (output, publish) = sandbox.json_output(&[
         "--format",
         "json",
         "--relay",
-        relay_url.as_str(),
+        relay_url,
         "--approval-token",
         "approve",
         "listing",
@@ -5311,36 +5453,33 @@ fn listing_publish_failure_writes_failed_signed_outbox_record() {
     assert!(!output.status.success());
     assert_eq!(publish["operation_id"], "listing.publish");
     assert_eq!(publish["errors"][0]["code"], "network_unavailable");
-    let requests = relay.take_requests(1);
-    assert_eq!(requests.len(), 1);
-
-    let records = sandbox.local_event_records();
-    let signed_records = records
-        .iter()
-        .filter(|record| record.family == LocalRecordFamily::SignedEvent)
-        .collect::<Vec<_>>();
-    assert_eq!(signed_records.len(), 1);
-    let record = signed_records[0];
-    assert_eq!(record.status, LocalRecordStatus::Failed);
-    assert_eq!(record.outbox_status, PublishOutboxStatus::Failed);
-    assert_eq!(record.source_runtime, SourceRuntime::Cli);
-    assert_eq!(record.farm_id.as_deref(), Some(farm_d_tag));
-    assert_eq!(record.event_kind, Some(30402));
     assert_eq!(
-        record.relay_delivery_json.as_ref().unwrap()["state"],
-        "failed"
+        publish["errors"][0]["detail"]["source"],
+        "SDK listing publish · local key"
     );
+    assert_eq!(publish["errors"][0]["detail"]["state"], "unavailable");
     assert_eq!(
-        record.relay_delivery_json.as_ref().unwrap()["failed_relays"][0]["relay_url"],
+        publish["errors"][0]["detail"]["target_relays"][0],
         relay_url
     );
     assert_eq!(
-        record.relay_delivery_json.as_ref().unwrap()["failed_relays"][0]["error"],
-        "rejected by test relay"
+        publish["errors"][0]["detail"]["failed_relays"][0]["relay"],
+        relay_url
     );
     assert_eq!(
-        record.raw_event_json.as_ref().unwrap()["id"],
-        record.event_id.as_deref().expect("event id")
+        publish["errors"][0]["detail"]["actions"][0],
+        "radroots sync push"
+    );
+    assert_eq!(
+        publish["errors"][0]["detail"]["event_id"]
+            .as_str()
+            .expect("sdk event id")
+            .len(),
+        64
+    );
+    assert_eq!(
+        sandbox.local_event_records().len(),
+        local_event_records_before_publish
     );
 }
 
@@ -7778,11 +7917,11 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     assert_eq!(unavailable_publish["operation_id"], "listing.publish");
     assert_eq!(
         unavailable_publish["errors"][0]["code"],
-        "network_unavailable"
+        "empty_target_relays"
     );
     assert_eq!(
         unavailable_publish["errors"][0]["detail"]["class"],
-        "network"
+        "configuration"
     );
     assert_no_removed_command_reference(&unavailable_publish, &["listing", "publish"]);
     assert_no_daemon_runtime_reference(&unavailable_publish, &["listing", "publish"]);

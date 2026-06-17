@@ -61,13 +61,19 @@ pub struct CliSdkSession {
 impl CliSdkSession {
     pub fn connect(config: &RuntimeConfig) -> Result<Self, CliSdkAdapterError> {
         let sdk_config = CliSdkConfig::from_runtime_config(config);
-        let runtime = TokioRuntimeBuilder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| {
-                RuntimeError::Config(format!("failed to initialize SDK async runtime: {error}"))
-            })?;
+        let runtime = sdk_runtime()?;
         let sdk = runtime.block_on(sdk_config.builder().build())?;
+        Ok(Self {
+            runtime,
+            sdk,
+            config: sdk_config,
+        })
+    }
+
+    pub fn connect_memory(config: &RuntimeConfig) -> Result<Self, CliSdkAdapterError> {
+        let sdk_config = CliSdkConfig::from_runtime_config(config);
+        let runtime = sdk_runtime()?;
+        let sdk = runtime.block_on(memory_builder(&sdk_config).build())?;
         Ok(Self {
             runtime,
             sdk,
@@ -132,6 +138,22 @@ impl CliSdkLocalSigner {
 
 pub fn sdk_storage_root(config: &RuntimeConfig) -> PathBuf {
     config.local.root.join(SDK_STORAGE_DIR_NAME)
+}
+
+fn sdk_runtime() -> Result<Runtime, RuntimeError> {
+    TokioRuntimeBuilder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| {
+            RuntimeError::Config(format!("failed to initialize SDK async runtime: {error}"))
+        })
+}
+
+fn memory_builder(config: &CliSdkConfig) -> RadrootsSdkBuilder {
+    config.relay_urls.iter().fold(
+        RadrootsSdk::builder().relay_url_policy(config.relay_url_policy),
+        |builder, relay_url| builder.relay_url(relay_url.clone()),
+    )
 }
 
 pub fn sdk_relay_url_policy(config: &RuntimeConfig) -> SdkRelayUrlPolicy {

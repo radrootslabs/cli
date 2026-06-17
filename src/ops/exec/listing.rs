@@ -13,8 +13,8 @@ use crate::ops::{
     ListingGetRequest, ListingGetResult, ListingListRequest, ListingListResult,
     ListingPublishRequest, ListingPublishResult, ListingRebindRequest, ListingRebindResult,
     ListingUpdateRequest, ListingUpdateResult, ListingValidateRequest, ListingValidateResult,
-    OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
-    OperationResult, OperationResultData, OperationService,
+    OperationAdapterError, OperationNetworkMode, OperationRequest, OperationRequestData,
+    OperationRequestPayload, OperationResult, OperationResultData, OperationService,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -224,8 +224,8 @@ impl OperationService<ListingPublishRequest> for ListingOperationService<'_> {
         }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
-        let view = crate::runtime::listing::publish(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+        let view = crate::runtime::listing::publish_via_sdk(&config, &args).map_err(|error| {
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         mutation_result::<ListingPublishResult>(request.operation_id(), &view)
     }
@@ -277,6 +277,7 @@ where
             .or_else(|| string_input(request, "idempotency_key")),
         signer_session_id: string_input(request, "signer_session_id"),
         print_event: bool_input(request, "print_event").unwrap_or(false),
+        offline: matches!(request.context.network_mode, OperationNetworkMode::Offline),
     })
 }
 
@@ -335,12 +336,16 @@ where
 }
 
 fn listing_relay_unavailable(view: &ListingMutationView) -> bool {
-    view.source == "direct Nostr relay publish · local key"
-        && (view.reason.as_deref().is_some_and(|reason| {
-            reason.contains("configured relay") || reason.contains("direct relay connection failed")
-        }) || !view.target_relays.is_empty()
-            || !view.connected_relays.is_empty()
-            || !view.failed_relays.is_empty())
+    matches!(
+        view.source.as_str(),
+        "direct Nostr relay publish · local key" | "SDK listing publish · local key"
+    ) && (view.reason.as_deref().is_some_and(|reason| {
+        reason.contains("configured relay")
+            || reason.contains("direct relay connection failed")
+            || reason.contains("SDK relay publish")
+    }) || !view.target_relays.is_empty()
+        || !view.connected_relays.is_empty()
+        || !view.failed_relays.is_empty())
 }
 
 fn listing_app_record_export_result<R>(

@@ -955,12 +955,9 @@ fn local_listing_publish_fails_without_configured_relay() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"], serde_json::Value::Null);
-    assert_eq!(value["errors"][0]["code"], "network_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "network");
-    assert_contains(
-        &value["errors"][0]["message"],
-        "requires at least one configured relay",
-    );
+    assert_eq!(value["errors"][0]["code"], "empty_target_relays");
+    assert_eq!(value["errors"][0]["detail"]["class"], "configuration");
+    assert_contains(&value["errors"][0]["message"], "sdk empty target relays");
     assert_no_removed_command_reference(&value, &["listing", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["listing", "publish"]);
 }
@@ -985,7 +982,17 @@ fn local_listing_publish_dry_run_does_not_sign_matching_listing() {
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["result"]["state"], "dry_run");
     assert_eq!(value["result"]["dry_run"], true);
-    assert_eq!(value["result"]["event_id"], serde_json::Value::Null);
+    assert_eq!(
+        value["result"]["event_id"]
+            .as_str()
+            .expect("dry-run event id")
+            .len(),
+        64
+    );
+    assert!(
+        !sandbox.root().join("data/apps/cli/replica/sdk").exists(),
+        "dry-run must not materialize durable SDK storage"
+    );
     assert_no_removed_command_reference(&value, &["listing", "publish", "--dry-run"]);
     assert_no_daemon_runtime_reference(&value, &["listing", "publish", "--dry-run"]);
 }
@@ -2022,11 +2029,16 @@ fn local_seller_publish_commands_attempt_configured_direct_relay() {
         listing_file_arg.as_ref(),
     ]);
     assert!(!publish_output.status.success());
-    assert_direct_relay_connection_failure(
-        &publish_value,
-        "listing.publish",
-        &["listing", "publish"],
+    assert_eq!(publish_value["operation_id"], "listing.publish");
+    assert_eq!(publish_value["result"], serde_json::Value::Null);
+    assert_eq!(publish_value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(publish_value["errors"][0]["detail"]["class"], "network");
+    assert_contains(
+        &publish_value["errors"][0]["message"],
+        "SDK relay publish did not reach accepted quorum",
     );
+    assert_no_removed_command_reference(&publish_value, &["listing", "publish"]);
+    assert_no_daemon_runtime_reference(&publish_value, &["listing", "publish"]);
     assert_eq!(
         publish_value["errors"][0]["detail"]["target_relays"][0],
         relay
@@ -2036,7 +2048,7 @@ fn local_seller_publish_commands_attempt_configured_direct_relay() {
             .as_array()
             .expect("connected relays")
             .len(),
-        0
+        1
     );
     assert_eq!(
         publish_value["errors"][0]["detail"]["failed_relays"]

@@ -186,6 +186,7 @@ pub struct ListingMutationArgs {
     pub idempotency_key: Option<String>,
     pub signer_session_id: Option<String>,
     pub print_event: bool,
+    pub offline: bool,
 }
 
 #[derive(Debug, Clone, Default)]

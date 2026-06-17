@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use radroots_authority::{RadrootsActorContext, RadrootsLocalEventSigner};
 use radroots_core::{
     RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreDiscount, RadrootsCoreDiscountScope,
     RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney,
     RadrootsCorePercent, RadrootsCoreQuantity, RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
 use radroots_events::RadrootsNostrEvent;
+use radroots_events::contract::RadrootsActorRole;
 use radroots_events::farm::RadrootsFarmRef;
 use radroots_events::ids::{RadrootsDTag, RadrootsInventoryBinId};
 use radroots_events::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
@@ -23,11 +25,18 @@ use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_events_codec::wire::WireEventParts;
 use radroots_local_events::{LocalEventRecord, LocalRecordFamily, SourceRuntime};
-use radroots_nostr::prelude::{RadrootsNostrEvent as SignedNostrEvent, radroots_event_from_nostr};
+use radroots_nostr::prelude::{
+    RadrootsNostrEvent as SignedNostrEvent, RadrootsNostrKeys, radroots_event_from_nostr,
+};
 use radroots_replica_db::{ReplicaSql, migrations};
 use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
+use radroots_sdk::{
+    ListingEnqueuePublishRequest, ListingEnqueueReceipt, ListingPreparePublishRequest,
+    ListingPublishPlan, PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
+    PushOutboxRelayOutcomeKind, PushOutboxRequest, SdkMutationState, SdkRelayTargetPolicy,
+};
 use radroots_sql_core::SqliteExecutor;
-use radroots_trade::listing::validation::validate_listing_event;
+use radroots_trade::listing::{RadrootsListingDraftDocumentV1, validation::validate_listing_event};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -50,6 +59,7 @@ use crate::runtime::local_events::{
     list_shared_records_latest, mark_signed_event_acknowledged,
     mark_signed_event_failed_for_publish_error, shared_local_events_db_path,
 };
+use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_relay_url_policy};
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
@@ -67,6 +77,7 @@ const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
 const LISTING_APP_RECORD_SOURCE: &str = "shared local events · app";
 const RELAY_LISTING_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
+const SDK_LISTING_WRITE_SOURCE: &str = "SDK listing publish · local key";
 const RADROOTSD_LISTING_WRITE_SOURCE: &str = "radrootsd publish transport · deferred";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 const LISTING_SELLER_ACTOR_SOURCE_FARM_CONFIG: &str = "farm_config";
@@ -237,6 +248,13 @@ struct CanonicalListingDraft {
 struct ListingMutationEventDraft {
     event: ListingMutationEventView,
     parts: WireEventParts,
+}
+
+#[derive(Debug, Clone)]
+struct SdkListingPublishInput {
+    canonical: CanonicalListingDraft,
+    actor: RadrootsActorContext,
+    document: RadrootsListingDraftDocumentV1,
 }
 
 #[derive(Debug, Clone)]
@@ -1735,11 +1753,362 @@ fn refresh_market_listing_if_needed(config: &RuntimeConfig) -> Result<(), Runtim
     Ok(())
 }
 
-pub fn publish(
+pub fn publish_via_sdk(
     config: &RuntimeConfig,
     args: &ListingMutationArgs,
-) -> Result<ListingMutationView, RuntimeError> {
-    mutate(config, args, ListingMutationOperation::Publish)
+) -> Result<ListingMutationView, CliSdkAdapterError> {
+    let input = sdk_listing_publish_input(config, args)?;
+    if config.output.dry_run {
+        validate_local_listing_signer(config, &input.canonical)?;
+        let session = CliSdkSession::connect_memory(config)?;
+        let plan = session.sdk().listings().prepare_publish(
+            ListingPreparePublishRequest::from_document(
+                input.actor.clone(),
+                input.document.clone(),
+            ),
+        )?;
+        return Ok(sdk_prepared_publish_view(
+            config,
+            args,
+            &input.canonical,
+            plan,
+        ));
+    }
+
+    let session = CliSdkSession::connect(config)?;
+    let signer = sdk_listing_signer(config, &input.canonical)?;
+    let mut request = ListingEnqueuePublishRequest::from_document(
+        input.actor,
+        input.document,
+        SdkRelayTargetPolicy::UseConfiguredRelays,
+    );
+    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
+        request = request.try_with_idempotency_key(idempotency_key)?;
+    }
+    let enqueue_receipt =
+        session.block_on(session.sdk().listings().enqueue_publish(request, &signer))?;
+    let push_receipt = if args.offline {
+        None
+    } else {
+        Some(
+            session.block_on(
+                session.sdk().sync().push_outbox(
+                    PushOutboxRequest::new()
+                        .with_limit(1)
+                        .with_relay_url_policy(sdk_relay_url_policy(config)),
+                ),
+            )?,
+        )
+    };
+    Ok(sdk_enqueued_publish_view(
+        config,
+        args,
+        &input.canonical,
+        enqueue_receipt,
+        push_receipt,
+    ))
+}
+
+fn sdk_listing_publish_input(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+) -> Result<SdkListingPublishInput, RuntimeError> {
+    let contents = fs::read_to_string(&args.file)?;
+    let parsed = toml::from_str::<ListingDraftDocument>(&contents).map_err(|error| {
+        RuntimeError::Config(format!(
+            "invalid listing draft {}: {error}",
+            args.file.display()
+        ))
+    })?;
+    let context = mutation_validation_context(config)?;
+    let canonical = canonicalize_draft(&parsed, &contents, &context).map_err(|error| {
+        let issue = match error {
+            ListingDraftValidationError::MissingSellerAccount(issue) => {
+                return account::AccountRuntimeFailure::unresolved_with_detail(
+                    format!("{} ({})", issue.message, issue.field),
+                    json!({
+                        "seller_actor_source": "listing_draft",
+                        "listing_file": args.file.display().to_string(),
+                        "actions": listing_bound_account_recovery_actions(args.file.as_path()),
+                    }),
+                )
+                .into();
+            }
+            ListingDraftValidationError::Issue(issue) => issue,
+        };
+        RuntimeError::Config(format!(
+            "invalid listing draft {}: {} ({})",
+            args.file.display(),
+            issue.message,
+            issue.field
+        ))
+    })?;
+    ensure_listing_bound_account(config, &canonical, args.file.as_path())?;
+    let actor = RadrootsActorContext::local_account(
+        canonical.seller_pubkey.as_str(),
+        canonical.seller_account_id.clone(),
+        [RadrootsActorRole::Seller],
+    )
+    .map_err(|error| RuntimeError::Config(format!("invalid listing SDK actor: {error}")))?;
+    let document = RadrootsListingDraftDocumentV1::new(canonical.listing.clone());
+    Ok(SdkListingPublishInput {
+        canonical,
+        actor,
+        document,
+    })
+}
+
+fn sdk_listing_signer(
+    config: &RuntimeConfig,
+    canonical: &CanonicalListingDraft,
+) -> Result<RadrootsLocalEventSigner, RuntimeError> {
+    let signing = resolve_listing_signing_identity(config, canonical)?;
+    let keys: RadrootsNostrKeys = signing.identity.into_keys();
+    RadrootsLocalEventSigner::new(keys).map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn sdk_prepared_publish_view(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    canonical: &CanonicalListingDraft,
+    plan: ListingPublishPlan,
+) -> ListingMutationView {
+    let listing_addr = plan.public_listing_addr.as_str().to_owned();
+    let event = sdk_plan_event_view(&plan);
+    ListingMutationView {
+        state: "dry_run".to_owned(),
+        operation: ListingMutationOperation::Publish.as_str().to_owned(),
+        source: SDK_LISTING_WRITE_SOURCE.to_owned(),
+        file: args.file.display().to_string(),
+        listing_id: canonical.listing_id.clone(),
+        listing_addr: listing_addr.clone(),
+        seller_account_id: canonical.seller_account_id.clone(),
+        seller_pubkey: canonical.seller_pubkey.clone(),
+        seller_actor_source: canonical.seller_actor_source.clone(),
+        event_kind: KIND_LISTING,
+        dry_run: true,
+        deduplicated: false,
+        target_relays: Vec::new(),
+        connected_relays: Vec::new(),
+        acknowledged_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        job_id: None,
+        job_status: None,
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        event_id: Some(plan.expected_event_id.as_str().to_owned()),
+        event_addr: Some(listing_addr),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_session_id: None,
+        requested_signer_session_id: args.signer_session_id.clone(),
+        local_replica: None,
+        reason: Some("dry run requested; SDK enqueue and relay push skipped".to_owned()),
+        job: None,
+        event: args.print_event.then_some(event),
+        actions: vec![format!("radroots listing publish {}", args.file.display())],
+    }
+}
+
+fn sdk_enqueued_publish_view(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+    canonical: &CanonicalListingDraft,
+    enqueue: ListingEnqueueReceipt,
+    push: Option<PushOutboxReceipt>,
+) -> ListingMutationView {
+    let push_event = push
+        .as_ref()
+        .and_then(|receipt| sdk_push_event_for_listing(&enqueue, receipt));
+    let state = sdk_publish_state(args, push_event);
+    let reason = sdk_publish_reason(args, push_event);
+    let target_relays = push_event
+        .map(sdk_push_target_relays)
+        .unwrap_or_else(|| config.relay.urls.clone());
+    let connected_relays = push_event
+        .map(sdk_push_connected_relays)
+        .unwrap_or_default();
+    let acknowledged_relays = push_event
+        .map(sdk_push_acknowledged_relays)
+        .unwrap_or_default();
+    let failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    let event_id = enqueue.signed_event_id.as_str().to_owned();
+    let listing_addr = enqueue.public_listing_addr.as_str().to_owned();
+    ListingMutationView {
+        state,
+        operation: ListingMutationOperation::Publish.as_str().to_owned(),
+        source: SDK_LISTING_WRITE_SOURCE.to_owned(),
+        file: args.file.display().to_string(),
+        listing_id: canonical.listing_id.clone(),
+        listing_addr: listing_addr.clone(),
+        seller_account_id: canonical.seller_account_id.clone(),
+        seller_pubkey: canonical.seller_pubkey.clone(),
+        seller_actor_source: canonical.seller_actor_source.clone(),
+        event_kind: KIND_LISTING,
+        dry_run: false,
+        deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
+        target_relays,
+        connected_relays,
+        acknowledged_relays,
+        failed_relays,
+        job_id: None,
+        job_status: None,
+        signer_mode: Some(config.signer.backend.as_str().to_owned()),
+        event_id: Some(event_id),
+        event_addr: Some(listing_addr),
+        idempotency_key: args.idempotency_key.clone(),
+        signer_session_id: None,
+        requested_signer_session_id: args.signer_session_id.clone(),
+        local_replica: None,
+        reason,
+        job: None,
+        event: None,
+        actions: sdk_publish_actions(args, push_event),
+    }
+}
+
+fn sdk_plan_event_view(plan: &ListingPublishPlan) -> ListingMutationEventView {
+    ListingMutationEventView {
+        kind: plan.frozen_draft.kind,
+        author: plan.frozen_draft.expected_pubkey.clone(),
+        created_at: Some(plan.frozen_draft.created_at),
+        content: plan.frozen_draft.content.clone(),
+        tags: plan.frozen_draft.tags.clone(),
+        event_id: Some(plan.expected_event_id.as_str().to_owned()),
+        signature: None,
+        event_addr: plan.public_listing_addr.as_str().to_owned(),
+    }
+}
+
+fn sdk_push_event_for_listing<'a>(
+    enqueue: &ListingEnqueueReceipt,
+    push: &'a PushOutboxReceipt,
+) -> Option<&'a PushOutboxEventReceipt> {
+    push.events
+        .iter()
+        .find(|event| event.event_id == enqueue.signed_event_id)
+}
+
+fn sdk_publish_state(
+    args: &ListingMutationArgs,
+    push_event: Option<&PushOutboxEventReceipt>,
+) -> String {
+    match push_event.map(|event| event.final_state) {
+        Some(PushOutboxEventState::Published) => "published",
+        Some(PushOutboxEventState::PublishRetryable | PushOutboxEventState::FailedTerminal) => {
+            "unavailable"
+        }
+        Some(_) | None if args.offline => "queued",
+        Some(_) | None => "queued",
+    }
+    .to_owned()
+}
+
+fn sdk_publish_reason(
+    args: &ListingMutationArgs,
+    push_event: Option<&PushOutboxEventReceipt>,
+) -> Option<String> {
+    match push_event.map(|event| event.final_state) {
+        Some(PushOutboxEventState::Published) => None,
+        Some(PushOutboxEventState::PublishRetryable) => Some(
+            "SDK relay publish did not reach accepted quorum; outbox event remains retryable"
+                .to_owned(),
+        ),
+        Some(PushOutboxEventState::FailedTerminal) => {
+            Some("SDK relay publish failed terminally".to_owned())
+        }
+        Some(state) => Some(format!("SDK relay push left event in state `{state:?}`")),
+        None if args.offline => Some(
+            "listing publish queued in SDK outbox; relay push skipped for offline mode".to_owned(),
+        ),
+        None => Some(
+            "listing publish queued in SDK outbox; no ready SDK outbox event was pushed".to_owned(),
+        ),
+    }
+}
+
+fn sdk_publish_actions(
+    args: &ListingMutationArgs,
+    push_event: Option<&PushOutboxEventReceipt>,
+) -> Vec<String> {
+    if args.offline
+        || !matches!(
+            push_event.map(|event| event.final_state),
+            Some(PushOutboxEventState::Published)
+        )
+    {
+        return vec!["radroots sync push".to_owned()];
+    }
+    Vec::new()
+}
+
+fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+    event
+        .relays
+        .iter()
+        .map(|relay| relay.relay_url.clone())
+        .collect()
+}
+
+fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+    event
+        .relays
+        .iter()
+        .filter(|relay| relay.attempted)
+        .map(|relay| relay.relay_url.clone())
+        .collect()
+}
+
+fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+    event
+        .relays
+        .iter()
+        .filter(|relay| {
+            matches!(
+                relay.outcome_kind,
+                PushOutboxRelayOutcomeKind::Accepted
+                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+            )
+        })
+        .map(|relay| relay.relay_url.clone())
+        .collect()
+}
+
+fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureView> {
+    event
+        .relays
+        .iter()
+        .filter(|relay| {
+            !matches!(
+                relay.outcome_kind,
+                PushOutboxRelayOutcomeKind::Accepted
+                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+            )
+        })
+        .map(|relay| RelayFailureView {
+            relay: relay.relay_url.clone(),
+            reason: relay
+                .message
+                .clone()
+                .unwrap_or_else(|| sdk_relay_outcome_kind(relay.outcome_kind).to_owned()),
+        })
+        .collect()
+}
+
+fn sdk_relay_outcome_kind(kind: PushOutboxRelayOutcomeKind) -> &'static str {
+    match kind {
+        PushOutboxRelayOutcomeKind::Accepted => "accepted",
+        PushOutboxRelayOutcomeKind::DuplicateAccepted => "duplicate_accepted",
+        PushOutboxRelayOutcomeKind::Blocked => "blocked",
+        PushOutboxRelayOutcomeKind::RateLimited => "rate_limited",
+        PushOutboxRelayOutcomeKind::Invalid => "invalid",
+        PushOutboxRelayOutcomeKind::PowRequired => "pow_required",
+        PushOutboxRelayOutcomeKind::Restricted => "restricted",
+        PushOutboxRelayOutcomeKind::AuthRequired => "auth_required",
+        PushOutboxRelayOutcomeKind::Error => "error",
+        PushOutboxRelayOutcomeKind::Timeout => "timeout",
+        PushOutboxRelayOutcomeKind::ConnectionFailed => "connection_failed",
+        PushOutboxRelayOutcomeKind::Unknown => "unknown",
+        _ => "unknown",
+    }
 }
 
 pub fn update(
@@ -3440,13 +3809,21 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 mod tests {
     use super::{
         DRAFT_KIND, ListingDraftDocument, direct_relay_error_view_parts, encode_base64url_no_pad,
-        generate_d_tag, ingest_listing_event_into_local_replica,
+        generate_d_tag, ingest_listing_event_into_local_replica, sdk_publish_actions,
+        sdk_publish_reason, sdk_publish_state, sdk_push_acknowledged_relays,
+        sdk_push_failed_relays,
     };
+    use crate::cli::global::ListingMutationArgs;
     use crate::runtime::direct_relay::{DirectRelayFailure, DirectRelayPublishError};
+    use radroots_events::ids::RadrootsEventId;
     use radroots_events_codec::d_tag::is_d_tag_base64url;
     use radroots_events_codec::wire::WireEventParts;
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{RadrootsNostrTimestamp, radroots_nostr_build_event};
+    use radroots_sdk::{
+        PushOutboxEventReceipt, PushOutboxEventState, PushOutboxRelayOutcomeKind,
+        PushOutboxRelayReceipt,
+    };
 
     #[test]
     fn generated_listing_d_tag_is_valid_base64url() {
@@ -3480,6 +3857,49 @@ mod tests {
         assert_eq!(parts.event_id, Some("e".repeat(64)));
         assert!(parts.reason.contains("direct relay publish failed"));
         assert_eq!(parts.failed_relays.len(), 1);
+    }
+
+    #[test]
+    fn sdk_push_receipt_helpers_map_published_and_auth_required_states() {
+        let accepted = sdk_push_event(
+            PushOutboxEventState::Published,
+            PushOutboxRelayOutcomeKind::Accepted,
+            Some("accepted".to_owned()),
+        );
+        let args = listing_mutation_args(false);
+
+        assert_eq!(sdk_publish_state(&args, Some(&accepted)), "published");
+        assert!(sdk_publish_reason(&args, Some(&accepted)).is_none());
+        assert!(sdk_publish_actions(&args, Some(&accepted)).is_empty());
+        assert_eq!(
+            sdk_push_acknowledged_relays(&accepted),
+            vec!["ws://127.0.0.1:19000".to_owned()]
+        );
+        assert!(sdk_push_failed_relays(&accepted).is_empty());
+
+        let auth_required = sdk_push_event(
+            PushOutboxEventState::PublishRetryable,
+            PushOutboxRelayOutcomeKind::AuthRequired,
+            Some("auth required".to_owned()),
+        );
+        let failed = sdk_push_failed_relays(&auth_required);
+
+        assert_eq!(
+            sdk_publish_state(&args, Some(&auth_required)),
+            "unavailable"
+        );
+        assert!(
+            sdk_publish_reason(&args, Some(&auth_required))
+                .expect("retry reason")
+                .contains("accepted quorum")
+        );
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].relay, "ws://127.0.0.1:19000");
+        assert_eq!(failed[0].reason, "auth required");
+        assert_eq!(
+            sdk_publish_actions(&args, Some(&auth_required)),
+            vec!["radroots sync push".to_owned()]
+        );
     }
 
     #[test]
@@ -3730,6 +4150,53 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    fn sdk_push_event(
+        final_state: PushOutboxEventState,
+        outcome_kind: PushOutboxRelayOutcomeKind,
+        message: Option<String>,
+    ) -> PushOutboxEventReceipt {
+        PushOutboxEventReceipt {
+            event_id: RadrootsEventId::parse("e".repeat(64)).expect("event id"),
+            outbox_event_id: 7,
+            final_state,
+            attempted_count: 1,
+            accepted_count: usize::from(matches!(
+                outcome_kind,
+                PushOutboxRelayOutcomeKind::Accepted
+                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+            )),
+            retryable_count: usize::from(matches!(
+                outcome_kind,
+                PushOutboxRelayOutcomeKind::AuthRequired
+                    | PushOutboxRelayOutcomeKind::Timeout
+                    | PushOutboxRelayOutcomeKind::ConnectionFailed
+            )),
+            terminal_count: 0,
+            quorum: 1,
+            quorum_met: matches!(
+                outcome_kind,
+                PushOutboxRelayOutcomeKind::Accepted
+                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+            ),
+            relays: vec![PushOutboxRelayReceipt {
+                relay_url: "ws://127.0.0.1:19000".to_owned(),
+                outcome_kind,
+                attempted: true,
+                message,
+            }],
+        }
+    }
+
+    fn listing_mutation_args(offline: bool) -> ListingMutationArgs {
+        ListingMutationArgs {
+            file: "listing.toml".into(),
+            idempotency_key: None,
+            signer_session_id: None,
+            print_event: false,
+            offline,
+        }
     }
 
     fn signed_test_listing_event(

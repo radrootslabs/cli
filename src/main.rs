@@ -404,6 +404,9 @@ fn validate_network_contract(
     match request.context().network_mode {
         OperationNetworkMode::Default => Ok(()),
         OperationNetworkMode::Offline => {
+            if allows_offline_local_mutation(spec.operation_id) {
+                return Ok(());
+            }
             if let NetworkRequirement::External {
                 dry_run_requires_network,
             } = requirement
@@ -451,6 +454,10 @@ fn requires_local_signer_mode_for_publish_mode(operation_id: &str, config: &Runt
 
 fn requires_pre_runtime_relay_target(operation_id: &str) -> bool {
     !is_publish_mode_routed_operation(operation_id)
+}
+
+fn allows_offline_local_mutation(operation_id: &str) -> bool {
+    matches!(operation_id, "listing.publish")
 }
 
 fn validate_publish_mode_contract(
