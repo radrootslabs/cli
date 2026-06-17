@@ -12,6 +12,7 @@ pub mod network;
 pub mod order;
 pub mod paths;
 pub mod provider;
+pub mod sdk;
 pub mod signer;
 pub mod store;
 pub mod sync;

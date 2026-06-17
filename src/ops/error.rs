@@ -1,10 +1,12 @@
 use std::io::ErrorKind;
 
+use radroots_sdk::{RadrootsSdkError, RadrootsSdkErrorClass, RadrootsSdkRecoveryAction};
 use serde_json::{Map, Value, json};
 
 use crate::out::envelope::{CliExitCode, OutputError};
 use crate::runtime::RuntimeError;
 use crate::runtime::account::AccountRuntimeFailure;
+use crate::runtime::sdk::CliSdkAdapterError;
 use crate::view::runtime::CommandDisposition;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -319,6 +321,38 @@ impl OperationAdapterError {
         }
     }
 
+    pub fn sdk_adapter_failure(operation_id: &str, error: CliSdkAdapterError) -> Self {
+        match error {
+            CliSdkAdapterError::Runtime(error) => Self::runtime_failure(operation_id, error),
+            CliSdkAdapterError::Sdk(error) => Self::sdk_failure(operation_id, error),
+        }
+    }
+
+    pub fn sdk_failure(operation_id: &str, error: RadrootsSdkError) -> Self {
+        let code = error.code().to_owned();
+        let class = sdk_error_class_name(error.class()).to_owned();
+        let message = error.to_string();
+        let exit_code = sdk_error_exit_code(error.class());
+        let mut detail = error.detail_json();
+        let actions = sdk_recovery_next_actions(operation_id, &error.recovery_actions());
+        if !actions.is_empty()
+            && let Some(detail) = detail.as_object_mut()
+        {
+            detail.insert(
+                "actions".to_owned(),
+                Value::Array(actions.into_iter().map(Value::String).collect()),
+            );
+        }
+        Self::DetailedFailure {
+            operation_id: operation_id.to_owned(),
+            code,
+            class,
+            message,
+            exit_code,
+            detail_json: detail.to_string(),
+        }
+    }
+
     pub fn to_output_error(&self) -> OutputError {
         match self {
             Self::ApprovalRequired { message, .. } => OutputError::new(
@@ -504,6 +538,73 @@ impl OperationAdapterError {
             }
         }
     }
+}
+
+fn sdk_error_exit_code(class: RadrootsSdkErrorClass) -> CliExitCode {
+    match class {
+        RadrootsSdkErrorClass::Authorization => CliExitCode::AuthorizationFailed,
+        RadrootsSdkErrorClass::Clock
+        | RadrootsSdkErrorClass::Configuration
+        | RadrootsSdkErrorClass::Request => CliExitCode::InvalidInput,
+        RadrootsSdkErrorClass::LocalMutation => CliExitCode::Conflict,
+        RadrootsSdkErrorClass::Storage => CliExitCode::RuntimeUnavailable,
+        RadrootsSdkErrorClass::Transport => CliExitCode::SyncOrNetworkFailure,
+        RadrootsSdkErrorClass::Unsupported => CliExitCode::RuntimeUnavailable,
+        _ => CliExitCode::InternalError,
+    }
+}
+
+fn sdk_error_class_name(class: RadrootsSdkErrorClass) -> &'static str {
+    match class {
+        RadrootsSdkErrorClass::Authorization => "authorization",
+        RadrootsSdkErrorClass::Clock => "clock",
+        RadrootsSdkErrorClass::Configuration => "configuration",
+        RadrootsSdkErrorClass::LocalMutation => "local_mutation",
+        RadrootsSdkErrorClass::Request => "request",
+        RadrootsSdkErrorClass::Storage => "storage",
+        RadrootsSdkErrorClass::Transport => "transport",
+        RadrootsSdkErrorClass::Unsupported => "unsupported",
+        _ => "internal",
+    }
+}
+
+fn sdk_recovery_next_actions(
+    operation_id: &str,
+    recovery_actions: &[RadrootsSdkRecoveryAction],
+) -> Vec<String> {
+    recovery_actions
+        .iter()
+        .filter_map(|action| match action {
+            RadrootsSdkRecoveryAction::RetryOutboxEnqueue
+            | RadrootsSdkRecoveryAction::RetryOperationWithSameIdempotencyKey
+            | RadrootsSdkRecoveryAction::FixRequest => Some(operation_retry_action(operation_id)),
+            RadrootsSdkRecoveryAction::InspectLocalStores => {
+                Some("radroots store status get".to_owned())
+            }
+            RadrootsSdkRecoveryAction::ConfigureRelayTargets => {
+                Some("radroots relay list".to_owned())
+            }
+            RadrootsSdkRecoveryAction::SelectAuthorizedActor => {
+                Some("radroots account list".to_owned())
+            }
+            RadrootsSdkRecoveryAction::RetryAfterTransportFailure => {
+                Some(operation_retry_action(operation_id))
+            }
+            RadrootsSdkRecoveryAction::EnableRequiredFeature => {
+                Some("radroots health status get".to_owned())
+            }
+            _ => None,
+        })
+        .fold(Vec::new(), |mut actions, action| {
+            if !actions.contains(&action) {
+                actions.push(action);
+            }
+            actions
+        })
+}
+
+fn operation_retry_action(operation_id: &str) -> String {
+    format!("radroots {}", operation_id.replace('.', " "))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -828,4 +929,49 @@ fn runtime_output_error_with_detail(
     detail.insert("class".to_owned(), Value::from(class.to_owned()));
     error.detail = Some(Value::Object(detail));
     error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sdk_storage_error_maps_to_typed_output_without_string_classification() {
+        let error = OperationAdapterError::sdk_failure(
+            "store.status.get",
+            RadrootsSdkError::EventStore {
+                message: "database is locked".to_owned(),
+            },
+        );
+
+        let output = error.to_output_error();
+
+        assert_eq!(output.code, "event_store");
+        assert_eq!(output.exit_code, CliExitCode::RuntimeUnavailable.code());
+        let detail = output.detail.expect("detail");
+        assert_eq!(detail["operation_id"], "store.status.get");
+        assert_eq!(detail["class"], "storage");
+        assert_eq!(detail["retryable"], true);
+        assert_eq!(detail["detail"]["message"], "database is locked");
+        assert_eq!(detail["actions"], json!(["radroots store status get"]));
+    }
+
+    #[test]
+    fn sdk_request_error_maps_recovery_to_operation_retry_action() {
+        let error = OperationAdapterError::sdk_failure(
+            "listing.publish",
+            RadrootsSdkError::InvalidRequest {
+                message: "idempotency key must not contain boundary whitespace".to_owned(),
+            },
+        );
+
+        let output = error.to_output_error();
+
+        assert_eq!(output.code, "invalid_request");
+        assert_eq!(output.exit_code, CliExitCode::InvalidInput.code());
+        let detail = output.detail.expect("detail");
+        assert_eq!(detail["class"], "request");
+        assert_eq!(detail["retryable"], false);
+        assert_eq!(detail["actions"], json!(["radroots listing publish"]));
+    }
 }
