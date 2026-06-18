@@ -188,6 +188,7 @@ target_operation_contracts! {
     StoreStatusGet => (StoreStatusGetRequest, StoreStatusGetResult, "store.status.get"),
     StoreExport => (StoreExportRequest, StoreExportResult, "store.export"),
     StoreBackupCreate => (StoreBackupCreateRequest, StoreBackupCreateResult, "store.backup.create"),
+    StoreBackupRestore => (StoreBackupRestoreRequest, StoreBackupRestoreResult, "store.backup.restore"),
     SyncStatusGet => (SyncStatusGetRequest, SyncStatusGetResult, "sync.status.get"),
     SyncPull => (SyncPullRequest, SyncPullResult, "sync.pull"),
     SyncPush => (SyncPushRequest, SyncPushResult, "sync.push"),

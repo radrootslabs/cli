@@ -5,9 +5,10 @@ use radroots_replica_db::export::{ReplicaDbExportManifestRs, export_manifest};
 use radroots_replica_db::migrations;
 use radroots_replica_sync::radroots_replica_sync_status;
 use radroots_sdk::{
-    BackupReceipt, BackupRequest, IntegrityReceipt, IntegrityRequest, SdkBackupState,
-    SdkEventStoreStorageStatus, SdkOutboxStorageStatus, SdkSqliteStoreStatus, SdkStorageKind,
-    StorageStatusReceipt, StorageStatusRequest,
+    BackupReceipt, BackupRequest, IntegrityReceipt, IntegrityRequest, RadrootsSdk, RestoreReceipt,
+    RestoreRequest, SdkBackupState, SdkEventStoreStorageStatus, SdkOutboxStorageStatus,
+    SdkRestoreState, SdkSqliteStoreStatus, SdkStorageKind, StorageStatusReceipt,
+    StorageStatusRequest,
 };
 use radroots_sql_core::SqliteExecutor;
 use serde::Serialize;
@@ -16,12 +17,12 @@ use serde_json::{Value, json};
 use crate::cli::global::LocalExportFormatArg;
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_storage_root};
+use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_runtime, sdk_storage_root};
 use crate::runtime::sync::ensure_sync_run_table;
 use crate::view::runtime::{
     LocalBackupView, LocalExportView, LocalInitView, LocalLegacyReplicaStatusView,
-    LocalReplicaCountsView, LocalReplicaSyncView, LocalStatusView, SdkEventStoreStatusView,
-    SdkIntegrityView, SdkOutboxStatusView, SdkSqliteStatusView,
+    LocalReplicaCountsView, LocalReplicaSyncView, LocalRestoreView, LocalStatusView,
+    SdkEventStoreStatusView, SdkIntegrityView, SdkOutboxStatusView, SdkSqliteStatusView,
 };
 
 const LEGACY_REPLICA_SOURCE: &str = "legacy local replica · derived/migration source";
@@ -88,12 +89,8 @@ pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterEr
     let sdk_existed_before_open = sdk_storage_files_exist(sdk_root.as_path());
     let legacy_replica = legacy_replica_status(config)?;
     let session = CliSdkSession::connect(config)?;
-    let receipt = session.block_on(
-        session
-            .sdk()
-            .storage_status(StorageStatusRequest::default()),
-    )?;
-    let integrity = session.block_on(session.sdk().integrity(IntegrityRequest::default()))?;
+    let receipt = session.block_on(session.sdk().storage_status(StorageStatusRequest::new()))?;
+    let integrity = session.block_on(session.sdk().integrity(IntegrityRequest::new()))?;
     Ok(sdk_status_view(
         config,
         sdk_root,
@@ -161,10 +158,7 @@ pub fn backup(
 ) -> Result<LocalBackupView, CliSdkAdapterError> {
     ensure_safe_sdk_backup_destination(config, output)?;
     let session = CliSdkSession::connect(config)?;
-    let receipt = session.block_on(session.sdk().backup(BackupRequest {
-        destination: output.to_path_buf(),
-        overwrite: false,
-    }))?;
+    let receipt = session.block_on(session.sdk().backup(BackupRequest::new(output)))?;
     sdk_backup_view(receipt)
 }
 
@@ -174,12 +168,8 @@ pub fn backup_preflight(
 ) -> Result<LocalBackupView, CliSdkAdapterError> {
     ensure_safe_sdk_backup_destination(config, output)?;
     let session = CliSdkSession::connect(config)?;
-    let status = session.block_on(
-        session
-            .sdk()
-            .storage_status(StorageStatusRequest::default()),
-    )?;
-    let integrity = session.block_on(session.sdk().integrity(IntegrityRequest::default()))?;
+    let status = session.block_on(session.sdk().storage_status(StorageStatusRequest::new()))?;
+    let integrity = session.block_on(session.sdk().integrity(IntegrityRequest::new()))?;
     let manifest = sdk_backup_manifest_preview(output, &status, &integrity);
     Ok(LocalBackupView {
         state: "dry_run".to_owned(),
@@ -198,6 +188,26 @@ pub fn backup_preflight(
         ),
         actions: vec!["radroots store backup create".to_owned()],
     })
+}
+
+pub fn restore(
+    config: &RuntimeConfig,
+    source: &Path,
+    destination: Option<&Path>,
+    overwrite: bool,
+    dry_run: bool,
+) -> Result<LocalRestoreView, CliSdkAdapterError> {
+    let destination = destination
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| sdk_storage_root(config));
+    ensure_safe_sdk_restore_destination(config, &destination)?;
+    let request = RestoreRequest::new(source)
+        .with_destination(destination)
+        .with_overwrite(overwrite)
+        .with_dry_run(dry_run);
+    let runtime = sdk_runtime()?;
+    let receipt = runtime.block_on(RadrootsSdk::restore(request))?;
+    sdk_restore_view(receipt, overwrite, dry_run)
 }
 
 pub fn export(
@@ -480,6 +490,40 @@ fn ensure_safe_sdk_backup_destination(
     Ok(())
 }
 
+fn ensure_safe_sdk_restore_destination(
+    config: &RuntimeConfig,
+    destination: &Path,
+) -> Result<(), RuntimeError> {
+    let sdk_root = sdk_storage_root(config);
+    let sdk_event_store_path = sdk_root.join(SDK_EVENT_STORE_FILE);
+    let sdk_outbox_path = sdk_root.join(SDK_OUTBOX_FILE);
+    let forbidden_paths = [
+        config.local.root.as_path(),
+        config.local.replica_db_path.as_path(),
+        sdk_event_store_path.as_path(),
+        sdk_outbox_path.as_path(),
+    ];
+    if forbidden_paths
+        .iter()
+        .any(|forbidden| destination == *forbidden)
+    {
+        return Err(RuntimeError::Config(format!(
+            "restore destination {} would overwrite canonical runtime roots or store files",
+            destination.display()
+        )));
+    }
+    if config.local.replica_db_path.starts_with(destination)
+        || config.local.backups_dir.starts_with(destination)
+        || config.local.exports_dir.starts_with(destination)
+    {
+        return Err(RuntimeError::Config(format!(
+            "restore destination {} must not contain CLI runtime state directories",
+            destination.display()
+        )));
+    }
+    Ok(())
+}
+
 fn sdk_backup_view(receipt: BackupReceipt) -> Result<LocalBackupView, CliSdkAdapterError> {
     let event_store_file = receipt.event_store_path.as_ref().map(display_path);
     let outbox_file = receipt.outbox_path.as_ref().map(display_path);
@@ -504,6 +548,59 @@ fn sdk_backup_view(receipt: BackupReceipt) -> Result<LocalBackupView, CliSdkAdap
         reason: None,
         actions: Vec::new(),
     })
+}
+
+fn sdk_restore_view(
+    receipt: RestoreReceipt,
+    overwrite: bool,
+    dry_run: bool,
+) -> Result<LocalRestoreView, CliSdkAdapterError> {
+    let destination_paths = receipt.destination_paths.as_ref();
+    let restored_paths = receipt.restored_paths.as_ref();
+    Ok(LocalRestoreView {
+        state: sdk_restore_state_label(receipt.state).to_owned(),
+        source: SDK_CANONICAL_SOURCE.to_owned(),
+        restore_kind: SDK_BACKUP_KIND.to_owned(),
+        canonical_store: SDK_CANONICAL_STORE.to_owned(),
+        backup_source: display_path(&receipt.source),
+        destination: receipt
+            .destination
+            .as_ref()
+            .map(display_path)
+            .unwrap_or_default(),
+        event_store_file: display_path(&receipt.event_store_path),
+        outbox_file: display_path(&receipt.outbox_path),
+        manifest_file: display_path(&receipt.manifest_path),
+        destination_event_store_file: destination_paths
+            .map(|paths| display_path(&paths.event_store_path)),
+        destination_outbox_file: destination_paths.map(|paths| display_path(&paths.outbox_path)),
+        restored_event_store_file: restored_paths
+            .map(|paths| display_path(&paths.event_store_path)),
+        restored_outbox_file: restored_paths.map(|paths| display_path(&paths.outbox_path)),
+        manifest: json_value(&receipt.manifest)?,
+        verification: json_value(&receipt.verification)?,
+        overwrite,
+        dry_run,
+        reason: if dry_run {
+            Some("dry run requested; SDK canonical store was not restored".to_owned())
+        } else {
+            None
+        },
+        actions: if dry_run {
+            vec!["radroots store backup restore <backup-dir>".to_owned()]
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+fn sdk_restore_state_label(state: SdkRestoreState) -> &'static str {
+    match state {
+        SdkRestoreState::Validated => "validated",
+        SdkRestoreState::DryRun => "dry_run",
+        SdkRestoreState::Completed => "completed",
+        _ => "unknown",
+    }
 }
 
 fn sdk_backup_manifest_preview(

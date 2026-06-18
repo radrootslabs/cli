@@ -63,3 +63,19 @@ pub const STORE_BACKUP_CREATE: OperationSpec = operation!(
     false,
     true
 );
+
+pub const STORE_BACKUP_RESTORE: OperationSpec = operation!(
+    "store.backup.restore",
+    "radroots store backup restore sdk-store-backup",
+    "store",
+    "store_backup_restore",
+    "StoreBackupRestoreRequest",
+    "StoreBackupRestoreResult",
+    "Restore SDK canonical store backup.",
+    Any,
+    true,
+    Conditional,
+    High,
+    false,
+    true
+);

@@ -132,6 +132,9 @@ fn execute_request(
         TargetOperationRequest::StoreBackupCreate(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
+        TargetOperationRequest::StoreBackupRestore(request) => {
+            execute_with(CoreOperationService::new(config, logging), request)
+        }
         TargetOperationRequest::SignerStatusGet(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }

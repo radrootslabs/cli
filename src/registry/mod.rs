@@ -117,6 +117,7 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
     store::STORE_STATUS_GET,
     store::STORE_EXPORT,
     store::STORE_BACKUP_CREATE,
+    store::STORE_BACKUP_RESTORE,
     sync::SYNC_STATUS_GET,
     sync::SYNC_PULL,
     sync::SYNC_PUSH,
@@ -295,6 +296,7 @@ mod tests {
         "store.status.get",
         "store.export",
         "store.backup.create",
+        "store.backup.restore",
         "sync.status.get",
         "sync.pull",
         "sync.push",
@@ -365,6 +367,7 @@ mod tests {
         "account.selection.clear",
         "store.init",
         "store.backup.create",
+        "store.backup.restore",
         "sync.pull",
         "sync.push",
         "farm.create",
@@ -410,7 +413,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 78);
+        assert_eq!(OPERATION_REGISTRY.len(), 79);
     }
 
     #[test]

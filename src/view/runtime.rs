@@ -3472,6 +3472,44 @@ impl LocalBackupView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LocalRestoreView {
+    pub state: String,
+    pub source: String,
+    pub restore_kind: String,
+    pub canonical_store: String,
+    pub backup_source: String,
+    pub destination: String,
+    pub event_store_file: String,
+    pub outbox_file: String,
+    pub manifest_file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination_event_store_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination_outbox_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored_event_store_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored_outbox_file: Option<String>,
+    pub manifest: serde_json::Value,
+    pub verification: serde_json::Value,
+    pub overwrite: bool,
+    pub dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+impl LocalRestoreView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LocalExportView {
     pub state: String,
     pub source: String,

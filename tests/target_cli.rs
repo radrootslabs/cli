@@ -3715,7 +3715,7 @@ fn store_export_dry_run_is_structured_unsupported() {
 }
 
 #[test]
-fn store_backup_dry_run_preflights_initialized_store_without_writing_file() {
+fn store_backup_and_restore_use_sdk_canonical_store() {
     let sandbox = RadrootsCliSandbox::new();
     let sdk_root = sandbox.root().join("data/apps/cli/replica/sdk");
 
@@ -3817,6 +3817,10 @@ fn store_backup_dry_run_preflights_initialized_store_without_writing_file() {
     );
     assert_eq!(backup["result"]["backup_kind"], "sdk_canonical");
     assert_eq!(backup["result"]["canonical_store"], "sdk");
+    assert_eq!(
+        backup["result"]["manifest"]["manifest_kind"],
+        "storage_backup"
+    );
     assert!(
         backup["result"]["size_bytes"]
             .as_u64()
@@ -3842,6 +3846,144 @@ fn store_backup_dry_run_preflights_initialized_store_without_writing_file() {
             .contains("data/apps/cli/replica/sdk/event_store.sqlite")
     );
     assert!(!event_store_file.ends_with("replica.sqlite"));
+
+    let restore_destination = sandbox.root().join("restored-sdk-store");
+    let restore_destination_arg = restore_destination.to_string_lossy().to_string();
+    let restore_dry_run = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--dry-run",
+        "store",
+        "backup",
+        "restore",
+        backup_destination,
+        "--destination",
+        restore_destination_arg.as_str(),
+    ]);
+
+    assert_eq!(restore_dry_run["operation_id"], "store.backup.restore");
+    assert_eq!(restore_dry_run["dry_run"], true);
+    assert_eq!(restore_dry_run["result"]["state"], "dry_run");
+    assert_eq!(
+        restore_dry_run["result"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(restore_dry_run["result"]["restore_kind"], "sdk_canonical");
+    assert_eq!(restore_dry_run["result"]["canonical_store"], "sdk");
+    assert_eq!(
+        restore_dry_run["result"]["backup_source"],
+        backup_destination
+    );
+    assert_eq!(
+        restore_dry_run["result"]["destination"],
+        restore_destination_arg
+    );
+    assert_eq!(
+        restore_dry_run["result"]["manifest"]["manifest_kind"],
+        "storage_backup"
+    );
+    assert_eq!(
+        restore_dry_run["result"]["verification"]["event_store_ok"],
+        true
+    );
+    assert_eq!(restore_dry_run["result"]["verification"]["outbox_ok"], true);
+    assert!(!restore_destination.exists());
+
+    let restored = sandbox.json_success(&[
+        "--format",
+        "json",
+        "store",
+        "backup",
+        "restore",
+        backup_destination,
+        "--destination",
+        restore_destination_arg.as_str(),
+    ]);
+
+    assert_eq!(restored["operation_id"], "store.backup.restore");
+    assert_eq!(restored["result"]["state"], "completed");
+    assert_eq!(
+        restored["result"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(restored["result"]["restore_kind"], "sdk_canonical");
+    assert_eq!(restored["result"]["canonical_store"], "sdk");
+    assert!(restore_destination.join("event_store.sqlite").exists());
+    assert!(restore_destination.join("outbox.sqlite").exists());
+    assert_eq!(
+        restored["result"]["restored_event_store_file"],
+        restore_destination
+            .join("event_store.sqlite")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(
+        restored["result"]["restored_outbox_file"],
+        restore_destination
+            .join("outbox.sqlite")
+            .to_string_lossy()
+            .to_string()
+    );
+
+    let unapproved_overwrite = sandbox.json_output(&[
+        "--format",
+        "json",
+        "store",
+        "backup",
+        "restore",
+        backup_destination,
+        "--destination",
+        restore_destination_arg.as_str(),
+        "--overwrite",
+    ]);
+    assert!(!unapproved_overwrite.0.status.success());
+    assert_eq!(unapproved_overwrite.0.status.code(), Some(6));
+    assert_eq!(
+        unapproved_overwrite.1["operation_id"],
+        "store.backup.restore"
+    );
+    assert_eq!(
+        unapproved_overwrite.1["errors"][0]["code"],
+        "approval_required"
+    );
+
+    let approved_overwrite = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "restore-ok",
+        "store",
+        "backup",
+        "restore",
+        backup_destination,
+        "--destination",
+        restore_destination_arg.as_str(),
+        "--overwrite",
+    ]);
+    assert_eq!(approved_overwrite["operation_id"], "store.backup.restore");
+    assert_eq!(approved_overwrite["result"]["state"], "completed");
+    assert_eq!(approved_overwrite["result"]["overwrite"], true);
+
+    let missing_backup = sandbox.root().join("missing-sdk-backup");
+    let missing_backup_arg = missing_backup.to_string_lossy().to_string();
+    let (missing_output, missing_value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "store",
+        "backup",
+        "restore",
+        missing_backup_arg.as_str(),
+        "--destination",
+        sandbox
+            .root()
+            .join("missing-restore-destination")
+            .to_string_lossy()
+            .as_ref(),
+    ]);
+    assert!(!missing_output.status.success());
+    assert_eq!(missing_value["operation_id"], "store.backup.restore");
+    assert_eq!(missing_value["errors"][0]["code"], "io");
+    assert_eq!(missing_value["errors"][0]["detail"]["class"], "storage");
 }
 
 #[test]

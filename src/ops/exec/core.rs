@@ -14,9 +14,9 @@ use crate::ops::{
     HealthCheckRunResult, HealthStatusGetRequest, HealthStatusGetResult, OperationAdapterError,
     OperationRequest, OperationRequestData, OperationRequestPayload, OperationResult,
     OperationResultData, OperationService, StoreBackupCreateRequest, StoreBackupCreateResult,
-    StoreExportRequest, StoreExportResult, StoreInitRequest, StoreInitResult,
-    StoreStatusGetRequest, StoreStatusGetResult, WorkspaceGetRequest, WorkspaceGetResult,
-    WorkspaceInitRequest, WorkspaceInitResult,
+    StoreBackupRestoreRequest, StoreBackupRestoreResult, StoreExportRequest, StoreExportResult,
+    StoreInitRequest, StoreInitResult, StoreStatusGetRequest, StoreStatusGetResult,
+    WorkspaceGetRequest, WorkspaceGetResult, WorkspaceInitRequest, WorkspaceInitResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::account::{
@@ -33,8 +33,8 @@ use crate::runtime::config::{
 use crate::runtime::logging::LoggingState;
 use crate::runtime::sdk::CliSdkAdapterError;
 use crate::view::runtime::{
-    CommandDisposition, LocalBackupView, PublishProviderRuntimeView, PublishRelayRuntimeView,
-    PublishRuntimeView,
+    CommandDisposition, LocalBackupView, LocalRestoreView, PublishProviderRuntimeView,
+    PublishRelayRuntimeView, PublishRuntimeView,
 };
 
 pub struct CoreOperationService<'a> {
@@ -654,6 +654,36 @@ impl OperationService<StoreBackupCreateRequest> for CoreOperationService<'_> {
     }
 }
 
+impl OperationService<StoreBackupRestoreRequest> for CoreOperationService<'_> {
+    type Result = StoreBackupRestoreResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<StoreBackupRestoreRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let source = required_path(&request, "source")?;
+        let destination = optional_path(&request, "destination");
+        let overwrite = bool_input(&request, "overwrite").unwrap_or(false);
+        if overwrite && request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
+
+        let view = map_sdk_adapter(
+            request.operation_id(),
+            crate::runtime::store::restore(
+                self.config,
+                source.as_path(),
+                destination.as_deref(),
+                overwrite,
+                request.context.dry_run,
+            ),
+        )?;
+        local_restore_result(request.operation_id(), &view)
+    }
+}
+
 fn serialized_operation_result<R, T>(value: &T) -> Result<OperationResult<R>, OperationAdapterError>
 where
     R: OperationResultData,
@@ -723,6 +753,34 @@ fn local_backup_result(
                 CommandDisposition::ExternalUnavailable => "store backup is unavailable".to_owned(),
                 CommandDisposition::Unsupported => "store backup is unsupported".to_owned(),
                 CommandDisposition::InternalError => "store backup failed".to_owned(),
+            }),
+        )),
+    }
+}
+
+fn local_restore_result(
+    operation_id: &str,
+    view: &LocalRestoreView,
+) -> Result<OperationResult<StoreBackupRestoreResult>, OperationAdapterError> {
+    match view.disposition() {
+        CommandDisposition::Success => {
+            serialized_operation_result::<StoreBackupRestoreResult, _>(view)
+        }
+        disposition => Err(OperationAdapterError::from_command_disposition(
+            operation_id,
+            disposition,
+            view.reason.clone().unwrap_or_else(|| match disposition {
+                CommandDisposition::Success => "store restore succeeded".to_owned(),
+                CommandDisposition::NotFound => "store restore source was not found".to_owned(),
+                CommandDisposition::ValidationFailed => {
+                    "store restore validation failed".to_owned()
+                }
+                CommandDisposition::Unconfigured => "store restore is unconfigured".to_owned(),
+                CommandDisposition::ExternalUnavailable => {
+                    "store restore is unavailable".to_owned()
+                }
+                CommandDisposition::Unsupported => "store restore is unsupported".to_owned(),
+                CommandDisposition::InternalError => "store restore failed".to_owned(),
             }),
         )),
     }

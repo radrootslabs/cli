@@ -182,8 +182,9 @@ impl TargetCommand {
                     StoreStatusCommand::Get => "store.status.get",
                 },
                 StoreCommand::Export => "store.export",
-                StoreCommand::Backup(backup) => match backup.command {
+                StoreCommand::Backup(backup) => match &backup.command {
                     StoreBackupCommand::Create => "store.backup.create",
+                    StoreBackupCommand::Restore(_) => "store.backup.restore",
                 },
             },
             Self::Sync(args) => match &args.command {

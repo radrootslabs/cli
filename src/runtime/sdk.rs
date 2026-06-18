@@ -140,7 +140,7 @@ pub fn sdk_storage_root(config: &RuntimeConfig) -> PathBuf {
     config.local.root.join(SDK_STORAGE_DIR_NAME)
 }
 
-fn sdk_runtime() -> Result<Runtime, RuntimeError> {
+pub(crate) fn sdk_runtime() -> Result<Runtime, RuntimeError> {
     TokioRuntimeBuilder::new_multi_thread()
         .enable_all()
         .build()
@@ -517,8 +517,8 @@ mod tests {
             ),
             &[
                 "session.sdk()",
-                "storage_status(StorageStatusRequest::default())",
-                "integrity(IntegrityRequest::default())",
+                "storage_status(StorageStatusRequest::new())",
+                "integrity(IntegrityRequest::new())",
             ],
         );
         assert_migrated_path(
@@ -532,10 +532,19 @@ mod tests {
         );
         assert_migrated_path(
             "store backup preflight",
-            source_segment(&store, "pub fn backup_preflight(", "pub fn export("),
+            source_segment(&store, "pub fn backup_preflight(", "pub fn restore("),
             &[
-                "storage_status(StorageStatusRequest::default())",
-                "integrity(IntegrityRequest::default())",
+                "storage_status(StorageStatusRequest::new())",
+                "integrity(IntegrityRequest::new())",
+            ],
+        );
+        assert_migrated_path(
+            "store restore",
+            source_segment(&store, "pub fn restore(", "pub fn export("),
+            &[
+                "RestoreRequest::new",
+                "sdk_runtime()",
+                "RadrootsSdk::restore",
             ],
         );
     }

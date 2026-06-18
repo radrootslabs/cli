@@ -1,4 +1,6 @@
-use clap::{Args, Subcommand};
+use std::path::PathBuf;
+
+use clap::{ArgAction, Args, Subcommand};
 
 #[derive(Debug, Clone, Args)]
 pub struct StoreArgs {
@@ -31,7 +33,17 @@ pub struct StoreBackupArgs {
     pub command: StoreBackupCommand,
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum StoreBackupCommand {
     Create,
+    Restore(StoreBackupRestoreArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct StoreBackupRestoreArgs {
+    pub source: PathBuf,
+    #[arg(long = "destination")]
+    pub destination: Option<PathBuf>,
+    #[arg(long = "overwrite", action = ArgAction::SetTrue)]
+    pub overwrite: bool,
 }

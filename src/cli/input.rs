@@ -48,8 +48,8 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
         FarmLocationCommand, FarmProfileCommand, ListingAppCommand, ListingCommand, MarketCommand,
         MarketListingCommand, MarketProductCommand, OrderAppCommand, OrderCommand,
         OrderEventCommand, OrderFulfillmentCommand, OrderPaymentCommand, OrderReceiptCommand,
-        OrderRevisionCommand, OrderSettlementCommand, OrderStatusCommand, ValidationCommand,
-        ValidationReceiptCommand,
+        OrderRevisionCommand, OrderSettlementCommand, OrderStatusCommand, StoreBackupCommand,
+        StoreCommand, ValidationCommand, ValidationReceiptCommand,
     };
 
     let mut input = OperationData::new();
@@ -167,6 +167,19 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                 MarketListingCommand::Get(args) => insert_string(&mut input, "key", &args.key),
             },
             MarketCommand::Refresh => {}
+        },
+        TargetCommand::Store(args) => match &args.command {
+            StoreCommand::Backup(backup) => match &backup.command {
+                StoreBackupCommand::Restore(args) => {
+                    insert_path(&mut input, "source", &Some(args.source.clone()));
+                    insert_path(&mut input, "destination", &args.destination);
+                    if args.overwrite {
+                        input.insert("overwrite".to_owned(), Value::Bool(true));
+                    }
+                }
+                StoreBackupCommand::Create => {}
+            },
+            StoreCommand::Init | StoreCommand::Status(_) | StoreCommand::Export => {}
         },
         TargetCommand::Basket(args) => match &args.command {
             BasketCommand::Create(args) => {
