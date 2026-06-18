@@ -197,6 +197,22 @@ mod tests {
         lifecycle: &'static str,
     }
 
+    struct LegacyDirectRelayConsumer {
+        path: &'static str,
+        required_tokens: &'static [&'static str],
+        owner: &'static str,
+        reason: &'static str,
+        lifecycle: &'static str,
+    }
+
+    struct MigratedCliPathGuard {
+        label: &'static str,
+        path: &'static str,
+        start: &'static str,
+        end: &'static str,
+        required_tokens: &'static [&'static str],
+    }
+
     const DIRECT_RR_RS_DEPENDENCIES: &[DirectRrRsDependency] = &[
         DirectRrRsDependency {
             section: "dependencies",
@@ -340,6 +356,145 @@ mod tests {
         },
     ];
 
+    const LEGACY_DIRECT_RELAY_CONSUMERS: &[LegacyDirectRelayConsumer] = &[
+        LegacyDirectRelayConsumer {
+            path: "src/runtime/farm.rs",
+            required_tokens: &[
+                "publish_via_direct_relay(",
+                "publish_signed_event_with_identity",
+            ],
+            owner: "farm.publish",
+            reason: "non-migrated farm publish direct relay write mode",
+            lifecycle: "retain until farm publish migrates to SDK-backed write APIs",
+        },
+        LegacyDirectRelayConsumer {
+            path: "src/runtime/listing.rs",
+            required_tokens: &[
+                "mutate_via_direct_relay(",
+                "publish_signed_event_with_identity",
+            ],
+            owner: "listing.nostr_relay.write",
+            reason: "non-migrated listing direct relay write mode outside SDK local publish",
+            lifecycle: "retain until listing relay publish migrates to SDK-backed write APIs",
+        },
+        LegacyDirectRelayConsumer {
+            path: "src/runtime/local_events.rs",
+            required_tokens: &["DirectRelayFailure", "DirectRelayPublishError"],
+            owner: "local-event.delivery-evidence",
+            reason: "delivery evidence mapping for non-migrated direct relay publish outcomes",
+            lifecycle: "retain until delivery evidence moves behind SDK or local-events APIs",
+        },
+        LegacyDirectRelayConsumer {
+            path: "src/runtime/order.rs",
+            required_tokens: &["fetch_events_from_relays", "publish_parts_with_identity"],
+            owner: "order.lifecycle.preflight-and-mutations",
+            reason: "non-migrated order lifecycle preflight reads and mutation writes",
+            lifecycle: "retain until full order lifecycle behavior migrates to SDK APIs",
+        },
+        LegacyDirectRelayConsumer {
+            path: "src/runtime/sync.rs",
+            required_tokens: &["fetch_events_from_relays", "pull_with_fetcher"],
+            owner: "sync.pull-and-market-refresh",
+            reason: "non-migrated relay ingest into the legacy derived replica",
+            lifecycle: "retain until relay ingest and derived projection repair migrate to SDK APIs",
+        },
+        LegacyDirectRelayConsumer {
+            path: "src/runtime/validation_receipt.rs",
+            required_tokens: &["fetch_events_from_relays", "DirectRelayFetchReceipt"],
+            owner: "validation.receipt.relay-reads",
+            reason: "non-migrated validation receipt relay inspection",
+            lifecycle: "retain until validation receipt inspection migrates to SDK APIs",
+        },
+    ];
+
+    const MIGRATED_CLI_PATH_GUARDS: &[MigratedCliPathGuard] = &[
+        MigratedCliPathGuard {
+            label: "listing publish",
+            path: "src/runtime/listing.rs",
+            start: "pub fn publish_via_sdk(",
+            end: "fn sdk_listing_publish_input(",
+            required_tokens: &[
+                "session.sdk().listings().prepare_publish",
+                "session.sdk().listings().enqueue_publish",
+                "session.sdk().sync().push_outbox",
+            ],
+        },
+        MigratedCliPathGuard {
+            label: "sync status",
+            path: "src/runtime/sync.rs",
+            start: "pub fn status(config: &RuntimeConfig) -> Result<SyncStatusView, CliSdkAdapterError>",
+            end: "pub fn pull(",
+            required_tokens: &["session.sdk().sync().status"],
+        },
+        MigratedCliPathGuard {
+            label: "sync push",
+            path: "src/runtime/sync.rs",
+            start: "pub fn push(config: &RuntimeConfig) -> Result<SyncActionView, CliSdkAdapterError>",
+            end: "pub fn watch(",
+            required_tokens: &["session.sdk().sync().push_outbox", "PushOutboxRequest::new"],
+        },
+        MigratedCliPathGuard {
+            label: "order status",
+            path: "src/runtime/order.rs",
+            start: "pub fn status(\n    config: &RuntimeConfig",
+            end: "fn relay_status(",
+            required_tokens: &["OrderStatusRequest::parse", "session.sdk().orders().status"],
+        },
+        MigratedCliPathGuard {
+            label: "store status",
+            path: "src/runtime/store.rs",
+            start: "pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterError>",
+            end: "fn legacy_replica_status(",
+            required_tokens: &[
+                "session.sdk()",
+                "storage_status(StorageStatusRequest::new())",
+                "integrity(IntegrityRequest::new())",
+            ],
+        },
+        MigratedCliPathGuard {
+            label: "store backup",
+            path: "src/runtime/store.rs",
+            start: "pub fn backup(\n    config: &RuntimeConfig",
+            end: "pub fn backup_preflight(",
+            required_tokens: &["session.sdk().backup", "BackupRequest"],
+        },
+        MigratedCliPathGuard {
+            label: "store backup preflight",
+            path: "src/runtime/store.rs",
+            start: "pub fn backup_preflight(",
+            end: "pub fn restore(",
+            required_tokens: &[
+                "storage_status(StorageStatusRequest::new())",
+                "integrity(IntegrityRequest::new())",
+            ],
+        },
+        MigratedCliPathGuard {
+            label: "store restore",
+            path: "src/runtime/store.rs",
+            start: "pub fn restore(",
+            end: "pub fn export(",
+            required_tokens: &[
+                "RestoreRequest::new",
+                "sdk_runtime()",
+                "RadrootsSdk::restore",
+            ],
+        },
+    ];
+
+    const MIGRATED_PATH_DISALLOWED_TOKENS: &[&str] = &[
+        "fetch_events_from_relays",
+        "publish_parts_with_identity",
+        "publish_via_direct_relay",
+        "mutate_via_direct_relay",
+        "radroots_replica_pending_publish",
+        "radroots_replica_pending_publish_batch",
+        "radroots_replica_sync_status",
+        "ReplicaSql::new",
+        "SqliteExecutor::open(&config.local.replica_db_path)",
+        "outbox_idempotency_digest",
+        "canonical_target_relays",
+    ];
+
     #[test]
     fn maps_runtime_config_to_sdk_builder_inputs() {
         let root = tempdir().expect("tempdir");
@@ -395,11 +550,7 @@ mod tests {
         let session = CliSdkSession::connect(&config).expect("sdk session");
 
         let status = session
-            .block_on(
-                session
-                    .sdk()
-                    .storage_status(StorageStatusRequest::default()),
-            )
+            .block_on(session.sdk().storage_status(StorageStatusRequest::new()))
             .expect("storage status");
 
         assert_eq!(session.config().storage_root, config.local.root.join("sdk"));
@@ -460,93 +611,39 @@ mod tests {
     }
 
     #[test]
+    fn legacy_direct_relay_consumers_are_explicitly_allowlisted() {
+        let actual = legacy_direct_relay_consumer_paths();
+        let expected = LEGACY_DIRECT_RELAY_CONSUMERS
+            .iter()
+            .map(|consumer| consumer.path.to_owned())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(actual, expected);
+        for consumer in LEGACY_DIRECT_RELAY_CONSUMERS {
+            let source = crate_source(consumer.path);
+            for token in consumer.required_tokens {
+                assert!(
+                    source.contains(token),
+                    "{} does not contain legacy direct-relay token `{token}`",
+                    consumer.path
+                );
+            }
+            assert!(!consumer.owner.trim().is_empty());
+            assert!(!consumer.reason.trim().is_empty());
+            assert!(!consumer.lifecycle.trim().is_empty());
+        }
+    }
+
+    #[test]
     fn migrated_cli_paths_are_guarded_against_direct_relay_and_legacy_canonical_use() {
-        let listing = crate_source("src/runtime/listing.rs");
-        assert_migrated_path(
-            "listing publish",
-            source_segment(
-                &listing,
-                "pub fn publish_via_sdk(",
-                "fn sdk_listing_publish_input(",
-            ),
-            &[
-                "session.sdk().listings().prepare_publish",
-                "session.sdk().listings().enqueue_publish",
-                "session.sdk().sync().push_outbox",
-            ],
-        );
-
-        let sync = crate_source("src/runtime/sync.rs");
-        assert_migrated_path(
-            "sync status",
-            source_segment(
-                &sync,
-                "pub fn status(config: &RuntimeConfig) -> Result<SyncStatusView, CliSdkAdapterError>",
-                "pub fn pull(",
-            ),
-            &["session.sdk().sync().status"],
-        );
-        assert_migrated_path(
-            "sync push",
-            source_segment(
-                &sync,
-                "pub fn push(config: &RuntimeConfig) -> Result<SyncActionView, CliSdkAdapterError>",
-                "pub fn watch(",
-            ),
-            &["session.sdk().sync().push_outbox", "PushOutboxRequest::new"],
-        );
-
-        let order = crate_source("src/runtime/order.rs");
-        assert_migrated_path(
-            "order status",
-            source_segment(
-                &order,
-                "pub fn status(\n    config: &RuntimeConfig",
-                "fn relay_status(",
-            ),
-            &["OrderStatusRequest::parse", "session.sdk().orders().status"],
-        );
-
-        let store = crate_source("src/runtime/store.rs");
-        assert_migrated_path(
-            "store status",
-            source_segment(
-                &store,
-                "pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterError>",
-                "fn legacy_replica_status(",
-            ),
-            &[
-                "session.sdk()",
-                "storage_status(StorageStatusRequest::new())",
-                "integrity(IntegrityRequest::new())",
-            ],
-        );
-        assert_migrated_path(
-            "store backup",
-            source_segment(
-                &store,
-                "pub fn backup(\n    config: &RuntimeConfig",
-                "pub fn backup_preflight(",
-            ),
-            &["session.sdk().backup", "BackupRequest"],
-        );
-        assert_migrated_path(
-            "store backup preflight",
-            source_segment(&store, "pub fn backup_preflight(", "pub fn restore("),
-            &[
-                "storage_status(StorageStatusRequest::new())",
-                "integrity(IntegrityRequest::new())",
-            ],
-        );
-        assert_migrated_path(
-            "store restore",
-            source_segment(&store, "pub fn restore(", "pub fn export("),
-            &[
-                "RestoreRequest::new",
-                "sdk_runtime()",
-                "RadrootsSdk::restore",
-            ],
-        );
+        for guard in MIGRATED_CLI_PATH_GUARDS {
+            let source = crate_source(guard.path);
+            assert_migrated_path(
+                guard.label,
+                source_segment(&source, guard.start, guard.end),
+                guard.required_tokens,
+            );
+        }
     }
 
     fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -583,6 +680,34 @@ mod tests {
         format!("{}:{}", dependency.section, dependency.name)
     }
 
+    fn legacy_direct_relay_consumer_paths() -> BTreeSet<String> {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        collect_rs_files(manifest_dir.join("src/runtime").as_path(), &mut files);
+        files
+            .into_iter()
+            .filter(|file| {
+                !matches!(
+                    file.file_name().and_then(|name| name.to_str()),
+                    Some("direct_relay.rs" | "sdk.rs")
+                )
+            })
+            .filter_map(|file| {
+                let source = fs::read_to_string(&file).expect("read runtime source");
+                source
+                    .contains("use crate::runtime::direct_relay")
+                    .then(|| relative_source_path(manifest_dir, file.as_path()))
+            })
+            .collect()
+    }
+
+    fn relative_source_path(root: &Path, path: &Path) -> String {
+        path.strip_prefix(root)
+            .expect("source path under manifest root")
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
     fn dependency_path(value: &toml::Value) -> Option<&str> {
         value
             .as_table()
@@ -611,19 +736,7 @@ mod tests {
             );
         }
 
-        for token in [
-            "fetch_events_from_relays",
-            "publish_parts_with_identity",
-            "publish_via_direct_relay",
-            "mutate_via_direct_relay",
-            "radroots_replica_pending_publish",
-            "radroots_replica_pending_publish_batch",
-            "radroots_replica_sync_status",
-            "ReplicaSql::new",
-            "SqliteExecutor::open(&config.local.replica_db_path)",
-            "outbox_idempotency_digest",
-            "canonical_target_relays",
-        ] {
+        for token in MIGRATED_PATH_DISALLOWED_TOKENS {
             assert!(
                 !source.contains(token),
                 "{label} contains disallowed migrated-path token `{token}`"
