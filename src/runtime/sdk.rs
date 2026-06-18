@@ -386,7 +386,11 @@ mod tests {
         },
         LegacyDirectRelayConsumer {
             path: "src/runtime/order.rs",
-            required_tokens: &["fetch_events_from_relays", "publish_parts_with_identity"],
+            required_tokens: &[
+                "legacy_order_preflight_relay_status",
+                "fetch_events_from_relays",
+                "publish_parts_with_identity",
+            ],
             owner: "order.lifecycle.preflight-and-mutations",
             reason: "non-migrated order lifecycle preflight reads and mutation writes",
             lifecycle: "retain until full order lifecycle behavior migrates to SDK APIs",
@@ -437,7 +441,7 @@ mod tests {
             label: "order status",
             path: "src/runtime/order.rs",
             start: "pub fn status(\n    config: &RuntimeConfig",
-            end: "fn relay_status(",
+            end: "fn legacy_order_preflight_relay_status(",
             required_tokens: &["OrderStatusRequest::parse", "session.sdk().orders().status"],
         },
         MigratedCliPathGuard {

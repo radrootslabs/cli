@@ -141,7 +141,8 @@ const ORDER_RECEIPT_SOURCE: &str = "direct Nostr relay receipt publish · local 
 const ORDER_PAYMENT_SOURCE: &str = "direct Nostr relay payment publish · local key";
 const ORDER_SETTLEMENT_SOURCE: &str = "direct Nostr relay settlement publish · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
-const ORDER_STATUS_SOURCE: &str = "direct Nostr relay status fetch · active order reducer";
+const LEGACY_ORDER_PREFLIGHT_STATUS_SOURCE: &str =
+    "legacy direct Nostr relay preflight status · active order reducer";
 const ORDER_STATUS_SDK_SOURCE: &str = "SDK local order projection";
 const ORDER_EVENT_LIST_RELAY_ACTION: &str =
     "radroots --relay wss://relay.example.com order event list";
@@ -1359,7 +1360,7 @@ pub fn decide(
     }
     if resolution.requests.len() == 1 {
         let request = resolution.requests[0].clone();
-        let status_view = relay_status(
+        let status_view = legacy_order_preflight_relay_status(
             config,
             &OrderStatusArgs {
                 key: args.key.clone(),
@@ -2233,14 +2234,14 @@ pub fn status(
     Ok(sdk_order_status_view(receipt))
 }
 
-fn relay_status(
+fn legacy_order_preflight_relay_status(
     config: &RuntimeConfig,
     args: &OrderStatusArgs,
 ) -> Result<OrderStatusView, RuntimeError> {
     if config.relay.urls.is_empty() {
         return Ok(OrderStatusView {
             state: "unconfigured".to_owned(),
-            source: ORDER_STATUS_SOURCE.to_owned(),
+            source: LEGACY_ORDER_PREFLIGHT_STATUS_SOURCE.to_owned(),
             order_id: args.key.clone(),
             actor_context_source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY.to_owned(),
             request_event_id: None,
@@ -2282,7 +2283,7 @@ fn relay_status(
         }) => {
             return Ok(OrderStatusView {
                 state: "unavailable".to_owned(),
-                source: ORDER_STATUS_SOURCE.to_owned(),
+                source: LEGACY_ORDER_PREFLIGHT_STATUS_SOURCE.to_owned(),
                 order_id: args.key.clone(),
                 actor_context_source: ORDER_ACTOR_CONTEXT_NETWORK_ONLY.to_owned(),
                 request_event_id: None,
@@ -2791,7 +2792,7 @@ fn order_status_reduction_from_receipt_inner(
             let message = error.to_string();
             let view = OrderStatusView {
                 state: "invalid".to_owned(),
-                source: ORDER_STATUS_SOURCE.to_owned(),
+                source: LEGACY_ORDER_PREFLIGHT_STATUS_SOURCE.to_owned(),
                 order_id: context.order_id.to_owned(),
                 actor_context_source: context.actor_context_source.to_owned(),
                 request_event_id: None,
@@ -2974,7 +2975,7 @@ fn order_status_reduction_from_receipt_inner(
 
     let view = OrderStatusView {
         state,
-        source: ORDER_STATUS_SOURCE.to_owned(),
+        source: LEGACY_ORDER_PREFLIGHT_STATUS_SOURCE.to_owned(),
         order_id: projection.order_id.to_string(),
         actor_context_source: context.actor_context_source.to_owned(),
         request_event_id: optional_string(projection.request_event_id),
