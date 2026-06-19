@@ -458,6 +458,18 @@ mod tests {
             ],
         },
         MigratedCliPathGuard {
+            label: "order decision",
+            path: "src/runtime/order.rs",
+            start: "fn publish_order_decision(",
+            end: "fn canonical_order_decision_payload(",
+            required_tokens: &[
+                "OrderDecisionEnqueueRequest::new",
+                "ingest_request_evidence(OrderRequestEvidenceIngestRequest::new",
+                "enqueue_decision(request, &signer)",
+                "push_outbox(",
+            ],
+        },
+        MigratedCliPathGuard {
             label: "store status",
             path: "src/runtime/store.rs",
             start: "pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterError>",
