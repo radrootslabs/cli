@@ -446,6 +446,18 @@ mod tests {
             required_tokens: &["OrderStatusRequest::parse", "session.sdk().orders().status"],
         },
         MigratedCliPathGuard {
+            label: "order SDK status adapter",
+            path: "src/runtime/order/sdk_status.rs",
+            start: "pub(super) fn sdk_order_status_view(",
+            end: "fn sdk_event_id_string(",
+            required_tokens: &[
+                "OrderStatusReceipt",
+                "OrderStatusView",
+                "OrderStatusLifecycleView",
+                "OrderStatusPaymentView",
+            ],
+        },
+        MigratedCliPathGuard {
             label: "order submit",
             path: "src/runtime/order.rs",
             start: "fn prepare_order_submit_via_sdk(",
@@ -472,7 +484,7 @@ mod tests {
         MigratedCliPathGuard {
             label: "order lifecycle",
             path: "src/runtime/order.rs",
-            start: "fn prepare_order_revision_proposal_dry_run_via_sdk(",
+            start: "fn publish_order_revision(",
             end: "fn publish_order_payment(",
             required_tokens: &[
                 "prepare_revision_proposal(OrderRevisionProposalPrepareRequest::new",
