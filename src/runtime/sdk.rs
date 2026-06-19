@@ -455,6 +455,7 @@ mod tests {
                 "OrderStatusView",
                 "OrderStatusLifecycleView",
                 "OrderStatusPaymentView",
+                "OrderStatusSdkReceiptView",
             ],
         },
         MigratedCliPathGuard {

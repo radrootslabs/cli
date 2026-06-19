@@ -2266,6 +2266,7 @@ fn legacy_order_preflight_relay_status(
             fulfillment: None,
             lifecycle: None,
             payment: None,
+            sdk_receipt: None,
             reducer_issues: Vec::new(),
             target_relays: Vec::new(),
             connected_relays: Vec::new(),
@@ -2308,6 +2309,7 @@ fn legacy_order_preflight_relay_status(
                 fulfillment: None,
                 lifecycle: None,
                 payment: None,
+                sdk_receipt: None,
                 reducer_issues: Vec::new(),
                 target_relays,
                 connected_relays: Vec::new(),
@@ -2551,6 +2553,7 @@ fn order_status_reduction_from_receipt_inner(
                 fulfillment: None,
                 lifecycle: None,
                 payment: None,
+                sdk_receipt: None,
                 reducer_issues: vec![issue("order_id", message.clone())],
                 target_relays,
                 connected_relays,
@@ -2734,6 +2737,7 @@ fn order_status_reduction_from_receipt_inner(
         fulfillment,
         lifecycle: Some(lifecycle),
         payment,
+        sdk_receipt: None,
         reducer_issues,
         target_relays,
         connected_relays,
@@ -15596,6 +15600,7 @@ mod tests {
         assert!(view.request_event_id.is_none());
         assert!(view.economics.is_none());
         assert!(view.fulfillment.is_none());
+        assert!(view.sdk_receipt.is_none());
         assert!(view.reducer_issues.is_empty());
     }
 
@@ -15676,6 +15681,24 @@ mod tests {
         assert!(view.connected_relays.is_empty());
         assert!(view.failed_relays.is_empty());
         assert!(view.reducer_issues.is_empty());
+        let sdk_receipt = view.sdk_receipt.as_ref().expect("sdk receipt");
+        assert_eq!(
+            sdk_receipt.payment_handoff,
+            "in_person_or_off_platform_pending"
+        );
+        assert_eq!(
+            sdk_receipt.next_action,
+            "arrange_in_person_or_off_platform_payment"
+        );
+        assert_eq!(sdk_receipt.evidence.event_count, 2);
+        assert!(sdk_receipt.evidence.has_request);
+        assert!(sdk_receipt.evidence.has_decision);
+        assert!(sdk_receipt.evidence.has_agreement);
+        assert!(!sdk_receipt.evidence.has_issues);
+        assert!(!sdk_receipt.eligibility.can_decide);
+        assert!(sdk_receipt.eligibility.can_propose_revision);
+        assert!(sdk_receipt.eligibility.can_cancel);
+        assert!(sdk_receipt.eligibility.can_update_fulfillment);
         let lifecycle = view.lifecycle.expect("lifecycle");
         assert_eq!(lifecycle.phase, "accepted");
         assert!(!lifecycle.terminal);
@@ -15825,6 +15848,12 @@ mod tests {
             view.reducer_issues[0].event_ids,
             vec![fork_event_id.to_string()]
         );
+        let sdk_receipt = view.sdk_receipt.expect("sdk receipt");
+        assert_eq!(sdk_receipt.payment_handoff, "invalid");
+        assert_eq!(sdk_receipt.next_action, "inspect_evidence_issues");
+        assert!(sdk_receipt.evidence.has_issues);
+        assert!(!sdk_receipt.eligibility.can_decide);
+        assert!(!sdk_receipt.eligibility.can_update_fulfillment);
     }
 
     #[test]

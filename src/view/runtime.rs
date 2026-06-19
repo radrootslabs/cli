@@ -2415,6 +2415,8 @@ pub struct OrderStatusView {
     pub lifecycle: Option<OrderStatusLifecycleView>,
     #[serde(skip_serializing_if = "inactive_status_payment")]
     pub payment: Option<OrderStatusPaymentView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sdk_receipt: Option<OrderStatusSdkReceiptView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reducer_issues: Vec<OrderIssueView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2433,6 +2435,38 @@ pub struct OrderStatusView {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderStatusSdkReceiptView {
+    pub payment_handoff: String,
+    pub next_action: String,
+    pub evidence: OrderStatusEvidenceSummaryView,
+    pub eligibility: OrderStatusEligibilityView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderStatusEvidenceSummaryView {
+    pub event_count: usize,
+    pub limit_applied: u32,
+    pub has_request: bool,
+    pub has_decision: bool,
+    pub has_agreement: bool,
+    pub has_pending_revision: bool,
+    pub has_fulfillment: bool,
+    pub has_cancellation: bool,
+    pub has_receipt: bool,
+    pub has_issues: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderStatusEligibilityView {
+    pub can_decide: bool,
+    pub can_propose_revision: bool,
+    pub can_decide_revision: bool,
+    pub can_cancel: bool,
+    pub can_update_fulfillment: bool,
+    pub can_record_receipt: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

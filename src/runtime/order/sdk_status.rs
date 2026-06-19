@@ -1,13 +1,15 @@
 use radroots_events::ids::RadrootsEventId;
 use radroots_sdk::{
-    OrderFulfillmentStatusKind, OrderPaymentStateKind, OrderSettlementStateKind, OrderStatusKind,
-    OrderStatusReceipt, SdkOrderStatusIssue,
+    OrderFulfillmentStatusKind, OrderPaymentHandoffKind, OrderPaymentStateKind,
+    OrderSettlementStateKind, OrderStatusEligibility, OrderStatusEvidenceSummary, OrderStatusKind,
+    OrderStatusNextActionKind, OrderStatusReceipt, SdkOrderStatusIssue,
 };
 
 use crate::view::runtime::{
-    OrderIssueView, OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
+    OrderIssueView, OrderStatusEligibilityView, OrderStatusEvidenceSummaryView,
+    OrderStatusFulfillmentView, OrderStatusLifecycleCancellationView,
     OrderStatusLifecycleReceiptView, OrderStatusLifecycleView, OrderStatusPaymentView,
-    OrderStatusView,
+    OrderStatusSdkReceiptView, OrderStatusView,
 };
 
 use super::{ORDER_ACTOR_CONTEXT_SDK_LOCAL, ORDER_STATUS_SDK_SOURCE};
@@ -26,6 +28,7 @@ pub(super) fn sdk_order_status_view(receipt: OrderStatusReceipt) -> OrderStatusV
         &receipt,
         reducer_issues.as_slice(),
     ));
+    let sdk_receipt = Some(sdk_order_status_receipt_view(&receipt));
 
     OrderStatusView {
         state,
@@ -46,6 +49,7 @@ pub(super) fn sdk_order_status_view(receipt: OrderStatusReceipt) -> OrderStatusV
         fulfillment,
         lifecycle: Some(lifecycle),
         payment,
+        sdk_receipt,
         reducer_issues,
         target_relays: Vec::new(),
         connected_relays: Vec::new(),
@@ -55,6 +59,78 @@ pub(super) fn sdk_order_status_view(receipt: OrderStatusReceipt) -> OrderStatusV
         skipped_count: 0,
         reason,
         actions: Vec::new(),
+    }
+}
+
+fn sdk_order_status_receipt_view(receipt: &OrderStatusReceipt) -> OrderStatusSdkReceiptView {
+    OrderStatusSdkReceiptView {
+        payment_handoff: sdk_payment_handoff(receipt.payment_handoff).to_owned(),
+        next_action: sdk_status_next_action(receipt.next_action).to_owned(),
+        evidence: sdk_status_evidence_view(&receipt.evidence),
+        eligibility: sdk_status_eligibility_view(&receipt.eligibility),
+    }
+}
+
+fn sdk_status_evidence_view(
+    evidence: &OrderStatusEvidenceSummary,
+) -> OrderStatusEvidenceSummaryView {
+    OrderStatusEvidenceSummaryView {
+        event_count: evidence.event_count,
+        limit_applied: evidence.limit_applied,
+        has_request: evidence.has_request,
+        has_decision: evidence.has_decision,
+        has_agreement: evidence.has_agreement,
+        has_pending_revision: evidence.has_pending_revision,
+        has_fulfillment: evidence.has_fulfillment,
+        has_cancellation: evidence.has_cancellation,
+        has_receipt: evidence.has_receipt,
+        has_issues: evidence.has_issues,
+    }
+}
+
+fn sdk_status_eligibility_view(eligibility: &OrderStatusEligibility) -> OrderStatusEligibilityView {
+    OrderStatusEligibilityView {
+        can_decide: eligibility.can_decide,
+        can_propose_revision: eligibility.can_propose_revision,
+        can_decide_revision: eligibility.can_decide_revision,
+        can_cancel: eligibility.can_cancel,
+        can_update_fulfillment: eligibility.can_update_fulfillment,
+        can_record_receipt: eligibility.can_record_receipt,
+    }
+}
+
+fn sdk_payment_handoff(kind: OrderPaymentHandoffKind) -> &'static str {
+    match kind {
+        OrderPaymentHandoffKind::NotReady => "not_ready",
+        OrderPaymentHandoffKind::NotRequired => "not_required",
+        OrderPaymentHandoffKind::InPersonOrOffPlatformPending => {
+            "in_person_or_off_platform_pending"
+        }
+        OrderPaymentHandoffKind::InPersonOrOffPlatformRecorded => {
+            "in_person_or_off_platform_recorded"
+        }
+        OrderPaymentHandoffKind::InPersonOrOffPlatformSettled => {
+            "in_person_or_off_platform_settled"
+        }
+        OrderPaymentHandoffKind::Rejected => "rejected",
+        OrderPaymentHandoffKind::Invalid => "invalid",
+        _ => "unknown",
+    }
+}
+
+fn sdk_status_next_action(kind: OrderStatusNextActionKind) -> &'static str {
+    match kind {
+        OrderStatusNextActionKind::NoLocalOrder => "no_local_order",
+        OrderStatusNextActionKind::InspectEvidenceIssues => "inspect_evidence_issues",
+        OrderStatusNextActionKind::AwaitSellerDecision => "await_seller_decision",
+        OrderStatusNextActionKind::ArrangeInPersonOrOffPlatformPayment => {
+            "arrange_in_person_or_off_platform_payment"
+        }
+        OrderStatusNextActionKind::DecideRevision => "decide_revision",
+        OrderStatusNextActionKind::FulfillOrder => "fulfill_order",
+        OrderStatusNextActionKind::RecordReceipt => "record_receipt",
+        OrderStatusNextActionKind::Terminal => "terminal",
+        _ => "unknown",
     }
 }
 
