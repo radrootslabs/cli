@@ -3,21 +3,19 @@ mod support;
 use std::fs;
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::ids::{
     RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId, RadrootsPublicKey,
 };
-use radroots_events::kinds::{KIND_FARM, KIND_ORDER_REQUEST, KIND_PROFILE};
+use radroots_events::kinds::KIND_ORDER_REQUEST;
 use radroots_events::order::{RadrootsOrderEconomics, RadrootsOrderItem, RadrootsOrderRequest};
 use radroots_events_codec::order::order_request_event_build;
 use radroots_local_events::{
-    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, CANONICAL_RELAY_SET_FINGERPRINT_VERSION,
-    LocalEventRecordInput, LocalEventsStore, LocalRecordFamily, LocalRecordStatus,
-    PublishOutboxStatus, RelayDeliveryEvidence, SourceRuntime, canonical_relay_set_fingerprint,
+    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecordInput, LocalEventsStore,
+    LocalRecordFamily, LocalRecordStatus, PublishOutboxStatus, RelayDeliveryEvidence,
+    SourceRuntime, canonical_relay_set_fingerprint,
 };
 use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
 use radroots_replica_db::{farm, migrations};
@@ -55,48 +53,6 @@ fn test_inventory_bin_id(value: &str) -> RadrootsInventoryBinId {
 
 fn test_pubkey(value: &str) -> RadrootsPublicKey {
     value.parse().expect("valid public key")
-}
-
-struct RelayPublishServer {
-    endpoint: String,
-    requests: Receiver<Value>,
-    handle: JoinHandle<()>,
-}
-
-impl RelayPublishServer {
-    fn with_publish_outcomes(outcomes: Vec<(bool, &'static str)>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind relay");
-        let endpoint = format!("ws://{}", listener.local_addr().expect("relay addr"));
-        let (tx, requests) = mpsc::channel();
-        let handle = thread::spawn(move || {
-            for (accepted, reason) in outcomes {
-                let (stream, _) = listener.accept().expect("accept relay connection");
-                handle_relay_publish_connection(stream, accepted, reason, &tx);
-            }
-        });
-
-        Self {
-            endpoint,
-            requests,
-            handle,
-        }
-    }
-
-    fn endpoint(&self) -> &str {
-        self.endpoint.as_str()
-    }
-
-    fn take_requests(self, count: usize) -> Vec<Value> {
-        let requests = (0..count)
-            .map(|_| {
-                self.requests
-                    .recv_timeout(Duration::from_secs(5))
-                    .expect("relay publish request")
-            })
-            .collect::<Vec<_>>();
-        self.handle.join().expect("relay server join");
-        requests
-    }
 }
 
 struct RelayFetchServer {
@@ -155,37 +111,6 @@ fn read_relay_req_subscription_id(websocket: &mut tungstenite::WebSocket<TcpStre
                 .and_then(Value::as_str)
                 .expect("subscription id")
                 .to_owned();
-        }
-    }
-}
-
-fn handle_relay_publish_connection(
-    stream: TcpStream,
-    accepted: bool,
-    reason: &str,
-    tx: &mpsc::Sender<Value>,
-) {
-    let mut websocket = tungstenite::accept(stream).expect("accept websocket");
-    let event = read_relay_event_message(&mut websocket);
-    let event_id = event["id"].as_str().expect("event id").to_owned();
-    tx.send(event).expect("relay request send");
-    websocket
-        .send(tungstenite::Message::Text(
-            json!(["OK", event_id, accepted, reason]).to_string().into(),
-        ))
-        .expect("relay ok send");
-}
-
-fn read_relay_event_message(websocket: &mut tungstenite::WebSocket<TcpStream>) -> Value {
-    loop {
-        let message = websocket.read().expect("relay message");
-        if !message.is_text() {
-            continue;
-        }
-        let value: Value =
-            serde_json::from_str(message.to_text().expect("relay text")).expect("relay json");
-        if value.get(0).and_then(Value::as_str) == Some("EVENT") {
-            return value.get(1).cloned().expect("relay event payload");
         }
     }
 }
@@ -5602,10 +5527,10 @@ fn order_app_records_fail_closed_when_order_id_conflicts() {
 }
 
 #[test]
-fn farm_publish_writes_acknowledged_signed_outbox_records() {
+fn farm_publish_uses_sdk_outbox_without_legacy_signed_event_records() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
-    let farm = sandbox.json_success(&[
+    sandbox.json_success(&[
         "--format",
         "json",
         "farm",
@@ -5619,84 +5544,47 @@ fn farm_publish_writes_acknowledged_signed_outbox_records() {
         "--delivery-method",
         "pickup",
     ]);
-    let farm_config = &farm["result"]["config"];
-    let farm_d_tag = farm_config["farm_d_tag"].as_str().expect("farm d tag");
-    let account_id = farm_config["seller_account_id"]
-        .as_str()
-        .expect("seller account id");
-    let seller_pubkey = farm_config["seller_pubkey"]
-        .as_str()
-        .expect("seller pubkey");
-    let relay = RelayPublishServer::with_publish_outcomes(vec![(true, ""), (true, "")]);
-    let relay_url = relay.endpoint().to_owned();
+    let relay_url = "ws://127.0.0.1:9";
+    let local_event_records_before_publish = sandbox.local_event_records().len();
 
-    let publish = sandbox.json_success(&[
+    let (output, publish) = sandbox.json_output(&[
         "--format",
         "json",
         "--relay",
-        relay_url.as_str(),
+        relay_url,
         "--approval-token",
         "approve",
         "farm",
         "publish",
     ]);
 
+    assert!(!output.status.success());
     assert_eq!(publish["operation_id"], "farm.publish");
-    assert_eq!(publish["result"]["state"], "published");
-    let profile_event_id = publish["result"]["profile"]["event_id"]
-        .as_str()
-        .expect("profile event id");
-    let farm_event_id = publish["result"]["farm"]["event_id"]
-        .as_str()
-        .expect("farm event id");
-    let requests = relay.take_requests(2);
-    assert_eq!(requests.len(), 2);
+    assert_eq!(publish["result"], serde_json::Value::Null);
+    assert_eq!(publish["errors"][0]["code"], "network_unavailable");
+    let detail = &publish["errors"][0]["detail"];
+    assert_eq!(detail["source"], "SDK farm publish · local key");
+    assert_eq!(detail["state"], "unavailable");
+    assert_eq!(detail["profile"]["state"], "not_submitted");
+    assert_eq!(detail["profile"]["event_id"], serde_json::Value::Null);
+    assert_eq!(detail["farm"]["state"], "unavailable");
+    assert_eq!(detail["farm"]["target_relays"][0], relay_url);
+    assert_eq!(detail["farm"]["failed_relays"][0]["relay"], relay_url);
+    assert_eq!(
+        detail["farm"]["event_id"]
+            .as_str()
+            .expect("sdk farm event id")
+            .len(),
+        64
+    );
 
     let records = sandbox.local_event_records();
+    assert_eq!(records.len(), local_event_records_before_publish);
     let signed_records = records
         .iter()
         .filter(|record| record.family == LocalRecordFamily::SignedEvent)
         .collect::<Vec<_>>();
-    assert_eq!(signed_records.len(), 2);
-    for record in &signed_records {
-        assert_eq!(record.status, LocalRecordStatus::Published);
-        assert_eq!(record.outbox_status, PublishOutboxStatus::Acknowledged);
-        assert_eq!(record.source_runtime, SourceRuntime::Cli);
-        assert_eq!(record.owner_account_id.as_deref(), Some(account_id));
-        assert_eq!(record.owner_pubkey.as_deref(), Some(seller_pubkey));
-        assert_eq!(record.farm_id.as_deref(), Some(farm_d_tag));
-        assert_eq!(
-            record.relay_delivery_json.as_ref().unwrap()["state"],
-            "acknowledged"
-        );
-        assert_eq!(
-            record.relay_delivery_json.as_ref().unwrap()["acknowledged_relays"][0],
-            relay_url
-        );
-        assert_eq!(
-            record.relay_set_fingerprint.as_deref(),
-            canonical_relay_set_fingerprint([relay_url.as_str()]).as_deref()
-        );
-        assert!(
-            record
-                .relay_set_fingerprint
-                .as_deref()
-                .expect("relay set fingerprint")
-                .starts_with(CANONICAL_RELAY_SET_FINGERPRINT_VERSION)
-        );
-        assert_eq!(
-            record.raw_event_json.as_ref().unwrap()["id"],
-            record.event_id.as_deref().expect("event id")
-        );
-    }
-    assert!(signed_records.iter().any(|record| {
-        record.event_id.as_deref() == Some(profile_event_id)
-            && record.event_kind == Some(i64::from(KIND_PROFILE))
-    }));
-    assert!(signed_records.iter().any(|record| {
-        record.event_id.as_deref() == Some(farm_event_id)
-            && record.event_kind == Some(i64::from(KIND_FARM))
-    }));
+    assert!(signed_records.is_empty());
 }
 
 #[test]

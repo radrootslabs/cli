@@ -185,7 +185,7 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
         }
 
         let view = crate::runtime::farm::publish(self.config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         farm_publish_result(request.operation_id(), &view)
     }

@@ -1,14 +1,9 @@
 mod support;
 
 use std::fs;
-use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver};
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
-use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
-use serde_json::{Value, json};
+use serde_json::Value;
 use support::{
     RadrootsCliSandbox, assert_contains, assert_no_daemon_runtime_reference,
     assert_no_removed_command_reference, create_listing_draft, identity_public, identity_secret,
@@ -18,87 +13,6 @@ use support::{
 
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
-
-struct FarmPartialRelayServer {
-    endpoint: String,
-    requests: Receiver<Value>,
-    handle: JoinHandle<()>,
-}
-
-impl FarmPartialRelayServer {
-    fn profile_accept_farm_reject() -> Self {
-        Self::with_publish_outcomes([(true, ""), (false, "farm rejected by test relay")])
-    }
-
-    fn profile_and_farm_accept() -> Self {
-        Self::with_publish_outcomes([(true, ""), (true, "")])
-    }
-
-    fn with_publish_outcomes(outcomes: [(bool, &'static str); 2]) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind relay");
-        let endpoint = format!("ws://{}", listener.local_addr().expect("relay addr"));
-        let (tx, requests) = mpsc::channel();
-        let handle = thread::spawn(move || {
-            for (accepted, reason) in outcomes {
-                let (stream, _) = listener.accept().expect("accept relay connection");
-                handle_publish_connection(stream, accepted, reason, &tx);
-            }
-        });
-
-        Self {
-            endpoint,
-            requests,
-            handle,
-        }
-    }
-
-    fn endpoint(&self) -> &str {
-        self.endpoint.as_str()
-    }
-
-    fn take_requests(self) -> Vec<Value> {
-        let requests = (0..2)
-            .map(|_| {
-                self.requests
-                    .recv_timeout(Duration::from_secs(5))
-                    .expect("relay publish request")
-            })
-            .collect::<Vec<_>>();
-        self.handle.join().expect("relay server join");
-        requests
-    }
-}
-
-fn handle_publish_connection(
-    stream: TcpStream,
-    accepted: bool,
-    reason: &str,
-    tx: &mpsc::Sender<Value>,
-) {
-    let mut websocket = tungstenite::accept(stream).expect("accept websocket");
-    let event = read_event_message(&mut websocket);
-    let event_id = event["id"].as_str().expect("event id").to_owned();
-    tx.send(event).expect("relay request send");
-    websocket
-        .send(tungstenite::Message::Text(
-            json!(["OK", event_id, accepted, reason]).to_string().into(),
-        ))
-        .expect("relay ok send");
-}
-
-fn read_event_message(websocket: &mut tungstenite::WebSocket<TcpStream>) -> Value {
-    loop {
-        let message = websocket.read().expect("relay message");
-        if !message.is_text() {
-            continue;
-        }
-        let value: Value =
-            serde_json::from_str(message.to_text().expect("relay text")).expect("relay json");
-        if value.get(0).and_then(Value::as_str) == Some("EVENT") {
-            return value.get(1).cloned().expect("relay event payload");
-        }
-    }
-}
 
 #[test]
 fn local_signer_status_reports_unconfigured_without_account() {
@@ -1277,7 +1191,7 @@ fn farm_setup_actions_withhold_publish_for_watch_only_account() {
 }
 
 #[test]
-fn local_farm_publish_reports_partial_when_farm_event_fails_after_profile_publish() {
+fn local_farm_publish_reports_sdk_push_failure_without_profile_publish() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     sandbox.json_success(&[
@@ -1294,14 +1208,13 @@ fn local_farm_publish_reports_partial_when_farm_event_fails_after_profile_publis
         "--delivery-method",
         "pickup",
     ]);
-    let relay = FarmPartialRelayServer::profile_accept_farm_reject();
-    let relay_url = relay.endpoint().to_owned();
+    let relay_url = "ws://127.0.0.1:9";
 
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
         "--relay",
-        relay_url.as_str(),
+        relay_url,
         "--approval-token",
         "approve",
         "--idempotency-key",
@@ -1309,7 +1222,6 @@ fn local_farm_publish_reports_partial_when_farm_event_fails_after_profile_publis
         "farm",
         "publish",
     ]);
-    let requests = relay.take_requests();
 
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "farm.publish");
@@ -1318,45 +1230,33 @@ fn local_farm_publish_reports_partial_when_farm_event_fails_after_profile_publis
     assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "farm publish failed after profile publish",
-    );
-    assert_contains(
-        &value["errors"][0]["message"],
-        "farm rejected by test relay",
+        "SDK relay publish did not reach accepted quorum",
     );
     let detail = &value["errors"][0]["detail"];
-    assert_eq!(detail["state"], "partial");
-    assert_eq!(detail["profile"]["state"], "published");
-    assert_eq!(detail["farm"]["state"], "failed");
-    assert_eq!(detail["profile"]["event_id"], requests[0]["id"]);
-    assert_eq!(detail["farm"]["event_id"], requests[1]["id"]);
+    assert_eq!(detail["source"], "SDK farm publish · local key");
+    assert_eq!(detail["state"], "unavailable");
+    assert_eq!(detail["profile"]["state"], "not_submitted");
+    assert_eq!(detail["farm"]["state"], "unavailable");
+    assert_eq!(detail["profile"]["event_id"], serde_json::Value::Null);
+    assert_eq!(
+        detail["farm"]["event_id"]
+            .as_str()
+            .expect("sdk farm event id")
+            .len(),
+        64
+    );
     assert_eq!(detail["profile"]["idempotency_key"], "farm_partial:profile");
     assert_eq!(detail["farm"]["idempotency_key"], "farm_partial:farm");
-    assert_eq!(detail["actions"][0], "radroots farm publish");
-    assert_eq!(detail["profile"]["target_relays"][0], relay_url.as_str());
-    assert_eq!(detail["farm"]["target_relays"][0], relay_url.as_str());
-    assert_relay_url(
-        &detail["profile"]["acknowledged_relays"][0],
-        relay_url.as_str(),
-    );
-    assert_relay_url(&detail["farm"]["connected_relays"][0], relay_url.as_str());
-    assert_relay_url(
-        &detail["farm"]["failed_relays"][0]["relay"],
-        relay_url.as_str(),
-    );
-    assert_contains(
-        &detail["farm"]["failed_relays"][0]["reason"],
-        "farm rejected by test relay",
-    );
-    assert_eq!(requests[0]["kind"], KIND_PROFILE);
-    assert_eq!(requests[1]["kind"], KIND_FARM);
+    assert_eq!(detail["actions"][0], "radroots sync push");
+    assert_eq!(detail["farm"]["target_relays"][0], relay_url);
+    assert_relay_url(&detail["farm"]["failed_relays"][0]["relay"], relay_url);
     assert_no_removed_command_reference(&value, &["farm", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish"]);
 
     let persisted = sandbox.json_success(&["--format", "json", "farm", "get"]);
     assert_eq!(
         persisted["result"]["document"]["publication"]["profile_state"],
-        "published"
+        "not_published"
     );
     assert_eq!(
         persisted["result"]["document"]["publication"]["farm_state"],
@@ -1364,12 +1264,16 @@ fn local_farm_publish_reports_partial_when_farm_event_fails_after_profile_publis
     );
     assert_eq!(
         persisted["result"]["document"]["publication"]["profile_event_id"],
-        requests[0]["id"]
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        persisted["result"]["document"]["publication"]["farm_event_id"],
+        serde_json::Value::Null
     );
 }
 
 #[test]
-fn local_farm_publish_persists_publication_after_profile_and_farm_publish() {
+fn local_farm_publish_does_not_persist_publication_until_sdk_push_publishes() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     sandbox.json_success(&[
@@ -1386,14 +1290,13 @@ fn local_farm_publish_persists_publication_after_profile_and_farm_publish() {
         "--delivery-method",
         "pickup",
     ]);
-    let relay = FarmPartialRelayServer::profile_and_farm_accept();
-    let relay_url = relay.endpoint().to_owned();
+    let relay_url = "ws://127.0.0.1:9";
 
-    let value = sandbox.json_success(&[
+    let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
         "--relay",
-        relay_url.as_str(),
+        relay_url,
         "--approval-token",
         "approve",
         "--idempotency-key",
@@ -1401,43 +1304,43 @@ fn local_farm_publish_persists_publication_after_profile_and_farm_publish() {
         "farm",
         "publish",
     ]);
-    let requests = relay.take_requests();
 
+    assert!(!output.status.success());
     assert_eq!(value["operation_id"], "farm.publish");
-    assert_eq!(value["result"]["state"], "published");
-    assert_eq!(value["result"]["profile"]["state"], "published");
-    assert_eq!(value["result"]["farm"]["state"], "published");
-    assert_eq!(value["result"]["profile"]["event_id"], requests[0]["id"]);
-    assert_eq!(value["result"]["farm"]["event_id"], requests[1]["id"]);
+    assert_eq!(value["result"], serde_json::Value::Null);
+    let detail = &value["errors"][0]["detail"];
+    assert_eq!(detail["source"], "SDK farm publish · local key");
+    assert_eq!(detail["profile"]["state"], "not_submitted");
+    assert_eq!(detail["farm"]["state"], "unavailable");
+    assert_eq!(detail["profile"]["event_id"], serde_json::Value::Null);
     assert_eq!(
-        value["result"]["profile"]["idempotency_key"],
-        "farm_success:profile"
+        detail["farm"]["event_id"]
+            .as_str()
+            .expect("sdk farm event id")
+            .len(),
+        64
     );
-    assert_eq!(
-        value["result"]["farm"]["idempotency_key"],
-        "farm_success:farm"
-    );
-    assert_eq!(requests[0]["kind"], KIND_PROFILE);
-    assert_eq!(requests[1]["kind"], KIND_FARM);
+    assert_eq!(detail["profile"]["idempotency_key"], "farm_success:profile");
+    assert_eq!(detail["farm"]["idempotency_key"], "farm_success:farm");
     assert_no_removed_command_reference(&value, &["farm", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish"]);
 
     let persisted = sandbox.json_success(&["--format", "json", "farm", "get"]);
     assert_eq!(
         persisted["result"]["document"]["publication"]["profile_state"],
-        "published"
+        "not_published"
     );
     assert_eq!(
         persisted["result"]["document"]["publication"]["farm_state"],
-        "published"
+        "not_published"
     );
     assert_eq!(
         persisted["result"]["document"]["publication"]["profile_event_id"],
-        requests[0]["id"]
+        serde_json::Value::Null
     );
     assert_eq!(
         persisted["result"]["document"]["publication"]["farm_event_id"],
-        requests[1]["id"]
+        serde_json::Value::Null
     );
 }
 
@@ -1486,27 +1389,14 @@ fn farm_rebind_is_explicit_and_publish_defaults_ignore_ambient_selection() {
             .is_none()
     );
 
-    let relay = FarmPartialRelayServer::profile_and_farm_accept();
-    let relay_url = relay.endpoint().to_owned();
-    sandbox.json_success(&[
-        "--format",
-        "json",
-        "--relay",
-        relay_url.as_str(),
-        "--approval-token",
-        "approve",
-        "farm",
-        "publish",
-    ]);
-    let _requests = relay.take_requests();
     let published = sandbox.json_success(&["--format", "json", "farm", "get"]);
     assert_eq!(
         published["result"]["document"]["publication"]["profile_state"],
-        "published"
+        "not_published"
     );
     assert_eq!(
         published["result"]["document"]["publication"]["farm_state"],
-        "published"
+        "not_published"
     );
 
     let same_seller_dry_run = sandbox.json_success(&[
@@ -1540,11 +1430,11 @@ fn farm_rebind_is_explicit_and_publish_defaults_ignore_ambient_selection() {
     let same_seller_get = sandbox.json_success(&["--format", "json", "farm", "get"]);
     assert_eq!(
         same_seller_get["result"]["document"]["publication"]["profile_state"],
-        "published"
+        "not_published"
     );
     assert_eq!(
         same_seller_get["result"]["document"]["publication"]["farm_state"],
-        "published"
+        "not_published"
     );
 
     let second = sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -1978,7 +1868,7 @@ fn farm_rebind_allows_watch_only_target_and_attach_secret_recovers_publish() {
 }
 
 #[test]
-fn local_seller_publish_commands_attempt_configured_direct_relay() {
+fn local_seller_publish_commands_attempt_configured_relay() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let farm = sandbox.json_success(&[
@@ -2011,7 +1901,28 @@ fn local_seller_publish_commands_attempt_configured_direct_relay() {
         "publish",
     ]);
     assert!(!farm_output.status.success());
-    assert_direct_relay_connection_failure(&farm_value, "farm.publish", &["farm", "publish"]);
+    assert_eq!(farm_value["operation_id"], "farm.publish");
+    assert_eq!(farm_value["result"], serde_json::Value::Null);
+    assert_eq!(farm_value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(farm_value["errors"][0]["detail"]["class"], "network");
+    assert_contains(
+        &farm_value["errors"][0]["message"],
+        "SDK relay publish did not reach accepted quorum",
+    );
+    assert_eq!(
+        farm_value["errors"][0]["detail"]["source"],
+        "SDK farm publish · local key"
+    );
+    assert_eq!(
+        farm_value["errors"][0]["detail"]["farm"]["target_relays"][0],
+        relay
+    );
+    assert_eq!(
+        farm_value["errors"][0]["detail"]["farm"]["failed_relays"][0]["relay"],
+        relay
+    );
+    assert_no_removed_command_reference(&farm_value, &["farm", "publish"]);
+    assert_no_daemon_runtime_reference(&farm_value, &["farm", "publish"]);
 
     let listing_file = create_listing_draft(&sandbox, "direct-relay-attempt");
     make_listing_publishable(&listing_file, farm_d_tag);

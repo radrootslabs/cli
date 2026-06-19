@@ -1,18 +1,20 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use radroots_authority::{RadrootsActorContext, RadrootsLocalEventSigner};
+use radroots_events::contract::RadrootsActorRole;
 use radroots_events::farm::{RadrootsFarm, RadrootsFarmLocation};
 use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
 use radroots_events::listing::RadrootsListingLocation;
 use radroots_events::profile::{RadrootsProfile, RadrootsProfileType};
 use radroots_events_codec::d_tag::is_d_tag_base64url;
-use radroots_events_codec::farm::encode::to_wire_parts_with_kind;
 use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
-use radroots_events_codec::wire::WireEventParts;
-use radroots_nostr::prelude::radroots_event_from_nostr;
-use radroots_replica_db::migrations;
-use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
-use radroots_sql_core::SqliteExecutor;
+use radroots_nostr::prelude::RadrootsNostrKeys;
+use radroots_sdk::{
+    FarmEnqueuePublishRequest, FarmEnqueueReceipt, FarmPreparePublishRequest, FarmPublishPlan,
+    PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt, PushOutboxRelayOutcomeKind,
+    PushOutboxRequest, SdkMutationState, SdkRelayTargetPolicy,
+};
 use serde_json::json;
 
 use crate::cli::global::{
@@ -24,30 +26,28 @@ use crate::runtime::account::{self, AccountRecordView};
 use crate::runtime::config::{
     PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
 };
-use crate::runtime::direct_relay::{
-    DirectRelayFailure, DirectRelayPublishError, DirectRelayPublishReceipt,
-    publish_signed_event_with_identity, sign_parts_with_identity,
-};
 use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
     FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
 };
-use crate::runtime::local_events::{
-    append_local_work, append_signed_event, mark_signed_event_acknowledged,
-    mark_signed_event_failed_for_publish_error,
-};
+use crate::runtime::local_events::append_local_work;
+use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_relay_url_policy};
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::view::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
-    FarmPublicationView, FarmPublishComponentView, FarmPublishEventView,
-    FarmPublishLocalReplicaView, FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView,
-    FarmSetupView, FarmStatusView, RelayFailureView,
+    FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishView,
+    FarmRebindView, FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
+    RelayFailureView,
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
 const FARM_SELLER_ACTOR_SOURCE: &str = "farm_config";
-const RELAY_FARM_WRITE_SOURCE: &str = "direct Nostr relay publish · local key";
+const SDK_FARM_WRITE_SOURCE: &str = "SDK farm publish · local key";
 const RADROOTSD_FARM_WRITE_SOURCE: &str = "radrootsd publish transport · deferred";
+const SDK_PROFILE_NOT_SUBMITTED_METHOD: &str = "sdk.farm.profile.not_submitted";
+const SDK_FARM_PUBLISH_METHOD: &str = "sdk.farm.publish.v1";
+const SDK_PROFILE_NOT_SUBMITTED_REASON: &str =
+    "profile publish is not part of SDK farm.publish.v1; profile draft was not submitted";
 const RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD: &str = "bridge.profile.publish";
 const RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD: &str = "bridge.farm.publish";
 
@@ -574,7 +574,7 @@ fn radrootsd_farm_publish_readiness(_config: &RuntimeConfig) -> FarmPublishReadi
 pub fn publish(
     config: &RuntimeConfig,
     args: &FarmPublishArgs,
-) -> Result<FarmPublishView, RuntimeError> {
+) -> Result<FarmPublishView, CliSdkAdapterError> {
     let scope = scope_from_arg(args.scope);
     let resolved_scope = farm_config::resolve_scope(&config.paths, scope)?;
     let path = farm_config::config_path(&config.paths, resolved_scope)?;
@@ -640,128 +640,17 @@ pub fn publish(
     let farm_idempotency_key = component_idempotency_key(args, "farm")?;
 
     if config.output.dry_run {
-        return dry_run_publish_view(
-            config,
-            args,
-            &resolved,
-            &account_pubkey,
-            previews,
-            profile_idempotency_key,
-            farm_idempotency_key,
-        );
-    }
-
-    match config.publish.mode {
-        PublishMode::NostrRelay => publish_via_direct_relay(
-            config,
-            args,
-            resolved,
-            account_pubkey,
-            previews,
-            profile_idempotency_key,
-            farm_idempotency_key,
-        ),
-        PublishMode::Radrootsd => Ok(radrootsd_preflight_publish_view(
-            config,
-            args,
-            &resolved,
-            &account_pubkey,
-            previews,
-            profile_idempotency_key,
-            farm_idempotency_key,
-            "unavailable",
-            RADROOTSD_PUBLISH_DEFERRED_REASON,
-        )),
-    }
-}
-
-fn dry_run_publish_view(
-    config: &RuntimeConfig,
-    args: &FarmPublishArgs,
-    resolved: &ResolvedFarmConfig,
-    account_pubkey: &str,
-    previews: FarmPublishPreviews,
-    profile_idempotency_key: Option<String>,
-    farm_idempotency_key: Option<String>,
-) -> Result<FarmPublishView, RuntimeError> {
-    match config.publish.mode {
-        PublishMode::NostrRelay => {
-            if let Err(error) = resolve_farm_signing_identity(
-                config,
-                resolved.document.selection.account.as_str(),
-                account_pubkey,
-            ) {
-                return match error {
-                    ActorWriteBindingError::Account(failure) => Err(failure.into()),
-                    error => Ok(binding_error_publish_view(
-                        config,
-                        args,
-                        resolved,
-                        account_pubkey,
-                        previews,
-                        profile_idempotency_key,
-                        farm_idempotency_key,
-                        error,
-                    )),
-                };
-            }
-
-            Ok(base_publish_view(
-                "dry_run",
+        return match config.publish.mode {
+            PublishMode::NostrRelay => publish_via_sdk(
                 config,
                 args,
                 resolved,
                 account_pubkey,
-                preview_component(
-                    "relay.profile.publish",
-                    KIND_PROFILE,
-                    profile_idempotency_key,
-                    args,
-                    Some(previews.profile.event),
-                ),
-                preview_component(
-                    "relay.farm.publish",
-                    KIND_FARM,
-                    farm_idempotency_key,
-                    args,
-                    Some(previews.farm.event),
-                ),
-                Some("dry run requested; relay publish skipped".to_owned()),
-                vec!["radroots farm publish".to_owned()],
-            ))
-        }
-        PublishMode::Radrootsd => Ok(radrootsd_preflight_publish_view(
-            config,
-            args,
-            resolved,
-            account_pubkey,
-            previews,
-            profile_idempotency_key,
-            farm_idempotency_key,
-            "unavailable",
-            RADROOTSD_PUBLISH_DEFERRED_REASON,
-        )),
-    }
-}
-
-fn publish_via_direct_relay(
-    config: &RuntimeConfig,
-    args: &FarmPublishArgs,
-    mut resolved: ResolvedFarmConfig,
-    account_pubkey: String,
-    mut previews: FarmPublishPreviews,
-    profile_idempotency_key: Option<String>,
-    farm_idempotency_key: Option<String>,
-) -> Result<FarmPublishView, RuntimeError> {
-    let signing = match resolve_farm_signing_identity(
-        config,
-        resolved.document.selection.account.as_str(),
-        account_pubkey.as_str(),
-    ) {
-        Ok(signing) => signing,
-        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
-        Err(error) => {
-            return Ok(binding_error_publish_view(
+                previews,
+                profile_idempotency_key,
+                farm_idempotency_key,
+            ),
+            PublishMode::Radrootsd => Ok(radrootsd_preflight_publish_view(
                 config,
                 args,
                 &resolved,
@@ -769,91 +658,55 @@ fn publish_via_direct_relay(
                 previews,
                 profile_idempotency_key,
                 farm_idempotency_key,
-                error,
-            ));
-        }
-    };
-
-    if config.relay.urls.is_empty() {
-        return Err(RuntimeError::Network(
-            DirectRelayPublishError::MissingRelays.to_string(),
-        ));
+                "unavailable",
+                RADROOTSD_PUBLISH_DEFERRED_REASON,
+            )),
+        };
     }
 
-    let profile_event = sign_parts_with_identity(&signing.identity, previews.profile.parts.clone())
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
-    previews.profile.event.event_id = Some(profile_event.id.to_hex());
-    let profile_record = append_signed_event(
-        config,
-        format!("farm_profile:{}", resolved.document.selection.farm_d_tag).as_str(),
-        Some(resolved.document.selection.account.clone()),
-        Some(account_pubkey.clone()),
-        Some(resolved.document.selection.farm_d_tag.clone()),
-        None,
-        &profile_event,
-    )?;
-    let profile_receipt = match publish_signed_event_with_identity(
-        &signing.identity,
-        &config.relay.urls,
-        profile_event,
-    ) {
-        Ok(receipt) => {
-            mark_signed_event_acknowledged(
-                config,
-                profile_record.record_id.as_str(),
-                receipt.target_relays.clone(),
-                receipt.connected_relays.clone(),
-                receipt.acknowledged_relays.clone(),
-                receipt.failed_relays.clone(),
-            )?;
-            receipt
-        }
-        Err(error) => {
-            mark_signed_event_failed_for_publish_error(
-                config,
-                profile_record.record_id.as_str(),
-                &error,
-            )?;
-            return Err(RuntimeError::Network(error.to_string()));
-        }
-    };
-    let profile_local_replica =
-        farm_local_replica_ingest_view(config, "profile", &profile_receipt, None);
-    persist_profile_publication(config, &mut resolved, profile_receipt.event_id.clone())?;
+    match config.publish.mode {
+        PublishMode::NostrRelay => publish_via_sdk(
+            config,
+            args,
+            resolved,
+            account_pubkey,
+            previews,
+            profile_idempotency_key,
+            farm_idempotency_key,
+        ),
+        PublishMode::Radrootsd => Ok(radrootsd_preflight_publish_view(
+            config,
+            args,
+            &resolved,
+            &account_pubkey,
+            previews,
+            profile_idempotency_key,
+            farm_idempotency_key,
+            "unavailable",
+            RADROOTSD_PUBLISH_DEFERRED_REASON,
+        )),
+    }
+}
 
-    let farm_event = sign_parts_with_identity(&signing.identity, previews.farm.parts.clone())
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
-    previews.farm.event.event_id = Some(farm_event.id.to_hex());
-    let farm_record = append_signed_event(
-        config,
-        format!("farm:{}", resolved.document.selection.farm_d_tag).as_str(),
-        Some(resolved.document.selection.account.clone()),
-        Some(account_pubkey.clone()),
-        Some(resolved.document.selection.farm_d_tag.clone()),
-        None,
-        &farm_event,
-    )?;
-    let farm_receipt =
-        match publish_signed_event_with_identity(&signing.identity, &config.relay.urls, farm_event)
-        {
-            Ok(receipt) => {
-                mark_signed_event_acknowledged(
-                    config,
-                    farm_record.record_id.as_str(),
-                    receipt.target_relays.clone(),
-                    receipt.connected_relays.clone(),
-                    receipt.acknowledged_relays.clone(),
-                    receipt.failed_relays.clone(),
-                )?;
-                receipt
-            }
-            Err(error) => {
-                mark_signed_event_failed_for_publish_error(
-                    config,
-                    farm_record.record_id.as_str(),
-                    &error,
-                )?;
-                return Ok(partial_publish_view(
+fn publish_via_sdk(
+    config: &RuntimeConfig,
+    args: &FarmPublishArgs,
+    mut resolved: ResolvedFarmConfig,
+    account_pubkey: String,
+    previews: FarmPublishPreviews,
+    profile_idempotency_key: Option<String>,
+    farm_idempotency_key: Option<String>,
+) -> Result<FarmPublishView, CliSdkAdapterError> {
+    let input = sdk_farm_publish_input(&resolved, account_pubkey.as_str())?;
+    if config.output.dry_run {
+        if let Err(error) = resolve_farm_signing_identity(
+            config,
+            resolved.document.selection.account.as_str(),
+            account_pubkey.as_str(),
+        ) {
+            return match error {
+                ActorWriteBindingError::Account(failure) => Err(RuntimeError::from(failure).into()),
+                error => Ok(binding_error_publish_view(
                     config,
                     args,
                     &resolved,
@@ -861,59 +714,85 @@ fn publish_via_direct_relay(
                     previews,
                     profile_idempotency_key,
                     farm_idempotency_key,
-                    profile_receipt,
-                    profile_local_replica,
                     error,
-                ));
-            }
-        };
-    let farm_local_replica = farm_local_replica_ingest_view(
-        config,
-        "farm",
-        &farm_receipt,
-        previews.farm.event.event_addr.clone(),
-    );
-    persist_farm_publication(config, &mut resolved, farm_receipt.event_id.clone())?;
+                )),
+            };
+        }
 
-    let mut view = base_publish_view(
-        "published",
+        let session = CliSdkSession::connect_memory(config)?;
+        let plan = session
+            .sdk()
+            .farms()
+            .prepare_publish(FarmPreparePublishRequest::new(input.actor, input.farm))?;
+        return Ok(sdk_prepared_publish_view(
+            config,
+            args,
+            &resolved,
+            account_pubkey.as_str(),
+            previews,
+            profile_idempotency_key,
+            farm_idempotency_key,
+            plan,
+        ));
+    }
+
+    let session = CliSdkSession::connect(config)?;
+    let signer = sdk_farm_signer(
+        config,
+        resolved.document.selection.account.as_str(),
+        account_pubkey.as_str(),
+    )?;
+    let mut request = FarmEnqueuePublishRequest::new(
+        input.actor,
+        input.farm,
+        SdkRelayTargetPolicy::UseConfiguredRelays,
+    );
+    if let Some(idempotency_key) = farm_idempotency_key.as_deref() {
+        request = request.try_with_idempotency_key(idempotency_key)?;
+    }
+    let enqueue = session.block_on(session.sdk().farms().enqueue_publish(request, &signer))?;
+    let push = session.block_on(
+        session.sdk().sync().push_outbox(
+            PushOutboxRequest::new()
+                .with_limit(1)
+                .with_relay_url_policy(sdk_relay_url_policy(config)),
+        ),
+    )?;
+    let view = sdk_enqueued_publish_view(
         config,
         args,
         &resolved,
-        &account_pubkey,
-        published_component(
-            "relay.profile.publish",
-            KIND_PROFILE,
-            profile_idempotency_key,
-            args,
-            previews.profile.event,
-            profile_receipt,
-        ),
-        published_component(
-            "relay.farm.publish",
-            KIND_FARM,
-            farm_idempotency_key,
-            args,
-            previews.farm.event,
-            farm_receipt,
-        ),
-        None,
-        Vec::new(),
+        account_pubkey.as_str(),
+        previews,
+        profile_idempotency_key,
+        farm_idempotency_key,
+        &enqueue,
+        &push,
     );
-    view.local_replica = vec![profile_local_replica, farm_local_replica];
+    if view.farm.state == "published" {
+        persist_farm_publication(
+            config,
+            &mut resolved,
+            enqueue.signed_event_id.as_str().to_owned(),
+        )?;
+    }
     Ok(view)
+}
+
+#[derive(Debug, Clone)]
+struct SdkFarmPublishInput {
+    actor: RadrootsActorContext,
+    farm: RadrootsFarm,
 }
 
 #[derive(Debug, Clone)]
 struct FarmPublishPreviews {
     profile: FarmPublishEventDraft,
-    farm: FarmPublishEventDraft,
 }
 
 #[derive(Debug, Clone)]
 struct FarmPublishEventDraft {
     event: FarmPublishEventView,
-    parts: WireEventParts,
 }
 
 impl FarmPublishView {
@@ -1036,12 +915,6 @@ fn build_publish_previews(
     let profile_parts =
         to_wire_parts_with_profile_type(&document.profile, Some(RadrootsProfileType::Farm))
             .map_err(|error| RuntimeError::Config(format!("invalid farm profile: {error}")))?;
-    let farm_parts = to_wire_parts_with_kind(&document.farm, KIND_FARM)
-        .map_err(|error| RuntimeError::Config(format!("invalid farm contract: {error}")))?;
-    let farm_addr = format!(
-        "{}:{}:{}",
-        farm_parts.kind, account_pubkey, document.farm.d_tag
-    );
 
     Ok(FarmPublishPreviews {
         profile: FarmPublishEventDraft {
@@ -1053,18 +926,6 @@ fn build_publish_previews(
                 event_id: None,
                 event_addr: None,
             },
-            parts: profile_parts,
-        },
-        farm: FarmPublishEventDraft {
-            event: FarmPublishEventView {
-                kind: farm_parts.kind,
-                author: account_pubkey.to_owned(),
-                content: farm_parts.content.clone(),
-                tags: farm_parts.tags.clone(),
-                event_id: None,
-                event_addr: Some(farm_addr),
-            },
-            parts: farm_parts,
         },
     })
 }
@@ -1146,9 +1007,7 @@ fn binding_error_publish_view(
         FarmPublishComponentView {
             state: state.clone(),
             reason: Some(reason.clone()),
-            ..preview_component(
-                "relay.profile.publish",
-                KIND_PROFILE,
+            ..profile_not_submitted_component(
                 profile_idempotency_key,
                 args,
                 Some(previews.profile.event),
@@ -1158,11 +1017,11 @@ fn binding_error_publish_view(
             state: state.clone(),
             reason: Some(reason.clone()),
             ..preview_component(
-                "relay.farm.publish",
+                farm_publish_rpc_method(config),
                 KIND_FARM,
                 farm_idempotency_key,
                 args,
-                Some(previews.farm.event),
+                None,
             )
         },
         Some(reason),
@@ -1170,7 +1029,37 @@ fn binding_error_publish_view(
     )
 }
 
-fn partial_publish_view(
+fn sdk_farm_publish_input(
+    resolved: &ResolvedFarmConfig,
+    account_pubkey: &str,
+) -> Result<SdkFarmPublishInput, RuntimeError> {
+    let actor = RadrootsActorContext::local_account(
+        account_pubkey,
+        resolved.document.selection.account.clone(),
+        [RadrootsActorRole::Farmer],
+    )
+    .map_err(|error| RuntimeError::Config(format!("invalid farm SDK actor: {error}")))?;
+    Ok(SdkFarmPublishInput {
+        actor,
+        farm: resolved.document.farm.clone(),
+    })
+}
+
+fn sdk_farm_signer(
+    config: &RuntimeConfig,
+    account_id: &str,
+    account_pubkey: &str,
+) -> Result<RadrootsLocalEventSigner, RuntimeError> {
+    let signing = match resolve_farm_signing_identity(config, account_id, account_pubkey) {
+        Ok(signing) => signing,
+        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
+        Err(error) => return Err(RuntimeError::Config(error.reason())),
+    };
+    let keys: RadrootsNostrKeys = signing.identity.into_keys();
+    RadrootsLocalEventSigner::new(keys).map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn sdk_prepared_publish_view(
     config: &RuntimeConfig,
     args: &FarmPublishArgs,
     resolved: &ResolvedFarmConfig,
@@ -1178,191 +1067,250 @@ fn partial_publish_view(
     previews: FarmPublishPreviews,
     profile_idempotency_key: Option<String>,
     farm_idempotency_key: Option<String>,
-    profile_receipt: DirectRelayPublishReceipt,
-    profile_local_replica: FarmPublishLocalReplicaView,
-    farm_error: DirectRelayPublishError,
+    plan: FarmPublishPlan,
 ) -> FarmPublishView {
-    let reason = format!("farm publish failed after profile publish: {farm_error}");
-    let mut view = base_publish_view(
-        "partial",
+    base_publish_view(
+        "dry_run",
         config,
         args,
         resolved,
         account_pubkey,
-        published_component(
-            "relay.profile.publish",
-            KIND_PROFILE,
+        profile_not_submitted_component(
             profile_idempotency_key,
             args,
-            previews.profile.event,
-            profile_receipt,
+            Some(previews.profile.event),
         ),
-        failed_component(
-            "relay.farm.publish",
-            KIND_FARM,
-            farm_idempotency_key,
-            args,
-            previews.farm.event,
-            &config.relay.urls,
-            farm_error,
-        ),
-        Some(reason),
+        FarmPublishComponentView {
+            state: "not_submitted".to_owned(),
+            reason: Some("dry run requested; SDK enqueue and relay push skipped".to_owned()),
+            signer_mode: Some(config.signer.backend.as_str().to_owned()),
+            event_id: Some(plan.expected_event_id.as_str().to_owned()),
+            event_addr: Some(plan.farm_addr.as_str().to_owned()),
+            event: args.print_event.then_some(sdk_plan_event_view(&plan)),
+            ..preview_component(
+                farm_publish_rpc_method(config),
+                KIND_FARM,
+                farm_idempotency_key,
+                args,
+                None,
+            )
+        },
+        Some("dry run requested; SDK enqueue and relay push skipped".to_owned()),
         vec!["radroots farm publish".to_owned()],
-    );
-    view.local_replica = vec![profile_local_replica];
-    view
+    )
 }
 
-fn published_component(
-    rpc_method: &str,
-    event_kind: u32,
-    idempotency_key: Option<String>,
-    args: &FarmPublishArgs,
-    mut event: FarmPublishEventView,
-    receipt: DirectRelayPublishReceipt,
-) -> FarmPublishComponentView {
-    event.event_id = Some(receipt.event_id.clone());
-    FarmPublishComponentView {
-        state: "published".to_owned(),
-        rpc_method: rpc_method.to_owned(),
-        event_kind,
-        deduplicated: false,
-        target_relays: receipt.target_relays,
-        connected_relays: receipt.connected_relays,
-        acknowledged_relays: receipt.acknowledged_relays,
-        failed_relays: relay_failures(receipt.failed_relays),
-        job_id: None,
-        job_status: None,
-        signer_mode: Some("local".to_owned()),
-        signer_session_id: None,
-        event_id: Some(receipt.event_id),
-        event_addr: event.event_addr.clone(),
-        idempotency_key,
-        reason: None,
-        job: None,
-        event: args.print_event.then_some(event),
-    }
-}
-
-fn farm_local_replica_ingest_view(
+fn sdk_enqueued_publish_view(
     config: &RuntimeConfig,
-    component: &str,
-    receipt: &DirectRelayPublishReceipt,
-    event_addr: Option<String>,
-) -> FarmPublishLocalReplicaView {
-    if !config.local.replica_db_path.exists() {
-        return FarmPublishLocalReplicaView {
-            component: component.to_owned(),
-            state: "unconfigured".to_owned(),
-            store_state: "missing".to_owned(),
-            ingest_outcome: None,
-            event_id: Some(receipt.event_id.clone()),
-            event_addr,
-            reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots store init".to_owned()],
-        };
-    }
+    args: &FarmPublishArgs,
+    resolved: &ResolvedFarmConfig,
+    account_pubkey: &str,
+    previews: FarmPublishPreviews,
+    profile_idempotency_key: Option<String>,
+    farm_idempotency_key: Option<String>,
+    enqueue: &FarmEnqueueReceipt,
+    push: &PushOutboxReceipt,
+) -> FarmPublishView {
+    let push_event = sdk_push_event_for_farm(enqueue, push);
+    let state = sdk_publish_state(push_event);
+    let view_state = state.clone();
+    let reason = sdk_publish_reason(push_event);
+    base_publish_view(
+        view_state.as_str(),
+        config,
+        args,
+        resolved,
+        account_pubkey,
+        profile_not_submitted_component(
+            profile_idempotency_key,
+            args,
+            Some(previews.profile.event),
+        ),
+        FarmPublishComponentView {
+            state,
+            deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
+            target_relays: push_event
+                .map(sdk_push_target_relays)
+                .unwrap_or_else(|| config.relay.urls.clone()),
+            connected_relays: push_event
+                .map(sdk_push_connected_relays)
+                .unwrap_or_default(),
+            acknowledged_relays: push_event
+                .map(sdk_push_acknowledged_relays)
+                .unwrap_or_default(),
+            failed_relays: push_event.map(sdk_push_failed_relays).unwrap_or_default(),
+            signer_mode: Some(config.signer.backend.as_str().to_owned()),
+            event_id: Some(enqueue.signed_event_id.as_str().to_owned()),
+            event_addr: Some(enqueue.farm_addr.as_str().to_owned()),
+            idempotency_key: farm_idempotency_key,
+            reason: sdk_publish_reason(push_event),
+            ..preview_component(farm_publish_rpc_method(config), KIND_FARM, None, args, None)
+        },
+        reason,
+        sdk_publish_actions(push_event),
+    )
+}
 
-    let executor = match SqliteExecutor::open(&config.local.replica_db_path) {
-        Ok(executor) => executor,
-        Err(error) => {
-            return farm_local_replica_failed_view(
-                component,
-                receipt.event_id.clone(),
-                event_addr,
-                format!("failed to open local replica database: {error}"),
-            );
+fn sdk_plan_event_view(plan: &FarmPublishPlan) -> FarmPublishEventView {
+    FarmPublishEventView {
+        kind: plan.frozen_draft.kind,
+        author: plan.frozen_draft.expected_pubkey.clone(),
+        content: plan.frozen_draft.content.clone(),
+        tags: plan.frozen_draft.tags.clone(),
+        event_id: Some(plan.expected_event_id.as_str().to_owned()),
+        event_addr: Some(plan.farm_addr.as_str().to_owned()),
+    }
+}
+
+fn sdk_push_event_for_farm<'a>(
+    enqueue: &FarmEnqueueReceipt,
+    push: &'a PushOutboxReceipt,
+) -> Option<&'a PushOutboxEventReceipt> {
+    push.events
+        .iter()
+        .find(|event| event.event_id == enqueue.signed_event_id)
+}
+
+fn sdk_publish_state(push_event: Option<&PushOutboxEventReceipt>) -> String {
+    match push_event.map(|event| event.final_state) {
+        Some(PushOutboxEventState::Published) => "published",
+        Some(PushOutboxEventState::PublishRetryable | PushOutboxEventState::FailedTerminal) => {
+            "unavailable"
         }
-    };
-    if let Err(error) = migrations::run_all_up(&executor) {
-        return farm_local_replica_failed_view(
-            component,
-            receipt.event_id.clone(),
-            event_addr,
-            format!("failed to migrate local replica database: {error}"),
-        );
+        Some(_) | None => "queued",
     }
+    .to_owned()
+}
 
-    let event = radroots_event_from_nostr(&receipt.event);
-    match radroots_replica_ingest_event(&executor, &event) {
-        Ok(RadrootsReplicaIngestOutcome::Applied) => FarmPublishLocalReplicaView {
-            component: component.to_owned(),
-            state: "applied".to_owned(),
-            store_state: "ready".to_owned(),
-            ingest_outcome: Some("applied".to_owned()),
-            event_id: Some(receipt.event_id.clone()),
-            event_addr,
-            reason: None,
-            actions: Vec::new(),
-        },
-        Ok(RadrootsReplicaIngestOutcome::Skipped) => FarmPublishLocalReplicaView {
-            component: component.to_owned(),
-            state: "skipped".to_owned(),
-            store_state: "ready".to_owned(),
-            ingest_outcome: Some("skipped".to_owned()),
-            event_id: Some(receipt.event_id.clone()),
-            event_addr,
-            reason: Some("shared replica ingest skipped the event".to_owned()),
-            actions: Vec::new(),
-        },
-        Err(error) => farm_local_replica_failed_view(
-            component,
-            receipt.event_id.clone(),
-            event_addr,
-            format!("failed to ingest farm publish event into local replica: {error}"),
+fn sdk_publish_reason(push_event: Option<&PushOutboxEventReceipt>) -> Option<String> {
+    match push_event.map(|event| event.final_state) {
+        Some(PushOutboxEventState::Published) => None,
+        Some(PushOutboxEventState::PublishRetryable) => Some(
+            "SDK relay publish did not reach accepted quorum; outbox event remains retryable"
+                .to_owned(),
+        ),
+        Some(PushOutboxEventState::FailedTerminal) => {
+            Some("SDK relay publish failed terminally".to_owned())
+        }
+        Some(state) => Some(format!("SDK relay push left event in state `{state:?}`")),
+        None => Some(
+            "farm publish queued in SDK outbox; no ready SDK outbox event was pushed".to_owned(),
         ),
     }
 }
 
-fn farm_local_replica_failed_view(
-    component: &str,
-    event_id: String,
-    event_addr: Option<String>,
-    reason: String,
-) -> FarmPublishLocalReplicaView {
-    FarmPublishLocalReplicaView {
-        component: component.to_owned(),
-        state: "failed".to_owned(),
-        store_state: "unavailable".to_owned(),
-        ingest_outcome: None,
-        event_id: Some(event_id),
-        event_addr,
-        reason: Some(reason),
-        actions: vec!["radroots store status get".to_owned()],
+fn sdk_publish_actions(push_event: Option<&PushOutboxEventReceipt>) -> Vec<String> {
+    if !matches!(
+        push_event.map(|event| event.final_state),
+        Some(PushOutboxEventState::Published)
+    ) {
+        return vec!["radroots sync push".to_owned()];
+    }
+    Vec::new()
+}
+
+fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+    event
+        .relays
+        .iter()
+        .map(|relay| relay.relay_url.clone())
+        .collect()
+}
+
+fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+    event
+        .relays
+        .iter()
+        .filter(|relay| relay.attempted)
+        .map(|relay| relay.relay_url.clone())
+        .collect()
+}
+
+fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+    event
+        .relays
+        .iter()
+        .filter(|relay| {
+            matches!(
+                relay.outcome_kind,
+                PushOutboxRelayOutcomeKind::Accepted
+                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+            )
+        })
+        .map(|relay| relay.relay_url.clone())
+        .collect()
+}
+
+fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureView> {
+    event
+        .relays
+        .iter()
+        .filter(|relay| {
+            !matches!(
+                relay.outcome_kind,
+                PushOutboxRelayOutcomeKind::Accepted
+                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+            )
+        })
+        .map(|relay| RelayFailureView {
+            relay: relay.relay_url.clone(),
+            reason: relay
+                .message
+                .clone()
+                .unwrap_or_else(|| sdk_relay_outcome_kind(relay.outcome_kind).to_owned()),
+        })
+        .collect()
+}
+
+fn sdk_relay_outcome_kind(kind: PushOutboxRelayOutcomeKind) -> &'static str {
+    match kind {
+        PushOutboxRelayOutcomeKind::Accepted => "accepted",
+        PushOutboxRelayOutcomeKind::DuplicateAccepted => "duplicate_accepted",
+        PushOutboxRelayOutcomeKind::Blocked => "blocked",
+        PushOutboxRelayOutcomeKind::RateLimited => "rate_limited",
+        PushOutboxRelayOutcomeKind::Invalid => "invalid",
+        PushOutboxRelayOutcomeKind::PowRequired => "pow_required",
+        PushOutboxRelayOutcomeKind::Restricted => "restricted",
+        PushOutboxRelayOutcomeKind::AuthRequired => "auth_required",
+        PushOutboxRelayOutcomeKind::Error => "error",
+        PushOutboxRelayOutcomeKind::Timeout => "timeout",
+        PushOutboxRelayOutcomeKind::ConnectionFailed => "connection_failed",
+        PushOutboxRelayOutcomeKind::Unknown => "unknown",
+        _ => "unknown",
     }
 }
 
-fn failed_component(
+fn profile_not_submitted_component(
+    idempotency_key: Option<String>,
+    args: &FarmPublishArgs,
+    event: Option<FarmPublishEventView>,
+) -> FarmPublishComponentView {
+    FarmPublishComponentView {
+        reason: Some(SDK_PROFILE_NOT_SUBMITTED_REASON.to_owned()),
+        ..preview_component(
+            SDK_PROFILE_NOT_SUBMITTED_METHOD,
+            KIND_PROFILE,
+            idempotency_key,
+            args,
+            event,
+        )
+    }
+}
+
+fn deferred_component(
     rpc_method: &str,
     event_kind: u32,
     idempotency_key: Option<String>,
     args: &FarmPublishArgs,
-    event: FarmPublishEventView,
-    relay_urls: &[String],
-    error: DirectRelayPublishError,
+    reason: &str,
+    event: Option<FarmPublishEventView>,
 ) -> FarmPublishComponentView {
-    let reason = error.to_string();
-    let failure = publish_failure_details(&error, relay_urls);
-    let event_id = failure.event_id.or_else(|| event.event_id.clone());
     FarmPublishComponentView {
-        state: "failed".to_owned(),
-        rpc_method: rpc_method.to_owned(),
-        event_kind,
-        deduplicated: false,
-        target_relays: failure.target_relays,
-        connected_relays: failure.connected_relays,
-        acknowledged_relays: Vec::new(),
-        failed_relays: failure.failed_relays,
-        job_id: None,
-        job_status: None,
-        signer_mode: Some("local".to_owned()),
+        state: "unavailable".to_owned(),
+        signer_mode: Some("deferred".to_owned()),
         signer_session_id: None,
-        event_id,
-        event_addr: event.event_addr.clone(),
-        idempotency_key,
-        reason: Some(reason),
-        job: None,
-        event: args.print_event.then_some(event),
+        reason: Some(reason.to_owned()),
+        ..preview_component(rpc_method, event_kind, idempotency_key, args, event)
     }
 }
 
@@ -1384,32 +1332,22 @@ fn radrootsd_preflight_publish_view(
         args,
         resolved,
         account_pubkey,
-        FarmPublishComponentView {
-            state: state.to_owned(),
-            signer_mode: Some("deferred".to_owned()),
-            signer_session_id: None,
-            reason: Some(reason.to_owned()),
-            ..radrootsd_preview_component(
-                RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD,
-                KIND_PROFILE,
-                profile_idempotency_key,
-                args,
-                Some(previews.profile.event),
-            )
-        },
-        FarmPublishComponentView {
-            state: state.to_owned(),
-            signer_mode: Some("deferred".to_owned()),
-            signer_session_id: None,
-            reason: Some(reason.to_owned()),
-            ..radrootsd_preview_component(
-                RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
-                KIND_FARM,
-                farm_idempotency_key,
-                args,
-                Some(previews.farm.event),
-            )
-        },
+        deferred_component(
+            RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD,
+            KIND_PROFILE,
+            profile_idempotency_key,
+            args,
+            reason,
+            Some(previews.profile.event),
+        ),
+        deferred_component(
+            RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
+            KIND_FARM,
+            farm_idempotency_key,
+            args,
+            reason,
+            None,
+        ),
         Some(reason.to_owned()),
         vec![
             "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish"
@@ -1417,27 +1355,6 @@ fn radrootsd_preflight_publish_view(
         ],
     )
     .with_requested_signer_session_id(requested_signer_session_id)
-}
-
-fn radrootsd_preview_component(
-    rpc_method: &str,
-    event_kind: u32,
-    idempotency_key: Option<String>,
-    args: &FarmPublishArgs,
-    event: Option<FarmPublishEventView>,
-) -> FarmPublishComponentView {
-    FarmPublishComponentView {
-        signer_mode: Some("deferred".to_owned()),
-        ..preview_component(rpc_method, event_kind, idempotency_key, args, event)
-    }
-}
-
-fn persist_profile_publication(
-    config: &RuntimeConfig,
-    resolved: &mut ResolvedFarmConfig,
-    event_id: String,
-) -> Result<(), RuntimeError> {
-    persist_publication(config, resolved, Some(event_id), None)
 }
 
 fn persist_farm_publication(
@@ -1469,90 +1386,23 @@ fn persist_publication(
 
 fn farm_write_source(config: &RuntimeConfig) -> &'static str {
     match config.publish.mode {
-        PublishMode::NostrRelay => RELAY_FARM_WRITE_SOURCE,
+        PublishMode::NostrRelay => SDK_FARM_WRITE_SOURCE,
         PublishMode::Radrootsd => RADROOTSD_FARM_WRITE_SOURCE,
     }
 }
 
 fn profile_publish_rpc_method(config: &RuntimeConfig) -> &'static str {
     match config.publish.mode {
-        PublishMode::NostrRelay => "relay.profile.publish",
+        PublishMode::NostrRelay => SDK_PROFILE_NOT_SUBMITTED_METHOD,
         PublishMode::Radrootsd => RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD,
     }
 }
 
 fn farm_publish_rpc_method(config: &RuntimeConfig) -> &'static str {
     match config.publish.mode {
-        PublishMode::NostrRelay => "relay.farm.publish",
+        PublishMode::NostrRelay => SDK_FARM_PUBLISH_METHOD,
         PublishMode::Radrootsd => RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
     }
-}
-
-#[derive(Debug, Clone)]
-struct FarmPublishFailureDetails {
-    event_id: Option<String>,
-    target_relays: Vec<String>,
-    connected_relays: Vec<String>,
-    failed_relays: Vec<RelayFailureView>,
-}
-
-fn publish_failure_details(
-    error: &DirectRelayPublishError,
-    relay_urls: &[String],
-) -> FarmPublishFailureDetails {
-    match error {
-        DirectRelayPublishError::MissingRelays
-        | DirectRelayPublishError::Runtime(_)
-        | DirectRelayPublishError::Build(_)
-        | DirectRelayPublishError::Sign(_) => FarmPublishFailureDetails {
-            event_id: None,
-            target_relays: relay_urls.to_vec(),
-            connected_relays: Vec::new(),
-            failed_relays: Vec::new(),
-        },
-        DirectRelayPublishError::RelayConfig { relay, source } => FarmPublishFailureDetails {
-            event_id: None,
-            target_relays: relay_urls.to_vec(),
-            connected_relays: Vec::new(),
-            failed_relays: vec![RelayFailureView {
-                relay: relay.clone(),
-                reason: source.to_string(),
-            }],
-        },
-        DirectRelayPublishError::Connect {
-            target_relays,
-            connected_relays,
-            failed_relays,
-            ..
-        } => FarmPublishFailureDetails {
-            event_id: None,
-            target_relays: target_relays.clone(),
-            connected_relays: connected_relays.clone(),
-            failed_relays: relay_failures(failed_relays.clone()),
-        },
-        DirectRelayPublishError::Publish {
-            event_id,
-            target_relays,
-            connected_relays,
-            failed_relays,
-            ..
-        } => FarmPublishFailureDetails {
-            event_id: Some(event_id.clone()),
-            target_relays: target_relays.clone(),
-            connected_relays: connected_relays.clone(),
-            failed_relays: relay_failures(failed_relays.clone()),
-        },
-    }
-}
-
-fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
-    failures
-        .into_iter()
-        .map(|failure| RelayFailureView {
-            relay: failure.relay,
-            reason: failure.reason,
-        })
-        .collect()
 }
 
 fn selected_account_for_draft(

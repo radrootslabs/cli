@@ -358,16 +358,6 @@ mod tests {
 
     const LEGACY_DIRECT_RELAY_CONSUMERS: &[LegacyDirectRelayConsumer] = &[
         LegacyDirectRelayConsumer {
-            path: "src/runtime/farm.rs",
-            required_tokens: &[
-                "publish_via_direct_relay(",
-                "publish_signed_event_with_identity",
-            ],
-            owner: "farm.publish",
-            reason: "non-migrated farm publish direct relay write mode",
-            lifecycle: "retain until farm publish migrates to SDK-backed write APIs",
-        },
-        LegacyDirectRelayConsumer {
             path: "src/runtime/listing.rs",
             required_tokens: &[
                 "mutate_via_direct_relay(",
@@ -420,6 +410,17 @@ mod tests {
             required_tokens: &[
                 "session.sdk().listings().prepare_publish",
                 "session.sdk().listings().enqueue_publish",
+                "session.sdk().sync().push_outbox",
+            ],
+        },
+        MigratedCliPathGuard {
+            label: "farm publish",
+            path: "src/runtime/farm.rs",
+            start: "fn publish_via_sdk(",
+            end: "#[derive(Debug, Clone)]\nstruct SdkFarmPublishInput",
+            required_tokens: &[
+                "prepare_publish(FarmPreparePublishRequest::new",
+                "enqueue_publish(request, &signer)",
                 "session.sdk().sync().push_outbox",
             ],
         },
