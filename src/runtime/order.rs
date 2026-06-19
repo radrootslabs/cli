@@ -68,12 +68,19 @@ use radroots_replica_db_schema::trade_product::{
     ITradeProductFieldsFilter, ITradeProductFindMany, TradeProduct,
 };
 use radroots_sdk::{
-    OrderDecisionEnqueueRequest, OrderDecisionReceipt, OrderFulfillmentStatusKind,
-    OrderPaymentStateKind, OrderRequestEvidenceIngestRequest, OrderSettlementStateKind,
-    OrderStatusKind, OrderStatusReceipt, OrderStatusRequest, OrderSubmitEnqueueRequest,
-    OrderSubmitPlan, OrderSubmitPrepareRequest, OrderSubmitReceipt, PushOutboxEventReceipt,
-    PushOutboxEventState, PushOutboxReceipt, PushOutboxRelayOutcomeKind, PushOutboxRequest,
-    SdkMutationState, SdkOrderStatusIssue, SdkRelayTargetPolicy, SdkRelayUrlPolicy,
+    OrderCancellationEnqueueRequest, OrderCancellationPrepareRequest, OrderCancellationReceipt,
+    OrderDecisionEnqueueRequest, OrderDecisionReceipt, OrderEvidenceIngestRequest,
+    OrderFulfillmentStatusKind, OrderFulfillmentUpdateEnqueueRequest,
+    OrderFulfillmentUpdatePrepareRequest, OrderFulfillmentUpdateReceipt, OrderPaymentStateKind,
+    OrderReceiptRecordEnqueueRequest, OrderReceiptRecordPrepareRequest, OrderReceiptRecordReceipt,
+    OrderRequestEvidenceIngestRequest, OrderRevisionDecisionEnqueueRequest,
+    OrderRevisionDecisionPrepareRequest, OrderRevisionDecisionReceipt,
+    OrderRevisionProposalEnqueueRequest, OrderRevisionProposalPrepareRequest,
+    OrderRevisionProposalReceipt, OrderSettlementStateKind, OrderStatusKind, OrderStatusReceipt,
+    OrderStatusRequest, OrderSubmitEnqueueRequest, OrderSubmitPlan, OrderSubmitPrepareRequest,
+    OrderSubmitReceipt, PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
+    PushOutboxRelayOutcomeKind, PushOutboxRequest, SdkMutationState, SdkOrderStatusIssue,
+    SdkRelayTargetPolicy, SdkRelayUrlPolicy,
 };
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
@@ -131,13 +138,11 @@ const ORDER_SOURCE: &str = "local order drafts · local first";
 const ORDER_APP_RECORD_SOURCE: &str = "app-authored shared local order records";
 const ORDER_SUBMIT_SOURCE: &str = "SDK order submit · local key";
 const ORDER_DECISION_SOURCE: &str = "SDK order decision · local key";
-const ORDER_REVISION_PROPOSAL_SOURCE: &str =
-    "direct Nostr relay revision proposal publish · local key";
-const ORDER_REVISION_DECISION_SOURCE: &str =
-    "direct Nostr relay revision decision publish · local key";
-const ORDER_FULFILLMENT_SOURCE: &str = "direct Nostr relay fulfillment publish · local key";
-const ORDER_CANCELLATION_SOURCE: &str = "direct Nostr relay cancellation publish · local key";
-const ORDER_RECEIPT_SOURCE: &str = "direct Nostr relay receipt publish · local key";
+const ORDER_REVISION_PROPOSAL_SOURCE: &str = "SDK order revision proposal · local key";
+const ORDER_REVISION_DECISION_SOURCE: &str = "SDK order revision decision · local key";
+const ORDER_FULFILLMENT_SOURCE: &str = "SDK order fulfillment update · local key";
+const ORDER_CANCELLATION_SOURCE: &str = "SDK order cancellation · local key";
+const ORDER_RECEIPT_SOURCE: &str = "SDK order receipt record · local key";
 const ORDER_PAYMENT_SOURCE: &str = "direct Nostr relay payment publish · local key";
 const ORDER_SETTLEMENT_SOURCE: &str = "direct Nostr relay settlement publish · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
@@ -1468,6 +1473,7 @@ pub fn revision_propose(
         Err(error) => return Err(RuntimeError::Network(error.to_string())),
     };
 
+    let evidence_events = order_evidence_from_relay_events(receipt.events.as_slice());
     let revision_candidates =
         order_revision_proposals_from_events(args.key.as_str(), receipt.events.as_slice());
     let reduction = order_status_reduction_from_receipt_with_context(
@@ -1531,7 +1537,7 @@ pub fn revision_propose(
     {
         return Ok(view);
     }
-    let _ = order_revision_event_parts(&status_view, &payload)?;
+    prepare_order_revision_proposal_dry_run_via_sdk(config, &signing, &payload)?;
     if config.output.dry_run {
         return Ok(order_revision_dry_run_view(
             config,
@@ -1540,7 +1546,7 @@ pub fn revision_propose(
             &payload,
         ));
     }
-    publish_order_revision(config, args, status_view, signing, payload)
+    publish_order_revision(config, args, status_view, signing, payload, evidence_events)
 }
 
 pub fn revision_decide(
@@ -1597,6 +1603,7 @@ pub fn revision_decide(
         Err(error) => return Err(RuntimeError::Network(error.to_string())),
     };
 
+    let evidence_events = order_evidence_from_relay_events(receipt.events.as_slice());
     let revision_candidates =
         order_revision_proposals_from_events(args.key.as_str(), receipt.events.as_slice());
     let reduction = order_status_reduction_from_receipt_with_context(
@@ -1691,7 +1698,7 @@ pub fn revision_decide(
         }
     }
     let payload = order_revision_decision_payload_from_proposal(args, proposal)?;
-    let _ = order_revision_decision_event_parts(&payload)?;
+    prepare_order_revision_decision_dry_run_via_sdk(config, &signing, &payload)?;
     if config.output.dry_run {
         return Ok(order_revision_decision_dry_run_view(
             config,
@@ -1701,7 +1708,15 @@ pub fn revision_decide(
             &payload,
         ));
     }
-    publish_order_revision_decision(config, args, status_view, proposal, signing, payload)
+    publish_order_revision_decision(
+        config,
+        args,
+        status_view,
+        proposal,
+        signing,
+        payload,
+        evidence_events,
+    )
 }
 
 pub fn fulfillment_update(
@@ -1779,6 +1794,7 @@ pub fn fulfillment_update(
         Err(error) => return Err(RuntimeError::Network(error.to_string())),
     };
 
+    let evidence_events = order_evidence_from_relay_events(receipt.events.as_slice());
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
@@ -1816,7 +1832,7 @@ pub fn fulfillment_update(
         }
     };
     let payload = order_fulfillment_payload_from_status(&status_view, fulfillment_state)?;
-    let _ = order_fulfillment_event_parts(&status_view, &payload)?;
+    prepare_order_fulfillment_dry_run_via_sdk(config, &signing, &status_view, &payload)?;
     if config.output.dry_run {
         return Ok(order_fulfillment_dry_run_view(
             config,
@@ -1825,7 +1841,7 @@ pub fn fulfillment_update(
             fulfillment_state,
         ));
     }
-    publish_order_fulfillment(config, args, status_view, signing, payload)
+    publish_order_fulfillment(config, args, status_view, signing, payload, evidence_events)
 }
 
 pub fn cancel(
@@ -1869,6 +1885,7 @@ pub fn cancel(
         Err(error) => return Err(RuntimeError::Network(error.to_string())),
     };
 
+    let evidence_events = order_evidence_from_relay_events(receipt.events.as_slice());
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
@@ -1915,11 +1932,11 @@ pub fn cancel(
         }
     };
     let payload = order_cancellation_payload_from_status(args, &status_view)?;
-    let _ = order_cancellation_event_parts(&status_view, &payload)?;
+    prepare_order_cancellation_dry_run_via_sdk(config, &signing, &status_view, &payload)?;
     if config.output.dry_run {
         return Ok(order_cancellation_dry_run_view(config, args, &status_view));
     }
-    publish_order_cancellation(config, args, status_view, signing, payload)
+    publish_order_cancellation(config, args, status_view, signing, payload, evidence_events)
 }
 
 pub fn receipt_record(
@@ -1966,6 +1983,7 @@ pub fn receipt_record(
         Err(error) => return Err(RuntimeError::Network(error.to_string())),
     };
 
+    let evidence_events = order_evidence_from_relay_events(receipt.events.as_slice());
     let reduction = order_status_reduction_from_receipt_with_context(
         OrderStatusContext {
             order_id: args.key.as_str(),
@@ -2013,7 +2031,7 @@ pub fn receipt_record(
         }
     };
     let payload = order_receipt_payload_from_status(args, &status_view)?;
-    let _ = order_receipt_event_parts(&status_view, &payload)?;
+    prepare_order_receipt_dry_run_via_sdk(config, &signing, &status_view, &payload)?;
     if config.output.dry_run {
         return Ok(order_receipt_dry_run_view(
             config,
@@ -2022,7 +2040,7 @@ pub fn receipt_record(
             &payload,
         ));
     }
-    publish_order_receipt(config, args, status_view, signing, payload)
+    publish_order_receipt(config, args, status_view, signing, payload, evidence_events)
 }
 
 pub fn payment_record(
@@ -8312,14 +8330,10 @@ fn publish_order_revision(
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
     payload: RadrootsOrderRevisionProposal,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
 ) -> Result<OrderRevisionProposalView, RuntimeError> {
-    let parts = order_revision_event_parts(&status, &payload)?;
-    let event_kind = parts.kind;
-    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
-    Ok(published_order_revision_view(
-        config, args, &status, &payload, event_kind, receipt,
-    ))
+    enqueue_order_revision_proposal_via_sdk(config, args, status, signing, payload, evidence_events)
+        .map_err(cli_sdk_error_to_runtime)
 }
 
 fn publish_order_revision_decision(
@@ -8329,84 +8343,18 @@ fn publish_order_revision_decision(
     proposal: &OrderRevisionProposalRecord,
     signing: account::AccountSigningIdentity,
     payload: RadrootsOrderRevisionDecision,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
 ) -> Result<OrderRevisionDecisionView, RuntimeError> {
-    let parts = order_revision_decision_event_parts(&payload)?;
-    let event_kind = parts.kind;
-    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
-    Ok(published_order_revision_decision_view(
-        config, args, &status, proposal, &payload, event_kind, receipt,
-    ))
-}
-
-fn published_order_revision_view(
-    config: &RuntimeConfig,
-    args: &OrderRevisionProposeArgs,
-    status: &OrderStatusView,
-    payload: &RadrootsOrderRevisionProposal,
-    event_kind: u32,
-    receipt: DirectRelayPublishReceipt,
-) -> OrderRevisionProposalView {
-    let DirectRelayPublishReceipt {
-        event: _,
-        event_id,
-        created_at: _,
-        signature: _,
-        target_relays,
-        connected_relays,
-        acknowledged_relays,
-        failed_relays,
-    } = receipt;
-    let mut view = order_revision_base_view(config, args, "proposed", false);
-    apply_order_revision_status(&mut view, status);
-    apply_order_revision_payload(&mut view, payload);
-    view.event_id = Some(event_id);
-    view.event_kind = Some(event_kind);
-    view.target_relays = target_relays;
-    view.connected_relays = connected_relays;
-    view.acknowledged_relays = acknowledged_relays;
-    view.failed_relays = relay_failures(failed_relays);
-    view
-}
-
-fn published_order_revision_decision_view(
-    config: &RuntimeConfig,
-    args: &OrderRevisionDecisionArgs,
-    status: &OrderStatusView,
-    proposal: &OrderRevisionProposalRecord,
-    payload: &RadrootsOrderRevisionDecision,
-    event_kind: u32,
-    receipt: DirectRelayPublishReceipt,
-) -> OrderRevisionDecisionView {
-    let DirectRelayPublishReceipt {
-        event: _,
-        event_id,
-        created_at: _,
-        signature: _,
-        target_relays,
-        connected_relays: _,
-        acknowledged_relays,
-        failed_relays,
-    } = receipt;
-    let state = match payload.decision {
-        RadrootsOrderRevisionOutcome::Accepted => "accepted",
-        RadrootsOrderRevisionOutcome::Declined { .. } => "declined",
-    };
-    let mut view = order_revision_decision_base_view(config, args, state, false);
-    apply_order_revision_decision_status(&mut view, status);
-    apply_order_revision_decision_payload(&mut view, proposal, payload);
-    view.revision_id = Some(payload.revision_id.to_string());
-    view.root_event_id = Some(payload.root_event_id.to_string());
-    view.prev_event_id = Some(payload.prev_event_id.to_string());
-    view.event_id = Some(event_id.clone());
-    view.event_kind = Some(event_kind);
-    if matches!(payload.decision, RadrootsOrderRevisionOutcome::Accepted) {
-        view.agreement_event_id = Some(event_id);
-    }
-    view.target_relays = target_relays;
-    view.acknowledged_relays = acknowledged_relays;
-    view.failed_relays = relay_failures(failed_relays);
-    view
+    enqueue_order_revision_decision_via_sdk(
+        config,
+        args,
+        status,
+        proposal,
+        signing,
+        payload,
+        evidence_events,
+    )
+    .map_err(cli_sdk_error_to_runtime)
 }
 
 fn publish_order_fulfillment(
@@ -8415,19 +8363,10 @@ fn publish_order_fulfillment(
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
     payload: RadrootsOrderFulfillmentUpdate,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
 ) -> Result<OrderFulfillmentView, RuntimeError> {
-    let parts = order_fulfillment_event_parts(&status, &payload)?;
-    let event_kind = parts.kind;
-    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
-    Ok(published_order_fulfillment_view(
-        config,
-        args,
-        &status,
-        payload.status,
-        event_kind,
-        receipt,
-    ))
+    enqueue_order_fulfillment_via_sdk(config, args, status, signing, payload, evidence_events)
+        .map_err(cli_sdk_error_to_runtime)
 }
 
 fn publish_order_cancellation(
@@ -8436,14 +8375,10 @@ fn publish_order_cancellation(
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
     payload: RadrootsOrderCancellation,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
 ) -> Result<OrderCancellationView, RuntimeError> {
-    let parts = order_cancellation_event_parts(&status, &payload)?;
-    let event_kind = parts.kind;
-    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
-    Ok(published_order_cancellation_view(
-        config, args, &status, event_kind, receipt,
-    ))
+    enqueue_order_cancellation_via_sdk(config, args, status, signing, payload, evidence_events)
+        .map_err(cli_sdk_error_to_runtime)
 }
 
 fn publish_order_receipt(
@@ -8452,14 +8387,738 @@ fn publish_order_receipt(
     status: OrderStatusView,
     signing: account::AccountSigningIdentity,
     payload: RadrootsOrderReceipt,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
 ) -> Result<OrderReceiptView, RuntimeError> {
-    let parts = order_receipt_event_parts(&status, &payload)?;
-    let event_kind = parts.kind;
-    let receipt = publish_parts_with_identity(&signing.identity, &config.relay.urls, parts)
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
-    Ok(published_order_receipt_view(
-        config, args, &status, &payload, event_kind, receipt,
+    enqueue_order_receipt_via_sdk(config, args, status, signing, payload, evidence_events)
+        .map_err(cli_sdk_error_to_runtime)
+}
+
+fn prepare_order_revision_proposal_dry_run_via_sdk(
+    config: &RuntimeConfig,
+    signing: &account::AccountSigningIdentity,
+    payload: &RadrootsOrderRevisionProposal,
+) -> Result<(), RuntimeError> {
+    let actor = sdk_order_lifecycle_actor(signing, RadrootsActorRole::Seller, "revision")
+        .map_err(cli_sdk_error_to_runtime)?;
+    let session = CliSdkSession::connect_memory(config).map_err(cli_sdk_error_to_runtime)?;
+    session
+        .sdk()
+        .orders()
+        .prepare_revision_proposal(OrderRevisionProposalPrepareRequest::new(
+            actor,
+            sdk_order_event_ptr(&payload.root_event_id, config.relay.urls.as_slice()),
+            sdk_order_event_ptr(&payload.prev_event_id, config.relay.urls.as_slice()),
+            payload.clone(),
+        ))
+        .map(|_| ())
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn prepare_order_revision_decision_dry_run_via_sdk(
+    config: &RuntimeConfig,
+    signing: &account::AccountSigningIdentity,
+    payload: &RadrootsOrderRevisionDecision,
+) -> Result<(), RuntimeError> {
+    let actor = sdk_order_lifecycle_actor(signing, RadrootsActorRole::Buyer, "revision decision")
+        .map_err(cli_sdk_error_to_runtime)?;
+    let session = CliSdkSession::connect_memory(config).map_err(cli_sdk_error_to_runtime)?;
+    session
+        .sdk()
+        .orders()
+        .prepare_revision_decision(OrderRevisionDecisionPrepareRequest::new(
+            actor,
+            sdk_order_event_ptr(&payload.root_event_id, config.relay.urls.as_slice()),
+            sdk_order_event_ptr(&payload.prev_event_id, config.relay.urls.as_slice()),
+            payload.clone(),
+        ))
+        .map(|_| ())
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn prepare_order_fulfillment_dry_run_via_sdk(
+    config: &RuntimeConfig,
+    signing: &account::AccountSigningIdentity,
+    status: &OrderStatusView,
+    payload: &RadrootsOrderFulfillmentUpdate,
+) -> Result<(), RuntimeError> {
+    let actor = sdk_order_lifecycle_actor(signing, RadrootsActorRole::Seller, "fulfillment")
+        .map_err(cli_sdk_error_to_runtime)?;
+    let root_event_id = protocol_event_id(
+        status.request_event_id.as_deref().ok_or_else(|| {
+            RuntimeError::Config("accepted order is missing request_event_id".to_owned())
+        })?,
+        "request_event_id",
+    )?;
+    let previous_event_id = protocol_event_id(
+        status
+            .last_event_id
+            .as_deref()
+            .or(status.decision_event_id.as_deref())
+            .ok_or_else(|| {
+                RuntimeError::Config("accepted order is missing previous event id".to_owned())
+            })?,
+        "prev_event_id",
+    )?;
+    let session = CliSdkSession::connect_memory(config).map_err(cli_sdk_error_to_runtime)?;
+    session
+        .sdk()
+        .orders()
+        .prepare_fulfillment_update(OrderFulfillmentUpdatePrepareRequest::new(
+            actor,
+            sdk_order_event_ptr(&root_event_id, config.relay.urls.as_slice()),
+            sdk_order_event_ptr(&previous_event_id, config.relay.urls.as_slice()),
+            payload.clone(),
+        ))
+        .map(|_| ())
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn prepare_order_cancellation_dry_run_via_sdk(
+    config: &RuntimeConfig,
+    signing: &account::AccountSigningIdentity,
+    status: &OrderStatusView,
+    payload: &RadrootsOrderCancellation,
+) -> Result<(), RuntimeError> {
+    let actor = sdk_order_lifecycle_actor(signing, RadrootsActorRole::Buyer, "cancellation")
+        .map_err(cli_sdk_error_to_runtime)?;
+    let root_event_id = protocol_event_id(
+        status.request_event_id.as_deref().ok_or_else(|| {
+            RuntimeError::Config("cancellable order is missing request_event_id".to_owned())
+        })?,
+        "request_event_id",
+    )?;
+    let previous_event_id = protocol_event_id(
+        order_cancellation_prev_event_id(status)
+            .ok_or_else(|| {
+                RuntimeError::Config("cancellable order is missing previous event id".to_owned())
+            })?
+            .as_str(),
+        "prev_event_id",
+    )?;
+    let session = CliSdkSession::connect_memory(config).map_err(cli_sdk_error_to_runtime)?;
+    session
+        .sdk()
+        .orders()
+        .prepare_cancellation(OrderCancellationPrepareRequest::new(
+            actor,
+            sdk_order_event_ptr(&root_event_id, config.relay.urls.as_slice()),
+            sdk_order_event_ptr(&previous_event_id, config.relay.urls.as_slice()),
+            payload.clone(),
+        ))
+        .map(|_| ())
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn prepare_order_receipt_dry_run_via_sdk(
+    config: &RuntimeConfig,
+    signing: &account::AccountSigningIdentity,
+    status: &OrderStatusView,
+    payload: &RadrootsOrderReceipt,
+) -> Result<(), RuntimeError> {
+    let actor = sdk_order_lifecycle_actor(signing, RadrootsActorRole::Buyer, "receipt")
+        .map_err(cli_sdk_error_to_runtime)?;
+    let root_event_id = protocol_event_id(
+        status.request_event_id.as_deref().ok_or_else(|| {
+            RuntimeError::Config("receiptable order is missing request_event_id".to_owned())
+        })?,
+        "request_event_id",
+    )?;
+    let previous_event_id = protocol_event_id(
+        order_receipt_prev_event_id(status)
+            .ok_or_else(|| {
+                RuntimeError::Config(
+                    "receiptable order is missing eligible fulfillment event id".to_owned(),
+                )
+            })?
+            .as_str(),
+        "prev_event_id",
+    )?;
+    let session = CliSdkSession::connect_memory(config).map_err(cli_sdk_error_to_runtime)?;
+    session
+        .sdk()
+        .orders()
+        .prepare_receipt_record(OrderReceiptRecordPrepareRequest::new(
+            actor,
+            sdk_order_event_ptr(&root_event_id, config.relay.urls.as_slice()),
+            sdk_order_event_ptr(&previous_event_id, config.relay.urls.as_slice()),
+            payload.clone(),
+        ))
+        .map(|_| ())
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn enqueue_order_revision_proposal_via_sdk(
+    config: &RuntimeConfig,
+    args: &OrderRevisionProposeArgs,
+    status: OrderStatusView,
+    signing: account::AccountSigningIdentity,
+    payload: RadrootsOrderRevisionProposal,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
+) -> Result<OrderRevisionProposalView, CliSdkAdapterError> {
+    let target_relays = order_decision_target_relays(config)?;
+    let policy = order_decision_relay_url_policy(target_relays.as_slice());
+    let actor = sdk_order_lifecycle_actor(&signing, RadrootsActorRole::Seller, "revision")?;
+    let signer = sdk_signer_from_account(signing)?;
+    let target_policy = SdkRelayTargetPolicy::try_explicit(target_relays.clone(), policy)?;
+    let mut request = OrderRevisionProposalEnqueueRequest::new(
+        actor,
+        sdk_order_event_ptr(&payload.root_event_id, target_relays.as_slice()),
+        sdk_order_event_ptr(&payload.prev_event_id, target_relays.as_slice()),
+        payload.clone(),
+        target_policy,
+    );
+    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
+        request = request.try_with_idempotency_key(idempotency_key)?;
+    }
+
+    let session = CliSdkSession::connect(config)?;
+    ingest_order_evidence_events(&session, evidence_events)?;
+    let enqueue = session.block_on(
+        session
+            .sdk()
+            .orders()
+            .enqueue_revision_proposal(request, &signer),
+    )?;
+    let push = push_one_sdk_outbox_event(&session, policy)?;
+    Ok(sdk_enqueued_order_revision_view(
+        config,
+        args,
+        &status,
+        &payload,
+        enqueue,
+        push,
+        target_relays,
     ))
+}
+
+fn enqueue_order_revision_decision_via_sdk(
+    config: &RuntimeConfig,
+    args: &OrderRevisionDecisionArgs,
+    status: OrderStatusView,
+    proposal: &OrderRevisionProposalRecord,
+    signing: account::AccountSigningIdentity,
+    payload: RadrootsOrderRevisionDecision,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
+) -> Result<OrderRevisionDecisionView, CliSdkAdapterError> {
+    let target_relays = order_decision_target_relays(config)?;
+    let policy = order_decision_relay_url_policy(target_relays.as_slice());
+    let actor = sdk_order_lifecycle_actor(&signing, RadrootsActorRole::Buyer, "revision decision")?;
+    let signer = sdk_signer_from_account(signing)?;
+    let target_policy = SdkRelayTargetPolicy::try_explicit(target_relays.clone(), policy)?;
+    let mut request = OrderRevisionDecisionEnqueueRequest::new(
+        actor,
+        sdk_order_event_ptr(&payload.root_event_id, target_relays.as_slice()),
+        sdk_order_event_ptr(&payload.prev_event_id, target_relays.as_slice()),
+        payload.clone(),
+        target_policy,
+    );
+    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
+        request = request.try_with_idempotency_key(idempotency_key)?;
+    }
+
+    let session = CliSdkSession::connect(config)?;
+    ingest_order_evidence_events(&session, evidence_events)?;
+    let enqueue = session.block_on(
+        session
+            .sdk()
+            .orders()
+            .enqueue_revision_decision(request, &signer),
+    )?;
+    let push = push_one_sdk_outbox_event(&session, policy)?;
+    Ok(sdk_enqueued_order_revision_decision_view(
+        config,
+        args,
+        &status,
+        proposal,
+        &payload,
+        enqueue,
+        push,
+        target_relays,
+    ))
+}
+
+fn enqueue_order_fulfillment_via_sdk(
+    config: &RuntimeConfig,
+    args: &OrderFulfillmentArgs,
+    status: OrderStatusView,
+    signing: account::AccountSigningIdentity,
+    payload: RadrootsOrderFulfillmentUpdate,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
+) -> Result<OrderFulfillmentView, CliSdkAdapterError> {
+    let root_event_id = protocol_event_id(
+        status.request_event_id.as_deref().ok_or_else(|| {
+            RuntimeError::Config("accepted order is missing request_event_id".to_owned())
+        })?,
+        "request_event_id",
+    )?;
+    let previous_event_id = protocol_event_id(
+        status
+            .last_event_id
+            .as_deref()
+            .or(status.decision_event_id.as_deref())
+            .ok_or_else(|| {
+                RuntimeError::Config("accepted order is missing previous event id".to_owned())
+            })?,
+        "prev_event_id",
+    )?;
+    let target_relays = order_decision_target_relays(config)?;
+    let policy = order_decision_relay_url_policy(target_relays.as_slice());
+    let actor = sdk_order_lifecycle_actor(&signing, RadrootsActorRole::Seller, "fulfillment")?;
+    let signer = sdk_signer_from_account(signing)?;
+    let target_policy = SdkRelayTargetPolicy::try_explicit(target_relays.clone(), policy)?;
+    let mut request = OrderFulfillmentUpdateEnqueueRequest::new(
+        actor,
+        sdk_order_event_ptr(&root_event_id, target_relays.as_slice()),
+        sdk_order_event_ptr(&previous_event_id, target_relays.as_slice()),
+        payload.clone(),
+        target_policy,
+    );
+    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
+        request = request.try_with_idempotency_key(idempotency_key)?;
+    }
+
+    let session = CliSdkSession::connect(config)?;
+    ingest_order_evidence_events(&session, evidence_events)?;
+    let enqueue = session.block_on(
+        session
+            .sdk()
+            .orders()
+            .enqueue_fulfillment_update(request, &signer),
+    )?;
+    let push = push_one_sdk_outbox_event(&session, policy)?;
+    Ok(sdk_enqueued_order_fulfillment_view(
+        config,
+        args,
+        &status,
+        payload.status,
+        enqueue,
+        push,
+        target_relays,
+    ))
+}
+
+fn enqueue_order_cancellation_via_sdk(
+    config: &RuntimeConfig,
+    args: &OrderCancelArgs,
+    status: OrderStatusView,
+    signing: account::AccountSigningIdentity,
+    payload: RadrootsOrderCancellation,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
+) -> Result<OrderCancellationView, CliSdkAdapterError> {
+    let root_event_id = protocol_event_id(
+        status.request_event_id.as_deref().ok_or_else(|| {
+            RuntimeError::Config("cancellable order is missing request_event_id".to_owned())
+        })?,
+        "request_event_id",
+    )?;
+    let previous_event_id = protocol_event_id(
+        order_cancellation_prev_event_id(&status)
+            .ok_or_else(|| {
+                RuntimeError::Config("cancellable order is missing previous event id".to_owned())
+            })?
+            .as_str(),
+        "prev_event_id",
+    )?;
+    let target_relays = order_decision_target_relays(config)?;
+    let policy = order_decision_relay_url_policy(target_relays.as_slice());
+    let actor = sdk_order_lifecycle_actor(&signing, RadrootsActorRole::Buyer, "cancellation")?;
+    let signer = sdk_signer_from_account(signing)?;
+    let target_policy = SdkRelayTargetPolicy::try_explicit(target_relays.clone(), policy)?;
+    let mut request = OrderCancellationEnqueueRequest::new(
+        actor,
+        sdk_order_event_ptr(&root_event_id, target_relays.as_slice()),
+        sdk_order_event_ptr(&previous_event_id, target_relays.as_slice()),
+        payload,
+        target_policy,
+    );
+    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
+        request = request.try_with_idempotency_key(idempotency_key)?;
+    }
+
+    let session = CliSdkSession::connect(config)?;
+    ingest_order_evidence_events(&session, evidence_events)?;
+    let enqueue = session.block_on(
+        session
+            .sdk()
+            .orders()
+            .enqueue_cancellation(request, &signer),
+    )?;
+    let push = push_one_sdk_outbox_event(&session, policy)?;
+    Ok(sdk_enqueued_order_cancellation_view(
+        config,
+        args,
+        &status,
+        enqueue,
+        push,
+        target_relays,
+    ))
+}
+
+fn enqueue_order_receipt_via_sdk(
+    config: &RuntimeConfig,
+    args: &OrderReceiptArgs,
+    status: OrderStatusView,
+    signing: account::AccountSigningIdentity,
+    payload: RadrootsOrderReceipt,
+    evidence_events: Vec<SdkRadrootsNostrEvent>,
+) -> Result<OrderReceiptView, CliSdkAdapterError> {
+    let root_event_id = protocol_event_id(
+        status.request_event_id.as_deref().ok_or_else(|| {
+            RuntimeError::Config("receiptable order is missing request_event_id".to_owned())
+        })?,
+        "request_event_id",
+    )?;
+    let previous_event_id = protocol_event_id(
+        order_receipt_prev_event_id(&status)
+            .ok_or_else(|| {
+                RuntimeError::Config(
+                    "receiptable order is missing eligible fulfillment event id".to_owned(),
+                )
+            })?
+            .as_str(),
+        "prev_event_id",
+    )?;
+    let target_relays = order_decision_target_relays(config)?;
+    let policy = order_decision_relay_url_policy(target_relays.as_slice());
+    let actor = sdk_order_lifecycle_actor(&signing, RadrootsActorRole::Buyer, "receipt")?;
+    let signer = sdk_signer_from_account(signing)?;
+    let target_policy = SdkRelayTargetPolicy::try_explicit(target_relays.clone(), policy)?;
+    let mut request = OrderReceiptRecordEnqueueRequest::new(
+        actor,
+        sdk_order_event_ptr(&root_event_id, target_relays.as_slice()),
+        sdk_order_event_ptr(&previous_event_id, target_relays.as_slice()),
+        payload.clone(),
+        target_policy,
+    );
+    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
+        request = request.try_with_idempotency_key(idempotency_key)?;
+    }
+
+    let session = CliSdkSession::connect(config)?;
+    ingest_order_evidence_events(&session, evidence_events)?;
+    let enqueue = session.block_on(
+        session
+            .sdk()
+            .orders()
+            .enqueue_receipt_record(request, &signer),
+    )?;
+    let push = push_one_sdk_outbox_event(&session, policy)?;
+    Ok(sdk_enqueued_order_receipt_view(
+        config,
+        args,
+        &status,
+        &payload,
+        enqueue,
+        push,
+        target_relays,
+    ))
+}
+
+fn sdk_order_lifecycle_actor(
+    signing: &account::AccountSigningIdentity,
+    role: RadrootsActorRole,
+    workflow: &str,
+) -> Result<RadrootsActorContext, CliSdkAdapterError> {
+    RadrootsActorContext::local_account(
+        signing
+            .account
+            .record
+            .public_identity
+            .public_key_hex
+            .as_str(),
+        signing.account.record.account_id.to_string(),
+        [role],
+    )
+    .map_err(|error| {
+        RuntimeError::Config(format!("invalid order {workflow} SDK actor: {error}")).into()
+    })
+}
+
+fn sdk_signer_from_account(
+    signing: account::AccountSigningIdentity,
+) -> Result<RadrootsLocalEventSigner, CliSdkAdapterError> {
+    let keys: RadrootsNostrKeys = signing.identity.into_keys();
+    RadrootsLocalEventSigner::new(keys)
+        .map_err(|error| RuntimeError::Config(error.to_string()).into())
+}
+
+fn sdk_order_event_ptr(
+    event_id: &RadrootsEventId,
+    target_relays: &[String],
+) -> RadrootsNostrEventPtr {
+    RadrootsNostrEventPtr {
+        id: event_id.as_str().to_owned(),
+        relays: target_relays.first().cloned(),
+    }
+}
+
+fn ingest_order_evidence_events(
+    session: &CliSdkSession,
+    events: Vec<SdkRadrootsNostrEvent>,
+) -> Result<(), CliSdkAdapterError> {
+    for event in events {
+        session.block_on(
+            session
+                .sdk()
+                .orders()
+                .ingest_evidence(OrderEvidenceIngestRequest::new(event)),
+        )?;
+    }
+    Ok(())
+}
+
+fn push_one_sdk_outbox_event(
+    session: &CliSdkSession,
+    policy: SdkRelayUrlPolicy,
+) -> Result<PushOutboxReceipt, CliSdkAdapterError> {
+    Ok(session.block_on(
+        session.sdk().sync().push_outbox(
+            PushOutboxRequest::new()
+                .with_limit(1)
+                .with_relay_url_policy(policy),
+        ),
+    )?)
+}
+
+fn sdk_enqueued_order_revision_view(
+    config: &RuntimeConfig,
+    args: &OrderRevisionProposeArgs,
+    status: &OrderStatusView,
+    payload: &RadrootsOrderRevisionProposal,
+    enqueue: OrderRevisionProposalReceipt,
+    push: PushOutboxReceipt,
+    target_relays: Vec<String>,
+) -> OrderRevisionProposalView {
+    let push_event = sdk_push_event_for_event_id(&enqueue.signed_event_id, &push);
+    let mut view = order_revision_base_view(
+        config,
+        args,
+        sdk_order_lifecycle_state("proposed", push_event).as_str(),
+        false,
+    );
+    apply_order_revision_status(&mut view, status);
+    apply_order_revision_payload(&mut view, payload);
+    view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
+    view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
+    view.target_relays = push_event
+        .map(sdk_push_target_relays)
+        .unwrap_or(target_relays);
+    view.connected_relays = push_event
+        .map(sdk_push_connected_relays)
+        .unwrap_or_default();
+    view.acknowledged_relays = push_event
+        .map(sdk_push_acknowledged_relays)
+        .unwrap_or_default();
+    view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    view.reason = sdk_order_lifecycle_reason("order revision proposal", push_event);
+    view.actions = sdk_order_lifecycle_actions(push_event);
+    view
+}
+
+fn sdk_enqueued_order_revision_decision_view(
+    config: &RuntimeConfig,
+    args: &OrderRevisionDecisionArgs,
+    status: &OrderStatusView,
+    proposal: &OrderRevisionProposalRecord,
+    payload: &RadrootsOrderRevisionDecision,
+    enqueue: OrderRevisionDecisionReceipt,
+    push: PushOutboxReceipt,
+    target_relays: Vec<String>,
+) -> OrderRevisionDecisionView {
+    let push_event = sdk_push_event_for_event_id(&enqueue.signed_event_id, &push);
+    let success_state = match payload.decision {
+        RadrootsOrderRevisionOutcome::Accepted => "accepted",
+        RadrootsOrderRevisionOutcome::Declined { .. } => "declined",
+    };
+    let mut view = order_revision_decision_base_view(
+        config,
+        args,
+        sdk_order_lifecycle_state(success_state, push_event).as_str(),
+        false,
+    );
+    apply_order_revision_decision_status(&mut view, status);
+    apply_order_revision_decision_payload(&mut view, proposal, payload);
+    view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
+    view.event_kind = Some(KIND_ORDER_REVISION_DECISION);
+    if matches!(payload.decision, RadrootsOrderRevisionOutcome::Accepted) {
+        view.agreement_event_id = Some(enqueue.signed_event_id.as_str().to_owned());
+    }
+    view.target_relays = push_event
+        .map(sdk_push_target_relays)
+        .unwrap_or(target_relays);
+    view.connected_relays = push_event
+        .map(sdk_push_connected_relays)
+        .unwrap_or_default();
+    view.acknowledged_relays = push_event
+        .map(sdk_push_acknowledged_relays)
+        .unwrap_or_default();
+    view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    view.reason = sdk_order_lifecycle_reason("order revision decision", push_event);
+    view.actions = sdk_order_lifecycle_actions(push_event);
+    view
+}
+
+fn sdk_enqueued_order_fulfillment_view(
+    config: &RuntimeConfig,
+    args: &OrderFulfillmentArgs,
+    status: &OrderStatusView,
+    fulfillment_state: RadrootsOrderFulfillmentState,
+    enqueue: OrderFulfillmentUpdateReceipt,
+    push: PushOutboxReceipt,
+    target_relays: Vec<String>,
+) -> OrderFulfillmentView {
+    let push_event = sdk_push_event_for_event_id(&enqueue.signed_event_id, &push);
+    let state = fulfillment_state_name(fulfillment_state);
+    let mut view = order_fulfillment_base_view(
+        config,
+        args,
+        sdk_order_lifecycle_state(state, push_event).as_str(),
+        false,
+    );
+    apply_order_fulfillment_status(&mut view, status);
+    view.fulfillment_state = state.to_owned();
+    view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
+    view.event_kind = Some(KIND_ORDER_FULFILLMENT_UPDATE);
+    view.target_relays = push_event
+        .map(sdk_push_target_relays)
+        .unwrap_or(target_relays);
+    view.connected_relays = push_event
+        .map(sdk_push_connected_relays)
+        .unwrap_or_default();
+    view.acknowledged_relays = push_event
+        .map(sdk_push_acknowledged_relays)
+        .unwrap_or_default();
+    view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    view.reason = sdk_order_lifecycle_reason("order fulfillment update", push_event);
+    view.actions = sdk_order_lifecycle_actions(push_event);
+    view
+}
+
+fn sdk_enqueued_order_cancellation_view(
+    config: &RuntimeConfig,
+    args: &OrderCancelArgs,
+    status: &OrderStatusView,
+    enqueue: OrderCancellationReceipt,
+    push: PushOutboxReceipt,
+    target_relays: Vec<String>,
+) -> OrderCancellationView {
+    let push_event = sdk_push_event_for_event_id(&enqueue.signed_event_id, &push);
+    let mut view = order_cancellation_base_view(
+        config,
+        args,
+        sdk_order_lifecycle_state("cancelled", push_event).as_str(),
+        false,
+    );
+    apply_order_cancellation_status(&mut view, status);
+    view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
+    view.event_kind = Some(KIND_ORDER_CANCELLATION);
+    view.target_relays = push_event
+        .map(sdk_push_target_relays)
+        .unwrap_or(target_relays);
+    view.connected_relays = push_event
+        .map(sdk_push_connected_relays)
+        .unwrap_or_default();
+    view.acknowledged_relays = push_event
+        .map(sdk_push_acknowledged_relays)
+        .unwrap_or_default();
+    view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    view.reason = sdk_order_lifecycle_reason("order cancellation", push_event);
+    view.actions = sdk_order_lifecycle_actions(push_event);
+    view
+}
+
+fn sdk_enqueued_order_receipt_view(
+    config: &RuntimeConfig,
+    args: &OrderReceiptArgs,
+    status: &OrderStatusView,
+    payload: &RadrootsOrderReceipt,
+    enqueue: OrderReceiptRecordReceipt,
+    push: PushOutboxReceipt,
+    target_relays: Vec<String>,
+) -> OrderReceiptView {
+    let push_event = sdk_push_event_for_event_id(&enqueue.signed_event_id, &push);
+    let success_state = if payload.received {
+        "completed"
+    } else {
+        "disputed"
+    };
+    let mut view = order_receipt_base_view(
+        config,
+        args,
+        sdk_order_lifecycle_state(success_state, push_event).as_str(),
+        false,
+    );
+    apply_order_receipt_status(&mut view, status);
+    view.received = payload.received;
+    view.issue = payload.issue.clone();
+    view.received_at = Some(payload.received_at);
+    view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
+    view.event_kind = Some(KIND_ORDER_RECEIPT);
+    view.target_relays = push_event
+        .map(sdk_push_target_relays)
+        .unwrap_or(target_relays);
+    view.connected_relays = push_event
+        .map(sdk_push_connected_relays)
+        .unwrap_or_default();
+    view.acknowledged_relays = push_event
+        .map(sdk_push_acknowledged_relays)
+        .unwrap_or_default();
+    view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    view.reason = sdk_order_lifecycle_reason("order receipt record", push_event);
+    view.actions = sdk_order_lifecycle_actions(push_event);
+    view
+}
+
+fn sdk_push_event_for_event_id<'a>(
+    event_id: &RadrootsEventId,
+    push: &'a PushOutboxReceipt,
+) -> Option<&'a PushOutboxEventReceipt> {
+    push.events.iter().find(|event| event.event_id == *event_id)
+}
+
+fn sdk_order_lifecycle_state(
+    published_state: &str,
+    push_event: Option<&PushOutboxEventReceipt>,
+) -> String {
+    match push_event.map(|event| event.final_state) {
+        Some(PushOutboxEventState::Published) => published_state,
+        Some(PushOutboxEventState::PublishRetryable | PushOutboxEventState::FailedTerminal) => {
+            "unavailable"
+        }
+        Some(_) | None => "queued",
+    }
+    .to_owned()
+}
+
+fn sdk_order_lifecycle_reason(
+    workflow: &str,
+    push_event: Option<&PushOutboxEventReceipt>,
+) -> Option<String> {
+    match push_event.map(|event| event.final_state) {
+        Some(PushOutboxEventState::Published) => None,
+        Some(PushOutboxEventState::PublishRetryable) => Some(format!(
+            "SDK relay publish for {workflow} did not reach accepted quorum; outbox event remains retryable"
+        )),
+        Some(PushOutboxEventState::FailedTerminal) => Some(format!(
+            "SDK relay publish for {workflow} failed terminally"
+        )),
+        Some(state) => Some(format!(
+            "SDK relay push for {workflow} left event in state `{state:?}`"
+        )),
+        None => Some(format!(
+            "{workflow} queued in SDK outbox; no ready SDK outbox event was pushed"
+        )),
+    }
+}
+
+fn sdk_order_lifecycle_actions(push_event: Option<&PushOutboxEventReceipt>) -> Vec<String> {
+    if !matches!(
+        push_event.map(|event| event.final_state),
+        Some(PushOutboxEventState::Published)
+    ) {
+        return vec!["radroots sync push".to_owned()];
+    }
+    Vec::new()
 }
 
 fn publish_order_payment(
@@ -9356,6 +10015,10 @@ fn order_status_filter(order_id: &str) -> Result<RadrootsNostrFilter, RuntimeErr
 
 fn event_kind_u32(event: &RadrootsNostrEvent) -> u32 {
     u32::from(event.kind.as_u16())
+}
+
+fn order_evidence_from_relay_events(events: &[RadrootsNostrEvent]) -> Vec<SdkRadrootsNostrEvent> {
+    events.iter().map(radroots_event_from_nostr).collect()
 }
 
 fn validate_scaffold_args(args: &OrderDraftCreateArgs) -> Result<(), RuntimeError> {
