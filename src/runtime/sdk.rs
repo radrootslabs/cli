@@ -381,8 +381,8 @@ mod tests {
                 "fetch_events_from_relays",
                 "publish_parts_with_identity",
             ],
-            owner: "order.lifecycle.preflight-and-mutations",
-            reason: "non-migrated order lifecycle preflight reads and mutation writes",
+            owner: "order.lifecycle.non-submit-preflight-and-mutations",
+            reason: "non-migrated order lifecycle preflight reads and mutation writes outside SDK order submit",
             lifecycle: "retain until full order lifecycle behavior migrates to SDK APIs",
         },
         LegacyDirectRelayConsumer {
@@ -444,6 +444,18 @@ mod tests {
             start: "pub fn status(\n    config: &RuntimeConfig",
             end: "fn legacy_order_preflight_relay_status(",
             required_tokens: &["OrderStatusRequest::parse", "session.sdk().orders().status"],
+        },
+        MigratedCliPathGuard {
+            label: "order submit",
+            path: "src/runtime/order.rs",
+            start: "fn prepare_order_submit_via_sdk(",
+            end: "fn enqueue_target_relays(",
+            required_tokens: &[
+                "prepare_submit(OrderSubmitPrepareRequest::new",
+                "OrderSubmitEnqueueRequest::new",
+                "enqueue_submit(request, &signer)",
+                "push_outbox(",
+            ],
         },
         MigratedCliPathGuard {
             label: "store status",

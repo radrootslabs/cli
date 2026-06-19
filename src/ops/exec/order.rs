@@ -72,7 +72,7 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
             config.output.dry_run = true;
         }
         let view = crate::runtime::order::submit(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         submit_result::<OrderSubmitResult>(request.operation_id(), &view)
     }

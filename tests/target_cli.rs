@@ -4946,7 +4946,7 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
     assert!(exported_contents.contains(format!("order_id = \"{order_id}\"").as_str()));
     assert!(exported_contents.contains("source = \"resolved_account\""));
 
-    let (dry_output, submit) = sandbox.json_output(&[
+    let submit = sandbox.json_success(&[
         "--format",
         "json",
         "--dry-run",
@@ -4954,15 +4954,20 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
         "submit",
         record_id.as_str(),
     ]);
-    assert!(!dry_output.status.success());
-    assert_eq!(dry_output.status.code(), Some(8));
     assert_eq!(submit["operation_id"], "order.submit");
-    assert_eq!(submit["errors"][0]["code"], "network_unavailable");
-    assert!(
-        submit["errors"][0]["message"]
+    assert_eq!(submit["result"]["state"], "dry_run");
+    assert_eq!(submit["result"]["source"], "SDK order submit · local key");
+    assert_eq!(submit["result"]["event_kind"], 3422);
+    assert_eq!(
+        submit["result"]["target_relays"][0],
+        ORDERABLE_LISTING_RELAY
+    );
+    assert_eq!(
+        submit["result"]["event_id"]
             .as_str()
-            .expect("submit message")
-            .contains("order submit requires at least one configured relay")
+            .expect("event id")
+            .len(),
+        64
     );
 }
 
@@ -6590,22 +6595,23 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_no_removed_command_reference(&orders, &["order", "list"]);
     assert_no_daemon_runtime_reference(&orders, &["order", "list"]);
 
-    let (dry_output, submit) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
-    assert!(!dry_output.status.success());
-    assert_eq!(dry_output.status.code(), Some(8));
+    let submit =
+        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
     assert_eq!(submit["operation_id"], "order.submit");
     assert_eq!(submit["dry_run"], true);
-    assert_eq!(submit["result"], Value::Null);
-    assert_eq!(submit["errors"][0]["code"], "network_unavailable");
-    assert_eq!(submit["errors"][0]["detail"]["class"], "network");
-    assert!(
-        submit["errors"][0]["message"]
+    assert_eq!(submit["result"]["state"], "dry_run");
+    assert_eq!(submit["result"]["source"], "SDK order submit · local key");
+    assert_eq!(submit["result"]["event_kind"], 3422);
+    assert_eq!(
+        submit["result"]["target_relays"][0],
+        ORDERABLE_LISTING_RELAY
+    );
+    assert_eq!(
+        submit["result"]["event_id"]
             .as_str()
-            .expect("message")
-            .contains(
-                "order submit requires at least one configured relay before publish preflight"
-            )
+            .expect("event id")
+            .len(),
+        64
     );
     assert_no_removed_command_reference(&submit, &["order", "submit", "--dry-run"]);
     assert_no_daemon_runtime_reference(&submit, &["order", "submit", "--dry-run"]);
@@ -6620,24 +6626,26 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         order_id,
     ]);
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(8));
+    assert_eq!(output.status.code(), Some(3), "{unavailable_submit}");
     assert_eq!(unavailable_submit["operation_id"], "order.submit");
     assert_eq!(unavailable_submit["result"], Value::Null);
     assert_eq!(
         unavailable_submit["errors"][0]["code"],
-        "network_unavailable"
+        "operation_unavailable"
     );
     assert_eq!(
         unavailable_submit["errors"][0]["detail"]["class"],
-        "network"
+        "operation"
+    );
+    assert_eq!(
+        unavailable_submit["errors"][0]["detail"]["state"],
+        "unavailable"
     );
     assert!(
         unavailable_submit["errors"][0]["message"]
             .as_str()
             .expect("message")
-            .contains(
-                "order submit requires at least one configured relay before publish preflight"
-            )
+            .contains("SDK relay publish")
     );
     assert_no_removed_command_reference(&unavailable_submit, &["order", "submit"]);
     assert_no_daemon_runtime_reference(&unavailable_submit, &["order", "submit"]);
@@ -7879,22 +7887,16 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
         listing_event_id
     );
 
-    let (dry_output, dry_run) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
-
-    assert!(!dry_output.status.success());
-    assert_eq!(dry_output.status.code(), Some(8));
+    let dry_run =
+        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
     assert_eq!(dry_run["operation_id"], "order.submit");
     assert_eq!(dry_run["dry_run"], true);
-    assert_eq!(dry_run["result"], Value::Null);
-    assert_eq!(dry_run["errors"][0]["code"], "network_unavailable");
-    assert!(
-        dry_run["errors"][0]["message"]
-            .as_str()
-            .expect("message")
-            .contains(
-                "order submit requires at least one configured relay before publish preflight"
-            )
+    assert_eq!(dry_run["result"]["state"], "dry_run");
+    assert_eq!(dry_run["result"]["source"], "SDK order submit · local key");
+    assert_eq!(dry_run["result"]["event_kind"], 3422);
+    assert_eq!(
+        dry_run["result"]["target_relays"][0],
+        ORDERABLE_LISTING_RELAY
     );
     assert_no_daemon_runtime_reference(&dry_run, &["order", "submit", "--dry-run"]);
 
@@ -7910,20 +7912,11 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
         "update",
         second_account_id,
     ]);
-    let (drift_output, drift) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
-    assert!(!drift_output.status.success());
-    assert_eq!(drift_output.status.code(), Some(8));
+    let drift =
+        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
     assert_eq!(drift["operation_id"], "order.submit");
-    assert_eq!(drift["errors"][0]["code"], "network_unavailable");
-    assert!(
-        drift["errors"][0]["message"]
-            .as_str()
-            .expect("message")
-            .contains(
-                "order submit requires at least one configured relay before publish preflight"
-            )
-    );
+    assert_eq!(drift["result"]["state"], "dry_run");
+    assert_eq!(drift["result"]["buyer_account_id"], first_account_id);
 
     let (output, mismatch) = sandbox.json_output(&[
         "--format",
