@@ -2406,13 +2406,7 @@ fn sdk_order_status_reason(status: OrderStatusKind, order_id: &str) -> Option<St
 }
 
 fn sdk_order_status_agreement_event_id(receipt: &OrderStatusReceipt) -> Option<String> {
-    match receipt.status {
-        OrderStatusKind::Accepted
-        | OrderStatusKind::Cancelled
-        | OrderStatusKind::Completed
-        | OrderStatusKind::Disputed => sdk_event_id_string(receipt.decision_event_id.as_ref()),
-        _ => None,
-    }
+    sdk_event_id_string(receipt.agreement_event_id.as_ref())
 }
 
 fn sdk_order_status_fulfillment_view(
@@ -15870,6 +15864,8 @@ mod tests {
             event_ids: vec![request_event_id.clone(), decision_event_id.clone()],
             request_event_id: Some(request_event_id.clone()),
             decision_event_id: Some(decision_event_id.clone()),
+            agreement_event_id: Some(decision_event_id.clone()),
+            pending_revision_event_id: None,
             fulfillment_event_id: None,
             cancellation_event_id: None,
             receipt_event_id: None,
@@ -15912,6 +15908,59 @@ mod tests {
     }
 
     #[test]
+    fn sdk_order_status_view_uses_sdk_agreement_event_id() {
+        let request_event_id = test_event_id_char('1');
+        let decision_event_id = test_event_id_char('2');
+        let agreement_event_id = test_event_id_char('3');
+        let receipt = OrderStatusReceipt {
+            order_id: test_order_id("ord_AAAAAAAAAAAAAAAAAAAAAg"),
+            source: SdkOrderStatusSource::LocalEventStore,
+            found: true,
+            event_count: 3,
+            limit_applied: 500,
+            status: OrderStatusKind::Accepted,
+            fulfillment_status: None,
+            payment_state: OrderPaymentStateKind::NotRecorded,
+            settlement_state: OrderSettlementStateKind::NotRequired,
+            lifecycle_terminal: false,
+            event_ids: vec![
+                request_event_id.clone(),
+                decision_event_id.clone(),
+                agreement_event_id.clone(),
+            ],
+            request_event_id: Some(request_event_id),
+            decision_event_id: Some(decision_event_id.clone()),
+            agreement_event_id: Some(agreement_event_id.clone()),
+            pending_revision_event_id: None,
+            fulfillment_event_id: None,
+            cancellation_event_id: None,
+            receipt_event_id: None,
+            last_event_id: Some(agreement_event_id.clone()),
+            issues: Vec::new(),
+        };
+
+        let view = sdk_order_status_view(receipt);
+
+        assert_eq!(
+            view.decision_event_id.as_deref(),
+            Some(decision_event_id.as_str())
+        );
+        assert_eq!(
+            view.agreement_event_id.as_deref(),
+            Some(agreement_event_id.as_str())
+        );
+        assert_eq!(
+            view.last_event_id.as_deref(),
+            Some(agreement_event_id.as_str())
+        );
+        let payment = view.payment.expect("payment");
+        assert_eq!(
+            payment.agreement_event_id.as_deref(),
+            Some(agreement_event_id.as_str())
+        );
+    }
+
+    #[test]
     fn sdk_order_status_view_maps_stable_issue_codes() {
         let request_event_id = test_event_id_char('1');
         let fork_event_id = test_event_id_char('3');
@@ -15929,6 +15978,8 @@ mod tests {
             event_ids: vec![request_event_id, fork_event_id.clone()],
             request_event_id: None,
             decision_event_id: None,
+            agreement_event_id: None,
+            pending_revision_event_id: None,
             fulfillment_event_id: None,
             cancellation_event_id: None,
             receipt_event_id: None,
