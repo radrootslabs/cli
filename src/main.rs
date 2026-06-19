@@ -760,3 +760,66 @@ fn envelope_exit_code(envelope: &OutputEnvelope) -> ExitCode {
 fn operation_config_error(error: OperationAdapterError) -> runtime::RuntimeError {
     runtime::RuntimeError::Config(error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::registry::{ApprovalPolicy, NetworkRequirement, OPERATION_REGISTRY, RiskLevel};
+
+    const DEFERRED_PAYMENT_OPERATION_IDS: &[&str] = &[
+        "order.payment.record",
+        "order.settlement.accept",
+        "order.settlement.reject",
+    ];
+
+    #[test]
+    fn payment_and_settlement_operations_are_pre_runtime_deferred_only() {
+        let actual = OPERATION_REGISTRY
+            .iter()
+            .filter(|operation| {
+                operation.operation_id.starts_with("order.payment.")
+                    || operation.operation_id.starts_with("order.settlement.")
+            })
+            .map(|operation| operation.operation_id)
+            .collect::<BTreeSet<_>>();
+        let expected = DEFERRED_PAYMENT_OPERATION_IDS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(actual, expected);
+
+        for operation_id in DEFERRED_PAYMENT_OPERATION_IDS {
+            let operation = OPERATION_REGISTRY
+                .iter()
+                .find(|operation| operation.operation_id == *operation_id)
+                .expect("deferred payment operation should be registered");
+
+            assert!(is_deferred_payment_operation(operation.operation_id));
+            assert!(!operation.mutates);
+            assert_eq!(operation.approval_policy, ApprovalPolicy::None);
+            assert_eq!(operation.risk_level, RiskLevel::Low);
+            assert_eq!(
+                network_requirement(operation.operation_id),
+                NetworkRequirement::Local
+            );
+            assert!(!requires_local_signer_mode(operation.operation_id));
+            assert!(!requires_nostr_relay_publish_mode(operation.operation_id));
+        }
+    }
+
+    #[test]
+    fn deferred_payment_guard_runs_before_runtime_config_loading() {
+        let source = include_str!("main.rs");
+        let deferred_guard = source
+            .find("if let Err(error) = validate_pre_runtime_request_contract(&request)")
+            .expect("run should validate pre-runtime request contract");
+        let runtime_config = source
+            .find("let config = RuntimeConfig::from_system")
+            .expect("run should load runtime config after pre-runtime guard");
+
+        assert!(deferred_guard < runtime_config);
+    }
+}
