@@ -79,8 +79,9 @@ use radroots_sdk::{
     OrderRevisionDecisionReceipt, OrderRevisionProposalEnqueueRequest,
     OrderRevisionProposalPrepareRequest, OrderRevisionProposalReceipt, OrderStatusRequest,
     OrderSubmitEnqueueRequest, OrderSubmitPlan, OrderSubmitPrepareRequest, OrderSubmitReceipt,
-    PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt, PushOutboxRelayOutcomeKind,
-    PushOutboxRequest, SdkMutationState, SdkRelayTargetPolicy, SdkRelayUrlPolicy,
+    OrderWorkflowEnqueueReceipt, PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
+    PushOutboxRelayOutcomeKind, PushOutboxRequest, SdkMutationState, SdkRelayTargetPolicy,
+    SdkRelayUrlPolicy,
 };
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::order::{
@@ -8650,7 +8651,8 @@ fn sdk_enqueued_order_revision_view(
         .map(sdk_push_acknowledged_relays)
         .unwrap_or_default();
     view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
-    view.reason = sdk_order_lifecycle_reason("order revision proposal", push_event);
+    view.reason =
+        sdk_order_lifecycle_reason("order revision proposal", &enqueue.workflow, push_event);
     view.actions = sdk_order_lifecycle_actions(push_event);
     view
 }
@@ -8693,7 +8695,8 @@ fn sdk_enqueued_order_revision_decision_view(
         .map(sdk_push_acknowledged_relays)
         .unwrap_or_default();
     view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
-    view.reason = sdk_order_lifecycle_reason("order revision decision", push_event);
+    view.reason =
+        sdk_order_lifecycle_reason("order revision decision", &enqueue.workflow, push_event);
     view.actions = sdk_order_lifecycle_actions(push_event);
     view
 }
@@ -8729,7 +8732,8 @@ fn sdk_enqueued_order_fulfillment_view(
         .map(sdk_push_acknowledged_relays)
         .unwrap_or_default();
     view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
-    view.reason = sdk_order_lifecycle_reason("order fulfillment update", push_event);
+    view.reason =
+        sdk_order_lifecycle_reason("order fulfillment update", &enqueue.workflow, push_event);
     view.actions = sdk_order_lifecycle_actions(push_event);
     view
 }
@@ -8762,7 +8766,7 @@ fn sdk_enqueued_order_cancellation_view(
         .map(sdk_push_acknowledged_relays)
         .unwrap_or_default();
     view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
-    view.reason = sdk_order_lifecycle_reason("order cancellation", push_event);
+    view.reason = sdk_order_lifecycle_reason("order cancellation", &enqueue.workflow, push_event);
     view.actions = sdk_order_lifecycle_actions(push_event);
     view
 }
@@ -8804,7 +8808,7 @@ fn sdk_enqueued_order_receipt_view(
         .map(sdk_push_acknowledged_relays)
         .unwrap_or_default();
     view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
-    view.reason = sdk_order_lifecycle_reason("order receipt record", push_event);
+    view.reason = sdk_order_lifecycle_reason("order receipt record", &enqueue.workflow, push_event);
     view.actions = sdk_order_lifecycle_actions(push_event);
     view
 }
@@ -8832,21 +8836,30 @@ fn sdk_order_lifecycle_state(
 
 fn sdk_order_lifecycle_reason(
     workflow: &str,
+    enqueue: &OrderWorkflowEnqueueReceipt,
     push_event: Option<&PushOutboxEventReceipt>,
 ) -> Option<String> {
     match push_event.map(|event| event.final_state) {
         Some(PushOutboxEventState::Published) => None,
         Some(PushOutboxEventState::PublishRetryable) => Some(format!(
-            "SDK relay publish for {workflow} did not reach accepted quorum; outbox event remains retryable"
+            "{}; SDK relay publish for {workflow} did not reach accepted quorum; outbox event remains retryable; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
         )),
         Some(PushOutboxEventState::FailedTerminal) => Some(format!(
-            "SDK relay publish for {workflow} failed terminally"
+            "{}; SDK relay publish for {workflow} failed terminally; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
         )),
         Some(state) => Some(format!(
-            "SDK relay push for {workflow} left event in state `{state:?}`"
+            "{}; SDK relay push for {workflow} left event in state `{state:?}`; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
         )),
         None => Some(format!(
-            "{workflow} queued in SDK outbox; no ready SDK outbox event was pushed"
+            "{}; {workflow} queued in SDK outbox; no ready SDK outbox event was pushed; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
         )),
     }
 }
@@ -8856,9 +8869,57 @@ fn sdk_order_lifecycle_actions(push_event: Option<&PushOutboxEventReceipt>) -> V
         push_event.map(|event| event.final_state),
         Some(PushOutboxEventState::Published)
     ) {
-        return vec!["radroots sync push".to_owned()];
+        return sdk_order_push_recovery_actions();
     }
     Vec::new()
+}
+
+fn sdk_order_enqueue_summary(enqueue: &OrderWorkflowEnqueueReceipt) -> String {
+    format!(
+        "local SDK enqueue completed for `{}` as `{}` with outbox_event_id {}; {}",
+        enqueue.operation_kind,
+        sdk_mutation_state_label(&enqueue.state),
+        enqueue.outbox_event_id,
+        sdk_order_idempotency_summary(enqueue)
+    )
+}
+
+fn sdk_order_idempotency_summary(enqueue: &OrderWorkflowEnqueueReceipt) -> &'static str {
+    if enqueue.idempotency.replayed_existing_operation {
+        "idempotency replayed an existing queued operation"
+    } else if enqueue.idempotency.safe_to_retry_with_same_idempotency_key {
+        "same idempotency key remains retry-safe"
+    } else {
+        "same idempotency key retry safety is unavailable"
+    }
+}
+
+fn sdk_order_enqueue_retry_summary(enqueue: &OrderWorkflowEnqueueReceipt) -> &'static str {
+    if enqueue
+        .retry
+        .safe_to_retry_enqueue_with_same_idempotency_key
+    {
+        "enqueue is safe to retry with the same idempotency key"
+    } else if enqueue.retry.retryable_after_error {
+        "inspect local SDK state before retrying enqueue"
+    } else {
+        "do not retry enqueue before inspecting local SDK state"
+    }
+}
+
+fn sdk_mutation_state_label(state: &SdkMutationState) -> &'static str {
+    match state {
+        SdkMutationState::StoredAndQueued => "stored_and_queued",
+        SdkMutationState::AlreadyQueued => "already_queued",
+        _ => "unknown",
+    }
+}
+
+fn sdk_order_push_recovery_actions() -> Vec<String> {
+    vec![
+        "radroots sync push".to_owned(),
+        "radroots sync status get".to_owned(),
+    ]
 }
 
 fn publish_order_payment(
@@ -9529,7 +9590,7 @@ fn sdk_enqueued_order_decision_view(
     view.decoded_count = resolution.decoded_count;
     view.skipped_count = resolution.skipped_count;
     view.inventory = order_decision_inventory_for_view(args, &request, inventory);
-    view.reason = sdk_order_decision_reason(push_event);
+    view.reason = sdk_order_decision_reason(&enqueue.workflow, push_event);
     view.actions = sdk_order_decision_actions(push_event);
     view
 }
@@ -9557,20 +9618,32 @@ fn sdk_order_decision_state(
     .to_owned()
 }
 
-fn sdk_order_decision_reason(push_event: Option<&PushOutboxEventReceipt>) -> Option<String> {
+fn sdk_order_decision_reason(
+    enqueue: &OrderWorkflowEnqueueReceipt,
+    push_event: Option<&PushOutboxEventReceipt>,
+) -> Option<String> {
     match push_event.map(|event| event.final_state) {
         Some(PushOutboxEventState::Published) => None,
-        Some(PushOutboxEventState::PublishRetryable) => Some(
-            "SDK relay publish did not reach accepted quorum; outbox event remains retryable"
-                .to_owned(),
-        ),
-        Some(PushOutboxEventState::FailedTerminal) => {
-            Some("SDK relay publish failed terminally".to_owned())
-        }
-        Some(state) => Some(format!("SDK relay push left event in state `{state:?}`")),
-        None => Some(
-            "order decision queued in SDK outbox; no ready SDK outbox event was pushed".to_owned(),
-        ),
+        Some(PushOutboxEventState::PublishRetryable) => Some(format!(
+            "{}; SDK relay publish did not reach accepted quorum; outbox event remains retryable; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
+        )),
+        Some(PushOutboxEventState::FailedTerminal) => Some(format!(
+            "{}; SDK relay publish failed terminally; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
+        )),
+        Some(state) => Some(format!(
+            "{}; SDK relay push left event in state `{state:?}`; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
+        )),
+        None => Some(format!(
+            "{}; order decision queued in SDK outbox; no ready SDK outbox event was pushed; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
+        )),
     }
 }
 
@@ -9579,7 +9652,7 @@ fn sdk_order_decision_actions(push_event: Option<&PushOutboxEventReceipt>) -> Ve
         push_event.map(|event| event.final_state),
         Some(PushOutboxEventState::Published)
     ) {
-        return vec!["radroots sync push".to_owned()];
+        return sdk_order_push_recovery_actions();
     }
     Vec::new()
 }
@@ -12826,7 +12899,7 @@ fn sdk_enqueued_order_submit_view(
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
         signer_session_id: None,
         requested_signer_session_id: None,
-        reason: sdk_order_submit_reason(push_event),
+        reason: sdk_order_submit_reason(&enqueue.workflow, push_event),
         job: None,
         issues: Vec::new(),
         actions: sdk_order_submit_actions(push_event),
@@ -12853,20 +12926,32 @@ fn sdk_order_submit_state(push_event: Option<&PushOutboxEventReceipt>) -> String
     .to_owned()
 }
 
-fn sdk_order_submit_reason(push_event: Option<&PushOutboxEventReceipt>) -> Option<String> {
+fn sdk_order_submit_reason(
+    enqueue: &OrderWorkflowEnqueueReceipt,
+    push_event: Option<&PushOutboxEventReceipt>,
+) -> Option<String> {
     match push_event.map(|event| event.final_state) {
         Some(PushOutboxEventState::Published) => None,
-        Some(PushOutboxEventState::PublishRetryable) => Some(
-            "SDK relay publish did not reach accepted quorum; outbox event remains retryable"
-                .to_owned(),
-        ),
-        Some(PushOutboxEventState::FailedTerminal) => {
-            Some("SDK relay publish failed terminally".to_owned())
-        }
-        Some(state) => Some(format!("SDK relay push left event in state `{state:?}`")),
-        None => Some(
-            "order submit queued in SDK outbox; no ready SDK outbox event was pushed".to_owned(),
-        ),
+        Some(PushOutboxEventState::PublishRetryable) => Some(format!(
+            "{}; SDK relay publish did not reach accepted quorum; outbox event remains retryable; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
+        )),
+        Some(PushOutboxEventState::FailedTerminal) => Some(format!(
+            "{}; SDK relay publish failed terminally; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
+        )),
+        Some(state) => Some(format!(
+            "{}; SDK relay push left event in state `{state:?}`; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
+        )),
+        None => Some(format!(
+            "{}; order submit queued in SDK outbox; no ready SDK outbox event was pushed; {}",
+            sdk_order_enqueue_summary(enqueue),
+            sdk_order_enqueue_retry_summary(enqueue)
+        )),
     }
 }
 
@@ -12875,7 +12960,7 @@ fn sdk_order_submit_actions(push_event: Option<&PushOutboxEventReceipt>) -> Vec<
         push_event.map(|event| event.final_state),
         Some(PushOutboxEventState::Published)
     ) {
-        return vec!["radroots sync push".to_owned()];
+        return sdk_order_push_recovery_actions();
     }
     Vec::new()
 }
