@@ -131,7 +131,7 @@ pub enum TargetCommand {
     Market(MarketArgs),
     #[command(about = "Prepare baskets and quotes before order coordination.")]
     Basket(BasketArgs),
-    #[command(about = "Coordinate order lifecycle events without payments.")]
+    #[command(about = "Coordinate buyer and farmer order agreement events.")]
     Order(OrderArgs),
     #[command(about = "Inspect validation receipts and proof state.")]
     Validation(ValidationArgs),

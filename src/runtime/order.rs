@@ -5787,7 +5787,7 @@ fn sdk_order_lifecycle_actions(push_event: Option<&PushOutboxEventReceipt>) -> V
 
 fn sdk_order_enqueue_summary(enqueue: &OrderWorkflowEnqueueReceipt) -> String {
     format!(
-        "local SDK enqueue completed for `{}` as `{}` with outbox_event_id {}; {}",
+        "local SDK enqueued `{}` as `{}` with outbox_event_id {}; {}",
         enqueue.operation_kind,
         sdk_mutation_state_label(&enqueue.state),
         enqueue.outbox_event_id,

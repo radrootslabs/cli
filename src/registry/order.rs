@@ -135,7 +135,7 @@ pub const ORDER_CANCEL: OperationSpec = operation!(
     "order_cancel",
     "OrderCancelRequest",
     "OrderCancelResult",
-    "Cancel a buyer order before fulfillment.",
+    "Withdraw a buyer order before agreement finalization.",
     Buyer,
     true,
     Required,
