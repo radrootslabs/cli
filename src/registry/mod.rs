@@ -165,11 +165,6 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
     order::ORDER_REVISION_PROPOSE,
     order::ORDER_REVISION_ACCEPT,
     order::ORDER_REVISION_DECLINE,
-    order::ORDER_FULFILLMENT_UPDATE,
-    order::ORDER_RECEIPT_RECORD,
-    order::ORDER_PAYMENT_RECORD,
-    order::ORDER_SETTLEMENT_ACCEPT,
-    order::ORDER_SETTLEMENT_REJECT,
     order::ORDER_STATUS_GET,
     order::ORDER_EVENT_LIST,
     order::ORDER_EVENT_WATCH,
@@ -206,9 +201,7 @@ pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
         | "order.cancel"
         | "order.revision.propose"
         | "order.revision.accept"
-        | "order.revision.decline"
-        | "order.fulfillment.update"
-        | "order.receipt.record" => NetworkRequirement::External {
+        | "order.revision.decline" => NetworkRequirement::External {
             dry_run_requires_network: true,
         },
         _ => NetworkRequirement::Local,
@@ -231,8 +224,6 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
             | "order.revision.propose"
             | "order.revision.accept"
             | "order.revision.decline"
-            | "order.fulfillment.update"
-            | "order.receipt.record"
     )
 }
 
@@ -251,8 +242,6 @@ pub fn requires_nostr_relay_publish_mode(operation_id: &str) -> bool {
             | "order.revision.propose"
             | "order.revision.accept"
             | "order.revision.decline"
-            | "order.fulfillment.update"
-            | "order.receipt.record"
     )
 }
 
@@ -344,11 +333,6 @@ mod tests {
         "order.revision.propose",
         "order.revision.accept",
         "order.revision.decline",
-        "order.fulfillment.update",
-        "order.receipt.record",
-        "order.payment.record",
-        "order.settlement.accept",
-        "order.settlement.reject",
         "order.status.get",
         "order.event.list",
         "order.event.watch",
@@ -399,8 +383,6 @@ mod tests {
         "order.revision.propose",
         "order.revision.accept",
         "order.revision.decline",
-        "order.fulfillment.update",
-        "order.receipt.record",
     ];
 
     const INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[];
@@ -413,7 +395,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 79);
+        assert_eq!(OPERATION_REGISTRY.len(), 74);
     }
 
     #[test]
@@ -472,8 +454,6 @@ mod tests {
             "order.revision.propose",
             "order.revision.accept",
             "order.revision.decline",
-            "order.fulfillment.update",
-            "order.receipt.record",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -577,8 +557,6 @@ mod tests {
             "order.revision.propose",
             "order.revision.accept",
             "order.revision.decline",
-            "order.fulfillment.update",
-            "order.receipt.record",
             "order.event.list",
             "validation.receipt.get",
             "validation.receipt.list",
@@ -611,8 +589,6 @@ mod tests {
             "order.revision.propose",
             "order.revision.accept",
             "order.revision.decline",
-            "order.fulfillment.update",
-            "order.receipt.record",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -640,8 +616,6 @@ mod tests {
             "order.revision.propose",
             "order.revision.accept",
             "order.revision.decline",
-            "order.fulfillment.update",
-            "order.receipt.record",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

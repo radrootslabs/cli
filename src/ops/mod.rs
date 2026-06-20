@@ -244,40 +244,6 @@ mod tests {
     }
 
     #[test]
-    fn adapter_maps_order_fulfillment_update_input() {
-        let parsed = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "fulfillment",
-            "update",
-            "ord_test",
-            "--state",
-            "seller_cancelled",
-        ])
-        .expect("target args parse");
-
-        let request = TargetOperationRequest::from_target_args(&parsed)
-            .expect("operation request from target args");
-        let TargetOperationRequest::OrderFulfillmentUpdate(request) = request else {
-            panic!("expected order fulfillment update request")
-        };
-
-        assert_eq!(request.operation_id(), "order.fulfillment.update");
-        assert_eq!(
-            request
-                .payload
-                .input
-                .get("order_id")
-                .and_then(Value::as_str),
-            Some("ord_test")
-        );
-        assert_eq!(
-            request.payload.input.get("state").and_then(Value::as_str),
-            Some("seller_cancelled")
-        );
-    }
-
-    #[test]
     fn adapter_maps_order_lifecycle_inputs() {
         let revision = TargetCliArgs::try_parse_from([
             "radroots",
@@ -472,135 +438,6 @@ mod tests {
             request.payload.input.get("reason").and_then(Value::as_str),
             Some("changed plans")
         );
-
-        let receipt = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "receipt",
-            "record",
-            "ord_test",
-            "--issue",
-            "damaged items",
-        ])
-        .expect("target args parse");
-        let request =
-            TargetOperationRequest::from_target_args(&receipt).expect("operation request");
-        let TargetOperationRequest::OrderReceiptRecord(request) = request else {
-            panic!("expected order receipt record request")
-        };
-        assert_eq!(request.operation_id(), "order.receipt.record");
-        assert_eq!(
-            request
-                .payload
-                .input
-                .get("order_id")
-                .and_then(Value::as_str),
-            Some("ord_test")
-        );
-        assert_eq!(
-            request.payload.input.get("issue").and_then(Value::as_str),
-            Some("damaged items")
-        );
-
-        let payment = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "payment",
-            "record",
-            "ord_test",
-            "--amount",
-            "12",
-            "--currency",
-            "USD",
-            "--method",
-            "manual_transfer",
-            "--reference",
-            "memo-1",
-            "--paid-at",
-            "1777666000",
-        ])
-        .expect("target args parse");
-        let request =
-            TargetOperationRequest::from_target_args(&payment).expect("operation request");
-        let TargetOperationRequest::OrderPaymentRecord(request) = request else {
-            panic!("expected order payment record request")
-        };
-        assert_eq!(request.operation_id(), "order.payment.record");
-        assert_eq!(
-            request
-                .payload
-                .input
-                .get("order_id")
-                .and_then(Value::as_str),
-            Some("ord_test")
-        );
-        assert_eq!(
-            request.payload.input.get("amount").and_then(Value::as_str),
-            Some("12")
-        );
-        assert_eq!(
-            request
-                .payload
-                .input
-                .get("currency")
-                .and_then(Value::as_str),
-            Some("USD")
-        );
-        assert_eq!(
-            request.payload.input.get("method").and_then(Value::as_str),
-            Some("manual_transfer")
-        );
-        assert_eq!(
-            request
-                .payload
-                .input
-                .get("reference")
-                .and_then(Value::as_str),
-            Some("memo-1")
-        );
-        assert_eq!(
-            request.payload.input.get("paid_at").and_then(Value::as_u64),
-            Some(1_777_666_000)
-        );
-
-        let settlement = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "settlement",
-            "reject",
-            "ord_test",
-            "--payment-event-id",
-            "pay_event",
-            "--reason",
-            "reference mismatch",
-        ])
-        .expect("target args parse");
-        let request =
-            TargetOperationRequest::from_target_args(&settlement).expect("operation request");
-        let TargetOperationRequest::OrderSettlementReject(request) = request else {
-            panic!("expected order settlement reject request")
-        };
-        assert_eq!(request.operation_id(), "order.settlement.reject");
-        assert_eq!(
-            request
-                .payload
-                .input
-                .get("order_id")
-                .and_then(Value::as_str),
-            Some("ord_test")
-        );
-        assert_eq!(
-            request
-                .payload
-                .input
-                .get("payment_event_id")
-                .and_then(Value::as_str),
-            Some("pay_event")
-        );
-        assert_eq!(
-            request.payload.input.get("reason").and_then(Value::as_str),
-            Some("reference mismatch")
-        );
     }
 
     #[test]
@@ -646,17 +483,15 @@ mod tests {
 
     #[test]
     fn not_implemented_errors_map_to_structured_exit_code() {
-        let error = OperationAdapterError::not_implemented(
-            "order.payment.record",
-            "coming soon".to_owned(),
-        );
+        let error =
+            OperationAdapterError::not_implemented("test.operation", "coming soon".to_owned());
         let output_error = error.to_output_error();
 
         assert_eq!(output_error.code, "not_implemented");
         assert_eq!(output_error.exit_code, 3);
         assert_eq!(
             output_error.detail.expect("detail")["operation_id"],
-            "order.payment.record"
+            "test.operation"
         );
     }
 

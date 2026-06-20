@@ -696,16 +696,16 @@ mod tests {
     fn ndjson_terminal_frame_carries_status_reason_and_resource() {
         let mut error = OutputError::new(
             "not_implemented",
-            "payments are deferred",
+            "operation is not implemented",
             CliExitCode::RuntimeUnavailable,
         );
         error.detail = Some(json!({
             "order_id": "ord_test",
         }));
         let envelope = OutputEnvelope::failure(
-            "order.payment.record",
+            "test.operation",
             error,
-            EnvelopeContext::new("req_payment", false),
+            EnvelopeContext::new("req_test", false),
         );
         let frames = envelope.to_ndjson_frames();
 

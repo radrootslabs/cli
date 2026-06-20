@@ -7,8 +7,7 @@ use crate::view::runtime::{
     SignerWriteKindReadinessView,
 };
 use radroots_events::kinds::{
-    KIND_FARM, KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION,
-    KIND_ORDER_FULFILLMENT_UPDATE, KIND_ORDER_RECEIPT, KIND_ORDER_REQUEST,
+    KIND_FARM, KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
     KIND_ORDER_REVISION_DECISION, KIND_ORDER_REVISION_PROPOSAL, KIND_PROFILE,
 };
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
@@ -293,7 +292,7 @@ fn deferred_myc_binding_status() -> SignerBindingStatusView {
     }
 }
 
-fn cli_write_kinds() -> [CliWriteKind; 14] {
+fn cli_write_kinds() -> [CliWriteKind; 12] {
     [
         CliWriteKind {
             command: "sync.push",
@@ -343,14 +342,6 @@ fn cli_write_kinds() -> [CliWriteKind; 14] {
             command: "order.revision.decline",
             event_kind: KIND_ORDER_REVISION_DECISION,
         },
-        CliWriteKind {
-            command: "order.fulfillment.update",
-            event_kind: KIND_ORDER_FULFILLMENT_UPDATE,
-        },
-        CliWriteKind {
-            command: "order.receipt.record",
-            event_kind: KIND_ORDER_RECEIPT,
-        },
     ]
 }
 
@@ -393,9 +384,8 @@ fn local_availability(value: RadrootsNostrLocalSignerAvailability) -> &'static s
 #[cfg(test)]
 mod tests {
     use super::{
-        KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_FULFILLMENT_UPDATE,
-        KIND_ORDER_RECEIPT, KIND_ORDER_REQUEST, KIND_ORDER_REVISION_DECISION,
-        KIND_ORDER_REVISION_PROPOSAL, cli_write_kinds,
+        KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
+        KIND_ORDER_REVISION_DECISION, KIND_ORDER_REVISION_PROPOSAL, cli_write_kinds,
     };
 
     const RESERVED_ORDER_KIND_3431: u32 = 3431;
@@ -422,8 +412,6 @@ mod tests {
                 "order.revision.propose",
                 "order.revision.accept",
                 "order.revision.decline",
-                "order.fulfillment.update",
-                "order.receipt.record",
             ]
         );
         assert!(!commands.contains(&"signer.status.get"));
@@ -475,26 +463,12 @@ mod tests {
     }
 
     #[test]
-    fn order_follow_on_readiness_uses_order_kinds() {
+    fn order_cancel_readiness_uses_order_cancellation_kind() {
         let cancel = cli_write_kinds()
             .into_iter()
             .find(|kind| kind.command == "order.cancel")
             .expect("order cancel readiness");
         assert_eq!(cancel.event_kind, KIND_ORDER_CANCELLATION);
         assert_ne!(cancel.event_kind, RESERVED_ORDER_KIND_3431);
-
-        let fulfillment = cli_write_kinds()
-            .into_iter()
-            .find(|kind| kind.command == "order.fulfillment.update")
-            .expect("order fulfillment readiness");
-        assert_eq!(fulfillment.event_kind, KIND_ORDER_FULFILLMENT_UPDATE);
-        assert_ne!(fulfillment.event_kind, RESERVED_ORDER_KIND_3431);
-
-        let receipt = cli_write_kinds()
-            .into_iter()
-            .find(|kind| kind.command == "order.receipt.record")
-            .expect("order receipt readiness");
-        assert_eq!(receipt.event_kind, KIND_ORDER_RECEIPT);
-        assert_ne!(receipt.event_kind, RESERVED_ORDER_KIND_3431);
     }
 }

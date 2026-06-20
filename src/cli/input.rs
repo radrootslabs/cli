@@ -47,8 +47,7 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
         BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
         FarmLocationCommand, FarmProfileCommand, ListingAppCommand, ListingCommand, MarketCommand,
         MarketListingCommand, MarketProductCommand, OrderAppCommand, OrderCommand,
-        OrderEventCommand, OrderFulfillmentCommand, OrderPaymentCommand, OrderReceiptCommand,
-        OrderRevisionCommand, OrderSettlementCommand, OrderStatusCommand, StoreBackupCommand,
+        OrderEventCommand, OrderRevisionCommand, OrderStatusCommand, StoreBackupCommand,
         StoreCommand, ValidationCommand, ValidationReceiptCommand,
     };
 
@@ -276,52 +275,6 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                 OrderRevisionCommand::Decline(args) => {
                     insert_string(&mut input, "order_id", &args.order_id);
                     insert_string(&mut input, "revision_id", &args.revision_id);
-                    insert_string(&mut input, "reason", &args.reason);
-                }
-            },
-            OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
-                OrderFulfillmentCommand::Update(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id);
-                    if let Some(state) = args.state {
-                        input.insert(
-                            "state".to_owned(),
-                            Value::String(state.as_protocol_state().to_owned()),
-                        );
-                    }
-                }
-            },
-            OrderCommand::Receipt(receipt) => match &receipt.command {
-                OrderReceiptCommand::Record(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id);
-                    if args.received {
-                        input.insert("received".to_owned(), Value::Bool(true));
-                    }
-                    insert_string(&mut input, "issue", &args.issue);
-                }
-            },
-            OrderCommand::Payment(payment) => match &payment.command {
-                OrderPaymentCommand::Record(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id);
-                    insert_string(&mut input, "amount", &args.amount);
-                    insert_string(&mut input, "currency", &args.currency);
-                    insert_string(&mut input, "method", &args.method);
-                    insert_string(&mut input, "reference", &args.reference);
-                    if let Some(paid_at) = args.paid_at {
-                        input.insert(
-                            "paid_at".to_owned(),
-                            Value::Number(serde_json::Number::from(paid_at)),
-                        );
-                    }
-                }
-            },
-            OrderCommand::Settlement(settlement) => match &settlement.command {
-                OrderSettlementCommand::Accept(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id);
-                    insert_string(&mut input, "payment_event_id", &args.payment_event_id);
-                }
-                OrderSettlementCommand::Reject(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id);
-                    insert_string(&mut input, "payment_event_id", &args.payment_event_id);
                     insert_string(&mut input, "reason", &args.reason);
                 }
             },

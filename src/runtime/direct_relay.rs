@@ -91,19 +91,6 @@ pub enum DirectRelayFetchError {
     Fetch(#[source] RadrootsNostrError),
 }
 
-pub fn publish_parts_with_identity(
-    identity: &RadrootsIdentity,
-    relay_urls: &[String],
-    parts: WireEventParts,
-) -> Result<DirectRelayPublishReceipt, DirectRelayPublishError> {
-    if relay_urls.is_empty() {
-        return Err(DirectRelayPublishError::MissingRelays);
-    }
-
-    let event = sign_parts_with_identity(identity, parts)?;
-    publish_signed_event_with_identity(identity, relay_urls, event)
-}
-
 pub fn publish_signed_event_with_identity(
     identity: &RadrootsIdentity,
     relay_urls: &[String],
@@ -318,27 +305,9 @@ mod tests {
     use radroots_nostr::prelude::RadrootsNostrFilter;
 
     use super::{
-        DirectRelayFetchError, DirectRelayPublishError, event_created_at_u32,
-        fetch_events_from_relays_async, fetch_events_from_relays_with_timeout,
-        publish_parts_with_identity, sign_parts_with_identity,
+        DirectRelayFetchError, event_created_at_u32, fetch_events_from_relays_async,
+        fetch_events_from_relays_with_timeout, sign_parts_with_identity,
     };
-
-    #[test]
-    fn publish_parts_requires_relays_before_runtime_work() {
-        let identity = RadrootsIdentity::generate();
-        let err = publish_parts_with_identity(
-            &identity,
-            &[],
-            WireEventParts {
-                kind: 30402,
-                content: "listing".to_owned(),
-                tags: Vec::new(),
-            },
-        )
-        .expect_err("missing relay error");
-
-        assert!(matches!(err, DirectRelayPublishError::MissingRelays));
-    }
 
     #[test]
     fn direct_relay_signed_event_preserves_publish_receipt_parity() {

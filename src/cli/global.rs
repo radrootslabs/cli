@@ -263,33 +263,6 @@ pub struct OrderCancelArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderFulfillmentArgs {
-    pub key: String,
-    pub state: String,
-    pub idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct OrderReceiptArgs {
-    pub key: String,
-    pub received: bool,
-    pub issue: Option<String>,
-    pub idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct OrderPaymentArgs {
-    pub key: String,
-    pub amount: String,
-    pub currency: String,
-    pub method: String,
-    pub reference: Option<String>,
-    pub paid_at: Option<u64>,
-    pub idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Clone)]
 pub struct OrderRevisionProposeArgs {
     pub key: String,
     pub reason: String,
@@ -330,23 +303,6 @@ pub struct OrderRevisionDecisionArgs {
     pub key: String,
     pub revision_id: String,
     pub decision: OrderRevisionDecisionArg,
-    pub reason: Option<String>,
-    pub idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum OrderSettlementDecisionArg {
-    Accept,
-    Reject,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct OrderSettlementArgs {
-    pub key: String,
-    pub payment_event_id: String,
-    pub decision: OrderSettlementDecisionArg,
     pub reason: Option<String>,
     pub idempotency_key: Option<String>,
 }

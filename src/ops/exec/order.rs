@@ -5,32 +5,27 @@ use serde_json::{Value, json};
 
 use crate::cli::global::{
     OrderAppRecordExportArgs, OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs,
-    OrderFulfillmentArgs, OrderRebindArgs, OrderReceiptArgs, OrderRevisionDecisionArg,
-    OrderRevisionDecisionArgs, OrderRevisionProposeArgs, OrderStatusArgs, OrderSubmitArgs,
-    RecordLookupArgs,
+    OrderRebindArgs, OrderRevisionDecisionArg, OrderRevisionDecisionArgs, OrderRevisionProposeArgs,
+    OrderStatusArgs, OrderSubmitArgs, RecordLookupArgs,
 };
-use crate::deferred_payment::deferred_payment_message;
 use crate::ops::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, OrderAcceptRequest, OrderAcceptResult,
     OrderAppExportRequest, OrderAppExportResult, OrderAppListRequest, OrderAppListResult,
     OrderCancelRequest, OrderCancelResult, OrderDeclineRequest, OrderDeclineResult,
     OrderEventListRequest, OrderEventListResult, OrderEventWatchRequest, OrderEventWatchResult,
-    OrderFulfillmentUpdateRequest, OrderFulfillmentUpdateResult, OrderGetRequest, OrderGetResult,
-    OrderListRequest, OrderListResult, OrderPaymentRecordRequest, OrderPaymentRecordResult,
-    OrderRebindRequest, OrderRebindResult, OrderReceiptRecordRequest, OrderReceiptRecordResult,
-    OrderRevisionAcceptRequest, OrderRevisionAcceptResult, OrderRevisionDeclineRequest,
-    OrderRevisionDeclineResult, OrderRevisionProposeRequest, OrderRevisionProposeResult,
-    OrderSettlementAcceptRequest, OrderSettlementAcceptResult, OrderSettlementRejectRequest,
-    OrderSettlementRejectResult, OrderStatusGetRequest, OrderStatusGetResult, OrderSubmitRequest,
+    OrderGetRequest, OrderGetResult, OrderListRequest, OrderListResult, OrderRebindRequest,
+    OrderRebindResult, OrderRevisionAcceptRequest, OrderRevisionAcceptResult,
+    OrderRevisionDeclineRequest, OrderRevisionDeclineResult, OrderRevisionProposeRequest,
+    OrderRevisionProposeResult, OrderStatusGetRequest, OrderStatusGetResult, OrderSubmitRequest,
     OrderSubmitResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::view::runtime::{
     CommandDisposition, OrderAppRecordExportView, OrderCancellationView, OrderDecisionView,
-    OrderFulfillmentView, OrderRebindView, OrderReceiptView, OrderRevisionDecisionView,
-    OrderRevisionProposalView, OrderStatusView, OrderSubmitView,
+    OrderRebindView, OrderRevisionDecisionView, OrderRevisionProposalView, OrderStatusView,
+    OrderSubmitView,
 };
 
 const ORDER_EVENT_WATCH_DEFERRED_REASON: &str = "relay-backed order event watch is not implemented";
@@ -417,132 +412,6 @@ impl OperationService<OrderRevisionDeclineRequest> for OrderOperationService<'_>
     }
 }
 
-impl OperationService<OrderFulfillmentUpdateRequest> for OrderOperationService<'_> {
-    type Result = OrderFulfillmentUpdateResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<OrderFulfillmentUpdateRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let key = required_order_key(&request)?;
-        let state = string_input(&request, "state")
-            .map(|state| state.trim().to_owned())
-            .filter(|state| !state.is_empty())
-            .ok_or_else(|| {
-                invalid_input(
-                    request.operation_id(),
-                    "missing required `state` input".to_owned(),
-                )
-            })?;
-        if request.context.requires_approval_token() {
-            return Err(OperationAdapterError::approval_required(
-                request.operation_id(),
-            ));
-        }
-
-        let args = OrderFulfillmentArgs {
-            key,
-            state,
-            idempotency_key: request
-                .context
-                .idempotency_key
-                .clone()
-                .or_else(|| string_input(&request, "idempotency_key")),
-        };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = crate::runtime::order::fulfillment_update(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
-        })?;
-        fulfillment_result::<OrderFulfillmentUpdateResult>(request.operation_id(), &view)
-    }
-}
-
-impl OperationService<OrderReceiptRecordRequest> for OrderOperationService<'_> {
-    type Result = OrderReceiptRecordResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<OrderReceiptRecordRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let received = bool_input(&request, "received").unwrap_or(false);
-        let issue = string_input(&request, "issue")
-            .map(|issue| issue.trim().to_owned())
-            .filter(|issue| !issue.is_empty());
-        if received && issue.is_some() {
-            return Err(invalid_input(
-                request.operation_id(),
-                "`received` and `issue` cannot both be set".to_owned(),
-            ));
-        }
-        if !received && issue.is_none() {
-            return Err(invalid_input(
-                request.operation_id(),
-                "missing required receipt outcome input".to_owned(),
-            ));
-        }
-        if request.context.requires_approval_token() {
-            return Err(OperationAdapterError::approval_required(
-                request.operation_id(),
-            ));
-        }
-
-        let args = OrderReceiptArgs {
-            key: required_order_key(&request)?,
-            received,
-            issue,
-            idempotency_key: request
-                .context
-                .idempotency_key
-                .clone()
-                .or_else(|| string_input(&request, "idempotency_key")),
-        };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = crate::runtime::order::receipt_record(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
-        })?;
-        receipt_result::<OrderReceiptRecordResult>(request.operation_id(), &view)
-    }
-}
-
-impl OperationService<OrderPaymentRecordRequest> for OrderOperationService<'_> {
-    type Result = OrderPaymentRecordResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<OrderPaymentRecordRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        Err(deferred_payment_error(request.operation_id()))
-    }
-}
-
-impl OperationService<OrderSettlementAcceptRequest> for OrderOperationService<'_> {
-    type Result = OrderSettlementAcceptResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<OrderSettlementAcceptRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        Err(deferred_payment_error(request.operation_id()))
-    }
-}
-
-impl OperationService<OrderSettlementRejectRequest> for OrderOperationService<'_> {
-    type Result = OrderSettlementRejectResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<OrderSettlementRejectRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        Err(deferred_payment_error(request.operation_id()))
-    }
-}
-
 impl OperationService<OrderStatusGetRequest> for OrderOperationService<'_> {
     type Result = OrderStatusGetResult;
 
@@ -677,96 +546,6 @@ fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
         "buyer_pubkey": &view.buyer_pubkey,
         "seller_pubkey": &view.seller_pubkey,
         "decision": &view.decision,
-        "dry_run": view.dry_run,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "acknowledged_relays": &view.acknowledged_relays,
-        "failed_relays": &view.failed_relays,
-        "fetched_count": view.fetched_count,
-        "decoded_count": view.decoded_count,
-        "skipped_count": view.skipped_count,
-        "idempotency_key": &view.idempotency_key,
-        "signer_mode": &view.signer_mode,
-        "issues": &view.issues,
-        "actions": &view.actions,
-    })
-}
-
-fn fulfillment_result<R>(
-    operation_id: &str,
-    view: &OrderFulfillmentView,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    match view.disposition() {
-        CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        CommandDisposition::ValidationFailed => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!(
-                    "order fulfillment update failed validation with state `{}`",
-                    view.state
-                )
-            });
-            Err(OperationAdapterError::validation_failed_with_detail(
-                operation_id,
-                message,
-                order_fulfillment_error_detail(view),
-            ))
-        }
-        disposition => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!(
-                    "order fulfillment update finished with state `{}`",
-                    view.state
-                )
-            });
-            if disposition == CommandDisposition::ExternalUnavailable {
-                let detail = order_fulfillment_error_detail(view);
-                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
-                    Err(OperationAdapterError::network_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                } else {
-                    Err(OperationAdapterError::operation_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                }
-            } else if disposition == CommandDisposition::Unconfigured {
-                Err(OperationAdapterError::operation_unavailable_with_detail(
-                    operation_id,
-                    message,
-                    order_fulfillment_error_detail(view),
-                ))
-            } else {
-                Err(OperationAdapterError::from_command_disposition(
-                    operation_id,
-                    disposition,
-                    message,
-                ))
-            }
-        }
-    }
-}
-
-fn order_fulfillment_error_detail(view: &OrderFulfillmentView) -> Value {
-    json!({
-        "state": &view.state,
-        "order_id": &view.order_id,
-        "fulfillment_state": &view.fulfillment_state,
-        "listing_addr": &view.listing_addr,
-        "request_event_id": &view.request_event_id,
-        "decision_event_id": &view.decision_event_id,
-        "root_event_id": &view.root_event_id,
-        "prev_event_id": &view.prev_event_id,
-        "event_id": &view.event_id,
-        "event_kind": view.event_kind,
-        "buyer_pubkey": &view.buyer_pubkey,
-        "seller_pubkey": &view.seller_pubkey,
         "dry_run": view.dry_run,
         "target_relays": &view.target_relays,
         "connected_relays": &view.connected_relays,
@@ -1056,96 +835,6 @@ fn order_revision_decision_error_detail(view: &OrderRevisionDecisionView) -> Val
     })
 }
 
-fn receipt_result<R>(
-    operation_id: &str,
-    view: &OrderReceiptView,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    match view.disposition() {
-        CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        CommandDisposition::ValidationFailed => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!(
-                    "order receipt record failed validation with state `{}`",
-                    view.state
-                )
-            });
-            Err(OperationAdapterError::validation_failed_with_detail(
-                operation_id,
-                message,
-                order_receipt_error_detail(view),
-            ))
-        }
-        disposition => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!("order receipt record finished with state `{}`", view.state)
-            });
-            if disposition == CommandDisposition::ExternalUnavailable {
-                let detail = order_receipt_error_detail(view);
-                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
-                    Err(OperationAdapterError::network_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                } else {
-                    Err(OperationAdapterError::operation_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                }
-            } else if disposition == CommandDisposition::Unconfigured {
-                Err(OperationAdapterError::operation_unavailable_with_detail(
-                    operation_id,
-                    message,
-                    order_receipt_error_detail(view),
-                ))
-            } else {
-                Err(OperationAdapterError::from_command_disposition(
-                    operation_id,
-                    disposition,
-                    message,
-                ))
-            }
-        }
-    }
-}
-
-fn order_receipt_error_detail(view: &OrderReceiptView) -> Value {
-    json!({
-        "state": &view.state,
-        "order_id": &view.order_id,
-        "listing_addr": &view.listing_addr,
-        "request_event_id": &view.request_event_id,
-        "decision_event_id": &view.decision_event_id,
-        "fulfillment_event_id": &view.fulfillment_event_id,
-        "root_event_id": &view.root_event_id,
-        "prev_event_id": &view.prev_event_id,
-        "event_id": &view.event_id,
-        "event_kind": view.event_kind,
-        "buyer_pubkey": &view.buyer_pubkey,
-        "seller_pubkey": &view.seller_pubkey,
-        "received": view.received,
-        "issue": &view.issue,
-        "received_at": &view.received_at,
-        "dry_run": view.dry_run,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "acknowledged_relays": &view.acknowledged_relays,
-        "failed_relays": &view.failed_relays,
-        "fetched_count": view.fetched_count,
-        "decoded_count": view.decoded_count,
-        "skipped_count": view.skipped_count,
-        "idempotency_key": &view.idempotency_key,
-        "signer_mode": &view.signer_mode,
-        "issues": &view.issues,
-        "actions": &view.actions,
-    })
-}
-
 fn status_result<R>(
     operation_id: &str,
     view: &OrderStatusView,
@@ -1206,9 +895,7 @@ fn order_status_error_detail(view: &OrderStatusView) -> Value {
         "last_event_id": &view.last_event_id,
         "revision": &view.revision,
         "inventory": &view.inventory,
-        "fulfillment": &view.fulfillment,
         "lifecycle": &view.lifecycle,
-        "payment": &view.payment,
         "reducer_issues": &view.reducer_issues,
         "target_relays": &view.target_relays,
         "connected_relays": &view.connected_relays,
@@ -1544,10 +1231,6 @@ fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapter
     result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
 }
 
-fn deferred_payment_error(operation_id: &str) -> OperationAdapterError {
-    OperationAdapterError::not_implemented(operation_id, deferred_payment_message())
-}
-
 fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
     OperationAdapterError::InvalidInput {
         operation_id: operation_id.to_owned(),
@@ -1569,9 +1252,8 @@ mod tests {
         OperationAdapter, OperationContext, OperationData, OperationRequest, OrderAcceptRequest,
         OrderAcceptResult, OrderCancelRequest, OrderDeclineRequest, OrderDeclineResult,
         OrderEventListRequest, OrderEventWatchRequest, OrderGetRequest, OrderListRequest,
-        OrderPaymentRecordRequest, OrderReceiptRecordRequest, OrderRevisionAcceptRequest,
-        OrderRevisionDeclineRequest, OrderRevisionProposeRequest, OrderSettlementAcceptRequest,
-        OrderSettlementRejectRequest, OrderStatusGetRequest, OrderSubmitRequest,
+        OrderRevisionAcceptRequest, OrderRevisionDeclineRequest, OrderRevisionProposeRequest,
+        OrderStatusGetRequest, OrderSubmitRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -1918,81 +1600,6 @@ mod tests {
         let error = service.execute(revision).expect_err("approval required");
 
         assert_eq!(error.to_output_error().code, "approval_required");
-    }
-
-    #[test]
-    fn order_receipt_record_requires_outcome_before_approval() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
-        let receipt = OperationRequest::new(
-            OperationContext::default(),
-            OrderReceiptRecordRequest::from_data(data(&[("order_id", "ord_pending")])),
-        )
-        .expect("order receipt request");
-        let error = service.execute(receipt).expect_err("outcome required");
-        let output_error = error.to_output_error();
-
-        assert_eq!(output_error.code, "invalid_input");
-        assert!(output_error.message.contains("outcome"));
-    }
-
-    #[test]
-    fn order_receipt_record_requires_approval_token() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
-        let mut input = data(&[("order_id", "ord_pending")]);
-        input.insert("received".to_owned(), Value::Bool(true));
-        let receipt = OperationRequest::new(
-            OperationContext::default(),
-            OrderReceiptRecordRequest::from_data(input),
-        )
-        .expect("order receipt request");
-        let error = service.execute(receipt).expect_err("approval required");
-
-        assert_eq!(error.to_output_error().code, "approval_required");
-    }
-
-    #[test]
-    fn deferred_payment_commands_return_not_implemented_before_input_or_approval() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
-
-        let payment = OperationRequest::new(
-            OperationContext::default(),
-            OrderPaymentRecordRequest::from_data(data(&[("order_id", "ord_pending")])),
-        )
-        .expect("order payment request");
-        let payment_error = service.execute(payment).expect_err("payment deferred");
-        assert_eq!(payment_error.to_output_error().code, "not_implemented");
-
-        let settlement_accept = OperationRequest::new(
-            OperationContext::default(),
-            OrderSettlementAcceptRequest::from_data(data(&[("order_id", "ord_pending")])),
-        )
-        .expect("order settlement accept request");
-        let settlement_accept_error = service
-            .execute(settlement_accept)
-            .expect_err("settlement accept deferred");
-        assert_eq!(
-            settlement_accept_error.to_output_error().code,
-            "not_implemented"
-        );
-
-        let settlement_reject = OperationRequest::new(
-            OperationContext::default(),
-            OrderSettlementRejectRequest::from_data(data(&[("order_id", "ord_pending")])),
-        )
-        .expect("order settlement reject request");
-        let settlement_reject_error = service
-            .execute(settlement_reject)
-            .expect_err("settlement reject deferred");
-        assert_eq!(
-            settlement_reject_error.to_output_error().code,
-            "not_implemented"
-        );
     }
 
     #[test]

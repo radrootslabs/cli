@@ -1920,86 +1920,6 @@ fn seller_order_decision_and_status_commands_are_public() {
             "order.status.get",
             ["--format", "json", "order", "status", "get", "ord_public"].as_slice(),
         ),
-        (
-            "order.fulfillment.update",
-            [
-                "--format",
-                "json",
-                "--dry-run",
-                "order",
-                "fulfillment",
-                "update",
-                "ord_public",
-                "--state",
-                "ready_for_pickup",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.receipt.record",
-            [
-                "--format",
-                "json",
-                "--dry-run",
-                "order",
-                "receipt",
-                "record",
-                "ord_public",
-                "--received",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.payment.record",
-            [
-                "--format",
-                "json",
-                "--dry-run",
-                "order",
-                "payment",
-                "record",
-                "ord_public",
-                "--amount",
-                "12",
-                "--currency",
-                "USD",
-                "--method",
-                "cash",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.accept",
-            [
-                "--format",
-                "json",
-                "--dry-run",
-                "order",
-                "settlement",
-                "accept",
-                "ord_public",
-                "--payment-event-id",
-                "1",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.reject",
-            [
-                "--format",
-                "json",
-                "--dry-run",
-                "order",
-                "settlement",
-                "reject",
-                "ord_public",
-                "--payment-event-id",
-                "1",
-                "--reason",
-                "reference mismatch",
-            ]
-            .as_slice(),
-        ),
     ] {
         let output = radroots()
             .args(args)
@@ -2025,196 +1945,22 @@ fn seller_order_decision_and_status_commands_are_public() {
 }
 
 #[test]
-fn payment_commands_return_not_implemented_before_mutation_preflight() {
-    let sandbox = RadrootsCliSandbox::new();
-
-    for (operation_id, args) in [
-        (
-            "order.payment.record",
-            [
-                "--format",
-                "json",
-                "order",
-                "payment",
-                "record",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.payment.record",
-            [
-                "--format",
-                "json",
-                "--relay",
-                "not-a-url",
-                "order",
-                "payment",
-                "record",
-                "ord_pending",
-                "--method",
-                "card",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.payment.record",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "order",
-                "payment",
-                "record",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.accept",
-            [
-                "--format",
-                "json",
-                "order",
-                "settlement",
-                "accept",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.accept",
-            [
-                "--format",
-                "json",
-                "--relay",
-                "not-a-url",
-                "order",
-                "settlement",
-                "accept",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.accept",
-            [
-                "--format",
-                "json",
-                "--online",
-                "--relay",
-                "not-a-url",
-                "order",
-                "settlement",
-                "accept",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.reject",
-            [
-                "--format",
-                "json",
-                "order",
-                "settlement",
-                "reject",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.reject",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "--dry-run",
-                "order",
-                "settlement",
-                "reject",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
+fn removed_order_post_agreement_subcommands_are_rejected_publicly() {
+    for args in [
+        ["order", "fulfillment", "update", "ord_public"].as_slice(),
+        ["order", "receipt", "record", "ord_public"].as_slice(),
+        ["order", "payment", "record", "ord_public"].as_slice(),
+        ["order", "settlement", "accept", "ord_public"].as_slice(),
+        ["order", "settlement", "reject", "ord_public"].as_slice(),
     ] {
-        let (output, value) = sandbox.json_output(args);
+        let output = radroots()
+            .args(args)
+            .output()
+            .expect("run removed order command");
 
-        assert!(!output.status.success());
-        assert_eq!(output.status.code(), Some(3));
-        assert_eq!(value["operation_id"], operation_id);
-        assert_eq!(value["result"], Value::Null);
-        assert_eq!(value["errors"][0]["code"], "not_implemented");
-        assert_eq!(value["errors"][0]["exit_code"], 3);
-        let message = value["errors"][0]["message"].as_str().expect("message");
-        assert!(message.contains("not implemented"));
-        assert!(message.contains("future phase"));
-        assert!(!message.contains("approval_token"));
-        assert!(!message.contains("relay"));
-    }
-}
-
-#[test]
-fn payment_commands_return_not_implemented_for_ndjson_output() {
-    let sandbox = RadrootsCliSandbox::new();
-
-    for (operation_id, args) in [
-        (
-            "order.payment.record",
-            [
-                "--format",
-                "ndjson",
-                "order",
-                "payment",
-                "record",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.accept",
-            [
-                "--format",
-                "ndjson",
-                "order",
-                "settlement",
-                "accept",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.settlement.reject",
-            [
-                "--format",
-                "ndjson",
-                "order",
-                "settlement",
-                "reject",
-                "ord_pending",
-            ]
-            .as_slice(),
-        ),
-    ] {
-        let output = sandbox.command().args(args).output().expect("run command");
-        let frames = ndjson_from_stdout(&output);
-        let error_frame = frames.last().expect("error frame");
-        let message = error_frame["errors"][0]["message"]
-            .as_str()
-            .expect("message");
-
-        assert!(!output.status.success());
-        assert_eq!(output.status.code(), Some(3));
-        assert_eq!(error_frame["operation_id"], operation_id);
-        assert_eq!(error_frame["frame_type"], "error");
-        assert_eq!(error_frame["errors"][0]["code"], "not_implemented");
-        assert_eq!(error_frame["errors"][0]["exit_code"], 3);
-        assert!(message.contains("not implemented"));
-        assert!(message.contains("future phase"));
-        assert!(!message.contains("ndjson"));
-        assert!(!message.contains("relay"));
-        assert!(!message.contains("approval"));
-        assert!(!message.contains("signer"));
+        assert!(!output.status.success(), "`{args:?}` should be rejected");
+        let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+        assert!(stderr.contains("unrecognized subcommand"));
     }
 }
 
@@ -2747,20 +2493,6 @@ fn machine_output_exposes_status_format_resource_and_reason_code() {
         account["result"]["account"]["id"]
     );
 
-    let (deferred_output, deferred) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "order",
-        "payment",
-        "record",
-        "ord_pending",
-    ]);
-    assert_eq!(deferred_output.status.code(), Some(3));
-    assert_eq!(deferred["status"], "error");
-    assert_eq!(deferred["output_format"], "json");
-    assert_eq!(deferred["reason_code"], "not_implemented");
-    assert_eq!(deferred["errors"][0]["reason_code"], "not_implemented");
-
     let output = sandbox
         .command()
         .args(["--format", "json", "--dry-run", "workspace", "get"])
@@ -2774,24 +2506,17 @@ fn machine_output_exposes_status_format_resource_and_reason_code() {
 
     let ndjson_output = sandbox
         .command()
-        .args([
-            "--format",
-            "ndjson",
-            "order",
-            "payment",
-            "record",
-            "ord_pending",
-        ])
+        .args(["--format", "ndjson", "--dry-run", "workspace", "get"])
         .output()
-        .expect("run deferred ndjson");
-    assert_eq!(ndjson_output.status.code(), Some(3));
+        .expect("run invalid ndjson");
+    assert_eq!(ndjson_output.status.code(), Some(2));
     let frames = ndjson_from_stdout(&ndjson_output);
     assert_eq!(frames[0]["payload"]["status"], "error");
     assert_eq!(frames[0]["payload"]["output_format"], "ndjson");
     assert_eq!(frames[1]["payload"]["status"], "error");
     assert_eq!(frames[1]["payload"]["output_format"], "ndjson");
-    assert_eq!(frames[1]["payload"]["reason_code"], "not_implemented");
-    assert_eq!(frames[1]["errors"][0]["reason_code"], "not_implemented");
+    assert_eq!(frames[1]["payload"]["reason_code"], "invalid_input");
+    assert_eq!(frames[1]["errors"][0]["reason_code"], "invalid_input");
 }
 
 #[test]
@@ -2881,35 +2606,6 @@ fn offline_forbids_external_network_operations() {
                 "revision_1",
                 "--reason",
                 "keep original",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.fulfillment.update",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "order",
-                "fulfillment",
-                "update",
-                "ord_offline_fulfillment",
-                "--state",
-                "ready_for_pickup",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.receipt.record",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "order",
-                "receipt",
-                "record",
-                "ord_offline_receipt",
-                "--received",
             ]
             .as_slice(),
         ),
@@ -3207,38 +2903,6 @@ fn offline_rejects_order_decision_dry_run() {
             ]
             .as_slice(),
         ),
-        (
-            "order.fulfillment.update",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "--dry-run",
-                "order",
-                "fulfillment",
-                "update",
-                "ord_offline_decision",
-                "--state",
-                "ready_for_pickup",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.receipt.record",
-            [
-                "--format",
-                "json",
-                "--offline",
-                "--dry-run",
-                "order",
-                "receipt",
-                "record",
-                "ord_offline_decision",
-                "--issue",
-                "damaged items",
-            ]
-            .as_slice(),
-        ),
     ] {
         let output = radroots()
             .args(args)
@@ -3386,35 +3050,6 @@ fn online_requires_relay_for_external_network_operations() {
                 "revision_1",
                 "--reason",
                 "keep original",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.fulfillment.update",
-            [
-                "--format",
-                "json",
-                "--online",
-                "order",
-                "fulfillment",
-                "update",
-                "ord_missing",
-                "--state",
-                "ready_for_pickup",
-            ]
-            .as_slice(),
-        ),
-        (
-            "order.receipt.record",
-            [
-                "--format",
-                "json",
-                "--online",
-                "order",
-                "receipt",
-                "record",
-                "ord_missing",
-                "--received",
             ]
             .as_slice(),
         ),
@@ -6259,23 +5894,6 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
             "keep original order",
         ],
     );
-    assert_required_approval_token_rejected(
-        &sandbox,
-        "order.fulfillment.update",
-        &[
-            "order",
-            "fulfillment",
-            "update",
-            "ord_pending_fulfillment",
-            "--state",
-            "ready_for_pickup",
-        ],
-    );
-    assert_required_approval_token_rejected(
-        &sandbox,
-        "order.receipt.record",
-        &["order", "receipt", "record", "ord_pending", "--received"],
-    );
 }
 
 fn assert_required_approval_token_rejected(
@@ -6299,34 +5917,6 @@ fn assert_required_approval_token_rejected(
         assert_eq!(value["errors"][0]["exit_code"], 6);
         assert_no_removed_command_reference(&value, &args);
     }
-}
-
-#[test]
-fn order_fulfillment_update_requires_state_before_approval() {
-    let sandbox = RadrootsCliSandbox::new();
-
-    let (output, value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "order",
-        "fulfillment",
-        "update",
-        "ord_missing_state",
-    ]);
-
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(value["operation_id"], "order.fulfillment.update");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "invalid_input");
-    assert_eq!(value["errors"][0]["exit_code"], 2);
-    assert!(
-        value["errors"][0]["message"]
-            .as_str()
-            .expect("message")
-            .contains("state")
-    );
-    assert_no_removed_command_reference(&value, &["order", "fulfillment", "update"]);
-    assert_no_daemon_runtime_reference(&value, &["order", "fulfillment", "update"]);
 }
 
 #[test]
@@ -7304,23 +6894,6 @@ fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft()
                 order_id.as_str(),
                 "--reason",
                 "changed plans",
-            ],
-        ),
-        (
-            "order.receipt.record",
-            vec![
-                "--format",
-                "json",
-                "--dry-run",
-                "--account-id",
-                drift_account_id,
-                "--relay",
-                "ws://127.0.0.1:9",
-                "order",
-                "receipt",
-                "record",
-                order_id.as_str(),
-                "--received",
             ],
         ),
     ] {

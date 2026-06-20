@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{ArgAction, Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 
 #[derive(Debug, Clone, Args)]
 pub struct OrderArgs {
@@ -19,10 +19,6 @@ pub enum OrderCommand {
     Decline(OrderDeclineArgs),
     Cancel(OrderCancelArgs),
     Revision(OrderRevisionArgs),
-    Fulfillment(OrderFulfillmentArgs),
-    Receipt(OrderReceiptArgs),
-    Payment(OrderPaymentArgs),
-    Settlement(OrderSettlementArgs),
     Status(OrderStatusArgs),
     Event(OrderEventArgs),
 }
@@ -122,120 +118,6 @@ pub struct OrderRevisionDeclineArgs {
     pub order_id: Option<String>,
     #[arg(long)]
     pub revision_id: Option<String>,
-    #[arg(long)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct OrderFulfillmentArgs {
-    #[command(subcommand)]
-    pub command: OrderFulfillmentCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum OrderFulfillmentCommand {
-    Update(OrderFulfillmentUpdateArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct OrderFulfillmentUpdateArgs {
-    pub order_id: Option<String>,
-    #[arg(long, value_enum)]
-    pub state: Option<OrderFulfillmentStateArg>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "snake_case")]
-pub enum OrderFulfillmentStateArg {
-    Preparing,
-    ReadyForPickup,
-    OutForDelivery,
-    Delivered,
-    SellerCancelled,
-}
-
-impl OrderFulfillmentStateArg {
-    pub const fn as_protocol_state(self) -> &'static str {
-        match self {
-            Self::Preparing => "preparing",
-            Self::ReadyForPickup => "ready_for_pickup",
-            Self::OutForDelivery => "out_for_delivery",
-            Self::Delivered => "delivered",
-            Self::SellerCancelled => "seller_cancelled",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct OrderReceiptArgs {
-    #[command(subcommand)]
-    pub command: OrderReceiptCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum OrderReceiptCommand {
-    Record(OrderReceiptRecordArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct OrderReceiptRecordArgs {
-    pub order_id: Option<String>,
-    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "issue")]
-    pub received: bool,
-    #[arg(long)]
-    pub issue: Option<String>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct OrderPaymentArgs {
-    #[command(subcommand)]
-    pub command: OrderPaymentCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum OrderPaymentCommand {
-    Record(OrderPaymentRecordArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct OrderPaymentRecordArgs {
-    pub order_id: Option<String>,
-    #[arg(long)]
-    pub amount: Option<String>,
-    #[arg(long)]
-    pub currency: Option<String>,
-    #[arg(long)]
-    pub method: Option<String>,
-    #[arg(long)]
-    pub reference: Option<String>,
-    #[arg(long)]
-    pub paid_at: Option<u64>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct OrderSettlementArgs {
-    #[command(subcommand)]
-    pub command: OrderSettlementCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum OrderSettlementCommand {
-    Accept(OrderSettlementAcceptArgs),
-    Reject(OrderSettlementRejectArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct OrderSettlementAcceptArgs {
-    pub order_id: Option<String>,
-    #[arg(long)]
-    pub payment_event_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct OrderSettlementRejectArgs {
-    pub order_id: Option<String>,
-    #[arg(long)]
-    pub payment_event_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
 }

@@ -271,19 +271,6 @@ impl TargetCommand {
                     OrderRevisionCommand::Accept(_) => "order.revision.accept",
                     OrderRevisionCommand::Decline(_) => "order.revision.decline",
                 },
-                OrderCommand::Fulfillment(fulfillment) => match &fulfillment.command {
-                    OrderFulfillmentCommand::Update(_) => "order.fulfillment.update",
-                },
-                OrderCommand::Receipt(receipt) => match &receipt.command {
-                    OrderReceiptCommand::Record(_) => "order.receipt.record",
-                },
-                OrderCommand::Payment(payment) => match &payment.command {
-                    OrderPaymentCommand::Record(_) => "order.payment.record",
-                },
-                OrderCommand::Settlement(settlement) => match &settlement.command {
-                    OrderSettlementCommand::Accept(_) => "order.settlement.accept",
-                    OrderSettlementCommand::Reject(_) => "order.settlement.reject",
-                },
                 OrderCommand::Status(status) => match &status.command {
                     OrderStatusCommand::Get(_) => "order.status.get",
                 },
@@ -309,10 +296,8 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{
-        AccountCommand, FarmCommand, ListingCommand, OrderCommand, OrderFulfillmentCommand,
-        OrderFulfillmentStateArg, OrderPaymentCommand, OrderReceiptCommand, OrderRevisionCommand,
-        OrderSettlementCommand, TargetCliArgs, TargetOutputFormat, ValidationCommand,
-        ValidationReceiptCommand,
+        AccountCommand, FarmCommand, ListingCommand, OrderCommand, OrderRevisionCommand,
+        TargetCliArgs, TargetOutputFormat, ValidationCommand, ValidationReceiptCommand,
     };
     use crate::registry::OPERATION_REGISTRY;
 
@@ -489,31 +474,6 @@ mod tests {
     }
 
     #[test]
-    fn target_parser_accepts_order_fulfillment_update_state() {
-        let parsed = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "fulfillment",
-            "update",
-            "ord_test",
-            "--state",
-            "ready_for_pickup",
-        ])
-        .expect("target args parse");
-
-        assert_eq!(parsed.command.operation_id(), "order.fulfillment.update");
-        let crate::cli::TargetCommand::Order(order) = parsed.command else {
-            panic!("expected order command")
-        };
-        let OrderCommand::Fulfillment(fulfillment) = order.command else {
-            panic!("expected order fulfillment command")
-        };
-        let OrderFulfillmentCommand::Update(args) = fulfillment.command;
-        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
-        assert_eq!(args.state, Some(OrderFulfillmentStateArg::ReadyForPickup));
-    }
-
-    #[test]
     fn target_parser_accepts_order_cancel_reason() {
         let parsed = TargetCliArgs::try_parse_from([
             "radroots",
@@ -636,42 +596,6 @@ mod tests {
     }
 
     #[test]
-    fn target_parser_accepts_order_receipt_record_outcomes() {
-        let received = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "receipt",
-            "record",
-            "ord_test",
-            "--received",
-        ])
-        .expect("target args parse");
-        assert_eq!(received.command.operation_id(), "order.receipt.record");
-        let crate::cli::TargetCommand::Order(order) = received.command else {
-            panic!("expected order command")
-        };
-        let OrderCommand::Receipt(receipt) = order.command else {
-            panic!("expected order receipt command")
-        };
-        let OrderReceiptCommand::Record(args) = receipt.command;
-        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
-        assert!(args.received);
-        assert_eq!(args.issue, None);
-
-        let issue = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "receipt",
-            "record",
-            "ord_test",
-            "--issue",
-            "damaged items",
-        ])
-        .expect("target args parse");
-        assert_eq!(issue.command.operation_id(), "order.receipt.record");
-    }
-
-    #[test]
     fn target_parser_accepts_validation_receipt_commands() {
         let get = TargetCliArgs::try_parse_from([
             "radroots",
@@ -722,95 +646,6 @@ mod tests {
         ])
         .expect("target args parse");
         assert_eq!(verify.command.operation_id(), "validation.receipt.verify");
-    }
-
-    #[test]
-    fn target_parser_accepts_order_payment_record_methods() {
-        let parsed = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "payment",
-            "record",
-            "ord_test",
-            "--amount",
-            "12",
-            "--currency",
-            "USD",
-            "--method",
-            "manual_transfer",
-            "--reference",
-            "memo-1",
-            "--paid-at",
-            "1777666000",
-        ])
-        .expect("target args parse");
-        assert_eq!(parsed.command.operation_id(), "order.payment.record");
-        let crate::cli::TargetCommand::Order(order) = parsed.command else {
-            panic!("expected order command")
-        };
-        let OrderCommand::Payment(payment) = order.command else {
-            panic!("expected order payment command")
-        };
-        let OrderPaymentCommand::Record(args) = payment.command;
-        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
-        assert_eq!(args.amount.as_deref(), Some("12"));
-        assert_eq!(args.currency.as_deref(), Some("USD"));
-        assert_eq!(args.method.as_deref(), Some("manual_transfer"));
-        assert_eq!(args.reference.as_deref(), Some("memo-1"));
-        assert_eq!(args.paid_at, Some(1_777_666_000));
-
-        let future_method = TargetCliArgs::try_parse_from([
-            "radroots", "order", "payment", "record", "ord_test", "--method", "card",
-        ])
-        .expect("target args parse");
-        let crate::cli::TargetCommand::Order(order) = future_method.command else {
-            panic!("expected order command")
-        };
-        let OrderCommand::Payment(payment) = order.command else {
-            panic!("expected order payment command")
-        };
-        let OrderPaymentCommand::Record(args) = payment.command;
-        assert_eq!(args.method.as_deref(), Some("card"));
-    }
-
-    #[test]
-    fn target_parser_accepts_order_settlement_decisions() {
-        let accept = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "settlement",
-            "accept",
-            "ord_test",
-            "--payment-event-id",
-            "pay_event",
-        ])
-        .expect("target args parse");
-        assert_eq!(accept.command.operation_id(), "order.settlement.accept");
-        let crate::cli::TargetCommand::Order(order) = accept.command else {
-            panic!("expected order command")
-        };
-        let OrderCommand::Settlement(settlement) = order.command else {
-            panic!("expected order settlement command")
-        };
-        let OrderSettlementCommand::Accept(args) = settlement.command else {
-            panic!("expected settlement accept command")
-        };
-        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
-        assert_eq!(args.payment_event_id.as_deref(), Some("pay_event"));
-
-        let reject = TargetCliArgs::try_parse_from([
-            "radroots",
-            "order",
-            "settlement",
-            "reject",
-            "ord_test",
-            "--payment-event-id",
-            "pay_event",
-            "--reason",
-            "reference mismatch",
-        ])
-        .expect("target args parse");
-        assert_eq!(reject.command.operation_id(), "order.settlement.reject");
     }
 
     #[test]
