@@ -181,8 +181,6 @@ fn output_resource_from_value(value: &Value) -> Option<OutputResource> {
             "basket",
             "quote",
             "order",
-            "payment",
-            "settlement",
         ];
         nested_fields
             .into_iter()
@@ -235,8 +233,6 @@ fn output_resource_from_fields(object: &serde_json::Map<String, Value>) -> Optio
         ("listing_addr", "listing"),
         ("basket_id", "basket"),
         ("order_id", "order"),
-        ("payment_event_id", "payment"),
-        ("settlement_event_id", "settlement"),
     ]
     .into_iter()
     .find_map(|(field, kind)| {
