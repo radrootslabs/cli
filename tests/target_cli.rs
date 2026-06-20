@@ -5595,7 +5595,7 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
 }
 
 #[test]
-fn market_checkout_readiness_gates_buyer_intent_actions() {
+fn market_order_request_readiness_gates_buyer_intent_actions() {
     let sandbox = RadrootsCliSandbox::new();
     seed_orderable_listing(&sandbox, LISTING_ADDR);
 
@@ -5604,7 +5604,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     let result = &search["result"]["results"][0];
     assert_eq!(result["protocol_valid"], true);
     assert_eq!(result["marketplace_eligible"], true);
-    assert_eq!(result["checkout_enabled"], true);
+    assert_eq!(result["order_request_enabled"], true);
     assert_eq!(result["primary_bin_verified"], true);
     assert!(result.get("reason_codes").is_none());
     assert!(
@@ -5626,7 +5626,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     assert_eq!(listing["operation_id"], "market.listing.get");
     assert_eq!(listing["result"]["protocol_valid"], true);
     assert_eq!(listing["result"]["marketplace_eligible"], true);
-    assert_eq!(listing["result"]["checkout_enabled"], true);
+    assert_eq!(listing["result"]["order_request_enabled"], true);
     assert_eq!(listing["result"]["primary_bin_verified"], true);
     assert!(
         listing["result"]["actions"]
@@ -5643,11 +5643,11 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     let disabled_result = &disabled_search["result"]["results"][0];
     assert_eq!(disabled_result["protocol_valid"], true);
     assert_eq!(disabled_result["marketplace_eligible"], true);
-    assert_eq!(disabled_result["checkout_enabled"], false);
+    assert_eq!(disabled_result["order_request_enabled"], false);
     assert_eq!(disabled_result["primary_bin_verified"], true);
     assert_eq!(
         disabled_result["reason_codes"][0],
-        "listing_checkout_disabled"
+        "listing_order_request_disabled"
     );
     assert_eq!(
         disabled_result["reason_codes"][1],
@@ -5671,11 +5671,11 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
     ]);
     assert_eq!(disabled_listing["result"]["protocol_valid"], true);
     assert_eq!(disabled_listing["result"]["marketplace_eligible"], true);
-    assert_eq!(disabled_listing["result"]["checkout_enabled"], false);
+    assert_eq!(disabled_listing["result"]["order_request_enabled"], false);
     assert_eq!(disabled_listing["result"]["primary_bin_verified"], true);
     assert_eq!(
         disabled_listing["result"]["reason_codes"][0],
-        "listing_checkout_disabled"
+        "listing_order_request_disabled"
     );
     assert!(
         disabled_listing["result"]
@@ -5691,11 +5691,11 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
         sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
     let no_bin_result = &no_bin_search["result"]["results"][0];
     assert_eq!(no_bin_result["primary_bin_id"], Value::Null);
-    assert_eq!(no_bin_result["checkout_enabled"], false);
+    assert_eq!(no_bin_result["order_request_enabled"], false);
     assert_eq!(no_bin_result["primary_bin_verified"], false);
     assert_eq!(
         no_bin_result["reason_codes"][0],
-        "listing_checkout_disabled"
+        "listing_order_request_disabled"
     );
     assert_eq!(
         no_bin_result["reason_codes"][1],
@@ -5718,7 +5718,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
         "pasture-eggs",
     ]);
     assert_eq!(no_bin_listing["result"]["primary_bin_id"], Value::Null);
-    assert_eq!(no_bin_listing["result"]["checkout_enabled"], false);
+    assert_eq!(no_bin_listing["result"]["order_request_enabled"], false);
     assert_eq!(no_bin_listing["result"]["primary_bin_verified"], false);
     assert_eq!(
         no_bin_listing["result"]["reason_codes"][1],
@@ -5737,7 +5737,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
         sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
     let invalid_bin_result = &invalid_bin_search["result"]["results"][0];
     assert_eq!(invalid_bin_result["primary_bin_id"], "missing-bin");
-    assert_eq!(invalid_bin_result["checkout_enabled"], false);
+    assert_eq!(invalid_bin_result["order_request_enabled"], false);
     assert_eq!(invalid_bin_result["primary_bin_verified"], false);
     assert_eq!(
         invalid_bin_result["reason_codes"][1],
@@ -5763,7 +5763,10 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
         invalid_bin_listing["result"]["primary_bin_id"],
         "missing-bin"
     );
-    assert_eq!(invalid_bin_listing["result"]["checkout_enabled"], false);
+    assert_eq!(
+        invalid_bin_listing["result"]["order_request_enabled"],
+        false
+    );
     assert_eq!(invalid_bin_listing["result"]["primary_bin_verified"], false);
     assert_eq!(
         invalid_bin_listing["result"]["reason_codes"][1],
@@ -5787,7 +5790,7 @@ fn market_checkout_readiness_gates_buyer_intent_actions() {
         "pasture-eggs",
     ]);
     assert_eq!(restored_listing["result"]["primary_bin_id"], "bin-1");
-    assert_eq!(restored_listing["result"]["checkout_enabled"], true);
+    assert_eq!(restored_listing["result"]["order_request_enabled"], true);
     assert_eq!(restored_listing["result"]["primary_bin_verified"], true);
     assert!(
         restored_listing["result"]

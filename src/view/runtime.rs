@@ -1124,7 +1124,7 @@ pub struct FindHyfView {
 pub struct MarketReadinessView {
     pub protocol_valid: bool,
     pub marketplace_eligible: bool,
-    pub checkout_enabled: bool,
+    pub order_request_enabled: bool,
     pub primary_bin_verified: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reason_codes: Vec<String>,
@@ -1135,7 +1135,7 @@ impl MarketReadinessView {
         Self {
             protocol_valid: false,
             marketplace_eligible: false,
-            checkout_enabled: false,
+            order_request_enabled: false,
             primary_bin_verified: false,
             reason_codes: vec![reason_code.into()],
         }
@@ -1179,7 +1179,7 @@ impl MarketReadinessView {
             && !price_currency.trim().is_empty()
             && price_per_amount.is_finite()
             && price_per_amount > 0.0;
-        let checkout_enabled =
+        let order_request_enabled =
             marketplace_eligible && inventory_available && primary_bin_verified && price_available;
         let mut reason_codes = Vec::new();
         if !protocol_valid {
@@ -1188,8 +1188,8 @@ impl MarketReadinessView {
         if protocol_valid && !marketplace_eligible {
             reason_codes.push("listing_marketplace_ineligible".to_owned());
         }
-        if marketplace_eligible && !checkout_enabled {
-            reason_codes.push("listing_checkout_disabled".to_owned());
+        if marketplace_eligible && !order_request_enabled {
+            reason_codes.push("listing_order_request_disabled".to_owned());
             if !inventory_available {
                 reason_codes.push("listing_inventory_unavailable".to_owned());
             }
@@ -1205,7 +1205,7 @@ impl MarketReadinessView {
         Self {
             protocol_valid,
             marketplace_eligible,
-            checkout_enabled,
+            order_request_enabled,
             primary_bin_verified,
             reason_codes,
         }
@@ -1219,7 +1219,7 @@ mod market_readiness_tests {
     const LISTING_ADDR: &str = "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
 
     #[test]
-    fn market_readiness_separates_protocol_marketplace_and_checkout_state() {
+    fn market_readiness_separates_protocol_marketplace_and_order_request_state() {
         let enabled = MarketReadinessView::from_market_projection(
             Some(LISTING_ADDR),
             Some("bin-1"),
@@ -1233,7 +1233,7 @@ mod market_readiness_tests {
         );
         assert!(enabled.protocol_valid);
         assert!(enabled.marketplace_eligible);
-        assert!(enabled.checkout_enabled);
+        assert!(enabled.order_request_enabled);
         assert!(enabled.primary_bin_verified);
         assert!(enabled.reason_codes.is_empty());
 
@@ -1250,7 +1250,7 @@ mod market_readiness_tests {
         );
         assert!(!invalid.protocol_valid);
         assert!(!invalid.marketplace_eligible);
-        assert!(!invalid.checkout_enabled);
+        assert!(!invalid.order_request_enabled);
         assert!(!invalid.primary_bin_verified);
         assert_eq!(invalid.reason_codes, vec!["listing_protocol_invalid"]);
 
@@ -1267,14 +1267,14 @@ mod market_readiness_tests {
         );
         assert!(ineligible.protocol_valid);
         assert!(!ineligible.marketplace_eligible);
-        assert!(!ineligible.checkout_enabled);
+        assert!(!ineligible.order_request_enabled);
         assert!(ineligible.primary_bin_verified);
         assert_eq!(
             ineligible.reason_codes,
             vec!["listing_marketplace_ineligible"]
         );
 
-        let checkout_disabled = MarketReadinessView::from_market_projection(
+        let order_request_disabled = MarketReadinessView::from_market_projection(
             Some(LISTING_ADDR),
             Some("bin-1"),
             Some("bin-1"),
@@ -1285,13 +1285,16 @@ mod market_readiness_tests {
             "USD",
             1.0,
         );
-        assert!(checkout_disabled.protocol_valid);
-        assert!(checkout_disabled.marketplace_eligible);
-        assert!(!checkout_disabled.checkout_enabled);
-        assert!(checkout_disabled.primary_bin_verified);
+        assert!(order_request_disabled.protocol_valid);
+        assert!(order_request_disabled.marketplace_eligible);
+        assert!(!order_request_disabled.order_request_enabled);
+        assert!(order_request_disabled.primary_bin_verified);
         assert_eq!(
-            checkout_disabled.reason_codes,
-            vec!["listing_checkout_disabled", "listing_inventory_unavailable"]
+            order_request_disabled.reason_codes,
+            vec![
+                "listing_order_request_disabled",
+                "listing_inventory_unavailable"
+            ]
         );
 
         let primary_bin_missing = MarketReadinessView::from_market_projection(
@@ -1307,11 +1310,14 @@ mod market_readiness_tests {
         );
         assert!(primary_bin_missing.protocol_valid);
         assert!(primary_bin_missing.marketplace_eligible);
-        assert!(!primary_bin_missing.checkout_enabled);
+        assert!(!primary_bin_missing.order_request_enabled);
         assert!(!primary_bin_missing.primary_bin_verified);
         assert_eq!(
             primary_bin_missing.reason_codes,
-            vec!["listing_checkout_disabled", "listing_primary_bin_missing"]
+            vec![
+                "listing_order_request_disabled",
+                "listing_primary_bin_missing"
+            ]
         );
 
         let primary_bin_blank = MarketReadinessView::from_market_projection(
@@ -1327,7 +1333,10 @@ mod market_readiness_tests {
         );
         assert_eq!(
             primary_bin_blank.reason_codes,
-            vec!["listing_checkout_disabled", "listing_primary_bin_missing"]
+            vec![
+                "listing_order_request_disabled",
+                "listing_primary_bin_missing"
+            ]
         );
 
         let primary_bin_invalid = MarketReadinessView::from_market_projection(
@@ -1343,11 +1352,14 @@ mod market_readiness_tests {
         );
         assert!(primary_bin_invalid.protocol_valid);
         assert!(primary_bin_invalid.marketplace_eligible);
-        assert!(!primary_bin_invalid.checkout_enabled);
+        assert!(!primary_bin_invalid.order_request_enabled);
         assert!(!primary_bin_invalid.primary_bin_verified);
         assert_eq!(
             primary_bin_invalid.reason_codes,
-            vec!["listing_checkout_disabled", "listing_primary_bin_invalid"]
+            vec![
+                "listing_order_request_disabled",
+                "listing_primary_bin_invalid"
+            ]
         );
     }
 }
