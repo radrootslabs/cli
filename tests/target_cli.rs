@@ -1,9 +1,11 @@
 mod support;
 
 use std::fs;
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::ids::{
@@ -84,6 +86,150 @@ impl RelayFetchServer {
     fn join(self) {
         self.handle.join().expect("relay fetch server join");
     }
+}
+
+struct RadrootsdProxyJsonRpcServer {
+    endpoint: String,
+    handle: JoinHandle<Value>,
+}
+
+impl RadrootsdProxyJsonRpcServer {
+    fn once(expected_token: &'static str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind radrootsd proxy");
+        listener
+            .set_nonblocking(true)
+            .expect("radrootsd proxy nonblocking");
+        let endpoint = format!("http://{}", listener.local_addr().expect("proxy addr"));
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        return handle_radrootsd_proxy_connection(stream, expected_token);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for radrootsd proxy request"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept radrootsd proxy connection: {error}"),
+                }
+            }
+        });
+        Self { endpoint, handle }
+    }
+
+    fn endpoint(&self) -> &str {
+        self.endpoint.as_str()
+    }
+
+    fn join(self) -> Value {
+        self.handle.join().expect("radrootsd proxy server join")
+    }
+}
+
+fn handle_radrootsd_proxy_connection(mut stream: TcpStream, expected_token: &str) -> Value {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    let body_start = loop {
+        let read = stream.read(&mut buffer).expect("read radrootsd proxy");
+        assert!(read > 0, "radrootsd proxy request closed before headers");
+        bytes.extend_from_slice(&buffer[..read]);
+        if let Some(index) = http_body_start(&bytes) {
+            break index;
+        }
+    };
+    let headers = String::from_utf8(bytes[..body_start].to_vec()).expect("headers utf8");
+    let content_length = http_content_length(headers.as_str());
+    while bytes.len() < body_start + content_length {
+        let read = stream.read(&mut buffer).expect("read radrootsd proxy body");
+        assert!(read > 0, "radrootsd proxy request closed before body");
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let body = String::from_utf8(bytes[body_start..body_start + content_length].to_vec())
+        .expect("body utf8");
+    assert!(
+        headers
+            .to_ascii_lowercase()
+            .contains(format!("authorization: bearer {expected_token}").as_str()),
+        "radrootsd proxy request missing expected bearer auth: {headers}"
+    );
+    let request: Value = serde_json::from_str(body.as_str()).expect("radrootsd proxy json");
+    assert_eq!(request["jsonrpc"], "2.0");
+    assert_eq!(request["method"], "publish.event");
+    let event = &request["params"]["event"];
+    let relays = request["params"]["relays"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let relay_results = relays
+        .iter()
+        .map(|relay| {
+            json!({
+                "relay_url": relay,
+                "source": "request",
+                "attempted": true,
+                "outcome_kind": "accepted"
+            })
+        })
+        .collect::<Vec<_>>();
+    let response = json!({
+        "jsonrpc": "2.0",
+        "id": request["id"],
+        "result": {
+            "deduplicated": false,
+            "job": {
+                "job_id": "cli-proxy-job-1",
+                "status": "delivery_satisfied",
+                "terminal": true,
+                "delivery_satisfied": true,
+                "event_id": event["id"],
+                "pubkey": event["pubkey"],
+                "event_kind": event["kind"],
+                "relay_policy": request["params"]["relay_policy"],
+                "delivery_policy": request["params"]["delivery_policy"],
+                "relay_count": relay_results.len(),
+                "acknowledged_count": relay_results.len(),
+                "retryable_count": 0,
+                "terminal_count": 0,
+                "requested_at_ms": 1_700_000_000_000_i64,
+                "completed_at_ms": 1_700_000_000_001_i64,
+                "relays": relay_results
+            }
+        }
+    });
+    let response_body = response.to_string();
+    let raw_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+        response_body.len()
+    );
+    stream
+        .write_all(raw_response.as_bytes())
+        .expect("write radrootsd proxy response");
+    request
+}
+
+fn http_body_start(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+}
+
+fn http_content_length(headers: &str) -> usize {
+    headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-length") {
+                Some(value.trim().parse::<usize>().expect("content length"))
+            } else {
+                None
+            }
+        })
+        .expect("content-length header")
 }
 
 fn handle_relay_fetch_connection(stream: TcpStream, events: Vec<RadrootsNostrEvent>) {
@@ -1414,6 +1560,104 @@ fn radrootsd_proxy_listing_publish_update_and_archive_dry_run_without_direct_rel
             "SDK enqueue and relay push skipped",
         );
     }
+}
+
+#[test]
+fn radrootsd_proxy_listing_publish_non_dry_run_uses_local_jsonrpc_server() {
+    let sandbox = RadrootsCliSandbox::new();
+    let proxy = RadrootsdProxyJsonRpcServer::once("proxy_test_token");
+    let token_file = radrootsd_proxy_token_file(&sandbox);
+    sandbox.write_app_config(
+        format!(
+            r#"[publish]
+transport = "radrootsd_proxy"
+
+[publish.radrootsd_proxy]
+url = "{}"
+token_file = "{}"
+"#,
+            toml_string(proxy.endpoint()),
+            toml_string(token_file.display().to_string().as_str())
+        )
+        .as_str(),
+    );
+    sandbox.json_success(&["--format", "json", "account", "create"]);
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Proxy Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let listing_file = create_listing_draft(&sandbox, "radrootsd-proxy-live");
+    make_listing_publishable(
+        &listing_file,
+        farm["result"]["config"]["farm_d_tag"]
+            .as_str()
+            .expect("farm d tag"),
+    );
+
+    let output = sandbox
+        .command()
+        .args([
+            "--format",
+            "json",
+            "--approval-token",
+            "approve",
+            "listing",
+            "publish",
+            listing_file.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .expect("run proxy listing publish");
+    let request = proxy.join();
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+
+    assert!(
+        output.status.success(),
+        "stderr `{}` stdout `{}`",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"]["state"], "published");
+    assert_eq!(value["result"]["source"], "SDK listing publish · local key");
+    assert_eq!(value["result"]["dry_run"], false);
+    assert_eq!(
+        request["params"]["event"]["id"],
+        value["result"]["event_id"]
+    );
+    assert_eq!(
+        request["params"]["relays"]
+            .as_array()
+            .expect("relays")
+            .len(),
+        0
+    );
+    assert!(
+        request["params"]["idempotency_key"]
+            .as_str()
+            .expect("daemon idempotency key")
+            .contains("-1-")
+    );
+
+    let status = sandbox.json_success(&["--format", "json", "sync", "status", "get"]);
+    assert_eq!(
+        status["result"]["source"],
+        "SDK canonical event store and outbox"
+    );
+    assert_eq!(status["result"]["queue"]["pending_count"], 0);
+    assert_eq!(status["result"]["queue"]["ready_signed_count"], 0);
+    assert_eq!(status["result"]["queue"]["publishing_count"], 0);
+    assert_eq!(status["result"]["queue"]["retryable_count"], 0);
+    assert_eq!(status["result"]["queue"]["failed_terminal_count"], 0);
 }
 
 #[test]
