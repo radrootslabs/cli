@@ -2,7 +2,7 @@
 use crate::runtime::config::{
     CapabilityBindingInspection, CapabilityBindingInspectionState, INFERENCE_HYF_STDIO_CAPABILITY,
 };
-use crate::runtime::config::{PublishMode, RuntimeConfig};
+use crate::runtime::config::{PublishTransport, RuntimeConfig};
 #[cfg(test)]
 use crate::runtime::hyf;
 use crate::view::runtime::PublishRuntimeView;
@@ -21,7 +21,7 @@ pub enum ProviderProvenance {
     DirectConfig,
     #[cfg(test)]
     Disabled,
-    PublishMode,
+    PublishTransport,
     #[cfg(test)]
     Unavailable,
 }
@@ -37,7 +37,7 @@ impl ProviderProvenance {
             Self::DirectConfig => "direct_config",
             #[cfg(test)]
             Self::Disabled => "disabled",
-            Self::PublishMode => "publish_mode",
+            Self::PublishTransport => "publish_transport",
             #[cfg(test)]
             Self::Unavailable => "unavailable",
         }
@@ -67,14 +67,12 @@ pub struct WritePlaneProviderView {
     pub target_kind: Option<String>,
     pub target: Option<String>,
     pub detail: String,
-    pub bridge_auth_configured: bool,
 }
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedWritePlaneTarget {
     pub url: String,
-    pub bridge_bearer_token: String,
 }
 
 #[cfg(test)]
@@ -97,31 +95,27 @@ pub fn resolve_write_plane_provider(
     config: &RuntimeConfig,
     publish: &PublishRuntimeView,
 ) -> WritePlaneProviderView {
-    let (provider_runtime_id, binding_model, detail, bridge_auth_configured) =
-        match config.publish.mode {
-            PublishMode::NostrRelay => (
-                "nostr_relay",
-                "direct_relay_publish",
-                "direct relay publish is selected; readiness is reported under publish",
-                false,
-            ),
-            PublishMode::Radrootsd => (
-                "radrootsd",
-                "radrootsd_bridge_publish",
-                "radrootsd bridge publish is selected; readiness is reported under publish",
-                config.rpc.bridge_bearer_token.is_some(),
-            ),
-        };
+    let (provider_runtime_id, binding_model, detail) = match config.publish.transport {
+        PublishTransport::DirectNostrRelay => (
+            "direct_nostr_relay",
+            "direct_relay_publish",
+            "direct relay publish is selected; readiness is reported under publish",
+        ),
+        PublishTransport::RadrootsdProxy => (
+            "radrootsd_proxy",
+            "daemon_proxy_publish",
+            "radrootsd_proxy publish is selected; readiness is reported under publish",
+        ),
+    };
     WritePlaneProviderView {
         provider_runtime_id: provider_runtime_id.to_owned(),
         binding_model: binding_model.to_owned(),
         state: publish.state.clone(),
-        provenance: ProviderProvenance::PublishMode.as_str().to_owned(),
+        provenance: ProviderProvenance::PublishTransport.as_str().to_owned(),
         source: publish.source.clone(),
         target_kind: None,
         target: None,
         detail: publish.reason.clone().unwrap_or_else(|| detail.to_owned()),
-        bridge_auth_configured,
     }
 }
 
@@ -268,9 +262,9 @@ mod tests {
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
         CapabilityBindingSource, CapabilityBindingTargetKind, HyfConfig, IdentityConfig,
         InteractionConfig, LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig,
-        OutputFormat, PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig,
-        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
-        SignerConfig, Verbosity,
+        OutputFormat, PathsConfig, PublishConfig, PublishTransport, PublishTransportSource,
+        RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
+        SignerBackend, SignerConfig, Verbosity,
     };
     use crate::view::runtime::{
         PublishProviderRuntimeView, PublishRelayRuntimeView, PublishRuntimeView,
@@ -340,8 +334,9 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             publish: PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Defaults,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Defaults,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -364,7 +359,6 @@ mod tests {
             },
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
-                bridge_bearer_token: None,
             },
             rhi: crate::runtime::config::RhiConfig {
                 trusted_worker_pubkeys: Vec::new(),
@@ -379,9 +373,9 @@ mod tests {
         reason: Option<&str>,
     ) -> PublishRuntimeView {
         PublishRuntimeView {
-            mode: config.publish.mode.as_str().to_owned(),
+            transport: config.publish.transport.as_str().to_owned(),
             source: config.publish.source.as_str().to_owned(),
-            transport_family: config.publish.mode.transport_family().to_owned(),
+            transport_family: config.publish.transport.transport_family().to_owned(),
             state: state.to_owned(),
             executable: state == "ready",
             reason: reason.map(str::to_owned),
@@ -392,7 +386,7 @@ mod tests {
                 source: config.relay.source.as_str().to_owned(),
             },
             provider: PublishProviderRuntimeView {
-                provider_runtime_id: config.publish.mode.as_str().to_owned(),
+                provider_runtime_id: config.publish.transport.as_str().to_owned(),
                 state: state.to_owned(),
                 source: config.publish.source.as_str().to_owned(),
                 reason: reason.map(str::to_owned),
@@ -406,16 +400,18 @@ mod tests {
         let publish = publish_view(
             &config,
             "unconfigured",
-            Some("nostr_relay publish mode requires a configured relay"),
+            Some("direct_nostr_relay publish transport requires a configured relay"),
         );
         let view = resolve_write_plane_provider(&config, &publish);
-        assert_eq!(view.provider_runtime_id, "nostr_relay");
+        assert_eq!(view.provider_runtime_id, "direct_nostr_relay");
         assert_eq!(view.binding_model, "direct_relay_publish");
         assert_eq!(view.state, "unconfigured");
-        assert_eq!(view.provenance, ProviderProvenance::PublishMode.as_str());
+        assert_eq!(
+            view.provenance,
+            ProviderProvenance::PublishTransport.as_str()
+        );
         assert!(view.target.is_none());
         assert!(view.detail.contains("configured relay"));
-        assert!(!view.bridge_auth_configured);
     }
 
     #[test]

@@ -39,7 +39,7 @@ pub struct RuntimeInvocationArgs {
     pub account: Option<String>,
     pub identity_path: Option<PathBuf>,
     pub signer: Option<String>,
-    pub publish_mode: Option<String>,
+    pub publish_transport: Option<String>,
     pub relay: Vec<String>,
     pub myc_executable: Option<PathBuf>,
     pub myc_status_timeout_ms: Option<u64>,
@@ -134,7 +134,6 @@ pub struct FarmUpdateArgs {
 pub struct FarmPublishArgs {
     pub scope: Option<FarmScopeArg>,
     pub idempotency_key: Option<String>,
-    pub signer_session_id: Option<String>,
     pub print_event: bool,
 }
 
@@ -184,7 +183,6 @@ pub struct ListingRebindArgs {
 pub struct ListingMutationArgs {
     pub file: PathBuf,
     pub idempotency_key: Option<String>,
-    pub signer_session_id: Option<String>,
     pub print_event: bool,
     pub offline: bool,
 }

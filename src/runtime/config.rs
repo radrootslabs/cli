@@ -44,14 +44,16 @@ const ENV_CLI_ACCOUNT_SECRET_BACKEND: &str = "RADROOTS_CLI_ACCOUNT_SECRET_BACKEN
 const ENV_CLI_ACCOUNT_SECRET_FALLBACK: &str = "RADROOTS_CLI_ACCOUNT_SECRET_FALLBACK";
 const ENV_CLI_IDENTITY_PATH: &str = "RADROOTS_CLI_IDENTITY_PATH";
 const ENV_CLI_SIGNER_BACKEND: &str = "RADROOTS_CLI_SIGNER_BACKEND";
-const ENV_CLI_PUBLISH_MODE: &str = "RADROOTS_CLI_PUBLISH_MODE";
+const ENV_CLI_PUBLISH_TRANSPORT: &str = "RADROOTS_CLI_PUBLISH_TRANSPORT";
 const ENV_CLI_RELAYS_URLS: &str = "RADROOTS_CLI_RELAYS_URLS";
+const ENV_CLI_RADROOTSD_PROXY_URL: &str = "RADROOTS_CLI_RADROOTSD_PROXY_URL";
+const ENV_CLI_RADROOTSD_PROXY_TOKEN_FILE: &str = "RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE";
+const ENV_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID: &str =
+    "RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID";
 const ENV_CLI_MYC_EXECUTABLE: &str = "RADROOTS_CLI_MYC_EXECUTABLE";
 const ENV_CLI_MYC_STATUS_TIMEOUT_MS: &str = "RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS";
 const ENV_CLI_HYF_ENABLED: &str = "RADROOTS_CLI_HYF_ENABLED";
 const ENV_CLI_HYF_EXECUTABLE: &str = "RADROOTS_CLI_HYF_EXECUTABLE";
-const ENV_CLI_RPC_URL: &str = "RADROOTS_CLI_RPC_URL";
-const ENV_CLI_RPC_BEARER_TOKEN: &str = "RADROOTS_CLI_RPC_BEARER_TOKEN";
 const ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS: &str = "RADROOTS_CLI_RHI_TRUSTED_WORKER_PUBKEYS";
 const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_CLI_OUTPUT_FORMAT,
@@ -65,14 +67,15 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_CLI_ACCOUNT_SECRET_FALLBACK,
     ENV_CLI_IDENTITY_PATH,
     ENV_CLI_SIGNER_BACKEND,
-    ENV_CLI_PUBLISH_MODE,
+    ENV_CLI_PUBLISH_TRANSPORT,
     ENV_CLI_RELAYS_URLS,
+    ENV_CLI_RADROOTSD_PROXY_URL,
+    ENV_CLI_RADROOTSD_PROXY_TOKEN_FILE,
+    ENV_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID,
     ENV_CLI_MYC_EXECUTABLE,
     ENV_CLI_MYC_STATUS_TIMEOUT_MS,
     ENV_CLI_HYF_ENABLED,
     ENV_CLI_HYF_EXECUTABLE,
-    ENV_CLI_RPC_URL,
-    ENV_CLI_RPC_BEARER_TOKEN,
     ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS,
 ];
 
@@ -181,29 +184,29 @@ pub struct SignerConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublishMode {
-    NostrRelay,
-    Radrootsd,
+pub enum PublishTransport {
+    DirectNostrRelay,
+    RadrootsdProxy,
 }
 
-impl PublishMode {
+impl PublishTransport {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::NostrRelay => "nostr_relay",
-            Self::Radrootsd => "radrootsd",
+            Self::DirectNostrRelay => "direct_nostr_relay",
+            Self::RadrootsdProxy => "radrootsd_proxy",
         }
     }
 
     pub fn transport_family(self) -> &'static str {
         match self {
-            Self::NostrRelay => "nostr_relay",
-            Self::Radrootsd => "radrootsd",
+            Self::DirectNostrRelay => "direct_nostr_relay",
+            Self::RadrootsdProxy => "radrootsd_proxy",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublishModeSource {
+pub enum PublishTransportSource {
     Flags,
     Environment,
     UserConfig,
@@ -211,7 +214,7 @@ pub enum PublishModeSource {
     Defaults,
 }
 
-impl PublishModeSource {
+impl PublishTransportSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Flags => "cli flags · local first",
@@ -225,8 +228,26 @@ impl PublishModeSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishConfig {
-    pub mode: PublishMode,
-    pub source: PublishModeSource,
+    pub transport: PublishTransport,
+    pub source: PublishTransportSource,
+    pub radrootsd_proxy: RadrootsdProxyConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RadrootsdProxyConfig {
+    pub url: String,
+    pub token_file: Option<PathBuf>,
+    pub token_secret_id: Option<String>,
+}
+
+impl Default for RadrootsdProxyConfig {
+    fn default() -> Self {
+        Self {
+            url: DEFAULT_RPC_URL.to_owned(),
+            token_file: None,
+            token_secret_id: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,7 +380,6 @@ pub struct CapabilityBindingInspection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpcConfig {
     pub url: String,
-    pub bridge_bearer_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -463,7 +483,16 @@ struct RelayFileConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct PublishFileConfig {
-    mode: Option<String>,
+    transport: Option<String>,
+    radrootsd_proxy: Option<RadrootsdProxyFileConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RadrootsdProxyFileConfig {
+    url: Option<String>,
+    token_file: Option<PathBuf>,
+    token_secret_id: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -518,8 +547,6 @@ struct CapabilityBindingSpec {
 
 pub(crate) const SIGNER_REMOTE_NIP46_CAPABILITY: &str = "signer.remote_nip46";
 pub(crate) const INFERENCE_HYF_STDIO_CAPABILITY: &str = "inference.hyf_stdio";
-pub(crate) const RADROOTSD_PUBLISH_DEFERRED_REASON: &str = "radrootsd publish mode is deferred for the active CLI buyer/seller workflow; use publish mode `nostr_relay` with local signer custody and configured relays";
-
 const CAPABILITY_BINDING_SPECS: &[CapabilityBindingSpec] = &[
     CapabilityBindingSpec {
         capability_id: SIGNER_REMOTE_NIP46_CAPABILITY,
@@ -909,17 +936,14 @@ fn load_cli_config_file(path: &Path) -> Result<Option<CliConfigFile>, RuntimeErr
 }
 
 fn resolve_rpc_config(
-    env: &dyn Environment,
-    env_file: &EnvFileValues,
+    _env: &dyn Environment,
+    _env_file: &EnvFileValues,
     user_config: Option<&CliConfigFile>,
     workspace_config: Option<&CliConfigFile>,
 ) -> Result<RpcConfig, RuntimeError> {
-    let url = env_value(env, env_file, &[ENV_CLI_RPC_URL])
-        .or_else(|| {
-            user_config
-                .and_then(|config| config.rpc.as_ref())
-                .and_then(|rpc| rpc.url.clone())
-        })
+    let url = user_config
+        .and_then(|config| config.rpc.as_ref())
+        .and_then(|rpc| rpc.url.clone())
         .or_else(|| {
             workspace_config
                 .and_then(|config| config.rpc.as_ref())
@@ -929,7 +953,37 @@ fn resolve_rpc_config(
 
     Ok(RpcConfig {
         url: validate_rpc_url(url.as_str())?,
-        bridge_bearer_token: env_value(env, env_file, &[ENV_CLI_RPC_BEARER_TOKEN]),
+    })
+}
+
+fn resolve_radrootsd_proxy_config(
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<RadrootsdProxyConfig, RuntimeError> {
+    let user_proxy = user_config
+        .and_then(|config| config.publish.as_ref())
+        .and_then(|publish| publish.radrootsd_proxy.as_ref());
+    let workspace_proxy = workspace_config
+        .and_then(|config| config.publish.as_ref())
+        .and_then(|publish| publish.radrootsd_proxy.as_ref());
+    let url = env_value(env, env_file, &[ENV_CLI_RADROOTSD_PROXY_URL])
+        .or_else(|| user_proxy.and_then(|proxy| proxy.url.clone()))
+        .or_else(|| workspace_proxy.and_then(|proxy| proxy.url.clone()))
+        .unwrap_or_else(|| DEFAULT_RPC_URL.to_owned());
+    let token_file = env_value(env, env_file, &[ENV_CLI_RADROOTSD_PROXY_TOKEN_FILE])
+        .map(PathBuf::from)
+        .or_else(|| user_proxy.and_then(|proxy| proxy.token_file.clone()))
+        .or_else(|| workspace_proxy.and_then(|proxy| proxy.token_file.clone()));
+    let token_secret_id = env_value(env, env_file, &[ENV_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID])
+        .or_else(|| user_proxy.and_then(|proxy| proxy.token_secret_id.clone()))
+        .or_else(|| workspace_proxy.and_then(|proxy| proxy.token_secret_id.clone()));
+
+    Ok(RadrootsdProxyConfig {
+        url: validate_rpc_url(url.as_str())?,
+        token_file,
+        token_secret_id,
     })
 }
 
@@ -1206,43 +1260,50 @@ fn resolve_publish_config(
     user_config: Option<&CliConfigFile>,
     workspace_config: Option<&CliConfigFile>,
 ) -> Result<PublishConfig, RuntimeError> {
-    if let Some(value) = args.publish_mode.clone() {
+    let radrootsd_proxy =
+        resolve_radrootsd_proxy_config(env, env_file, user_config, workspace_config)?;
+    if let Some(value) = args.publish_transport.clone() {
         return Ok(PublishConfig {
-            mode: parse_publish_mode("--publish-mode", value)?,
-            source: PublishModeSource::Flags,
+            transport: parse_publish_transport("--publish-transport", value)?,
+            source: PublishTransportSource::Flags,
+            radrootsd_proxy,
         });
     }
 
-    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_PUBLISH_MODE]) {
+    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_PUBLISH_TRANSPORT]) {
         return Ok(PublishConfig {
-            mode: parse_publish_mode(key.as_str(), value)?,
-            source: PublishModeSource::Environment,
+            transport: parse_publish_transport(key.as_str(), value)?,
+            source: PublishTransportSource::Environment,
+            radrootsd_proxy,
         });
     }
 
     if let Some(value) = user_config
         .and_then(|config| config.publish.as_ref())
-        .and_then(|publish| publish.mode.clone())
+        .and_then(|publish| publish.transport.clone())
     {
         return Ok(PublishConfig {
-            mode: parse_publish_mode("user config [publish].mode", value)?,
-            source: PublishModeSource::UserConfig,
+            transport: parse_publish_transport("user config [publish].transport", value)?,
+            source: PublishTransportSource::UserConfig,
+            radrootsd_proxy,
         });
     }
 
     if let Some(value) = workspace_config
         .and_then(|config| config.publish.as_ref())
-        .and_then(|publish| publish.mode.clone())
+        .and_then(|publish| publish.transport.clone())
     {
         return Ok(PublishConfig {
-            mode: parse_publish_mode("workspace config [publish].mode", value)?,
-            source: PublishModeSource::WorkspaceConfig,
+            transport: parse_publish_transport("workspace config [publish].transport", value)?,
+            source: PublishTransportSource::WorkspaceConfig,
+            radrootsd_proxy,
         });
     }
 
     Ok(PublishConfig {
-        mode: PublishMode::NostrRelay,
-        source: PublishModeSource::Defaults,
+        transport: PublishTransport::DirectNostrRelay,
+        source: PublishTransportSource::Defaults,
+        radrootsd_proxy,
     })
 }
 
@@ -1741,14 +1802,14 @@ fn parse_signer_mode(source: &str, value: String) -> Result<SignerBackend, Runti
     }
 }
 
-fn parse_publish_mode(source: &str, value: String) -> Result<PublishMode, RuntimeError> {
+fn parse_publish_transport(source: &str, value: String) -> Result<PublishTransport, RuntimeError> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "nostr_relay" => Ok(PublishMode::NostrRelay),
-        "radrootsd" => Ok(PublishMode::Radrootsd),
+        "direct_nostr_relay" => Ok(PublishTransport::DirectNostrRelay),
+        "radrootsd_proxy" => Ok(PublishTransport::RadrootsdProxy),
         other => Err(RuntimeError::Config(format!(
             "{source} must be `{}` or `{}`, got `{other}`",
-            PublishMode::NostrRelay.as_str(),
-            PublishMode::Radrootsd.as_str()
+            PublishTransport::DirectNostrRelay.as_str(),
+            PublishTransport::RadrootsdProxy.as_str()
         ))),
     }
 }
@@ -1853,7 +1914,7 @@ mod tests {
         CapabilityBindingSource, CapabilityBindingTargetKind, DEFAULT_HYF_EXECUTABLE,
         DEFAULT_LOG_FILTER, DEFAULT_MYC_STATUS_TIMEOUT_MS, DEFAULT_RPC_URL, EnvFileValues,
         Environment, HyfConfig, INFERENCE_HYF_STDIO_CAPABILITY, InteractionConfig, OutputConfig,
-        OutputFormat, PathsConfig, PublishConfig, PublishMode, PublishModeSource,
+        OutputFormat, PathsConfig, PublishConfig, PublishTransport, PublishTransportSource,
         RelayConfigSource, RelayPublishPolicy, RuntimeConfig, SignerBackend, Verbosity,
         parse_env_file_values,
     };
@@ -1964,7 +2025,7 @@ mod tests {
             log_stdout: true,
             identity_path: Some(PathBuf::from("custom-identity.json")),
             signer: Some("local".to_owned()),
-            publish_mode: Some("nostr_relay".to_owned()),
+            publish_transport: Some("direct_nostr_relay".to_owned()),
             relay: vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()],
             myc_executable: Some(PathBuf::from("bin/myc-cli")),
             myc_status_timeout_ms: Some(2500),
@@ -1982,8 +2043,8 @@ mod tests {
             ),
             ("RADROOTS_CLI_SIGNER_BACKEND".to_owned(), "myc".to_owned()),
             (
-                "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
-                "radrootsd".to_owned(),
+                "RADROOTS_CLI_PUBLISH_TRANSPORT".to_owned(),
+                "radrootsd_proxy".to_owned(),
             ),
             (
                 "RADROOTS_CLI_RELAYS_URLS".to_owned(),
@@ -2088,8 +2149,9 @@ mod tests {
         assert_eq!(
             resolved.publish,
             PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Flags,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Flags,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             }
         );
         assert_eq!(
@@ -2133,8 +2195,8 @@ mod tests {
             ),
             ("RADROOTS_CLI_SIGNER_BACKEND".to_owned(), "myc".to_owned()),
             (
-                "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
-                "radrootsd".to_owned(),
+                "RADROOTS_CLI_PUBLISH_TRANSPORT".to_owned(),
+                "radrootsd_proxy".to_owned(),
             ),
             (
                 "RADROOTS_CLI_RELAYS_URLS".to_owned(),
@@ -2197,8 +2259,9 @@ mod tests {
         assert_eq!(
             resolved.publish,
             PublishConfig {
-                mode: PublishMode::Radrootsd,
-                source: PublishModeSource::Environment,
+                transport: PublishTransport::RadrootsdProxy,
+                source: PublishTransportSource::Environment,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             }
         );
         assert_eq!(
@@ -2281,7 +2344,10 @@ mod tests {
             Some(RadrootsSecretBackend::EncryptedFile)
         );
         assert_eq!(resolved.signer.backend, SignerBackend::Local);
-        assert_eq!(resolved.publish.mode, PublishMode::NostrRelay);
+        assert_eq!(
+            resolved.publish.transport,
+            PublishTransport::DirectNostrRelay
+        );
         assert_eq!(resolved.relay.urls, Vec::<String>::new());
         assert_eq!(resolved.myc.executable, PathBuf::from("myc"));
         assert_eq!(
@@ -2294,7 +2360,6 @@ mod tests {
             PathBuf::from(DEFAULT_HYF_EXECUTABLE)
         );
         assert_eq!(resolved.rpc.url, DEFAULT_RPC_URL);
-        assert_eq!(resolved.rpc.bridge_bearer_token, None);
         assert_eq!(resolved.rhi.trusted_worker_pubkeys, Vec::<String>::new());
     }
 
@@ -2525,14 +2590,14 @@ path = "identity/from-toml.json"
         );
 
         let env = MapEnvironment::new(BTreeMap::from([(
-            "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
+            "RADROOTS_CLI_PUBLISH_TRANSPORT".to_owned(),
             "relay".to_owned(),
         )]));
         let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
-            .expect_err("invalid publish mode");
-        assert!(error.to_string().contains("RADROOTS_CLI_PUBLISH_MODE"));
-        assert!(error.to_string().contains("nostr_relay"));
-        assert!(error.to_string().contains("radrootsd"));
+            .expect_err("invalid publish transport");
+        assert!(error.to_string().contains("RADROOTS_CLI_PUBLISH_TRANSPORT"));
+        assert!(error.to_string().contains("direct_nostr_relay"));
+        assert!(error.to_string().contains("radrootsd_proxy"));
 
         let args = RuntimeInvocationArgs {
             myc_status_timeout_ms: Some(0),
@@ -2557,7 +2622,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
 RADROOTS_CLI_ACCOUNT_SELECTOR=acct_env_file
 RADROOTS_CLI_IDENTITY_PATH=state/identity.json
 RADROOTS_CLI_SIGNER_BACKEND=myc
-RADROOTS_CLI_PUBLISH_MODE=radrootsd
+RADROOTS_CLI_PUBLISH_TRANSPORT=radrootsd_proxy
 RADROOTS_CLI_RELAYS_URLS=wss://relay.env-file
 RADROOTS_CLI_MYC_EXECUTABLE=bin/myc
 RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS=4500
@@ -2583,8 +2648,9 @@ RADROOTS_CLI_HYF_EXECUTABLE=bin/hyfd
         assert_eq!(
             resolved.publish,
             PublishConfig {
-                mode: PublishMode::Radrootsd,
-                source: PublishModeSource::Environment,
+                transport: PublishTransport::RadrootsdProxy,
+                source: PublishTransportSource::Environment,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             }
         );
         assert_eq!(resolved.relay.urls, vec!["wss://relay.env-file".to_owned()]);
@@ -2740,7 +2806,7 @@ RADROOTS_CLI_LOGGING_STDOUT=false
     }
 
     #[test]
-    fn publish_mode_precedence_tracks_source() {
+    fn publish_transport_precedence_tracks_source() {
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
         let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
@@ -2750,12 +2816,12 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
             repo_local_root.join("config.toml"),
-            "[publish]\nmode = \"radrootsd\"\n",
+            "[publish]\ntransport = \"radrootsd_proxy\"\n",
         )
         .expect("write workspace config");
         fs::write(
             app_config_dir.join("config.toml"),
-            "[publish]\nmode = \"nostr_relay\"\n",
+            "[publish]\ntransport = \"direct_nostr_relay\"\n",
         )
         .expect("write user config");
 
@@ -2764,21 +2830,22 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             repo_local_root.clone(),
             user_home.clone(),
             BTreeMap::from([(
-                "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
-                "radrootsd".to_owned(),
+                "RADROOTS_CLI_PUBLISH_TRANSPORT".to_owned(),
+                "radrootsd_proxy".to_owned(),
             )]),
         );
         let args = RuntimeInvocationArgs {
-            publish_mode: Some("nostr_relay".to_owned()),
+            publish_transport: Some("direct_nostr_relay".to_owned()),
             ..runtime_args()
         };
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
-            .expect("resolve flag publish mode");
+            .expect("resolve flag publish transport");
         assert_eq!(
             resolved.publish,
             PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Flags,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Flags,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             }
         );
 
@@ -2787,18 +2854,19 @@ RADROOTS_CLI_LOGGING_STDOUT=false
             repo_local_root.clone(),
             user_home.clone(),
             BTreeMap::from([(
-                "RADROOTS_CLI_PUBLISH_MODE".to_owned(),
-                "radrootsd".to_owned(),
+                "RADROOTS_CLI_PUBLISH_TRANSPORT".to_owned(),
+                "radrootsd_proxy".to_owned(),
             )]),
         );
         let resolved =
             RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
-                .expect("resolve environment publish mode");
+                .expect("resolve environment publish transport");
         assert_eq!(
             resolved.publish,
             PublishConfig {
-                mode: PublishMode::Radrootsd,
-                source: PublishModeSource::Environment,
+                transport: PublishTransport::RadrootsdProxy,
+                source: PublishTransportSource::Environment,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             }
         );
 
@@ -2810,12 +2878,13 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         );
         let resolved =
             RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
-                .expect("resolve user publish mode");
+                .expect("resolve user publish transport");
         assert_eq!(
             resolved.publish,
             PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::UserConfig,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::UserConfig,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             }
         );
 
@@ -2828,12 +2897,13 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         );
         let resolved =
             RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
-                .expect("resolve workspace publish mode");
+                .expect("resolve workspace publish transport");
         assert_eq!(
             resolved.publish,
             PublishConfig {
-                mode: PublishMode::Radrootsd,
-                source: PublishModeSource::WorkspaceConfig,
+                transport: PublishTransport::RadrootsdProxy,
+                source: PublishTransportSource::WorkspaceConfig,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             }
         );
 
@@ -2841,12 +2911,13 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
         let resolved =
             RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
-                .expect("resolve default publish mode");
+                .expect("resolve default publish transport");
         assert_eq!(
             resolved.publish,
             PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Defaults,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Defaults,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             }
         );
     }
@@ -3042,18 +3113,18 @@ RADROOTS_CLI_LOGGING_STDOUT=false
         fs::create_dir_all(&repo_local_root).expect("workspace config dir");
         fs::write(
             repo_local_root.join("config.toml"),
-            "[publish]\nmode = \"nostr\"\n",
+            "[publish]\ntransport = \"nostr\"\n",
         )
         .expect("write workspace config");
 
         let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
         let error =
             RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
-                .expect_err("invalid publish mode");
+                .expect_err("invalid publish transport");
         let message = error.to_string();
-        assert!(message.contains("workspace config [publish].mode"));
-        assert!(message.contains("nostr_relay"));
-        assert!(message.contains("radrootsd"));
+        assert!(message.contains("workspace config [publish].transport"));
+        assert!(message.contains("direct_nostr_relay"));
+        assert!(message.contains("radrootsd_proxy"));
     }
 
     #[test]

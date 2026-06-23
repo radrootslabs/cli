@@ -1308,6 +1308,8 @@ fn local_farm_publish_does_not_persist_publication_until_sdk_push_publishes() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "farm.publish");
     assert_eq!(value["result"], serde_json::Value::Null);
+    assert_eq!(value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "network");
     let detail = &value["errors"][0]["detail"];
     assert_eq!(detail["source"], "SDK farm publish · local key");
     assert_eq!(detail["profile"]["state"], "not_submitted");
@@ -1981,11 +1983,16 @@ fn local_seller_publish_commands_attempt_configured_relay() {
         listing_file_arg.as_ref(),
     ]);
     assert!(!archive_output.status.success());
-    assert_direct_relay_connection_failure(
-        &archive_value,
-        "listing.archive",
-        &["listing", "archive"],
+    assert_eq!(archive_value["operation_id"], "listing.archive");
+    assert_eq!(archive_value["result"], serde_json::Value::Null);
+    assert_eq!(archive_value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(archive_value["errors"][0]["detail"]["class"], "network");
+    assert_contains(
+        &archive_value["errors"][0]["message"],
+        "SDK relay publish did not reach accepted quorum",
     );
+    assert_no_removed_command_reference(&archive_value, &["listing", "archive"]);
+    assert_no_daemon_runtime_reference(&archive_value, &["listing", "archive"]);
     assert_eq!(
         archive_value["errors"][0]["detail"]["target_relays"][0],
         relay
@@ -1995,7 +2002,7 @@ fn local_seller_publish_commands_attempt_configured_relay() {
             .as_array()
             .expect("connected relays")
             .len(),
-        0
+        1
     );
     assert_eq!(
         archive_value["errors"][0]["detail"]["failed_relays"]
@@ -2116,8 +2123,8 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     let submit_args = [
         "--format",
         "json",
-        "--publish-mode",
-        "nostr_relay",
+        "--publish-transport",
+        "direct_nostr_relay",
         "--dry-run",
         "order",
         "submit",
@@ -2200,8 +2207,8 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     let accept_args = [
         "--format",
         "json",
-        "--publish-mode",
-        "nostr_relay",
+        "--publish-transport",
+        "direct_nostr_relay",
         "--dry-run",
         "order",
         "accept",
@@ -2218,8 +2225,8 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     let decline_args = [
         "--format",
         "json",
-        "--publish-mode",
-        "nostr_relay",
+        "--publish-transport",
+        "direct_nostr_relay",
         "--dry-run",
         "order",
         "decline",

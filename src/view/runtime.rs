@@ -299,7 +299,7 @@ pub struct RelayRuntimeView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PublishRuntimeView {
-    pub mode: String,
+    pub transport: String,
     pub source: String,
     pub transport_family: String,
     pub state: String,
@@ -394,13 +394,11 @@ pub struct WritePlaneRuntimeView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     pub detail: String,
-    pub bridge_auth_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RpcRuntimeView {
     pub url: String,
-    pub bridge_auth_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -860,7 +858,7 @@ pub struct FarmStatusView {
     pub config_valid: bool,
     pub account_state: String,
     pub listing_defaults_state: String,
-    pub publish_mode: String,
+    pub publish_transport: String,
     pub publish_state: String,
     pub publish_executable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -920,8 +918,6 @@ pub struct FarmPublishView {
     pub seller_pubkey: String,
     pub seller_actor_source: String,
     pub farm_d_tag: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requested_signer_session_id: Option<String>,
     pub profile: FarmPublishComponentView,
     pub farm: FarmPublishComponentView,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -966,8 +962,6 @@ pub struct FarmPublishComponentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_addr: Option<String>,
@@ -1007,11 +1001,7 @@ pub struct FarmPublishJobView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub requested_signer_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1412,8 +1402,6 @@ pub struct JobSummaryView {
     pub state: String,
     pub terminal: bool,
     pub signer: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
     pub requested_at_unix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at_unix: Option<u64>,
@@ -1427,8 +1415,6 @@ pub struct JobDetailView {
     pub state: String,
     pub terminal: bool,
     pub signer: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
     pub requested_at_unix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at_unix: Option<u64>,
@@ -1456,8 +1442,6 @@ pub struct JobWatchFrameView {
     pub state: String,
     pub terminal: bool,
     pub signer: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
     pub summary: String,
 }
 
@@ -1736,10 +1720,6 @@ pub struct OrderSubmitView {
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requested_signer_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2398,10 +2378,6 @@ pub struct OrderJobView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requested_signer_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_addr: Option<String>,
@@ -2725,7 +2701,7 @@ pub struct SellMutationView {
     #[serde(default)]
     pub deduplicated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub publish_mode: Option<String>,
+    pub publish_transport: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2852,10 +2828,6 @@ pub struct ListingMutationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub requested_signer_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub local_replica: Option<ListingMutationLocalReplicaView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -2947,11 +2919,7 @@ pub struct ListingMutationJobView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub requested_signer_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signer_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3558,7 +3526,7 @@ pub struct SignerBindingStatusView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_session_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolved_signer_session_id: Option<String>,
+    pub resolved_session_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_session_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]

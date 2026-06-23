@@ -13,7 +13,7 @@ use radroots_nostr::prelude::RadrootsNostrKeys;
 use radroots_sdk::{
     FarmEnqueuePublishRequest, FarmEnqueueReceipt, FarmPreparePublishRequest, FarmPublishPlan,
     PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt, PushOutboxRelayOutcomeKind,
-    PushOutboxRequest, SdkMutationState, SdkRelayTargetPolicy,
+    PushOutboxRequest, SdkMutationState,
 };
 use serde_json::json;
 
@@ -23,15 +23,15 @@ use crate::cli::global::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::account::{self, AccountRecordView};
-use crate::runtime::config::{
-    PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
-};
+use crate::runtime::config::{PublishTransport, RuntimeConfig, SignerBackend};
 use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
     FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
 };
 use crate::runtime::local_events::append_local_work;
-use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_relay_url_policy};
+use crate::runtime::sdk::{
+    CliSdkAdapterError, CliSdkSession, sdk_relay_target_policy, sdk_relay_url_policy,
+};
 use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
 use crate::view::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
@@ -43,13 +43,10 @@ use crate::view::runtime::{
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
 const FARM_SELLER_ACTOR_SOURCE: &str = "farm_config";
 const SDK_FARM_WRITE_SOURCE: &str = "SDK farm publish · local key";
-const RADROOTSD_FARM_WRITE_SOURCE: &str = "radrootsd publish transport · deferred";
 const SDK_PROFILE_NOT_SUBMITTED_METHOD: &str = "sdk.farm.profile.not_submitted";
 const SDK_FARM_PUBLISH_METHOD: &str = "sdk.farm.publish.v1";
 const SDK_PROFILE_NOT_SUBMITTED_REASON: &str =
     "profile publish is not part of SDK farm.publish.v1; profile draft was not submitted";
-const RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD: &str = "bridge.profile.publish";
-const RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD: &str = "bridge.farm.publish";
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -358,7 +355,7 @@ pub fn status(
             config_valid: false,
             account_state: "not_checked".to_owned(),
             listing_defaults_state: "missing".to_owned(),
-            publish_mode: config.publish.mode.as_str().to_owned(),
+            publish_transport: config.publish.transport.as_str().to_owned(),
             publish_state: "not_checked".to_owned(),
             publish_executable: false,
             publish_reason: None,
@@ -423,7 +420,7 @@ pub fn status(
         config_valid: true,
         account_state: account_state.to_owned(),
         listing_defaults_state: listing_defaults_state.to_owned(),
-        publish_mode: config.publish.mode.as_str().to_owned(),
+        publish_transport: config.publish.transport.as_str().to_owned(),
         publish_state: publish.state.to_owned(),
         publish_executable: publish.executable,
         publish_reason: publish.reason,
@@ -499,22 +496,21 @@ fn farm_publish_readiness(
     config: &RuntimeConfig,
     account: &AccountRecordView,
 ) -> FarmPublishReadiness {
-    match config.publish.mode {
-        PublishMode::NostrRelay => relay_farm_publish_readiness(config, account),
-        PublishMode::Radrootsd => radrootsd_farm_publish_readiness(config),
-    }
+    relay_farm_publish_readiness(config, account)
 }
 
 fn relay_farm_publish_readiness(
     config: &RuntimeConfig,
     account: &AccountRecordView,
 ) -> FarmPublishReadiness {
-    if config.relay.urls.is_empty() {
+    if matches!(config.publish.transport, PublishTransport::DirectNostrRelay)
+        && config.relay.urls.is_empty()
+    {
         return FarmPublishReadiness {
             state: "unconfigured",
             executable: false,
             reason: Some(
-                "nostr_relay farm publish requires at least one configured relay".to_owned(),
+                "direct_nostr_relay farm publish requires at least one configured relay".to_owned(),
             ),
             missing: vec!["Configured relay".to_owned()],
             actions: vec!["radroots --relay wss://relay.example.com farm publish".to_owned()],
@@ -526,7 +522,7 @@ fn relay_farm_publish_readiness(
             state: "unavailable",
             executable: false,
             reason: Some(
-                "nostr_relay farm publish requires signer mode `local`; signer mode `myc` is deferred"
+                "direct_nostr_relay farm publish requires signer mode `local`; signer mode `myc` is deferred"
                     .to_owned(),
             ),
             missing: vec!["Local signer mode".to_owned()],
@@ -555,19 +551,6 @@ fn relay_farm_publish_readiness(
         reason: None,
         missing: Vec::new(),
         actions: vec!["radroots farm publish".to_owned()],
-    }
-}
-
-fn radrootsd_farm_publish_readiness(_config: &RuntimeConfig) -> FarmPublishReadiness {
-    FarmPublishReadiness {
-        state: "unavailable",
-        executable: false,
-        reason: Some(RADROOTSD_PUBLISH_DEFERRED_REASON.to_owned()),
-        missing: vec!["Active direct relay publish mode".to_owned()],
-        actions: vec![
-            "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish"
-                .to_owned(),
-        ],
     }
 }
 
@@ -639,53 +622,15 @@ pub fn publish(
     let profile_idempotency_key = component_idempotency_key(args, "profile")?;
     let farm_idempotency_key = component_idempotency_key(args, "farm")?;
 
-    if config.output.dry_run {
-        return match config.publish.mode {
-            PublishMode::NostrRelay => publish_via_sdk(
-                config,
-                args,
-                resolved,
-                account_pubkey,
-                previews,
-                profile_idempotency_key,
-                farm_idempotency_key,
-            ),
-            PublishMode::Radrootsd => Ok(radrootsd_preflight_publish_view(
-                config,
-                args,
-                &resolved,
-                &account_pubkey,
-                previews,
-                profile_idempotency_key,
-                farm_idempotency_key,
-                "unavailable",
-                RADROOTSD_PUBLISH_DEFERRED_REASON,
-            )),
-        };
-    }
-
-    match config.publish.mode {
-        PublishMode::NostrRelay => publish_via_sdk(
-            config,
-            args,
-            resolved,
-            account_pubkey,
-            previews,
-            profile_idempotency_key,
-            farm_idempotency_key,
-        ),
-        PublishMode::Radrootsd => Ok(radrootsd_preflight_publish_view(
-            config,
-            args,
-            &resolved,
-            &account_pubkey,
-            previews,
-            profile_idempotency_key,
-            farm_idempotency_key,
-            "unavailable",
-            RADROOTSD_PUBLISH_DEFERRED_REASON,
-        )),
-    }
+    publish_via_sdk(
+        config,
+        args,
+        resolved,
+        account_pubkey,
+        previews,
+        profile_idempotency_key,
+        farm_idempotency_key,
+    )
 }
 
 fn publish_via_sdk(
@@ -742,11 +687,8 @@ fn publish_via_sdk(
         resolved.document.selection.account.as_str(),
         account_pubkey.as_str(),
     )?;
-    let mut request = FarmEnqueuePublishRequest::new(
-        input.actor,
-        input.farm,
-        SdkRelayTargetPolicy::UseConfiguredRelays,
-    );
+    let mut request =
+        FarmEnqueuePublishRequest::new(input.actor, input.farm, sdk_relay_target_policy(config));
     if let Some(idempotency_key) = farm_idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }
@@ -795,13 +737,6 @@ struct FarmPublishEventDraft {
     event: FarmPublishEventView,
 }
 
-impl FarmPublishView {
-    fn with_requested_signer_session_id(mut self, signer_session_id: Option<String>) -> Self {
-        self.requested_signer_session_id = signer_session_id;
-        self
-    }
-}
-
 fn missing_publish_view(
     config: &RuntimeConfig,
     scope: FarmConfigScope,
@@ -827,7 +762,6 @@ fn missing_publish_view(
         seller_pubkey,
         seller_actor_source: FARM_SELLER_ACTOR_SOURCE.to_owned(),
         farm_d_tag,
-        requested_signer_session_id: args.signer_session_id.clone(),
         profile: not_submitted_component(
             profile_publish_rpc_method(config),
             KIND_PROFILE,
@@ -879,7 +813,7 @@ fn resolve_farm_signing_identity(
 fn base_publish_view(
     state: &str,
     config: &RuntimeConfig,
-    args: &FarmPublishArgs,
+    _args: &FarmPublishArgs,
     resolved: &ResolvedFarmConfig,
     account_pubkey: &str,
     profile: FarmPublishComponentView,
@@ -898,7 +832,6 @@ fn base_publish_view(
         seller_pubkey: account_pubkey.to_owned(),
         seller_actor_source: FARM_SELLER_ACTOR_SOURCE.to_owned(),
         farm_d_tag: resolved.document.selection.farm_d_tag.clone(),
-        requested_signer_session_id: args.signer_session_id.clone(),
         profile,
         farm,
         local_replica: Vec::new(),
@@ -965,7 +898,6 @@ fn preview_component(
         job_id: None,
         job_status: None,
         signer_mode: None,
-        signer_session_id: None,
         event_id: None,
         event_addr: event.as_ref().and_then(|event| event.event_addr.clone()),
         idempotency_key: idempotency_key.clone(),
@@ -1297,66 +1229,6 @@ fn profile_not_submitted_component(
     }
 }
 
-fn deferred_component(
-    rpc_method: &str,
-    event_kind: u32,
-    idempotency_key: Option<String>,
-    args: &FarmPublishArgs,
-    reason: &str,
-    event: Option<FarmPublishEventView>,
-) -> FarmPublishComponentView {
-    FarmPublishComponentView {
-        state: "unavailable".to_owned(),
-        signer_mode: Some("deferred".to_owned()),
-        signer_session_id: None,
-        reason: Some(reason.to_owned()),
-        ..preview_component(rpc_method, event_kind, idempotency_key, args, event)
-    }
-}
-
-fn radrootsd_preflight_publish_view(
-    config: &RuntimeConfig,
-    args: &FarmPublishArgs,
-    resolved: &ResolvedFarmConfig,
-    account_pubkey: &str,
-    previews: FarmPublishPreviews,
-    profile_idempotency_key: Option<String>,
-    farm_idempotency_key: Option<String>,
-    state: &str,
-    reason: &str,
-) -> FarmPublishView {
-    let requested_signer_session_id = args.signer_session_id.clone();
-    base_publish_view(
-        state,
-        config,
-        args,
-        resolved,
-        account_pubkey,
-        deferred_component(
-            RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD,
-            KIND_PROFILE,
-            profile_idempotency_key,
-            args,
-            reason,
-            Some(previews.profile.event),
-        ),
-        deferred_component(
-            RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
-            KIND_FARM,
-            farm_idempotency_key,
-            args,
-            reason,
-            None,
-        ),
-        Some(reason.to_owned()),
-        vec![
-            "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish"
-                .to_owned(),
-        ],
-    )
-    .with_requested_signer_session_id(requested_signer_session_id)
-}
-
 fn persist_farm_publication(
     config: &RuntimeConfig,
     resolved: &mut ResolvedFarmConfig,
@@ -1385,24 +1257,18 @@ fn persist_publication(
 }
 
 fn farm_write_source(config: &RuntimeConfig) -> &'static str {
-    match config.publish.mode {
-        PublishMode::NostrRelay => SDK_FARM_WRITE_SOURCE,
-        PublishMode::Radrootsd => RADROOTSD_FARM_WRITE_SOURCE,
-    }
+    let _ = config;
+    SDK_FARM_WRITE_SOURCE
 }
 
 fn profile_publish_rpc_method(config: &RuntimeConfig) -> &'static str {
-    match config.publish.mode {
-        PublishMode::NostrRelay => SDK_PROFILE_NOT_SUBMITTED_METHOD,
-        PublishMode::Radrootsd => RADROOTSD_BRIDGE_PROFILE_PUBLISH_METHOD,
-    }
+    let _ = config;
+    SDK_PROFILE_NOT_SUBMITTED_METHOD
 }
 
 fn farm_publish_rpc_method(config: &RuntimeConfig) -> &'static str {
-    match config.publish.mode {
-        PublishMode::NostrRelay => SDK_FARM_PUBLISH_METHOD,
-        PublishMode::Radrootsd => RADROOTSD_BRIDGE_FARM_PUBLISH_METHOD,
-    }
+    let _ = config;
+    SDK_FARM_PUBLISH_METHOD
 }
 
 fn selected_account_for_draft(

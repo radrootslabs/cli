@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::cli::input::runtime_invocation_args_from_target;
 use crate::cli::{TargetCliArgs, TargetOutputFormat};
@@ -28,13 +28,8 @@ use crate::ops::{
     TargetOperationRequest,
 };
 use crate::out::envelope::OutputEnvelope;
-use crate::registry::{
-    NetworkRequirement, network_requirement, requires_local_signer_mode,
-    requires_nostr_relay_publish_mode,
-};
-use crate::runtime::config::{
-    PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
-};
+use crate::registry::{NetworkRequirement, network_requirement, requires_local_signer_mode};
+use crate::runtime::config::{RuntimeConfig, SignerBackend};
 use crate::runtime::logging::initialize_logging;
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -327,7 +322,7 @@ fn validate_request_contract(
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
     validate_pre_runtime_request_contract(request)?;
-    validate_publish_mode_contract(request, config)?;
+    validate_publish_transport_contract(request, config)?;
     validate_signer_mode_contract(request, config)?;
     validate_network_contract(request, config)?;
     Ok(())
@@ -362,7 +357,7 @@ fn validate_signer_mode_contract(
 ) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
     if matches!(config.signer.backend, SignerBackend::Myc)
-        && requires_local_signer_mode_for_publish_mode(spec.operation_id, config)
+        && requires_local_signer_mode_for_publish_transport(spec.operation_id, config)
     {
         return Err(OperationAdapterError::SignerModeDeferred {
             operation_id: spec.operation_id.to_owned(),
@@ -423,84 +418,32 @@ fn validate_network_contract(
     }
 }
 
-fn requires_local_signer_mode_for_publish_mode(operation_id: &str, config: &RuntimeConfig) -> bool {
-    if matches!(config.publish.mode, PublishMode::Radrootsd)
-        && is_publish_mode_routed_operation(operation_id)
-    {
-        return false;
-    }
+fn requires_local_signer_mode_for_publish_transport(
+    operation_id: &str,
+    config: &RuntimeConfig,
+) -> bool {
+    let _ = config;
     requires_local_signer_mode(operation_id)
 }
 
 fn requires_pre_runtime_relay_target(operation_id: &str) -> bool {
-    !is_publish_mode_routed_operation(operation_id)
+    !is_publish_transport_routed_operation(operation_id)
 }
 
 fn allows_offline_local_mutation(operation_id: &str) -> bool {
     matches!(operation_id, "listing.publish")
 }
 
-fn validate_publish_mode_contract(
+fn validate_publish_transport_contract(
     request: &TargetOperationRequest,
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
-    let spec = request.spec();
-    if matches!(config.publish.mode, PublishMode::Radrootsd)
-        && requires_nostr_relay_publish_mode(spec.operation_id)
-    {
-        let message = format!(
-            "`{}` cannot run with publish mode `radrootsd`; {RADROOTSD_PUBLISH_DEFERRED_REASON}",
-            spec.cli_path
-        );
-        let actions = nostr_relay_publish_mode_recovery_actions(spec.operation_id);
-        return Err(OperationAdapterError::operation_unavailable_with_detail(
-            spec.operation_id,
-            message.clone(),
-            json!({
-                "state": "unavailable",
-                "reason": message,
-                "actions": actions,
-                "publish": {
-                    "mode": config.publish.mode.as_str(),
-                    "source": config.publish.source.as_str(),
-                    "transport_family": config.publish.mode.transport_family(),
-                    "state": "unavailable",
-                    "executable": false,
-                    "provider": {
-                        "provider_runtime_id": "radrootsd",
-                        "state": "unavailable",
-                    }
-                }
-            }),
-        ));
-    }
+    let _ = request;
+    let _ = config;
     Ok(())
 }
 
-fn nostr_relay_publish_mode_recovery_actions(operation_id: &str) -> Vec<String> {
-    match operation_id {
-        "farm.publish" => vec![
-            "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish"
-                .to_owned(),
-        ],
-        "listing.publish" => vec![format!(
-            "radroots --publish-mode nostr_relay --relay wss://relay.example.com {}",
-            "listing publish <file>"
-        )],
-        "listing.update" => vec![format!(
-            "radroots --publish-mode nostr_relay --relay wss://relay.example.com {}",
-            "listing update <file>"
-        )],
-        "listing.archive" => vec![format!(
-            "radroots --publish-mode nostr_relay --relay wss://relay.example.com {}",
-            "listing archive <file>"
-        )],
-        "sync.push" => vec!["radroots --publish-mode nostr_relay sync push".to_owned()],
-        _ => Vec::new(),
-    }
-}
-
-fn is_publish_mode_routed_operation(operation_id: &str) -> bool {
+fn is_publish_transport_routed_operation(operation_id: &str) -> bool {
     matches!(
         operation_id,
         "farm.publish" | "listing.publish" | "listing.update" | "listing.archive"
@@ -581,8 +524,8 @@ fn render_human_envelope(
     {
         writeln!(handle, "state: {state}")?;
     }
-    if let Some(mode) = human_publish_mode(display) {
-        writeln!(handle, "publish_mode: {mode}")?;
+    if let Some(mode) = human_publish_transport(display) {
+        writeln!(handle, "publish_transport: {mode}")?;
     }
     if let Some(state) = human_publish_state(display) {
         writeln!(handle, "publish_state: {state}")?;
@@ -624,10 +567,10 @@ fn human_state(result: &Value) -> Option<&str> {
     human_string_path(result, &["state"])
 }
 
-fn human_publish_mode(result: &Value) -> Option<&str> {
+fn human_publish_transport(result: &Value) -> Option<&str> {
     human_string_path(result, &["publish", "mode"])
         .or_else(|| human_string_path(result, &["checks", "publish", "mode"]))
-        .or_else(|| human_string_path(result, &["publish_mode"]))
+        .or_else(|| human_string_path(result, &["publish_transport"]))
 }
 
 fn human_publish_state(result: &Value) -> Option<&str> {

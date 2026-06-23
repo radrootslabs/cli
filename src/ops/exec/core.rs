@@ -27,9 +27,7 @@ use crate::runtime::account::{
     resolve_account_selector, secret_backend_status, select_account, snapshot,
     unresolved_account_reason,
 };
-use crate::runtime::config::{
-    PublishMode, RADROOTSD_PUBLISH_DEFERRED_REASON, RuntimeConfig, SignerBackend,
-};
+use crate::runtime::config::{PublishTransport, RuntimeConfig, SignerBackend};
 use crate::runtime::logging::LoggingState;
 use crate::runtime::sdk::CliSdkAdapterError;
 use crate::view::runtime::{
@@ -175,7 +173,7 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
                 "signer": signer,
                 "publish": {
                     "state": publish.state,
-                    "mode": publish.mode,
+                    "transport": publish.transport,
                     "executable": publish.executable,
                     "reason": publish.reason,
                 },
@@ -196,7 +194,6 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
         let publish = publish_runtime_view(self.config, true, &account);
         let write_plane =
             crate::runtime::provider::resolve_write_plane_provider(self.config, &publish);
-        let bridge_auth_configured = write_plane.bridge_auth_configured;
         let actions = config_actions(self.config, &account, &publish);
         let mut result = json!({
             "output": {
@@ -258,12 +255,15 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
             },
             "actions": actions,
         });
-        if matches!(self.config.publish.mode, PublishMode::Radrootsd) {
-            result["rpc"] = json!({
-                "url": self.config.rpc.url,
-                "bridge_auth_configured": self.config.rpc.bridge_bearer_token.is_some(),
+        if matches!(
+            self.config.publish.transport,
+            PublishTransport::RadrootsdProxy
+        ) {
+            result["radrootsd_proxy"] = json!({
+                "url": self.config.publish.radrootsd_proxy.url,
+                "token_file_configured": self.config.publish.radrootsd_proxy.token_file.is_some(),
+                "token_secret_id_configured": self.config.publish.radrootsd_proxy.token_secret_id.is_some(),
             });
-            result["write_plane"]["bridge_auth_configured"] = json!(bridge_auth_configured);
         }
         json_operation_result::<ConfigGetResult>(result)
     }
@@ -805,42 +805,46 @@ fn publish_runtime_view(
         source: config.relay.source.as_str().to_owned(),
     };
 
-    match config.publish.mode {
-        PublishMode::NostrRelay => {
-            let (state, executable, reason) =
-                nostr_relay_publish_readiness(config, relay_ready, signed_write_required, account);
+    match config.publish.transport {
+        PublishTransport::DirectNostrRelay => {
+            let (state, executable, reason) = direct_nostr_relay_publish_readiness(
+                config,
+                relay_ready,
+                signed_write_required,
+                account,
+            );
             PublishRuntimeView {
-                mode: config.publish.mode.as_str().to_owned(),
+                transport: config.publish.transport.as_str().to_owned(),
                 source,
-                transport_family: config.publish.mode.transport_family().to_owned(),
+                transport_family: config.publish.transport.transport_family().to_owned(),
                 state: state.to_owned(),
                 executable,
                 reason: reason.clone(),
                 signed_write_required,
                 relay,
                 provider: PublishProviderRuntimeView {
-                    provider_runtime_id: "nostr_relay".to_owned(),
+                    provider_runtime_id: "direct_nostr_relay".to_owned(),
                     state: state.to_owned(),
                     source: config.relay.source.as_str().to_owned(),
                     reason,
                 },
             }
         }
-        PublishMode::Radrootsd => {
+        PublishTransport::RadrootsdProxy => {
             let (state, executable, reason) = radrootsd_publish_readiness(config);
             PublishRuntimeView {
-                mode: config.publish.mode.as_str().to_owned(),
+                transport: config.publish.transport.as_str().to_owned(),
                 source,
-                transport_family: config.publish.mode.transport_family().to_owned(),
+                transport_family: config.publish.transport.transport_family().to_owned(),
                 state: state.to_owned(),
                 executable,
                 reason: reason.clone(),
                 signed_write_required,
                 relay,
                 provider: PublishProviderRuntimeView {
-                    provider_runtime_id: "radrootsd".to_owned(),
+                    provider_runtime_id: "radrootsd_proxy".to_owned(),
                     state: state.to_owned(),
-                    source: "publish mode · local first".to_owned(),
+                    source: "publish transport · local first".to_owned(),
                     reason,
                 },
             }
@@ -848,7 +852,7 @@ fn publish_runtime_view(
     }
 }
 
-fn nostr_relay_publish_readiness(
+fn direct_nostr_relay_publish_readiness(
     config: &RuntimeConfig,
     relay_ready: bool,
     signed_write_required: bool,
@@ -859,7 +863,7 @@ fn nostr_relay_publish_readiness(
             "unconfigured",
             false,
             Some(
-                "nostr_relay publish mode requires at least one configured relay for writes"
+                "direct_nostr_relay publish transport requires at least one configured relay for writes"
                     .to_owned(),
             ),
         );
@@ -874,7 +878,7 @@ fn nostr_relay_publish_readiness(
             "unavailable",
             false,
             Some(
-                "nostr_relay publish mode requires signer mode `local` for signed writes; signer mode `myc` is deferred"
+                "direct_nostr_relay publish transport requires signer mode `local` for signed writes; signer mode `myc` is deferred"
                     .to_owned(),
             ),
         );
@@ -885,7 +889,7 @@ fn nostr_relay_publish_readiness(
             "unconfigured",
             false,
             Some(
-                "nostr_relay publish mode requires a selected or default write-capable local account for signed writes"
+                "direct_nostr_relay publish transport requires a selected or default write-capable local account for signed writes"
                     .to_owned(),
             ),
         );
@@ -904,12 +908,29 @@ fn nostr_relay_publish_readiness(
     ("ready", true, None)
 }
 
-fn radrootsd_publish_readiness(_config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
-    (
-        "unavailable",
-        false,
-        Some(RADROOTSD_PUBLISH_DEFERRED_REASON.to_owned()),
-    )
+fn radrootsd_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
+    if config.publish.radrootsd_proxy.token_file.is_none()
+        && config.publish.radrootsd_proxy.token_secret_id.is_none()
+    {
+        return (
+            "unconfigured",
+            false,
+            Some("radrootsd_proxy publish transport requires a configured token file or token secret id".to_owned()),
+        );
+    }
+
+    if matches!(config.signer.backend, SignerBackend::Myc) {
+        return (
+            "unavailable",
+            false,
+            Some(
+                "radrootsd_proxy publish transport requires signer mode `local` for signed writes; signer mode `myc` is deferred"
+                    .to_owned(),
+            ),
+        );
+    }
+
+    ("ready", true, None)
 }
 
 fn signer_health_view(config: &RuntimeConfig, account: &AccountResolution) -> Value {
@@ -1005,8 +1026,8 @@ fn publish_recovery_actions(
     }
 
     let mut actions = Vec::new();
-    match config.publish.mode {
-        PublishMode::NostrRelay => {
+    match config.publish.transport {
+        PublishTransport::DirectNostrRelay => {
             if config.relay.urls.is_empty() {
                 push_unique(
                     &mut actions,
@@ -1025,14 +1046,27 @@ fn publish_recovery_actions(
                 }
             }
         }
-        PublishMode::Radrootsd => {
-            push_unique(
-                &mut actions,
-                "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
-            );
+        PublishTransport::RadrootsdProxy => {
+            if self::proxy_token_configured(config) {
+                if publish.signed_write_required
+                    && matches!(config.signer.backend, SignerBackend::Myc)
+                {
+                    push_unique(&mut actions, "radroots signer status get");
+                }
+            } else {
+                push_unique(
+                    &mut actions,
+                    "configure RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE or RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID",
+                );
+            }
         }
     }
     actions
+}
+
+fn proxy_token_configured(config: &RuntimeConfig) -> bool {
+    config.publish.radrootsd_proxy.token_file.is_some()
+        || config.publish.radrootsd_proxy.token_secret_id.is_some()
 }
 
 fn push_unique(actions: &mut Vec<String>, action: impl Into<String>) {
@@ -1123,8 +1157,9 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
+        SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
 
@@ -1340,8 +1375,9 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             publish: PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Defaults,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Defaults,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -1364,7 +1400,6 @@ mod tests {
             },
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
-                bridge_bearer_token: None,
             },
             rhi: crate::runtime::config::RhiConfig {
                 trusted_worker_pubkeys: Vec::new(),

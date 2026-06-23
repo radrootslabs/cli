@@ -54,7 +54,7 @@ pub struct ActorWriteSignerAuthority {
     pub provider_runtime_id: String,
     pub account_identity_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_signer_session_id: Option<String>,
+    pub provider_session_ref: Option<String>,
 }
 
 pub fn resolve_signer_status(config: &RuntimeConfig) -> SignerStatusView {
@@ -267,7 +267,7 @@ fn disabled_binding_status() -> SignerBindingStatusView {
         target: None,
         managed_account_ref: None,
         signer_session_ref: None,
-        resolved_signer_session_id: None,
+        resolved_session_ref: None,
         matched_session_count: None,
         reason: Some(
             "remote myc signer binding is disabled while cli signer mode is `local`".to_owned(),
@@ -286,7 +286,7 @@ fn deferred_myc_binding_status() -> SignerBindingStatusView {
         target: None,
         managed_account_ref: None,
         signer_session_ref: None,
-        resolved_signer_session_id: None,
+        resolved_session_ref: None,
         matched_session_count: None,
         reason: Some(MYC_DEFERRED_REASON.to_owned()),
     }

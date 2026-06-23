@@ -829,7 +829,6 @@ fn looks_like_signer_failure(value: &str) -> bool {
             "signer",
             "sign_event",
             "sign event",
-            "signer_session_id",
             "signer session",
             "nip46",
             "nip-46",
@@ -848,7 +847,7 @@ fn looks_like_provider_failure(value: &str) -> bool {
             "provider failed",
             "radrootsd unavailable",
             "daemon unavailable",
-            "bridge provider",
+            "proxy provider",
         ],
     )
 }
@@ -863,9 +862,8 @@ fn looks_like_operation_failure(value: &str) -> bool {
             "unsupported operation",
             "operation unavailable",
             "operation disabled",
-            "bridge disabled",
-            "bridge is disabled",
-            "bridge.listing.publish is disabled",
+            "publish proxy disabled",
+            "publish.event is disabled",
         ],
     )
 }

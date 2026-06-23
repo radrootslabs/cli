@@ -26,7 +26,7 @@ use serde_json::json;
 
 use crate::cli::global::SyncWatchArgs;
 use crate::runtime::RuntimeError;
-use crate::runtime::config::{PublishMode, RuntimeConfig};
+use crate::runtime::config::RuntimeConfig;
 use crate::runtime::direct_relay::{
     DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, fetch_events_from_relays,
 };
@@ -45,8 +45,6 @@ const SYNC_PUSH_ACTION: &str = "radroots sync push";
 const SYNC_READY_ACTION: &str = "radroots market product search eggs";
 const MARKET_READY_ACTION: &str = "radroots market product search eggs";
 const INGEST_SOURCE: &str = "direct Nostr relay fetch · local replica ingest";
-const RADROOTSD_SYNC_PUSH_SOURCE: &str = "radrootsd sync push · deferred";
-pub(crate) const RADROOTSD_SYNC_PUSH_UNAVAILABLE_REASON: &str = "sync push is only available in publish mode `nostr_relay`; radrootsd sync push is not implemented";
 const RELAY_FETCH_LIMIT: usize = 1_000;
 const RELAY_FETCH_MAX_PAGES: usize = 5;
 const MARKET_FRESHNESS_STALE_AFTER_SECONDS: u64 = 15 * 60;
@@ -329,10 +327,6 @@ where
 }
 
 pub fn push(config: &RuntimeConfig) -> Result<SyncActionView, CliSdkAdapterError> {
-    if matches!(config.publish.mode, PublishMode::Radrootsd) {
-        return Ok(push_radrootsd_unavailable_view(config));
-    }
-
     let session = CliSdkSession::connect(config)?;
     if config.output.dry_run {
         let status = session.block_on(session.sdk().sync().status(SyncStatusRequest::new()))?;
@@ -410,41 +404,6 @@ fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncAc
         reason_code: None,
         reason: snapshot.reason,
         actions: snapshot.actions,
-    }
-}
-
-fn push_radrootsd_unavailable_view(config: &RuntimeConfig) -> SyncActionView {
-    SyncActionView {
-        direction: "push".to_owned(),
-        state: "unavailable".to_owned(),
-        source: RADROOTSD_SYNC_PUSH_SOURCE.to_owned(),
-        local_root: config.local.root.display().to_string(),
-        replica_db: "not_checked".to_owned(),
-        relay_count: config.relay.urls.len(),
-        publish_policy: config.relay.publish_policy.as_str().to_owned(),
-        freshness: SyncFreshnessView {
-            state: "not_checked".to_owned(),
-            display: "not checked".to_owned(),
-            age_seconds: None,
-            last_event_at: None,
-            run: None,
-        },
-        queue: legacy_sync_queue(0, 0),
-        target_relays: config.relay.urls.clone(),
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
-        fetched_count: None,
-        ingested_count: None,
-        publishable_count: None,
-        published_count: None,
-        skipped_count: None,
-        unsupported_count: None,
-        failed_count: None,
-        publish_plan: None,
-        reason_code: Some("not_implemented".to_owned()),
-        reason: Some(RADROOTSD_SYNC_PUSH_UNAVAILABLE_REASON.to_owned()),
-        actions: vec!["radroots --publish-mode nostr_relay sync push".to_owned()],
     }
 }
 
@@ -1471,7 +1430,7 @@ mod tests {
 
     use super::{
         DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, RelayIngestScope,
-        freshness_for_scope, market_refresh_with_fetcher, pull_with_fetcher, push,
+        freshness_for_scope, market_refresh_with_fetcher, pull_with_fetcher,
         relay_provenance_relays_for_scope, sdk_push_dry_run_view, sdk_push_view,
         sdk_sync_status_view,
     };
@@ -1479,8 +1438,9 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
+        SignerConfig, Verbosity,
     };
 
     const FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
@@ -1746,28 +1706,6 @@ mod tests {
             view.actions,
             vec!["radroots sync push", "radroots sync status get"]
         );
-    }
-
-    #[test]
-    fn sync_push_rejects_radrootsd_before_store_or_sdk_work() {
-        let dir = tempdir().expect("tempdir");
-        let mut config = sample_config(dir.path(), Vec::new());
-        config.publish.mode = PublishMode::Radrootsd;
-
-        let view = push(&config).expect("radrootsd sync push view");
-
-        assert_eq!(view.state, "unavailable");
-        assert_eq!(view.replica_db, "not_checked");
-        assert_eq!(view.relay_count, 0);
-        assert_eq!(
-            view.reason.as_deref(),
-            Some(super::RADROOTSD_SYNC_PUSH_UNAVAILABLE_REASON)
-        );
-        assert_eq!(
-            view.actions,
-            vec!["radroots --publish-mode nostr_relay sync push"]
-        );
-        assert!(!config.local.replica_db_path.exists());
     }
 
     fn sdk_status_receipt(
@@ -2343,8 +2281,9 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             publish: PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Defaults,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Defaults,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             },
             relay: RelayConfig {
                 urls: relays,
@@ -2367,7 +2306,6 @@ mod tests {
             },
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
-                bridge_bearer_token: None,
             },
             rhi: crate::runtime::config::RhiConfig {
                 trusted_worker_pubkeys: Vec::new(),

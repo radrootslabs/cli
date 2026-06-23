@@ -1,20 +1,25 @@
 #![allow(dead_code)]
 
+use std::fs;
 use std::future::Future;
 use std::path::PathBuf;
 
 use radroots_authority::RadrootsLocalEventSigner;
 use radroots_nostr::prelude::RadrootsNostrKeys;
 use radroots_sdk::{
-    RadrootsSdk, RadrootsSdkBuilder, RadrootsSdkError, RadrootsSdkStorageConfig, SdkRelayUrlPolicy,
+    RadrootsSdk, RadrootsSdkBuilder, RadrootsSdkError, RadrootsSdkStorageConfig,
+    SdkPublishTransport, SdkRelayUrlPolicy,
+    adapters::radrootsd::{RadrootsdAuth, RadrootsdProxyConfig as SdkRadrootsdProxyConfig},
 };
+use radroots_secret_vault::{RadrootsSecretVault, RadrootsSecretVaultOsKeyring};
 use tokio::runtime::{Builder as TokioRuntimeBuilder, Runtime};
 
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{PublishTransport, RuntimeConfig};
 
 const SDK_STORAGE_DIR_NAME: &str = "sdk";
+const RADROOTSD_PROXY_SECRET_SERVICE: &str = "org.radroots.cli.radrootsd-proxy";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CliSdkAdapterError {
@@ -29,15 +34,17 @@ pub struct CliSdkConfig {
     pub storage_root: PathBuf,
     pub relay_url_policy: SdkRelayUrlPolicy,
     pub relay_urls: Vec<String>,
+    pub publish_transport: SdkPublishTransport,
 }
 
 impl CliSdkConfig {
-    pub fn from_runtime_config(config: &RuntimeConfig) -> Self {
-        Self {
+    pub fn from_runtime_config(config: &RuntimeConfig) -> Result<Self, RuntimeError> {
+        Ok(Self {
             storage_root: sdk_storage_root(config),
             relay_url_policy: sdk_relay_url_policy(config),
             relay_urls: config.relay.urls.clone(),
-        }
+            publish_transport: sdk_publish_transport(config)?,
+        })
     }
 
     pub fn builder(&self) -> RadrootsSdkBuilder {
@@ -46,7 +53,8 @@ impl CliSdkConfig {
                 .storage(RadrootsSdkStorageConfig::Directory(
                     self.storage_root.clone(),
                 ))
-                .relay_url_policy(self.relay_url_policy),
+                .relay_url_policy(self.relay_url_policy)
+                .publish_transport(self.publish_transport.clone()),
             |builder, relay_url| builder.relay_url(relay_url.clone()),
         )
     }
@@ -60,7 +68,7 @@ pub struct CliSdkSession {
 
 impl CliSdkSession {
     pub fn connect(config: &RuntimeConfig) -> Result<Self, CliSdkAdapterError> {
-        let sdk_config = CliSdkConfig::from_runtime_config(config);
+        let sdk_config = CliSdkConfig::from_runtime_config(config)?;
         let runtime = sdk_runtime()?;
         let sdk = runtime.block_on(sdk_config.builder().build())?;
         Ok(Self {
@@ -71,7 +79,7 @@ impl CliSdkSession {
     }
 
     pub fn connect_memory(config: &RuntimeConfig) -> Result<Self, CliSdkAdapterError> {
-        let sdk_config = CliSdkConfig::from_runtime_config(config);
+        let sdk_config = CliSdkConfig::from_runtime_config(config)?;
         let runtime = sdk_runtime()?;
         let sdk = runtime.block_on(memory_builder(&sdk_config).build())?;
         Ok(Self {
@@ -151,7 +159,9 @@ pub(crate) fn sdk_runtime() -> Result<Runtime, RuntimeError> {
 
 fn memory_builder(config: &CliSdkConfig) -> RadrootsSdkBuilder {
     config.relay_urls.iter().fold(
-        RadrootsSdk::builder().relay_url_policy(config.relay_url_policy),
+        RadrootsSdk::builder()
+            .relay_url_policy(config.relay_url_policy)
+            .publish_transport(config.publish_transport.clone()),
         |builder, relay_url| builder.relay_url(relay_url.clone()),
     )
 }
@@ -167,6 +177,66 @@ pub fn sdk_relay_url_policy(config: &RuntimeConfig) -> SdkRelayUrlPolicy {
     } else {
         SdkRelayUrlPolicy::Public
     }
+}
+
+pub fn sdk_relay_target_policy(config: &RuntimeConfig) -> radroots_sdk::SdkRelayTargetPolicy {
+    match config.publish.transport {
+        PublishTransport::DirectNostrRelay => {
+            radroots_sdk::SdkRelayTargetPolicy::UseConfiguredRelays
+        }
+        PublishTransport::RadrootsdProxy => {
+            radroots_sdk::SdkRelayTargetPolicy::use_publish_transport()
+        }
+    }
+}
+
+fn sdk_publish_transport(config: &RuntimeConfig) -> Result<SdkPublishTransport, RuntimeError> {
+    match config.publish.transport {
+        PublishTransport::DirectNostrRelay => Ok(SdkPublishTransport::DirectNostrRelay),
+        PublishTransport::RadrootsdProxy => {
+            let mut proxy_config =
+                SdkRadrootsdProxyConfig::new(config.publish.radrootsd_proxy.url.clone());
+            if let Some(auth) = radrootsd_proxy_auth(config)? {
+                proxy_config = proxy_config.with_auth(auth);
+            }
+            Ok(SdkPublishTransport::RadrootsdProxy(proxy_config))
+        }
+    }
+}
+
+fn radrootsd_proxy_auth(config: &RuntimeConfig) -> Result<Option<RadrootsdAuth>, RuntimeError> {
+    let proxy = &config.publish.radrootsd_proxy;
+    let token = if let Some(path) = proxy.token_file.as_ref() {
+        fs::read_to_string(path).map_err(|error| {
+            RuntimeError::Config(format!(
+                "failed to read radrootsd proxy token file {}: {error}",
+                path.display()
+            ))
+        })?
+    } else if let Some(secret_id) = proxy.token_secret_id.as_ref() {
+        let vault = RadrootsSecretVaultOsKeyring::new(RADROOTSD_PROXY_SECRET_SERVICE);
+        vault
+            .load_secret(secret_id)
+            .map_err(|error| {
+                RuntimeError::Config(format!(
+                    "failed to load radrootsd proxy token secret `{secret_id}`: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "radrootsd proxy token secret `{secret_id}` was not found"
+                ))
+            })?
+    } else {
+        return Ok(None);
+    };
+    let token = token.trim();
+    if token.is_empty() {
+        return Err(RuntimeError::Config(
+            "radrootsd proxy bearer token is empty".to_owned(),
+        ));
+    }
+    Ok(Some(RadrootsdAuth::BearerToken(token.to_owned())))
 }
 
 #[cfg(test)]
@@ -185,8 +255,9 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RhiConfig, RpcConfig, SignerBackend, SignerConfig, Verbosity,
+        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RhiConfig, RpcConfig, SignerBackend, SignerConfig,
+        Verbosity,
     };
 
     struct DirectRrRsDependency {
@@ -357,23 +428,6 @@ mod tests {
     ];
 
     const LEGACY_DIRECT_RELAY_CONSUMERS: &[LegacyDirectRelayConsumer] = &[
-        LegacyDirectRelayConsumer {
-            path: "src/runtime/listing.rs",
-            required_tokens: &[
-                "mutate_via_direct_relay(",
-                "publish_signed_event_with_identity",
-            ],
-            owner: "listing.nostr_relay.write",
-            reason: "non-migrated listing direct relay write mode outside SDK local publish",
-            lifecycle: "retain until listing relay publish migrates to SDK-backed write APIs",
-        },
-        LegacyDirectRelayConsumer {
-            path: "src/runtime/local_events.rs",
-            required_tokens: &["DirectRelayFailure", "DirectRelayPublishError"],
-            owner: "local-event.delivery-evidence",
-            reason: "delivery evidence mapping for non-migrated direct relay publish outcomes",
-            lifecycle: "retain until delivery evidence moves behind SDK or local-events APIs",
-        },
         LegacyDirectRelayConsumer {
             path: "src/runtime/order.rs",
             required_tokens: &[
@@ -559,7 +613,7 @@ mod tests {
             vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()],
         );
 
-        let sdk_config = CliSdkConfig::from_runtime_config(&config);
+        let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
 
         assert_eq!(sdk_config.storage_root, config.local.root.join("sdk"));
         assert_eq!(sdk_config.relay_url_policy, SdkRelayUrlPolicy::Public);
@@ -617,8 +671,7 @@ mod tests {
 
     #[test]
     fn sdk_sources_do_not_import_cli_types() {
-        let sdk_src = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../domains/radroots/sdk/crates/sdk/src");
+        let sdk_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sdk/crates/sdk/src");
         let mut files = Vec::new();
         collect_rs_files(sdk_src.as_path(), &mut files);
         let forbidden = [
@@ -724,7 +777,10 @@ mod tests {
                     .flat_map(move |dependencies| {
                         dependencies.iter().filter_map(move |(name, value)| {
                             dependency_path(value)
-                                .filter(|path| path.contains("domains/radroots/lib/crates"))
+                                .filter(|path| {
+                                    path.contains("../lib/crates")
+                                        || path.contains("domains/radroots/lib/crates")
+                                })
                                 .map(|_| format!("{section}:{name}"))
                         })
                     })
@@ -867,8 +923,9 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             publish: PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Defaults,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Defaults,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             },
             relay: RelayConfig {
                 urls: relays,
@@ -891,7 +948,6 @@ mod tests {
             },
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".to_owned(),
-                bridge_bearer_token: None,
             },
             rhi: RhiConfig {
                 trusted_worker_pubkeys: Vec::new(),

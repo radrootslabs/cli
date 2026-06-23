@@ -3815,6 +3815,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "radroots_publish_proxy_protocol"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "radroots_relay_transport"
 version = "0.1.0-alpha.2"
 dependencies = [
@@ -3905,6 +3912,7 @@ dependencies = [
 name = "radroots_sdk"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "hex",
  "radroots_authority",
  "radroots_event_store",
@@ -3913,8 +3921,10 @@ dependencies = [
  "radroots_identity",
  "radroots_nostr",
  "radroots_outbox",
+ "radroots_publish_proxy_protocol",
  "radroots_relay_transport",
  "radroots_trade",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

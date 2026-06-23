@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread::{self, JoinHandle};
 
 use radroots_events::RadrootsNostrEventPtr;
@@ -29,8 +29,8 @@ use support::{
     ORDERABLE_LISTING_RELAY, RadrootsCliSandbox, assert_contains,
     assert_no_daemon_runtime_reference, assert_no_removed_command_reference, create_listing_draft,
     duplicate_orderable_listing_row, identity_public, identity_secret, json_from_stdout,
-    make_listing_publishable, make_listing_publishable_with_seller, ndjson_from_stdout, radroots,
-    remove_orderable_listing, replace_latest_listing_event_id, seed_orderable_listing, toml_string,
+    make_listing_publishable, ndjson_from_stdout, radroots, remove_orderable_listing,
+    replace_latest_listing_event_id, seed_orderable_listing, toml_string,
     update_orderable_listing_available_amount, update_orderable_listing_primary_bin_id,
     write_public_identity_profile, write_secret_identity_profile,
 };
@@ -53,6 +53,12 @@ fn test_inventory_bin_id(value: &str) -> RadrootsInventoryBinId {
 
 fn test_pubkey(value: &str) -> RadrootsPublicKey {
     value.parse().expect("valid public key")
+}
+
+fn radrootsd_proxy_token_file(sandbox: &RadrootsCliSandbox) -> PathBuf {
+    let path = sandbox.root().join("radrootsd_proxy.token");
+    fs::write(&path, "proxy_test_token\n").expect("write proxy token file");
+    path
 }
 
 struct RelayFetchServer {
@@ -770,21 +776,18 @@ fn root_help_exposes_only_target_namespaces() {
 }
 
 #[test]
-fn root_help_explains_publish_modes() {
+fn root_help_explains_publish_transports() {
     let output = radroots().arg("--help").output().expect("run root help");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
-    assert!(stdout.contains("nostr_relay uses direct relay publish"));
-    assert!(stdout.contains("radrootsd is reserved and fails closed"));
-    assert!(stdout.contains("Relay mode never silently falls back"));
+    assert!(stdout.contains("direct_nostr_relay publishes directly to configured relays"));
+    assert!(stdout.contains("radrootsd_proxy publishes locally signed events"));
     assert!(stdout.contains("Inspect local readiness and mode-specific recovery steps"));
-    assert!(
-        stdout.contains(
-            "Select nostr_relay direct relay publish or reserved radrootsd guardrail mode"
-        )
-    );
+    assert!(stdout.contains(
+        "Select direct_nostr_relay direct relay publish or radrootsd_proxy daemon proxy publish"
+    ));
 }
 
 fn help_lists(stdout: &str, command: &str) -> bool {
@@ -792,29 +795,6 @@ fn help_lists(stdout: &str, command: &str) -> bool {
         let line = line.trim_start();
         line == command || line.starts_with(&format!("{command} "))
     })
-}
-
-fn assert_radrootsd_deferred_message(value: &Value) {
-    let message = value["errors"][0]["message"]
-        .as_str()
-        .expect("error message");
-    assert!(message.contains("radrootsd publish mode is deferred"));
-    assert!(message.contains("publish mode `nostr_relay`"));
-    assert!(
-        !message.contains("signer.remote_nip46"),
-        "deferred publish-mode message should not suggest signer-session setup: {message}"
-    );
-}
-
-fn assert_direct_relay_next_action(actions: &Value, command: &str) {
-    let action = actions
-        .as_array()
-        .expect("next actions")
-        .iter()
-        .find(|action| action["command"] == command)
-        .expect("direct relay next action");
-
-    assert_eq!(action["kind"], "cli_command");
 }
 
 #[test]
@@ -839,24 +819,27 @@ fn removed_global_flags_are_rejected_publicly() {
 }
 
 #[test]
-fn config_get_exposes_resolved_publish_state() {
+fn config_get_exposes_radrootsd_proxy_missing_token_state() {
     let sandbox = RadrootsCliSandbox::new();
-    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
+    sandbox.write_app_config("[publish]\ntransport = \"radrootsd_proxy\"\n");
 
     let value = sandbox.json_success(&["--format", "json", "config", "get"]);
 
     assert_eq!(value["operation_id"], "config.get");
-    assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
+    assert_eq!(value["result"]["publish"]["transport"], "radrootsd_proxy");
     assert_eq!(
         value["result"]["publish"]["source"],
         "user config · local first"
     );
-    assert_eq!(value["result"]["publish"]["transport_family"], "radrootsd");
-    assert_eq!(value["result"]["publish"]["state"], "unavailable");
+    assert_eq!(
+        value["result"]["publish"]["transport_family"],
+        "radrootsd_proxy"
+    );
+    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
     assert_eq!(value["result"]["publish"]["executable"], false);
     assert_contains(
         &value["result"]["publish"]["reason"],
-        "radrootsd publish mode is deferred",
+        "configured token file or token secret id",
     );
     assert_eq!(
         value["result"]["account_resolution"]["status"],
@@ -864,77 +847,76 @@ fn config_get_exposes_resolved_publish_state() {
     );
     assert_eq!(
         value["result"]["publish"]["provider"]["provider_runtime_id"],
-        "radrootsd"
+        "radrootsd_proxy"
     );
     assert_eq!(
         value["result"]["write_plane"]["provider_runtime_id"],
-        "radrootsd"
+        "radrootsd_proxy"
     );
     assert_eq!(
         value["result"]["write_plane"]["binding_model"],
-        "radrootsd_bridge_publish"
+        "daemon_proxy_publish"
     );
-    assert_eq!(value["result"]["write_plane"]["state"], "unavailable");
+    assert_eq!(value["result"]["write_plane"]["state"], "unconfigured");
     assert_eq!(
-        value["result"]["write_plane"]["bridge_auth_configured"],
+        value["result"]["radrootsd_proxy"]["token_file_configured"],
         false
     );
-    assert_eq!(value["result"]["rpc"]["bridge_auth_configured"], false);
+    assert_eq!(
+        value["result"]["radrootsd_proxy"]["token_secret_id_configured"],
+        false
+    );
     assert_eq!(
         value["result"]["actions"][0],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
+        "configure RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE or RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID"
     );
-    assert_direct_relay_next_action(
-        &value["next_actions"],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+    assert_eq!(
+        value["next_actions"][0]["env_var"],
+        "RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE"
     );
 }
 
 #[test]
-fn config_get_radrootsd_with_bridge_auth_still_reports_deferred_publish_mode() {
+fn config_get_radrootsd_proxy_with_token_file_reports_ready_transport() {
     let sandbox = RadrootsCliSandbox::new();
-    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
+    sandbox.write_app_config("[publish]\ntransport = \"radrootsd_proxy\"\n");
+    let token_file = radrootsd_proxy_token_file(&sandbox);
 
     let mut command = sandbox.command();
     command
-        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE", token_file)
         .args(["--format", "json", "config", "get"]);
     let output = command.output().expect("run config get");
     let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
 
     assert!(output.status.success());
     assert_eq!(value["operation_id"], "config.get");
-    assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
-    assert_eq!(value["result"]["publish"]["state"], "unavailable");
-    assert_eq!(value["result"]["publish"]["executable"], false);
-    assert_contains(
-        &value["result"]["publish"]["reason"],
-        "radrootsd publish mode is deferred",
-    );
-    assert_eq!(value["result"]["rpc"]["bridge_auth_configured"], true);
+    assert_eq!(value["result"]["publish"]["transport"], "radrootsd_proxy");
+    assert_eq!(value["result"]["publish"]["state"], "ready");
+    assert_eq!(value["result"]["publish"]["executable"], true);
+    assert_eq!(value["result"]["publish"]["reason"], Value::Null);
     assert_eq!(
-        value["result"]["actions"][0],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
+        value["result"]["radrootsd_proxy"]["token_file_configured"],
+        true
     );
     assert_eq!(
-        value["next_actions"]
+        value["result"]["actions"]
             .as_array()
-            .expect("next actions")
+            .expect("actions")
             .len(),
-        1
-    );
-    assert_direct_relay_next_action(
-        &value["next_actions"],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+        0
     );
 }
 
 #[test]
-fn config_get_marks_radrootsd_deferred_even_with_bridge_auth_and_session_binding() {
+fn config_get_marks_radrootsd_proxy_unavailable_with_myc_signer() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config(
         r#"[publish]
-mode = "radrootsd"
+transport = "radrootsd_proxy"
+
+[signer]
+backend = "myc"
 
 [[capability_binding]]
 capability = "signer.remote_nip46"
@@ -944,33 +926,26 @@ target = "http://myc.invalid"
 signer_session_ref = "session_ready"
 "#,
     );
+    let token_file = radrootsd_proxy_token_file(&sandbox);
 
     let mut command = sandbox.command();
     command
-        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
+        .env("RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE", token_file)
         .args(["--format", "json", "config", "get"]);
     let output = command.output().expect("run config get");
     let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
 
     assert!(output.status.success());
     assert_eq!(value["operation_id"], "config.get");
-    assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
-    assert_eq!(value["result"]["publish"]["relay"]["ready"], false);
+    assert_eq!(value["result"]["publish"]["transport"], "radrootsd_proxy");
     assert_eq!(value["result"]["publish"]["state"], "unavailable");
     assert_eq!(value["result"]["publish"]["executable"], false);
-    assert_contains(
-        &value["result"]["publish"]["reason"],
-        "radrootsd publish mode is deferred",
-    );
+    assert_contains(&value["result"]["publish"]["reason"], "signer mode `local`");
     assert_eq!(
         value["result"]["publish"]["provider"]["state"],
         "unavailable"
     );
-    assert_eq!(value["result"]["rpc"]["bridge_auth_configured"], true);
-    assert_eq!(
-        value["result"]["actions"][0],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
-    );
+    assert_eq!(value["result"]["actions"][0], "radroots signer status get");
 }
 
 #[test]
@@ -987,7 +962,10 @@ fn config_get_distinguishes_relay_ready_from_missing_signed_write_account() {
     ]);
 
     assert_eq!(value["operation_id"], "config.get");
-    assert_eq!(value["result"]["publish"]["mode"], "nostr_relay");
+    assert_eq!(
+        value["result"]["publish"]["transport"],
+        "direct_nostr_relay"
+    );
     assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
     assert_eq!(value["result"]["publish"]["signed_write_required"], true);
     assert_eq!(value["result"]["publish"]["state"], "unconfigured");
@@ -1002,7 +980,7 @@ fn config_get_distinguishes_relay_ready_from_missing_signed_write_account() {
     );
     assert_eq!(
         value["result"]["write_plane"]["provider_runtime_id"],
-        "nostr_relay"
+        "direct_nostr_relay"
     );
     assert_eq!(
         value["result"]["write_plane"]["binding_model"],
@@ -1046,7 +1024,10 @@ fn config_get_marks_relay_publish_ready_with_secret_backed_local_account() {
         "get",
     ]);
 
-    assert_eq!(value["result"]["publish"]["mode"], "nostr_relay");
+    assert_eq!(
+        value["result"]["publish"]["transport"],
+        "direct_nostr_relay"
+    );
     assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
     assert_eq!(value["result"]["publish"]["signed_write_required"], true);
     assert_eq!(value["result"]["publish"]["state"], "ready");
@@ -1070,7 +1051,10 @@ fn config_get_marks_relay_publish_unavailable_with_deferred_signer_mode() {
         "get",
     ]);
 
-    assert_eq!(value["result"]["publish"]["mode"], "nostr_relay");
+    assert_eq!(
+        value["result"]["publish"]["transport"],
+        "direct_nostr_relay"
+    );
     assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
     assert_eq!(value["result"]["publish"]["signed_write_required"], true);
     assert_eq!(value["result"]["publish"]["state"], "unavailable");
@@ -1119,8 +1103,10 @@ fn config_get_marks_relay_publish_unconfigured_with_watch_only_account() {
 fn health_surfaces_publish_state_under_deferred_signer_mode() {
     let sandbox = RadrootsCliSandbox::new();
     let missing_myc = sandbox.root().join("bin/missing-myc");
+    let token_file = radrootsd_proxy_token_file(&sandbox);
     sandbox.write_app_config(&format!(
-        "[publish]\nmode = \"radrootsd\"\n\n[signer]\nbackend = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
+        "[publish]\ntransport = \"radrootsd_proxy\"\n\n[publish.radrootsd_proxy]\ntoken_file = \"{}\"\n\n[signer]\nbackend = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
+        toml_string(token_file.display().to_string().as_str()),
         toml_string(missing_myc.display().to_string().as_str())
     ));
 
@@ -1128,16 +1114,13 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
 
     assert_eq!(value["operation_id"], "health.status.get");
     assert_eq!(value["result"]["state"], "needs_attention");
-    assert_eq!(value["result"]["publish"]["mode"], "radrootsd");
+    assert_eq!(value["result"]["publish"]["transport"], "radrootsd_proxy");
     assert_eq!(value["result"]["publish"]["executable"], false);
     assert_eq!(
         value["result"]["publish"]["provider"]["state"],
         "unavailable"
     );
-    assert_contains(
-        &value["result"]["publish"]["reason"],
-        "radrootsd publish mode is deferred",
-    );
+    assert_contains(&value["result"]["publish"]["reason"], "signer mode `local`");
     assert_eq!(value["result"]["store"]["state"], "ready");
     assert_eq!(
         value["result"]["store"]["source"],
@@ -1146,17 +1129,14 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
     assert_eq!(value["result"]["store"]["canonical_store"], "sdk");
     assert_eq!(value["result"]["signer"]["state"], "unavailable");
     assert_eq!(value["result"]["actions"][0], "radroots account create");
-    assert_eq!(
-        value["result"]["actions"][1],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
-    );
+    assert_eq!(value["result"]["actions"][1], "radroots signer status get");
     assert_eq!(
         value["next_actions"][0]["command"],
         "radroots account create"
     );
-    assert_direct_relay_next_action(
-        &value["next_actions"],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+    assert_eq!(
+        value["next_actions"][1]["command"],
+        "radroots signer status get"
     );
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
@@ -1198,7 +1178,7 @@ fn health_status_distinguishes_relay_ready_from_missing_signed_write_account() {
 #[test]
 fn health_check_exposes_publish_readiness() {
     let sandbox = RadrootsCliSandbox::new();
-    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
+    sandbox.write_app_config("[publish]\ntransport = \"radrootsd_proxy\"\n");
 
     let value = sandbox.json_success(&["--format", "json", "health", "check", "run"]);
 
@@ -1209,12 +1189,18 @@ fn health_check_exposes_publish_readiness() {
         "unresolved"
     );
     assert_eq!(value["result"]["account_resolution"]["source"], "none");
-    assert_eq!(value["result"]["checks"]["publish"]["mode"], "radrootsd");
-    assert_eq!(value["result"]["checks"]["publish"]["state"], "unavailable");
+    assert_eq!(
+        value["result"]["checks"]["publish"]["transport"],
+        "radrootsd_proxy"
+    );
+    assert_eq!(
+        value["result"]["checks"]["publish"]["state"],
+        "unconfigured"
+    );
     assert_eq!(value["result"]["checks"]["publish"]["executable"], false);
     assert_contains(
         &value["result"]["checks"]["publish"]["reason"],
-        "radrootsd publish mode is deferred",
+        "configured token file or token secret id",
     );
     assert_eq!(value["result"]["checks"]["store"]["state"], "ready");
     assert_eq!(
@@ -1226,15 +1212,19 @@ fn health_check_exposes_publish_readiness() {
     assert_eq!(value["result"]["actions"][0], "radroots account create");
     assert_eq!(
         value["result"]["actions"][1],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get"
+        "configure RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE or RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID"
     );
     assert_eq!(
         value["next_actions"][0]["command"],
         "radroots account create"
     );
-    assert_direct_relay_next_action(
-        &value["next_actions"],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+    assert_eq!(
+        value["next_actions"][1]["description"],
+        "configure RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE or RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID"
+    );
+    assert_eq!(
+        value["next_actions"][1]["env_var"],
+        "RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE"
     );
     assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
@@ -1270,7 +1260,10 @@ fn health_check_marks_relay_publish_ready_with_secret_backed_local_account() {
         value["result"]["account_resolution"]["resolved_account"]["write_capable"],
         true
     );
-    assert_eq!(value["result"]["checks"]["publish"]["mode"], "nostr_relay");
+    assert_eq!(
+        value["result"]["checks"]["publish"]["transport"],
+        "direct_nostr_relay"
+    );
     assert_eq!(value["result"]["checks"]["publish"]["state"], "ready");
     assert_eq!(value["result"]["checks"]["publish"]["executable"], true);
     assert_eq!(
@@ -1308,7 +1301,7 @@ fn farm_readiness_check_reports_mode_specific_publish_gates() {
     } else {
         &relay_value["result"]
     };
-    assert_eq!(relay_detail["publish_mode"], "nostr_relay");
+    assert_eq!(relay_detail["publish_transport"], "direct_nostr_relay");
     assert_eq!(relay_detail["publish_state"], "unconfigured");
     assert_eq!(relay_detail["publish_executable"], false);
     assert_eq!(relay_detail["missing"][0], "Configured relay");
@@ -1324,463 +1317,103 @@ signer_session_ref = "session_test"
     );
     let output = sandbox
         .command()
-        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
+        .env(
+            "RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE",
+            radrootsd_proxy_token_file(&sandbox),
+        )
         .args([
             "--format",
             "json",
-            "--publish-mode",
-            "radrootsd",
+            "--publish-transport",
+            "radrootsd_proxy",
             "farm",
             "readiness",
             "check",
         ])
         .output()
-        .expect("run radrootsd farm readiness");
+        .expect("run radrootsd proxy farm readiness");
     let radrootsd_value: Value = serde_json::from_slice(&output.stdout).expect("json output");
 
     assert!(output.status.success());
     assert_eq!(radrootsd_value["operation_id"], "farm.readiness.check");
-    assert_eq!(radrootsd_value["result"]["publish_mode"], "radrootsd");
-    assert_eq!(radrootsd_value["result"]["publish_state"], "unavailable");
-    assert_eq!(radrootsd_value["result"]["publish_executable"], false);
     assert_contains(
-        &radrootsd_value["result"]["reason"],
-        "radrootsd publish mode is deferred",
+        &radrootsd_value["result"]["publish_transport"],
+        "radrootsd_proxy",
     );
+    assert_eq!(radrootsd_value["result"]["publish_state"], "ready");
+    assert_eq!(radrootsd_value["result"]["publish_executable"], true);
+    assert_eq!(radrootsd_value["result"]["reason"], Value::Null);
     assert_eq!(
         radrootsd_value["result"]["actions"][0],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish"
+        "radroots farm publish"
     );
 }
 
 #[test]
-fn radrootsd_listing_publish_fails_closed_without_bridge_or_relay_side_effects() {
-    let sandbox = RadrootsCliSandbox::new();
-    sandbox.json_success(&["--format", "json", "account", "create"]);
-    let farm = sandbox.json_success(&[
-        "--format",
-        "json",
-        "farm",
-        "create",
-        "--name",
-        "Router Farm",
-        "--location",
-        "farmstand",
-        "--country",
-        "US",
-        "--delivery-method",
-        "pickup",
-    ]);
-    let listing_file = create_listing_draft(&sandbox, "radrootsd-router");
-    make_listing_publishable(
-        &listing_file,
-        farm["result"]["config"]["farm_d_tag"]
-            .as_str()
-            .expect("farm d tag"),
-    );
-
-    let output = sandbox
-        .command()
-        .env("RADROOTS_CLI_RPC_URL", "http://127.0.0.1:9")
-        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
-        .args([
-            "--format",
-            "json",
-            "--publish-mode",
-            "radrootsd",
-            "--approval-token",
-            "approve",
-            "--idempotency-key",
-            "idem_listing",
-            "listing",
-            "publish",
-            listing_file.to_string_lossy().as_ref(),
-        ])
-        .output()
-        .expect("run radrootsd listing publish");
-    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
-    assert_radrootsd_deferred_message(&value);
-    assert_eq!(
-        value["errors"][0]["detail"]["actions"][0],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com listing publish <file>"
-    );
-    assert_direct_relay_next_action(
-        &value["next_actions"],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com listing publish <file>",
-    );
-}
-
-#[test]
-fn radrootsd_farm_publish_fails_closed_without_bridge_or_relay_side_effects() {
-    let sandbox = RadrootsCliSandbox::new();
-    sandbox.json_success(&["--format", "json", "account", "create"]);
-    sandbox.json_success(&[
-        "--format",
-        "json",
-        "farm",
-        "create",
-        "--name",
-        "Router Farm",
-        "--location",
-        "farmstand",
-        "--country",
-        "US",
-        "--delivery-method",
-        "pickup",
-    ]);
-
-    let output = sandbox
-        .command()
-        .env("RADROOTS_CLI_RPC_URL", "http://127.0.0.1:9")
-        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
-        .args([
-            "--format",
-            "json",
-            "--publish-mode",
-            "radrootsd",
-            "--approval-token",
-            "approve",
-            "--idempotency-key",
-            "idem_farm",
-            "farm",
-            "publish",
-        ])
-        .output()
-        .expect("run radrootsd farm publish");
-    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "farm.publish");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
-    assert_radrootsd_deferred_message(&value);
-    assert_eq!(
-        value["errors"][0]["detail"]["actions"][0],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish"
-    );
-    assert_direct_relay_next_action(
-        &value["next_actions"],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com farm publish",
-    );
-
-    let persisted = sandbox.json_success(&["--format", "json", "farm", "get"]);
-    assert_eq!(
-        persisted["result"]["document"]["publication"]["profile_event_id"],
-        Value::Null
-    );
-    assert_eq!(
-        persisted["result"]["document"]["publication"]["farm_event_id"],
-        Value::Null
-    );
-}
-
-#[test]
-fn radrootsd_farm_publish_ignores_signer_session_binding_and_fails_closed() {
-    let sandbox = RadrootsCliSandbox::new();
-    sandbox.json_success(&["--format", "json", "account", "create"]);
-    sandbox.json_success(&[
-        "--format",
-        "json",
-        "farm",
-        "create",
-        "--name",
-        "Binding Farm",
-        "--location",
-        "farmstand",
-        "--country",
-        "US",
-        "--delivery-method",
-        "pickup",
-    ]);
-    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
-
-    let dry_run_output = sandbox
-        .command()
-        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
-        .args(["--format", "json", "--dry-run", "farm", "publish"])
-        .output()
-        .expect("run radrootsd farm publish dry-run");
-    let dry_run: Value = serde_json::from_slice(&dry_run_output.stdout).expect("json output");
-
-    assert!(!dry_run_output.status.success());
-    assert_eq!(dry_run_output.status.code(), Some(3));
-    assert_eq!(dry_run["operation_id"], "farm.publish");
-    assert_eq!(dry_run["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(dry_run["errors"][0]["detail"]["class"], "operation");
-    assert_radrootsd_deferred_message(&dry_run);
-
-    let live_output = sandbox
-        .command()
-        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
-        .args([
-            "--format",
-            "json",
-            "--approval-token",
-            "approve",
-            "farm",
-            "publish",
-        ])
-        .output()
-        .expect("run radrootsd farm publish");
-    let live: Value = serde_json::from_slice(&live_output.stdout).expect("json output");
-
-    assert!(!live_output.status.success());
-    assert_eq!(live_output.status.code(), Some(3));
-    assert_eq!(live["operation_id"], "farm.publish");
-    assert_eq!(live["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(live["errors"][0]["detail"]["class"], "operation");
-    assert_radrootsd_deferred_message(&live);
-}
-
-#[test]
-fn radrootsd_listing_writes_dry_run_fail_closed_before_account_or_bridge_work() {
+fn radrootsd_proxy_listing_publish_update_and_archive_dry_run_without_direct_relays() {
     for operation in ["publish", "update", "archive"] {
         let sandbox = RadrootsCliSandbox::new();
-        let seller = identity_public(42);
-        let listing_file = create_listing_draft(
-            &sandbox,
-            format!("radrootsd-no-account-dry-run-{operation}").as_str(),
-        );
-        make_listing_publishable_with_seller(
+        sandbox.json_success(&["--format", "json", "account", "create"]);
+        let farm = sandbox.json_success(&[
+            "--format",
+            "json",
+            "farm",
+            "create",
+            "--name",
+            "Proxy Farm",
+            "--location",
+            "farmstand",
+            "--country",
+            "US",
+            "--delivery-method",
+            "pickup",
+        ]);
+        let listing_file =
+            create_listing_draft(&sandbox, format!("radrootsd-proxy-{operation}").as_str());
+        make_listing_publishable(
             &listing_file,
-            "AAAAAAAAAAAAAAAAAAAAAw",
-            seller.public_key_hex.as_str(),
-        );
-        sandbox.write_app_config(
-            r#"[publish]
-mode = "radrootsd"
-
-[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "explicit_endpoint"
-target = "http://myc.invalid"
-signer_session_ref = "session_test"
-"#,
+            farm["result"]["config"]["farm_d_tag"]
+                .as_str()
+                .expect("farm d tag"),
         );
 
-        let mut command = sandbox.command();
-        command
-            .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
+        let output = sandbox
+            .command()
+            .env(
+                "RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE",
+                radrootsd_proxy_token_file(&sandbox),
+            )
             .args([
                 "--format",
                 "json",
-                "--account-id",
-                "missing-local-account",
+                "--publish-transport",
+                "radrootsd_proxy",
                 "--dry-run",
                 "listing",
                 operation,
                 listing_file.to_string_lossy().as_ref(),
-            ]);
-        let output = command
+            ])
             .output()
-            .expect("run radrootsd dry-run listing write");
+            .expect("run proxy listing dry run");
         let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
 
-        assert!(!output.status.success());
-        assert_eq!(output.status.code(), Some(3));
+        assert!(output.status.success());
         assert_eq!(value["operation_id"], format!("listing.{operation}"));
-        assert_eq!(value["result"], Value::Null);
-        assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-        assert_eq!(value["errors"][0]["detail"]["class"], "operation");
-        assert_radrootsd_deferred_message(&value);
+        assert_eq!(value["result"]["state"], "dry_run");
+        assert_eq!(value["result"]["source"], "SDK listing publish · local key");
+        assert_eq!(value["result"]["dry_run"], true);
+        assert_eq!(
+            value["result"]["target_relays"]
+                .as_array()
+                .expect("relays")
+                .len(),
+            0
+        );
+        assert_contains(
+            &value["result"]["reason"],
+            "SDK enqueue and relay push skipped",
+        );
     }
-}
-
-#[test]
-fn radrootsd_listing_writes_fail_closed_before_account_or_bridge_work() {
-    for operation in ["publish", "update", "archive"] {
-        let sandbox = RadrootsCliSandbox::new();
-        let seller = identity_public(43);
-        let listing_file = create_listing_draft(
-            &sandbox,
-            format!("radrootsd-no-account-{operation}").as_str(),
-        );
-        make_listing_publishable_with_seller(
-            &listing_file,
-            "AAAAAAAAAAAAAAAAAAAAAw",
-            seller.public_key_hex.as_str(),
-        );
-        sandbox.write_app_config(
-            r#"[publish]
-mode = "radrootsd"
-
-[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "explicit_endpoint"
-target = "http://myc.invalid"
-signer_session_ref = "session_test"
-"#,
-        );
-        let mut command = sandbox.command();
-        command
-            .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
-            .args([
-                "--format",
-                "json",
-                "--account-id",
-                "missing-local-account",
-                "--approval-token",
-                "approve",
-                "listing",
-                operation,
-                listing_file.to_string_lossy().as_ref(),
-            ]);
-        let output = command.output().expect("run radrootsd listing write");
-        let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-
-        assert!(!output.status.success());
-        assert_eq!(output.status.code(), Some(3));
-        assert_eq!(value["operation_id"], format!("listing.{operation}"));
-        assert_eq!(value["result"], Value::Null);
-        assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-        assert_eq!(value["errors"][0]["detail"]["class"], "operation");
-        assert_radrootsd_deferred_message(&value);
-    }
-}
-
-#[test]
-fn radrootsd_listing_publish_does_not_surface_bridge_errors_before_guardrail() {
-    let sandbox = RadrootsCliSandbox::new();
-    let listing_file = create_listing_draft(&sandbox, "radrootsd-bridge-error");
-    make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
-    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n");
-
-    let mut command = sandbox.command();
-    command
-        .env("RADROOTS_CLI_RPC_URL", "http://127.0.0.1:9")
-        .env("RADROOTS_CLI_RPC_BEARER_TOKEN", "bridge_test")
-        .args([
-            "--format",
-            "json",
-            "--approval-token",
-            "approve",
-            "listing",
-            "publish",
-            listing_file.to_string_lossy().as_ref(),
-        ]);
-    let output = command.output().expect("run radrootsd listing publish");
-    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
-    assert_radrootsd_deferred_message(&value);
-}
-
-#[test]
-fn radrootsd_listing_publish_fails_closed_before_relay_or_myc_preflight() {
-    let sandbox = RadrootsCliSandbox::new();
-    sandbox.json_success(&["--format", "json", "account", "create"]);
-    let farm = sandbox.json_success(&[
-        "--format",
-        "json",
-        "farm",
-        "create",
-        "--name",
-        "Deferred Farm",
-        "--location",
-        "farmstand",
-        "--country",
-        "US",
-        "--delivery-method",
-        "pickup",
-    ]);
-    let listing_file = create_listing_draft(&sandbox, "radrootsd-myc-router");
-    make_listing_publishable(
-        &listing_file,
-        farm["result"]["config"]["farm_d_tag"]
-            .as_str()
-            .expect("farm d tag"),
-    );
-    sandbox.write_app_config("[publish]\nmode = \"radrootsd\"\n\n[signer]\nbackend = \"myc\"\n");
-
-    let (output, value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "--approval-token",
-        "approve",
-        "listing",
-        "publish",
-        listing_file.to_string_lossy().as_ref(),
-    ]);
-
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
-    assert_radrootsd_deferred_message(&value);
-    assert!(
-        !value["errors"][0]["message"]
-            .as_str()
-            .expect("error message")
-            .contains("signer mode `myc`")
-    );
-}
-
-#[test]
-fn radrootsd_publish_mode_routes_listing_update() {
-    let sandbox = RadrootsCliSandbox::new();
-    sandbox.json_success(&["--format", "json", "account", "create"]);
-    let farm = sandbox.json_success(&[
-        "--format",
-        "json",
-        "farm",
-        "create",
-        "--name",
-        "Update Farm",
-        "--location",
-        "farmstand",
-        "--country",
-        "US",
-        "--delivery-method",
-        "pickup",
-    ]);
-    let listing_file = create_listing_draft(&sandbox, "radrootsd-update-router");
-    make_listing_publishable(
-        &listing_file,
-        farm["result"]["config"]["farm_d_tag"]
-            .as_str()
-            .expect("farm d tag"),
-    );
-
-    let (output, value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "--publish-mode",
-        "radrootsd",
-        "--approval-token",
-        "approve",
-        "listing",
-        "update",
-        listing_file.to_string_lossy().as_ref(),
-    ]);
-
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "listing.update");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "operation");
-    assert_radrootsd_deferred_message(&value);
-    assert_eq!(
-        value["errors"][0]["detail"]["actions"][0],
-        "radroots --publish-mode nostr_relay --relay wss://relay.example.com listing update <file>"
-    );
 }
 
 #[test]
@@ -1828,7 +1461,7 @@ fn listing_update_publish_attempts_direct_relay_with_approval() {
     assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "direct relay connection failed",
+        "SDK relay publish did not reach accepted quorum",
     );
     assert!(
         !value["errors"][0]["message"]
@@ -2252,15 +1885,20 @@ fn next_actions_mirror_result_actions_for_json_and_ndjson() {
         &["--format", "ndjson", "health", "check", "run"][..],
     ] {
         let daemon = RadrootsCliSandbox::new();
-        daemon.write_app_config("[publish]\nmode = \"radrootsd\"\n");
+        daemon.write_app_config("[publish]\ntransport = \"radrootsd_proxy\"\n");
         let output = daemon.command().args(args).output().expect("run ndjson");
         let frames = ndjson_from_stdout(&output);
         let terminal = frames.last().expect("terminal ndjson frame");
 
         assert!(output.status.success(), "{args:?}");
-        assert_direct_relay_next_action(
-            &terminal["payload"]["next_actions"],
-            "radroots --publish-mode nostr_relay --relay wss://relay.example.com config get",
+        assert!(
+            terminal["payload"]["next_actions"]
+                .as_array()
+                .expect("next actions")
+                .iter()
+                .any(|action| action["description"]
+                    == "configure RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE or RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID"),
+            "{args:?}"
         );
     }
 }
@@ -2294,9 +1932,8 @@ fn human_health_status_surfaces_publish_reason_and_actions() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
     assert!(stdout.starts_with("health.status.get: needs_attention\n"));
-    assert!(stdout.contains("publish_mode: nostr_relay"));
     assert!(stdout.contains("publish_state: unconfigured"));
-    assert!(stdout.contains("reason: nostr_relay publish mode requires a selected or default write-capable local account"));
+    assert!(stdout.contains("reason: direct_nostr_relay publish transport requires a selected or default write-capable local account for signed writes"));
     assert!(stdout.contains("- radroots account create"));
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }
@@ -3138,76 +2775,18 @@ fn order_status_get_invalid_order_id_uses_sdk_error_contract() {
 }
 
 #[test]
-fn radrootsd_sync_push_failure_exposes_nostr_relay_recovery_action() {
+fn legacy_radrootsd_publish_transport_value_is_rejected() {
     let sandbox = RadrootsCliSandbox::new();
-    let (json_output, value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "--publish-mode",
-        "radrootsd",
-        "sync",
-        "push",
-    ]);
-
-    assert_eq!(json_output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "sync.push");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["state"], "unavailable");
-    assert_eq!(value["errors"][0]["detail"]["publish"]["mode"], "radrootsd");
-    assert_eq!(
-        value["errors"][0]["detail"]["publish"]["state"],
-        "unavailable"
-    );
-    assert_eq!(
-        value["errors"][0]["detail"]["actions"][0],
-        "radroots --publish-mode nostr_relay sync push"
-    );
-    assert_eq!(value["next_actions"][0]["kind"], "cli_command");
-    assert_eq!(
-        value["next_actions"][0]["command"],
-        "radroots --publish-mode nostr_relay sync push"
-    );
-
-    let ndjson_output = sandbox
+    let output = sandbox
         .command()
-        .args([
-            "--format",
-            "ndjson",
-            "--publish-mode",
-            "radrootsd",
-            "sync",
-            "push",
-        ])
+        .args(["--publish-transport", "radrootsd", "sync", "push"])
         .output()
-        .expect("run sync push ndjson");
-    let frames = ndjson_from_stdout(&ndjson_output);
-    let terminal = frames.last().expect("terminal frame");
+        .expect("run legacy publish transport");
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
 
-    assert_eq!(ndjson_output.status.code(), Some(3));
-    assert_eq!(terminal["operation_id"], "sync.push");
-    assert_eq!(terminal["frame_type"], "error");
-    assert_eq!(
-        terminal["payload"]["next_actions"][0]["command"],
-        "radroots --publish-mode nostr_relay sync push"
-    );
-
-    let human_output = sandbox
-        .command()
-        .args(["--publish-mode", "radrootsd", "sync", "push"])
-        .output()
-        .expect("run sync push human");
-    let stdout = String::from_utf8(human_output.stdout).expect("utf8 stdout");
-
-    assert_eq!(human_output.status.code(), Some(3));
-    assert!(stdout.starts_with("sync.push: error\n"));
-    assert!(stdout.contains("error: operation_unavailable"));
-    assert!(stdout.contains("state: unavailable"));
-    assert!(stdout.contains("publish_mode: radrootsd"));
-    assert!(stdout.contains("publish_state: unavailable"));
-    assert!(stdout.contains("radrootsd publish mode is deferred"));
-    assert!(stdout.contains("- radroots --publish-mode nostr_relay sync push"));
-    assert!(serde_json::from_str::<Value>(&stdout).is_err());
+    assert!(!output.status.success());
+    assert!(stderr.contains("invalid value"));
+    assert!(stderr.contains("radrootsd_proxy"));
 }
 
 #[test]
@@ -7685,11 +7264,11 @@ fn seller_target_flow_acceptance_uses_target_operations() {
     assert_eq!(unavailable_archive["operation_id"], "listing.archive");
     assert_eq!(
         unavailable_archive["errors"][0]["code"],
-        "network_unavailable"
+        "empty_target_relays"
     );
     assert_eq!(
         unavailable_archive["errors"][0]["detail"]["class"],
-        "network"
+        "configuration"
     );
     assert_no_removed_command_reference(&unavailable_archive, &["listing", "archive"]);
     assert_no_daemon_runtime_reference(&unavailable_archive, &["listing", "archive"]);

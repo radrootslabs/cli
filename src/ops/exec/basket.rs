@@ -1335,8 +1335,9 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
+        SignerConfig, Verbosity,
     };
 
     const LISTING_ADDR: &str = "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
@@ -1912,8 +1913,9 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             publish: PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Defaults,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Defaults,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -1936,7 +1938,6 @@ mod tests {
             },
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
-                bridge_bearer_token: None,
             },
             rhi: crate::runtime::config::RhiConfig {
                 trusted_worker_pubkeys: Vec::new(),

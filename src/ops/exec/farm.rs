@@ -14,7 +14,7 @@ use crate::ops::{
     OperationResult, OperationResultData, OperationService,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::config::{PublishMode, RuntimeConfig};
+use crate::runtime::config::{PublishTransport, RuntimeConfig};
 use crate::view::runtime::{CommandDisposition, FarmPublishView};
 
 pub struct FarmOperationService<'a> {
@@ -172,7 +172,6 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
                 .idempotency_key
                 .clone()
                 .or_else(|| string_input(&request, "idempotency_key")),
-            signer_session_id: string_input(&request, "signer_session_id"),
             print_event: bool_input(&request, "print_event").unwrap_or(false),
         };
         if request.context.requires_approval_token() {
@@ -180,7 +179,10 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
                 request.operation_id(),
             ));
         }
-        if matches!(self.config.publish.mode, PublishMode::NostrRelay) {
+        if matches!(
+            self.config.publish.transport,
+            PublishTransport::DirectNostrRelay
+        ) {
             require_relay_target(&request, self.config)?;
         }
 
@@ -390,8 +392,9 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
+        SignerConfig, Verbosity,
     };
 
     #[test]
@@ -545,8 +548,9 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             publish: PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Defaults,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Defaults,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -569,7 +573,6 @@ mod tests {
             },
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
-                bridge_bearer_token: None,
             },
             rhi: crate::runtime::config::RhiConfig {
                 trusted_worker_pubkeys: Vec::new(),

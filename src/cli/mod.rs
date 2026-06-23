@@ -43,17 +43,18 @@ pub enum TargetOutputFormat {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum TargetPublishMode {
-    #[value(name = "nostr_relay")]
-    NostrRelay,
-    Radrootsd,
+pub enum TargetPublishTransport {
+    #[value(name = "direct_nostr_relay")]
+    DirectNostrRelay,
+    #[value(name = "radrootsd_proxy")]
+    RadrootsdProxy,
 }
 
-impl TargetPublishMode {
+impl TargetPublishTransport {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::NostrRelay => "nostr_relay",
-            Self::Radrootsd => "radrootsd",
+            Self::DirectNostrRelay => "direct_nostr_relay",
+            Self::RadrootsdProxy => "radrootsd_proxy",
         }
     }
 }
@@ -62,7 +63,7 @@ impl TargetPublishMode {
 #[command(
     name = "radroots",
     about = "Operate Radroots local-first trade workflows.",
-    long_about = "Operate Radroots local-first trade workflows.\n\nPublish modes:\n  nostr_relay uses direct relay publish with local signer custody.\n  radrootsd is reserved and fails closed for active buyer and seller writes.\n\nRelay mode never silently falls back to radrootsd.",
+    long_about = "Operate Radroots local-first trade workflows.\n\nPublish transports:\n  direct_nostr_relay publishes directly to configured relays with local signer custody.\n  radrootsd_proxy publishes locally signed events through the local daemon proxy.",
     disable_help_subcommand = true
 )]
 pub struct TargetCliArgs {
@@ -73,12 +74,12 @@ pub struct TargetCliArgs {
     #[arg(long = "relay", global = true)]
     pub relay: Vec<String>,
     #[arg(
-        long = "publish-mode",
+        long = "publish-transport",
         global = true,
         value_enum,
-        help = "Select nostr_relay direct relay publish or reserved radrootsd guardrail mode"
+        help = "Select direct_nostr_relay direct relay publish or radrootsd_proxy daemon proxy publish"
     )]
-    pub publish_mode: Option<TargetPublishMode>,
+    pub publish_transport: Option<TargetPublishTransport>,
     #[arg(long = "offline", global = true, action = ArgAction::SetTrue, conflicts_with = "online")]
     pub offline: bool,
     #[arg(long = "online", global = true, action = ArgAction::SetTrue, conflicts_with = "offline")]

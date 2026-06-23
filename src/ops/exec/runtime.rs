@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::cli::global::SyncWatchArgs;
 use crate::ops::{
@@ -10,7 +10,7 @@ use crate::ops::{
     SyncWatchResult,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::config::{PublishMode, RuntimeConfig};
+use crate::runtime::config::RuntimeConfig;
 use crate::view::runtime::{CommandDisposition, SyncActionView, SyncStatusView};
 
 pub struct RuntimeOperationService<'a> {
@@ -80,9 +80,6 @@ impl OperationService<SyncPushRequest> for RuntimeOperationService<'_> {
         &self,
         request: OperationRequest<SyncPushRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        if matches!(self.config.publish.mode, PublishMode::Radrootsd) {
-            return Err(sync_push_radrootsd_unavailable(self.config));
-        }
         if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required("sync.push"));
         }
@@ -109,26 +106,6 @@ impl OperationService<SyncWatchRequest> for RuntimeOperationService<'_> {
         )?;
         serialized_operation_result::<SyncWatchResult, _>(&view)
     }
-}
-
-fn sync_push_radrootsd_unavailable(config: &RuntimeConfig) -> OperationAdapterError {
-    OperationAdapterError::operation_unavailable_with_detail(
-        "sync.push",
-        crate::runtime::sync::RADROOTSD_SYNC_PUSH_UNAVAILABLE_REASON.to_owned(),
-        json!({
-            "publish": {
-                "mode": config.publish.mode.as_str(),
-                "source": config.publish.source.as_str(),
-                "transport_family": config.publish.mode.transport_family(),
-                "state": "unavailable",
-                "executable": false,
-                "provider": {
-                    "provider_runtime_id": "radrootsd",
-                    "state": "unavailable",
-                }
-            }
-        }),
-    )
 }
 
 fn serialized_operation_result<R, T>(value: &T) -> Result<OperationResult<R>, OperationAdapterError>
@@ -246,13 +223,14 @@ mod tests {
     use super::RuntimeOperationService;
     use crate::ops::{
         OperationAdapter, OperationContext, OperationRequest, RelayListRequest,
-        SignerStatusGetRequest, SyncPushRequest, SyncStatusGetRequest,
+        SignerStatusGetRequest, SyncStatusGetRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
+        SignerConfig, Verbosity,
     };
 
     #[test]
@@ -311,31 +289,6 @@ mod tests {
         assert_eq!(envelope.result["queue"]["pending_count"], 0);
         assert_eq!(envelope.result["queue"]["total_count"], 0);
         assert_eq!(envelope.result["actions"][0], "radroots sync pull");
-    }
-
-    #[test]
-    fn runtime_service_rejects_radrootsd_sync_push_before_approval_or_store_checks() {
-        let dir = tempdir().expect("tempdir");
-        let mut config = sample_config(dir.path(), Vec::new());
-        config.publish.mode = PublishMode::Radrootsd;
-        config.publish.source = PublishModeSource::Flags;
-        let service = OperationAdapter::new(RuntimeOperationService::new(&config));
-
-        let sync = OperationRequest::new(OperationContext::default(), SyncPushRequest::default())
-            .expect("sync push request");
-        let error = service.execute(sync).expect_err("radrootsd sync push");
-        let output = error.to_output_error();
-        let detail = output.detail.expect("radrootsd detail");
-
-        assert_eq!(output.code, "operation_unavailable");
-        assert_eq!(output.exit_code, 3);
-        assert_eq!(detail["publish"]["mode"], "radrootsd");
-        assert_eq!(detail["publish"]["source"], "cli flags · local first");
-        assert_eq!(
-            detail["publish"]["provider"]["provider_runtime_id"],
-            "radrootsd"
-        );
-        assert_eq!(detail["class"], "operation");
     }
 
     fn sample_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {
@@ -405,8 +358,9 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             publish: PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Defaults,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Defaults,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             },
             relay: RelayConfig {
                 urls: relays,
@@ -429,7 +383,6 @@ mod tests {
             },
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
-                bridge_bearer_token: None,
             },
             rhi: crate::runtime::config::RhiConfig {
                 trusted_worker_pubkeys: Vec::new(),

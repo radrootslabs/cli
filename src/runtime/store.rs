@@ -680,7 +680,7 @@ fn manifest_counts(manifest: &ReplicaDbExportManifestRs) -> LocalReplicaCountsVi
         farms: table_row_count(manifest, "farm"),
         listings: table_row_count(manifest, "trade_product"),
         profiles: table_row_count(manifest, "nostr_profile"),
-        relays: table_row_count(manifest, "nostr_relay"),
+        relays: table_row_count(manifest, "direct_nostr_relay"),
         event_states: table_row_count(manifest, "nostr_event_state"),
     }
 }

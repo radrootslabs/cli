@@ -158,10 +158,9 @@ impl OperationService<ListingUpdateRequest> for ListingOperationService<'_> {
         }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
-        let view = map_runtime(
-            request.operation_id(),
-            crate::runtime::listing::update(&config, &args),
-        )?;
+        let view = crate::runtime::listing::update(&config, &args).map_err(|error| {
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
+        })?;
         mutation_result::<ListingUpdateResult>(request.operation_id(), &view)
     }
 }
@@ -243,10 +242,9 @@ impl OperationService<ListingArchiveRequest> for ListingOperationService<'_> {
         }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
-        let view = map_runtime(
-            request.operation_id(),
-            crate::runtime::listing::archive(&config, &args),
-        )?;
+        let view = crate::runtime::listing::archive(&config, &args).map_err(|error| {
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
+        })?;
         mutation_result::<ListingArchiveResult>(request.operation_id(), &view)
     }
 }
@@ -275,7 +273,6 @@ where
             .idempotency_key
             .clone()
             .or_else(|| string_input(request, "idempotency_key")),
-        signer_session_id: string_input(request, "signer_session_id"),
         print_event: bool_input(request, "print_event").unwrap_or(false),
         offline: matches!(request.context.network_mode, OperationNetworkMode::Offline),
     })
@@ -479,8 +476,9 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishMode, PublishModeSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
+        SignerConfig, Verbosity,
     };
 
     #[test]
@@ -616,8 +614,9 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             publish: PublishConfig {
-                mode: PublishMode::NostrRelay,
-                source: PublishModeSource::Defaults,
+                transport: PublishTransport::DirectNostrRelay,
+                source: PublishTransportSource::Defaults,
+                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -640,7 +639,6 @@ mod tests {
             },
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
-                bridge_bearer_token: None,
             },
             rhi: crate::runtime::config::RhiConfig {
                 trusted_worker_pubkeys: Vec::new(),

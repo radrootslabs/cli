@@ -227,7 +227,8 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
     )
 }
 
-pub fn requires_nostr_relay_publish_mode(operation_id: &str) -> bool {
+#[cfg(test)]
+pub fn requires_direct_nostr_relay_publish_transport(operation_id: &str) -> bool {
     matches!(
         operation_id,
         "sync.push"
@@ -260,8 +261,8 @@ mod tests {
 
     use super::{
         ApprovalPolicy, NetworkRequirement, OPERATION_REGISTRY, OperationRole, RiskLevel,
-        get_operation, network_requirement, requires_local_signer_mode,
-        requires_nostr_relay_publish_mode,
+        get_operation, network_requirement, requires_direct_nostr_relay_publish_transport,
+        requires_local_signer_mode,
     };
 
     const EXPECTED_OPERATION_IDS: &[&str] = &[
@@ -597,10 +598,12 @@ mod tests {
     }
 
     #[test]
-    fn registry_nostr_relay_publish_requirements_are_explicit() {
+    fn registry_direct_nostr_relay_publish_requirements_are_explicit() {
         let publish = OPERATION_REGISTRY
             .iter()
-            .filter(|operation| requires_nostr_relay_publish_mode(operation.operation_id))
+            .filter(|operation| {
+                requires_direct_nostr_relay_publish_transport(operation.operation_id)
+            })
             .map(|operation| operation.operation_id)
             .collect::<BTreeSet<_>>();
         let expected = [
