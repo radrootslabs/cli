@@ -286,10 +286,7 @@ fn myc_nip46_signer_input(
         )));
     }
     if let Some(managed_account_ref) = binding.managed_account_ref.as_deref() {
-        let matched_account = actor_account_id
-            .is_some_and(|account_id| managed_account_ref == account_id)
-            || managed_account_ref == actor_pubkey;
-        if !matched_account {
+        if !myc_managed_account_ref_matches(managed_account_ref, actor_account_id, actor_pubkey) {
             return Err(RuntimeError::Config(format!(
                 "signer.remote_nip46 managed_account_ref `{managed_account_ref}` does not match actor account or pubkey"
             )));
@@ -320,6 +317,15 @@ fn myc_nip46_signer_input(
         target,
         actor_pubkey: actor_pubkey.to_owned(),
     })
+}
+
+pub(crate) fn myc_managed_account_ref_matches(
+    managed_account_ref: &str,
+    actor_account_id: Option<&str>,
+    actor_pubkey: &str,
+) -> bool {
+    actor_account_id.is_some_and(|account_id| managed_account_ref == account_id)
+        || managed_account_ref == actor_pubkey
 }
 
 async fn signer_provider(

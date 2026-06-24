@@ -4,7 +4,7 @@ use crate::runtime::account::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolut
 use crate::runtime::config::{
     CapabilityBindingTargetKind, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend,
 };
-use crate::runtime::sdk::MYC_NIP46_SESSION_SECRET_SERVICE;
+use crate::runtime::sdk::{MYC_NIP46_SESSION_SECRET_SERVICE, myc_managed_account_ref_matches};
 use crate::view::runtime::{
     IdentityPublicView, LocalSignerStatusView, MycStatusView, SignerBindingStatusView,
     SignerStatusView, SignerWriteKindReadinessView,
@@ -219,11 +219,27 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
 }
 
 fn resolve_myc_signer_status(config: &RuntimeConfig) -> SignerStatusView {
-    let account_resolution = match crate::runtime::account::resolve_account_resolution(config) {
-        Ok(resolution) => crate::runtime::account::account_resolution_view(&resolution),
-        Err(_) => empty_account_resolution_view(),
-    };
-    let readiness = myc_binding_readiness(config, None);
+    let (account_resolution, actor_account_id, actor_pubkey) =
+        match crate::runtime::account::resolve_account_resolution(config) {
+            Ok(resolution) => {
+                let actor_account_id = resolution
+                    .resolved_account
+                    .as_ref()
+                    .map(|account| account.record.account_id.to_string());
+                let actor_pubkey = resolution
+                    .resolved_account
+                    .as_ref()
+                    .map(|account| account.record.public_identity.public_key_hex.clone());
+                (
+                    crate::runtime::account::account_resolution_view(&resolution),
+                    actor_account_id,
+                    actor_pubkey,
+                )
+            }
+            Err(_) => (empty_account_resolution_view(), None, None),
+        };
+    let readiness =
+        myc_binding_readiness(config, actor_account_id.as_deref(), actor_pubkey.as_deref());
     SignerStatusView {
         mode: config.signer.backend.as_str().to_owned(),
         state: if readiness.ready {
@@ -367,6 +383,7 @@ struct MycBindingReadiness {
 
 fn myc_binding_readiness(
     config: &RuntimeConfig,
+    actor_account_id: Option<&str>,
     actor_pubkey: Option<&str>,
 ) -> MycBindingReadiness {
     let Some(binding) = config.capability_binding(SIGNER_REMOTE_NIP46_CAPABILITY) else {
@@ -394,9 +411,9 @@ fn myc_binding_readiness(
     if let (Some(managed_account_ref), Some(actor_pubkey)) =
         (binding.managed_account_ref.as_deref(), actor_pubkey)
     {
-        if managed_account_ref != actor_pubkey {
+        if !myc_managed_account_ref_matches(managed_account_ref, actor_account_id, actor_pubkey) {
             reasons.push(format!(
-                "signer.remote_nip46 managed_account_ref `{managed_account_ref}` does not match actor pubkey `{actor_pubkey}`"
+                "signer.remote_nip46 managed_account_ref `{managed_account_ref}` does not match actor account or pubkey"
             ));
         }
     }
@@ -506,16 +523,16 @@ fn myc_write_kind_readiness(
     cli_write_kinds()
         .iter()
         .map(|kind| {
-            let event_kind = kind.event_kind.to_string();
+            let permission = sign_event_permission_for_kind(kind.event_kind);
             let permission = permissions
                 .iter()
-                .find(|permission| permission.contains(event_kind.as_str()))
+                .find(|configured| configured.as_str() == permission.as_str())
                 .cloned()
-                .unwrap_or_else(|| format!("sign_event:{event_kind}"));
+                .unwrap_or(permission);
             let permission_ready = ready
                 && permissions
                     .iter()
-                    .any(|permission| permission.contains(event_kind.as_str()));
+                    .any(|configured| configured == &permission);
             SignerWriteKindReadinessView {
                 command: kind.command.to_owned(),
                 event_kind: kind.event_kind,
@@ -536,11 +553,16 @@ fn myc_write_kind_readiness(
         .collect()
 }
 
+fn sign_event_permission_for_kind(event_kind: u32) -> String {
+    format!("sign_event:{event_kind}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
-        KIND_ORDER_REVISION_DECISION, KIND_ORDER_REVISION_PROPOSAL, cli_write_kinds,
+        KIND_FARM, KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
+        KIND_ORDER_REVISION_DECISION, KIND_ORDER_REVISION_PROPOSAL, KIND_PROFILE, cli_write_kinds,
+        myc_managed_account_ref_matches, myc_write_kind_readiness, sign_event_permission_for_kind,
     };
 
     const RESERVED_ORDER_KIND_3431: u32 = 3431;
@@ -625,5 +647,59 @@ mod tests {
             .expect("order cancel readiness");
         assert_eq!(cancel.event_kind, KIND_ORDER_CANCELLATION);
         assert_ne!(cancel.event_kind, RESERVED_ORDER_KIND_3431);
+    }
+
+    #[test]
+    fn myc_write_readiness_requires_exact_permissions() {
+        let readiness = myc_write_kind_readiness(true, None);
+        let sync = readiness
+            .iter()
+            .find(|kind| kind.command == "sync.push")
+            .expect("sync readiness");
+
+        assert_eq!(sync.event_kind, KIND_PROFILE);
+        assert_eq!(sync.permission, "sign_event:0");
+        assert!(!sync.ready);
+        assert_eq!(
+            sync.reason.as_deref(),
+            Some("SDK Myc signer permission is not configured for this event kind")
+        );
+
+        for (command, event_kind) in [
+            ("farm.publish", KIND_FARM),
+            ("listing.publish", KIND_LISTING),
+            ("order.submit", KIND_ORDER_REQUEST),
+        ] {
+            let entry = readiness
+                .iter()
+                .find(|kind| kind.command == command)
+                .expect("product write readiness");
+
+            assert_eq!(entry.permission, sign_event_permission_for_kind(event_kind));
+            assert!(entry.ready, "{command} should be ready");
+            assert_eq!(entry.reason, None);
+        }
+    }
+
+    #[test]
+    fn myc_managed_account_ref_matches_actor_account_id_or_pubkey() {
+        let actor_account_id = Some("acct_farmer_market");
+        let actor_pubkey = "02d67b520cb0b835a5ca6ddf78bf3bbfe636d31a523050efc01bf8cb0c680da09e";
+
+        assert!(myc_managed_account_ref_matches(
+            "acct_farmer_market",
+            actor_account_id,
+            actor_pubkey,
+        ));
+        assert!(myc_managed_account_ref_matches(
+            actor_pubkey,
+            actor_account_id,
+            actor_pubkey,
+        ));
+        assert!(!myc_managed_account_ref_matches(
+            "acct_other",
+            actor_account_id,
+            actor_pubkey,
+        ));
     }
 }
