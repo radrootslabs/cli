@@ -19,8 +19,9 @@ use radroots_nostr_connect::prelude::{
 };
 use radroots_sdk::{
     RadrootsSdk, RadrootsSdkBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
-    RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport, RadrootsSdkNip46TransportFuture,
-    RadrootsSdkSignerProvider, RadrootsSdkStorageConfig, SdkPublishTransport, SdkRelayUrlPolicy,
+    RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
+    RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
+    SdkPublishTransport, SdkRelayUrlPolicy,
     adapters::radrootsd::{RadrootsdAuth, RadrootsdProxyConfig as SdkRadrootsdProxyConfig},
 };
 use radroots_secret_vault::{RadrootsSecretVault, RadrootsSecretVaultOsKeyring};
@@ -343,20 +344,29 @@ async fn signer_provider(
             target,
             actor_pubkey,
         } => {
+            let request_policy = myc_nip46_request_policy(config)?;
+            let request_timeout = request_policy.request_timeout();
             let transport = Arc::new(
-                CliSdkNip46RelayTransport::connect(
-                    &client_keys,
-                    &target,
-                    Duration::from_millis(config.myc.status_timeout_ms),
-                )
-                .await?,
+                CliSdkNip46RelayTransport::connect(&client_keys, &target, request_timeout).await?,
             );
-            let signer =
-                RadrootsSdkMycNip46Signer::new(client_keys, target, actor_pubkey, transport)
-                    .map_err(|error| RuntimeError::Config(error.to_string()))?;
+            let signer = RadrootsSdkMycNip46Signer::new_with_request_policy(
+                client_keys,
+                target,
+                actor_pubkey,
+                transport,
+                request_policy,
+            )
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
             Ok(RadrootsSdkSignerProvider::MycNip46(signer))
         }
     }
+}
+
+fn myc_nip46_request_policy(
+    config: &RuntimeConfig,
+) -> Result<RadrootsSdkMycNip46RequestPolicy, RuntimeError> {
+    RadrootsSdkMycNip46RequestPolicy::new(Duration::from_millis(config.myc.status_timeout_ms))
+        .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 fn parse_myc_nip46_target(value: &str) -> Result<RadrootsNostrConnectBunkerUri, RuntimeError> {
@@ -447,11 +457,18 @@ impl CliSdkNip46RelayTransport {
             ))
         })?;
         let notifications = client.notifications();
-        client.subscribe(filter, None).await.map_err(|error| {
+        let subscribe_output = client.subscribe(filter, None).await.map_err(|error| {
             RuntimeError::Network(format!(
                 "failed to subscribe to signer.remote_nip46 response relays: {error}"
             ))
         })?;
+        validate_myc_response_subscription_acceptance(
+            subscribe_output.success.len(),
+            subscribe_output
+                .failed
+                .iter()
+                .map(|(relay, error)| (relay.to_string(), error.to_owned())),
+        )?;
         Ok(Self {
             client,
             notifications: Mutex::new(notifications),
@@ -459,6 +476,30 @@ impl CliSdkNip46RelayTransport {
             deadline: Mutex::new(None),
         })
     }
+}
+
+fn validate_myc_response_subscription_acceptance<I>(
+    success_count: usize,
+    failed: I,
+) -> Result<(), RuntimeError>
+where
+    I: IntoIterator<Item = (String, String)>,
+{
+    if success_count > 0 {
+        return Ok(());
+    }
+    let failures = failed
+        .into_iter()
+        .map(|(relay, error)| format!("{relay}: {error}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(RuntimeError::Network(if failures.is_empty() {
+        "signer.remote_nip46 response subscription was not accepted by any relay".to_owned()
+    } else {
+        format!(
+            "signer.remote_nip46 response subscription was not accepted by any relay: {failures}"
+        )
+    }))
 }
 
 impl RadrootsSdkNip46Transport for CliSdkNip46RelayTransport {
@@ -633,6 +674,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use radroots_authority::RadrootsEventSigner;
     use radroots_runtime_paths::RadrootsMigrationReport;
@@ -1063,6 +1105,50 @@ mod tests {
         assert_eq!(status.storage, SdkStorageKind::Directory);
         assert_eq!(status.event_store.total_events, 0);
         assert_eq!(status.outbox.total_events, 0);
+    }
+
+    #[test]
+    fn myc_request_policy_uses_cli_timeout_config() {
+        let root = tempdir().expect("tempdir");
+        let mut config = sample_config(root.path(), Vec::new());
+        config.myc.status_timeout_ms = 12_345;
+
+        let policy = myc_nip46_request_policy(&config).expect("request policy");
+
+        assert_eq!(policy.request_timeout(), Duration::from_millis(12_345));
+    }
+
+    #[test]
+    fn myc_request_policy_rejects_zero_cli_timeout() {
+        let root = tempdir().expect("tempdir");
+        let mut config = sample_config(root.path(), Vec::new());
+        config.myc.status_timeout_ms = 0;
+
+        let error = myc_nip46_request_policy(&config).expect_err("zero timeout");
+
+        assert!(error.to_string().contains("must be greater than zero"));
+    }
+
+    #[test]
+    fn myc_response_subscription_requires_relay_acceptance() {
+        let error = validate_myc_response_subscription_acceptance(
+            0,
+            [(
+                "ws://127.0.0.1:8080".to_owned(),
+                "subscription rejected".to_owned(),
+            )],
+        )
+        .expect_err("response subscription acceptance");
+
+        assert!(
+            error
+                .to_string()
+                .contains("response subscription was not accepted by any relay")
+        );
+        assert!(error.to_string().contains("subscription rejected"));
+
+        validate_myc_response_subscription_acceptance(1, std::iter::empty())
+            .expect("accepted response subscription");
     }
 
     #[test]
