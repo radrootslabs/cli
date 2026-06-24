@@ -14,11 +14,13 @@ use radroots_events::kinds::{
     KIND_ORDER_REVISION_DECISION, KIND_ORDER_REVISION_PROPOSAL, KIND_PROFILE,
 };
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
+use radroots_nostr_connect::prelude::RadrootsNostrConnectPermissions;
 use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
     RadrootsNostrSignerCapability,
 };
 use radroots_sdk::radroots_sdk_myc_nip46_product_permission_strings;
+use std::str::FromStr;
 use url::Url;
 
 const SIGNER_BINDING_PROVIDER_RUNTIME_ID: &str = "myc";
@@ -408,13 +410,25 @@ fn myc_binding_readiness(
     if let Err(reason) = validate_myc_target(binding.target.as_str()) {
         reasons.push(reason);
     }
-    if let (Some(managed_account_ref), Some(actor_pubkey)) =
-        (binding.managed_account_ref.as_deref(), actor_pubkey)
-    {
-        if !myc_managed_account_ref_matches(managed_account_ref, actor_account_id, actor_pubkey) {
-            reasons.push(format!(
-                "signer.remote_nip46 managed_account_ref `{managed_account_ref}` does not match actor account or pubkey"
-            ));
+    if let Some(managed_account_ref) = binding.managed_account_ref.as_deref() {
+        let managed_account_matches = actor_pubkey
+            .map(|actor_pubkey| {
+                myc_managed_account_ref_matches(managed_account_ref, actor_account_id, actor_pubkey)
+            })
+            .unwrap_or_else(|| {
+                actor_account_id.is_some_and(|account_id| managed_account_ref == account_id)
+            });
+        if !managed_account_matches {
+            let reason = if actor_account_id.is_none() && actor_pubkey.is_none() {
+                format!(
+                    "signer.remote_nip46 managed_account_ref `{managed_account_ref}` cannot be evaluated because no actor account or pubkey resolved"
+                )
+            } else {
+                format!(
+                    "signer.remote_nip46 managed_account_ref `{managed_account_ref}` does not match actor account or pubkey"
+                )
+            };
+            reasons.push(reason);
         }
     }
     let signer_session_ref = binding.signer_session_ref.clone();
@@ -519,20 +533,43 @@ fn myc_write_kind_readiness(
     ready: bool,
     reason: Option<String>,
 ) -> Vec<SignerWriteKindReadinessView> {
-    let permissions = radroots_sdk_myc_nip46_product_permission_strings();
+    myc_write_kind_readiness_for_permissions(ready, reason, sdk_myc_nip46_product_permissions())
+}
+
+fn sdk_myc_nip46_product_permissions() -> Result<RadrootsNostrConnectPermissions, String> {
+    RadrootsNostrConnectPermissions::from_str(
+        radroots_sdk_myc_nip46_product_permission_strings()
+            .join(",")
+            .as_str(),
+    )
+    .map_err(|error| format!("SDK Myc signer permissions are invalid: {error}"))
+}
+
+fn myc_write_kind_readiness_for_permissions(
+    ready: bool,
+    reason: Option<String>,
+    permissions: Result<RadrootsNostrConnectPermissions, String>,
+) -> Vec<SignerWriteKindReadinessView> {
+    let permissions = match permissions {
+        Ok(permissions) => permissions,
+        Err(error) => {
+            return cli_write_kinds()
+                .iter()
+                .map(|kind| SignerWriteKindReadinessView {
+                    command: kind.command.to_owned(),
+                    event_kind: kind.event_kind,
+                    permission: sign_event_permission_for_kind(kind.event_kind),
+                    ready: false,
+                    reason: Some(error.clone()),
+                })
+                .collect();
+        }
+    };
     cli_write_kinds()
         .iter()
         .map(|kind| {
             let permission = sign_event_permission_for_kind(kind.event_kind);
-            let permission = permissions
-                .iter()
-                .find(|configured| configured.as_str() == permission.as_str())
-                .cloned()
-                .unwrap_or(permission);
-            let permission_ready = ready
-                && permissions
-                    .iter()
-                    .any(|configured| configured == &permission);
+            let permission_ready = ready && permissions.allows_sign_event_kind(kind.event_kind);
             SignerWriteKindReadinessView {
                 command: kind.command.to_owned(),
                 event_kind: kind.event_kind,
@@ -562,7 +599,11 @@ mod tests {
     use super::{
         KIND_FARM, KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
         KIND_ORDER_REVISION_DECISION, KIND_ORDER_REVISION_PROPOSAL, KIND_PROFILE, cli_write_kinds,
-        myc_managed_account_ref_matches, myc_write_kind_readiness, sign_event_permission_for_kind,
+        myc_managed_account_ref_matches, myc_write_kind_readiness,
+        myc_write_kind_readiness_for_permissions, sign_event_permission_for_kind,
+    };
+    use radroots_nostr_connect::prelude::{
+        RadrootsNostrConnectMethod, RadrootsNostrConnectPermission, RadrootsNostrConnectPermissions,
     };
 
     const RESERVED_ORDER_KIND_3431: u32 = 3431;
@@ -679,6 +720,31 @@ mod tests {
             assert!(entry.ready, "{command} should be ready");
             assert_eq!(entry.reason, None);
         }
+    }
+
+    #[test]
+    fn myc_write_readiness_uses_typed_kind_permissions() {
+        let readiness = myc_write_kind_readiness_for_permissions(
+            true,
+            None,
+            Ok(RadrootsNostrConnectPermissions::from(vec![
+                RadrootsNostrConnectPermission::with_parameter(
+                    RadrootsNostrConnectMethod::SignEvent,
+                    format!("kind:{KIND_LISTING}"),
+                ),
+            ])),
+        );
+        let listing = readiness
+            .iter()
+            .find(|kind| kind.command == "listing.publish")
+            .expect("listing readiness");
+        let farm = readiness
+            .iter()
+            .find(|kind| kind.command == "farm.publish")
+            .expect("farm readiness");
+
+        assert!(listing.ready);
+        assert!(!farm.ready);
     }
 
     #[test]

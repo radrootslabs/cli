@@ -662,6 +662,49 @@ fn myc_signer_status_reports_missing_binding() {
     assert_no_removed_command_reference(&value, &["signer", "status", "get"]);
 }
 
+#[test]
+fn myc_signer_status_fails_closed_when_managed_account_is_unresolved() {
+    let sandbox = RadrootsCliSandbox::new();
+    let missing_myc = sandbox.root().join("bin/missing-myc");
+    let remote_signer = identity_public(91);
+    sandbox.write_app_config(&format!(
+        r#"[signer]
+backend = "myc"
+
+[myc]
+executable = "{}"
+
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "explicit_endpoint"
+target = "bunker://{}?relay=wss%3A%2F%2Frelay.example"
+managed_account_ref = "acct_missing"
+signer_session_ref = "session_missing"
+"#,
+        toml_string(missing_myc.display().to_string().as_str()),
+        remote_signer.public_key_hex,
+    ));
+
+    let value = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+
+    assert_eq!(value["result"]["mode"], "myc");
+    assert_eq!(value["result"]["state"], "unconfigured");
+    assert_eq!(value["result"]["binding"]["state"], "unconfigured");
+    assert_eq!(value["result"]["myc"]["ready"], false);
+    assert_contains(
+        &value["result"]["reason"],
+        "managed_account_ref `acct_missing` cannot be evaluated",
+    );
+    assert!(
+        value["result"]["write_kinds"]
+            .as_array()
+            .expect("write kinds")
+            .iter()
+            .all(|kind| kind["ready"] == false)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn myc_signer_status_does_not_invoke_configured_executable() {
