@@ -3,23 +3,42 @@
 use std::fs;
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use radroots_authority::RadrootsLocalEventSigner;
-use radroots_nostr::prelude::RadrootsNostrKeys;
+use radroots_identity::RadrootsIdentity;
+use radroots_nostr::prelude::{
+    RadrootsNostrClient, RadrootsNostrEvent, RadrootsNostrFilter, RadrootsNostrKeys,
+    RadrootsNostrKind, RadrootsNostrRelayPoolNotification, RadrootsNostrTimestamp,
+    radroots_nostr_filter_tag,
+};
+use radroots_nostr_connect::prelude::{
+    RADROOTS_NOSTR_CONNECT_RPC_KIND, RadrootsNostrConnectBunkerUri,
+    RadrootsNostrConnectClientTarget, RadrootsNostrConnectError, RadrootsNostrConnectUri,
+};
 use radroots_sdk::{
-    RadrootsSdk, RadrootsSdkBuilder, RadrootsSdkError, RadrootsSdkStorageConfig,
-    SdkPublishTransport, SdkRelayUrlPolicy,
+    RadrootsSdk, RadrootsSdkBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
+    RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport, RadrootsSdkNip46TransportFuture,
+    RadrootsSdkSignerProvider, RadrootsSdkStorageConfig, SdkPublishTransport, SdkRelayUrlPolicy,
     adapters::radrootsd::{RadrootsdAuth, RadrootsdProxyConfig as SdkRadrootsdProxyConfig},
 };
 use radroots_secret_vault::{RadrootsSecretVault, RadrootsSecretVaultOsKeyring};
 use tokio::runtime::{Builder as TokioRuntimeBuilder, Runtime};
+use tokio::sync::{Mutex, broadcast};
+use tokio::time::{Instant, timeout};
+use url::Url;
 
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
-use crate::runtime::config::{PublishTransport, RuntimeConfig};
+use crate::runtime::config::{
+    CapabilityBindingTargetKind, PublishTransport, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY,
+    SignerBackend,
+};
 
 const SDK_STORAGE_DIR_NAME: &str = "sdk";
 const RADROOTSD_PROXY_SECRET_SERVICE: &str = "org.radroots.cli.radrootsd-proxy";
+pub(crate) const MYC_NIP46_SESSION_SECRET_SERVICE: &str = "org.radroots.cli.myc-nip46-session";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CliSdkAdapterError {
@@ -89,6 +108,53 @@ impl CliSdkSession {
         })
     }
 
+    pub fn connect_for_actor(
+        config: &RuntimeConfig,
+        actor_account_id: Option<&str>,
+        actor_pubkey: &str,
+        actor_label: &str,
+    ) -> Result<Self, CliSdkAdapterError> {
+        let sdk_config = CliSdkConfig::from_runtime_config(config)?;
+        let signer_input =
+            configured_signer_input(config, actor_account_id, actor_pubkey, actor_label)?;
+        let runtime = sdk_runtime()?;
+        let signer_provider = runtime.block_on(signer_provider(config, signer_input))?;
+        let sdk = runtime.block_on(
+            sdk_config
+                .builder()
+                .signer_provider(signer_provider)
+                .build(),
+        )?;
+        Ok(Self {
+            runtime,
+            sdk,
+            config: sdk_config,
+        })
+    }
+
+    pub fn connect_memory_for_actor(
+        config: &RuntimeConfig,
+        actor_account_id: Option<&str>,
+        actor_pubkey: &str,
+        actor_label: &str,
+    ) -> Result<Self, CliSdkAdapterError> {
+        let sdk_config = CliSdkConfig::from_runtime_config(config)?;
+        let signer_input =
+            configured_signer_input(config, actor_account_id, actor_pubkey, actor_label)?;
+        let runtime = sdk_runtime()?;
+        let signer_provider = runtime.block_on(signer_provider(config, signer_input))?;
+        let sdk = runtime.block_on(
+            memory_builder(&sdk_config)
+                .signer_provider(signer_provider)
+                .build(),
+        )?;
+        Ok(Self {
+            runtime,
+            sdk,
+            config: sdk_config,
+        })
+    }
+
     pub fn sdk(&self) -> &RadrootsSdk {
         &self.sdk
     }
@@ -103,6 +169,15 @@ impl CliSdkSession {
     {
         self.runtime.block_on(future)
     }
+}
+
+pub fn validate_configured_signer_for_actor(
+    config: &RuntimeConfig,
+    actor_account_id: Option<&str>,
+    actor_pubkey: &str,
+    actor_label: &str,
+) -> Result<(), RuntimeError> {
+    configured_signer_input(config, actor_account_id, actor_pubkey, actor_label).map(|_| ())
 }
 
 pub struct CliSdkLocalSigner {
@@ -141,6 +216,314 @@ impl CliSdkLocalSigner {
 
     pub fn signer(&self) -> &RadrootsLocalEventSigner {
         &self.signer
+    }
+}
+
+enum CliSdkSignerInput {
+    LocalKey(RadrootsNostrKeys),
+    MycNip46 {
+        client_keys: RadrootsNostrKeys,
+        target: RadrootsNostrConnectClientTarget,
+        actor_pubkey: String,
+    },
+}
+
+fn configured_signer_input(
+    config: &RuntimeConfig,
+    actor_account_id: Option<&str>,
+    actor_pubkey: &str,
+    actor_label: &str,
+) -> Result<CliSdkSignerInput, RuntimeError> {
+    match config.signer.backend {
+        SignerBackend::Local => {
+            let keys = local_key_signer_input(config, actor_account_id, actor_pubkey, actor_label)?;
+            Ok(CliSdkSignerInput::LocalKey(keys))
+        }
+        SignerBackend::Myc => myc_nip46_signer_input(config, actor_account_id, actor_pubkey),
+    }
+}
+
+fn local_key_signer_input(
+    config: &RuntimeConfig,
+    actor_account_id: Option<&str>,
+    actor_pubkey: &str,
+    actor_label: &str,
+) -> Result<RadrootsNostrKeys, RuntimeError> {
+    let signing = match actor_account_id {
+        Some(account_id) => {
+            account::resolve_local_signing_identity_for_account(config, account_id)?
+        }
+        None => account::resolve_local_signing_identity(config)?,
+    };
+    let signer_pubkey = signing
+        .account
+        .record
+        .public_identity
+        .public_key_hex
+        .as_str();
+    if !signer_pubkey.eq_ignore_ascii_case(actor_pubkey) {
+        return Err(account::AccountRuntimeFailure::mismatch(format!(
+            "{actor_label} public key `{actor_pubkey}` does not match local signer account `{}` public key `{signer_pubkey}`",
+            signing.account.record.account_id
+        ))
+        .into());
+    }
+    Ok(signing.identity.into_keys())
+}
+
+fn myc_nip46_signer_input(
+    config: &RuntimeConfig,
+    actor_account_id: Option<&str>,
+    actor_pubkey: &str,
+) -> Result<CliSdkSignerInput, RuntimeError> {
+    let binding = config
+        .capability_binding(SIGNER_REMOTE_NIP46_CAPABILITY)
+        .ok_or_else(|| RuntimeError::Config("signer.remote_nip46 binding is missing".to_owned()))?;
+    if binding.target_kind != CapabilityBindingTargetKind::ExplicitEndpoint {
+        return Err(RuntimeError::Config(format!(
+            "signer.remote_nip46 binding target_kind `{}` is not supported for CLI Myc signing; use `explicit_endpoint`",
+            binding.target_kind.as_str()
+        )));
+    }
+    if let Some(managed_account_ref) = binding.managed_account_ref.as_deref() {
+        let matched_account = actor_account_id
+            .is_some_and(|account_id| managed_account_ref == account_id)
+            || managed_account_ref == actor_pubkey;
+        if !matched_account {
+            return Err(RuntimeError::Config(format!(
+                "signer.remote_nip46 managed_account_ref `{managed_account_ref}` does not match actor account or pubkey"
+            )));
+        }
+    }
+    let signer_session_ref = binding.signer_session_ref.as_deref().ok_or_else(|| {
+        RuntimeError::Config("signer.remote_nip46 signer_session_ref is missing".to_owned())
+    })?;
+    let secret =
+        account::load_secret_backend_secret(config, signer_session_ref, MYC_NIP46_SESSION_SECRET_SERVICE)?
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "signer.remote_nip46 signer_session_ref `{signer_session_ref}` was not found in the account secret backend"
+                ))
+            })?;
+    let client_keys = RadrootsIdentity::from_secret_key_str(secret.trim())
+        .map_err(|error| {
+            RuntimeError::Config(format!(
+                "signer.remote_nip46 signer_session_ref `{signer_session_ref}` contains invalid client secret key material: {error}"
+            ))
+        })?
+        .into_keys();
+    let bunker = parse_myc_nip46_target(binding.target.as_str())?;
+    let target =
+        RadrootsNostrConnectClientTarget::new(bunker.remote_signer_public_key, bunker.relays);
+    Ok(CliSdkSignerInput::MycNip46 {
+        client_keys,
+        target,
+        actor_pubkey: actor_pubkey.to_owned(),
+    })
+}
+
+async fn signer_provider(
+    config: &RuntimeConfig,
+    signer_input: CliSdkSignerInput,
+) -> Result<RadrootsSdkSignerProvider, RuntimeError> {
+    match signer_input {
+        CliSdkSignerInput::LocalKey(keys) => {
+            let signer = RadrootsSdkLocalKeySigner::new(keys)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?;
+            Ok(RadrootsSdkSignerProvider::LocalKey(signer))
+        }
+        CliSdkSignerInput::MycNip46 {
+            client_keys,
+            target,
+            actor_pubkey,
+        } => {
+            let transport = Arc::new(
+                CliSdkNip46RelayTransport::connect(
+                    &client_keys,
+                    &target,
+                    Duration::from_millis(config.myc.status_timeout_ms),
+                )
+                .await?,
+            );
+            let signer =
+                RadrootsSdkMycNip46Signer::new(client_keys, target, actor_pubkey, transport)
+                    .map_err(|error| RuntimeError::Config(error.to_string()))?;
+            Ok(RadrootsSdkSignerProvider::MycNip46(signer))
+        }
+    }
+}
+
+fn parse_myc_nip46_target(value: &str) -> Result<RadrootsNostrConnectBunkerUri, RuntimeError> {
+    let trimmed = value.trim();
+    if trimmed.starts_with("nostrconnect://") {
+        return Err(RuntimeError::Config(
+            "signer.remote_nip46 target must be a bunker URI or discovery URL; raw nostrconnect client URIs are signer-side only"
+                .to_owned(),
+        ));
+    }
+    let bunker_uri = if trimmed.starts_with("bunker://") {
+        trimmed.to_owned()
+    } else {
+        let url = Url::parse(trimmed).map_err(|error| {
+            RuntimeError::Config(format!("signer.remote_nip46 target is invalid: {error}"))
+        })?;
+        url.query_pairs()
+            .find(|(key, _)| key == "uri")
+            .map(|(_, uri)| uri.into_owned())
+            .ok_or_else(|| {
+                RuntimeError::Config(
+                    "signer.remote_nip46 discovery target is missing `uri` query parameter"
+                        .to_owned(),
+                )
+            })?
+    };
+    match RadrootsNostrConnectUri::parse(bunker_uri.as_str()).map_err(|error| {
+        RuntimeError::Config(format!("signer.remote_nip46 target is invalid: {error}"))
+    })? {
+        RadrootsNostrConnectUri::Bunker(bunker) => Ok(bunker),
+        RadrootsNostrConnectUri::Client(_) => Err(RuntimeError::Config(
+            "signer.remote_nip46 target must resolve to a bunker URI; raw nostrconnect client URIs are signer-side only"
+                .to_owned(),
+        )),
+    }
+}
+
+struct CliSdkNip46RelayTransport {
+    client: RadrootsNostrClient,
+    notifications: Mutex<broadcast::Receiver<RadrootsNostrRelayPoolNotification>>,
+    request_timeout: Duration,
+    deadline: Mutex<Option<Instant>>,
+}
+
+impl CliSdkNip46RelayTransport {
+    async fn connect(
+        client_keys: &RadrootsNostrKeys,
+        target: &RadrootsNostrConnectClientTarget,
+        request_timeout: Duration,
+    ) -> Result<Self, RuntimeError> {
+        if request_timeout.is_zero() {
+            return Err(RuntimeError::Config(
+                "RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS must be greater than zero".to_owned(),
+            ));
+        }
+        let client = RadrootsNostrClient::new_signerless();
+        for relay in &target.relays {
+            client.add_relay(relay.as_str()).await.map_err(|error| {
+                RuntimeError::Network(format!(
+                    "failed to add signer.remote_nip46 relay `{relay}`: {error}"
+                ))
+            })?;
+        }
+        let connect_output = client.try_connect(request_timeout).await;
+        if connect_output.success.is_empty() {
+            let failures = connect_output
+                .failed
+                .iter()
+                .map(|(relay, error)| format!("{relay}: {error}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(RuntimeError::Network(if failures.is_empty() {
+                "failed to connect to signer.remote_nip46 relays".to_owned()
+            } else {
+                format!("failed to connect to signer.remote_nip46 relays: {failures}")
+            }));
+        }
+        let filter = radroots_nostr_filter_tag(
+            RadrootsNostrFilter::new()
+                .kind(RadrootsNostrKind::Custom(RADROOTS_NOSTR_CONNECT_RPC_KIND))
+                .since(RadrootsNostrTimestamp::now()),
+            "p",
+            vec![client_keys.public_key().to_hex()],
+        )
+        .map_err(|error| {
+            RuntimeError::Config(format!(
+                "failed to build signer.remote_nip46 filter: {error}"
+            ))
+        })?;
+        let notifications = client.notifications();
+        client.subscribe(filter, None).await.map_err(|error| {
+            RuntimeError::Network(format!(
+                "failed to subscribe to signer.remote_nip46 response relays: {error}"
+            ))
+        })?;
+        Ok(Self {
+            client,
+            notifications: Mutex::new(notifications),
+            request_timeout,
+            deadline: Mutex::new(None),
+        })
+    }
+}
+
+impl RadrootsSdkNip46Transport for CliSdkNip46RelayTransport {
+    fn publish_request_event<'a>(
+        &'a self,
+        event: RadrootsNostrEvent,
+    ) -> RadrootsSdkNip46TransportFuture<'a, ()> {
+        Box::pin(async move {
+            *self.deadline.lock().await = Some(Instant::now() + self.request_timeout);
+            let output = self.client.send_event(&event).await.map_err(|error| {
+                RadrootsNostrConnectError::Transport {
+                    reason: error.to_string(),
+                }
+            })?;
+            if output.success.is_empty() {
+                let failures = output
+                    .failed
+                    .iter()
+                    .map(|(relay, error)| format!("{relay}: {error}"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(RadrootsNostrConnectError::Transport {
+                    reason: if failures.is_empty() {
+                        "signer.remote_nip46 request event was not accepted by any relay".to_owned()
+                    } else {
+                        format!(
+                            "signer.remote_nip46 request event was not accepted by any relay: {failures}"
+                        )
+                    },
+                });
+            }
+            Ok(())
+        })
+    }
+
+    fn next_response_event<'a>(
+        &'a self,
+    ) -> RadrootsSdkNip46TransportFuture<'a, RadrootsNostrEvent> {
+        Box::pin(async move {
+            loop {
+                let Some(deadline) = *self.deadline.lock().await else {
+                    return Err(RadrootsNostrConnectError::Transport {
+                        reason: "signer.remote_nip46 request deadline is not initialized"
+                            .to_owned(),
+                    });
+                };
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(RadrootsNostrConnectError::RequestTimedOut);
+                }
+                let remaining = deadline - now;
+                let mut notifications = self.notifications.lock().await;
+                let received = timeout(remaining, notifications.recv()).await;
+                drop(notifications);
+                let notification = match received {
+                    Ok(Ok(notification)) => notification,
+                    Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+                    Ok(Err(broadcast::error::RecvError::Closed)) => {
+                        return Err(RadrootsNostrConnectError::Transport {
+                            reason: "signer.remote_nip46 relay notification stream closed"
+                                .to_owned(),
+                        });
+                    }
+                    Err(_) => return Err(RadrootsNostrConnectError::RequestTimedOut),
+                };
+                let RadrootsNostrRelayPoolNotification::Event { event, .. } = notification else {
+                    continue;
+                };
+                return Ok((*event).clone());
+            }
+        })
     }
 }
 
@@ -343,6 +726,13 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
+            name: "radroots_nostr_connect",
+            owner: "sdk-myc-nip46-transport",
+            reason: "CLI Myc signer target parsing and NIP-46 relay transport bridge for SDK signing",
+            lifecycle: "retain while CLI owns signer backend wiring",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
             name: "radroots_nostr_accounts",
             owner: "cli-account-store",
             reason: "CLI account selection, import, local signer status, and account persistence",
@@ -399,6 +789,13 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
+            name: "radroots_protected_store",
+            owner: "cli-account-store",
+            reason: "protected file secret vault selection for local account and Myc session material",
+            lifecycle: "retain while CLI owns account and signer session custody UX",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
             name: "radroots_sp1_host_trade",
             owner: "validation-receipts",
             reason: "validation receipt SP1 proof inspection and verification",
@@ -417,13 +814,6 @@ mod tests {
             owner: "cli-drafts-and-validation",
             reason: "listing draft validation, order economics, order reducer helpers, and validation receipt parsing",
             lifecycle: "retain until remaining trade validation and draft behavior migrates",
-        },
-        DirectRrRsDependency {
-            section: "dev-dependencies",
-            name: "radroots_protected_store",
-            owner: "account-tests",
-            reason: "unit coverage for protected file secret vault behavior",
-            lifecycle: "test-only",
         },
     ];
 
@@ -473,7 +863,7 @@ mod tests {
             end: "#[derive(Debug, Clone)]\nstruct SdkFarmPublishInput",
             required_tokens: &[
                 "prepare_publish(FarmPreparePublishRequest::new",
-                "enqueue_publish(request, &signer)",
+                "enqueue_publish(request)",
                 "session.sdk().sync().push_outbox",
             ],
         },
@@ -518,7 +908,7 @@ mod tests {
             required_tokens: &[
                 "prepare_submit(OrderSubmitPrepareRequest::new",
                 "OrderSubmitEnqueueRequest::new",
-                "enqueue_submit(request, &signer)",
+                "enqueue_submit_with_explicit_signer(request, &signer)",
                 "push_outbox(",
             ],
         },
@@ -530,7 +920,7 @@ mod tests {
             required_tokens: &[
                 "OrderDecisionEnqueueRequest::new",
                 "ingest_request_evidence(OrderRequestEvidenceIngestRequest::new",
-                "enqueue_decision(request, &signer)",
+                "enqueue_decision_with_explicit_signer(request, &signer)",
                 "push_outbox(",
             ],
         },
@@ -544,9 +934,9 @@ mod tests {
                 "prepare_revision_decision(OrderRevisionDecisionPrepareRequest::new",
                 "prepare_cancellation(OrderCancellationPrepareRequest::new",
                 "ingest_order_evidence_events(&session, evidence_events)?",
-                "enqueue_revision_proposal(request, &signer)",
-                "enqueue_revision_decision(request, &signer)",
-                "enqueue_cancellation(request, &signer)",
+                "enqueue_revision_proposal_with_explicit_signer(request, &signer)",
+                "enqueue_revision_decision_with_explicit_signer(request, &signer)",
+                "enqueue_cancellation_with_explicit_signer(request, &signer)",
                 "push_one_sdk_outbox_event(&session, policy)?",
             ],
         },

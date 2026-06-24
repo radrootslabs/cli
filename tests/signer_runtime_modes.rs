@@ -640,20 +640,25 @@ fn watch_only_import_reports_unconfigured_local_signer() {
 }
 
 #[test]
-fn myc_signer_status_returns_deferred_signer_error() {
+fn myc_signer_status_reports_missing_binding() {
     let sandbox = RadrootsCliSandbox::new();
     let missing_myc = sandbox.root().join("bin/missing-myc");
     configure_myc_mode(&sandbox, &missing_myc);
 
     let (output, value) = sandbox.json_output(&["--format", "json", "signer", "status", "get"]);
 
-    assert!(!output.status.success());
+    assert!(output.status.success());
     assert_eq!(value["operation_id"], "signer.status.get");
-    assert_eq!(value["result"], serde_json::Value::Null);
-    assert_eq!(value["errors"][0]["code"], "signer_mode_deferred");
-    assert_eq!(value["errors"][0]["exit_code"], 7);
-    assert_eq!(value["errors"][0]["detail"]["class"], "signer");
-    assert_contains(&value["errors"][0]["message"], "signer mode `myc`");
+    assert!(value["errors"].as_array().expect("errors").is_empty());
+    assert_eq!(value["result"]["mode"], "myc");
+    assert_eq!(value["result"]["state"], "unconfigured");
+    assert_eq!(value["result"]["binding"]["state"], "unconfigured");
+    assert_eq!(value["result"]["myc"]["state"], "unconfigured");
+    assert_eq!(value["result"]["myc"]["ready"], false);
+    assert_contains(
+        &value["result"]["reason"],
+        "signer.remote_nip46 binding is missing",
+    );
     assert_no_removed_command_reference(&value, &["signer", "status", "get"]);
 }
 
@@ -674,9 +679,11 @@ fn myc_signer_status_does_not_invoke_configured_executable() {
 
     let (output, value) = sandbox.json_output(&["--format", "json", "signer", "status", "get"]);
 
-    assert!(!output.status.success());
+    assert!(output.status.success());
     assert_eq!(value["operation_id"], "signer.status.get");
-    assert_eq!(value["errors"][0]["code"], "signer_mode_deferred");
+    assert!(value["errors"].as_array().expect("errors").is_empty());
+    assert_eq!(value["result"]["state"], "unconfigured");
+    assert_eq!(value["result"]["myc"]["ready"], false);
     assert!(!invoked.exists(), "target CLI must not execute MYC");
 }
 
@@ -1233,7 +1240,7 @@ fn local_farm_publish_reports_sdk_push_failure_without_profile_publish() {
         "SDK relay publish did not reach accepted quorum",
     );
     let detail = &value["errors"][0]["detail"];
-    assert_eq!(detail["source"], "SDK farm publish · local key");
+    assert_eq!(detail["source"], "SDK farm publish · configured signer");
     assert_eq!(detail["state"], "unavailable");
     assert_eq!(detail["profile"]["state"], "not_submitted");
     assert_eq!(detail["farm"]["state"], "unavailable");
@@ -1311,7 +1318,7 @@ fn local_farm_publish_does_not_persist_publication_until_sdk_push_publishes() {
     assert_eq!(value["errors"][0]["code"], "network_unavailable");
     assert_eq!(value["errors"][0]["detail"]["class"], "network");
     let detail = &value["errors"][0]["detail"];
-    assert_eq!(detail["source"], "SDK farm publish · local key");
+    assert_eq!(detail["source"], "SDK farm publish · configured signer");
     assert_eq!(detail["profile"]["state"], "not_submitted");
     assert_eq!(detail["farm"]["state"], "unavailable");
     assert_eq!(detail["profile"]["event_id"], serde_json::Value::Null);
@@ -1913,7 +1920,7 @@ fn local_seller_publish_commands_attempt_configured_relay() {
     );
     assert_eq!(
         farm_value["errors"][0]["detail"]["source"],
-        "SDK farm publish · local key"
+        "SDK farm publish · configured signer"
     );
     assert_eq!(
         farm_value["errors"][0]["detail"]["farm"]["target_relays"][0],
@@ -2399,10 +2406,13 @@ fn myc_listing_publish_does_not_fallback_to_local_account() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"], serde_json::Value::Null);
-    assert_eq!(value["errors"][0]["code"], "signer_mode_deferred");
+    assert_eq!(value["errors"][0]["code"], "signer_unconfigured");
     assert_eq!(value["errors"][0]["exit_code"], 7);
     assert_eq!(value["errors"][0]["detail"]["class"], "signer");
-    assert_contains(&value["errors"][0]["message"], "signer mode `myc`");
+    assert_contains(
+        &value["errors"][0]["message"],
+        "signer.remote_nip46 binding is missing",
+    );
     assert!(!invoked.exists(), "target CLI must not execute MYC");
 }
 

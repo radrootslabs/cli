@@ -15,7 +15,9 @@ use radroots_local_events::{
     LocalRecordStatus, PublishOutboxStatus, RelayDeliveryEvidence, SourceRuntime,
     canonical_relay_set_fingerprint,
 };
+use radroots_protected_store::RadrootsProtectedFileSecretVault;
 use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
+use radroots_secret_vault::RadrootsSecretVault;
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -478,6 +480,14 @@ pub fn identity_public(seed: u8) -> RadrootsIdentityPublic {
 pub fn identity_secret(seed: u8) -> RadrootsIdentity {
     let secret = [seed; 32];
     RadrootsIdentity::from_secret_key_bytes(&secret).expect("fixture identity")
+}
+
+pub fn store_test_session_secret(sandbox: &RadrootsCliSandbox, slot: &str, secret: &str) {
+    let vault =
+        RadrootsProtectedFileSecretVault::new(sandbox.root().join("secrets/shared/accounts"));
+    vault
+        .store_secret(slot, secret)
+        .expect("store test session secret");
 }
 
 pub fn make_listing_publishable(path: &Path, farm_d_tag: &str) {

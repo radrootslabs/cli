@@ -1,10 +1,13 @@
 use crate::runtime::RuntimeError;
 use crate::runtime::account::AccountRuntimeFailure;
 use crate::runtime::account::{SHARED_ACCOUNT_STORE_SOURCE, empty_account_resolution_view};
-use crate::runtime::config::{RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend};
+use crate::runtime::config::{
+    CapabilityBindingTargetKind, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend,
+};
+use crate::runtime::sdk::MYC_NIP46_SESSION_SECRET_SERVICE;
 use crate::view::runtime::{
-    IdentityPublicView, LocalSignerStatusView, SignerBindingStatusView, SignerStatusView,
-    SignerWriteKindReadinessView,
+    IdentityPublicView, LocalSignerStatusView, MycStatusView, SignerBindingStatusView,
+    SignerStatusView, SignerWriteKindReadinessView,
 };
 use radroots_events::kinds::{
     KIND_FARM, KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
@@ -15,11 +18,11 @@ use radroots_nostr_signer::prelude::{
     RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
     RadrootsNostrSignerCapability,
 };
-use serde::{Deserialize, Serialize};
+use radroots_sdk::radroots_sdk_myc_nip46_product_permission_strings;
+use url::Url;
 
 const SIGNER_BINDING_PROVIDER_RUNTIME_ID: &str = "myc";
 const SIGNER_BINDING_MODEL: &str = "session_authorized_remote_signer";
-const MYC_DEFERRED_REASON: &str = "signer mode `myc` is deferred; use signer mode `local`";
 
 #[derive(Debug, Clone, Copy)]
 struct CliWriteKind {
@@ -49,33 +52,11 @@ impl ActorWriteBindingError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActorWriteSignerAuthority {
-    pub provider_runtime_id: String,
-    pub account_identity_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_session_ref: Option<String>,
-}
-
 pub fn resolve_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     match config.signer.backend {
         SignerBackend::Local => resolve_local_signer_status(config),
         SignerBackend::Myc => resolve_myc_signer_status(config),
     }
-}
-
-pub fn resolve_actor_write_authority(
-    config: &RuntimeConfig,
-    _actor_role: &str,
-    _actor_pubkey: &str,
-) -> Result<Option<ActorWriteSignerAuthority>, ActorWriteBindingError> {
-    if !matches!(config.signer.backend, SignerBackend::Myc) {
-        return Ok(None);
-    }
-
-    Err(ActorWriteBindingError::Unconfigured(
-        MYC_DEFERRED_REASON.to_owned(),
-    ))
 }
 
 fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
@@ -242,17 +223,40 @@ fn resolve_myc_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         Ok(resolution) => crate::runtime::account::account_resolution_view(&resolution),
         Err(_) => empty_account_resolution_view(),
     };
+    let readiness = myc_binding_readiness(config, None);
     SignerStatusView {
         mode: config.signer.backend.as_str().to_owned(),
-        state: "unconfigured".to_owned(),
-        source: "target cli signer mode contract".to_owned(),
+        state: if readiness.ready {
+            "ready"
+        } else {
+            "unconfigured"
+        }
+        .to_owned(),
+        source: readiness.source.clone(),
         signer_account_id: None,
         account_resolution,
-        reason: Some(MYC_DEFERRED_REASON.to_owned()),
-        binding: deferred_myc_binding_status(),
-        write_kinds: deferred_write_kind_readiness(),
+        reason: readiness.reason.clone(),
+        binding: readiness.binding,
+        write_kinds: myc_write_kind_readiness(readiness.ready, readiness.reason.clone()),
         local: None,
-        myc: None,
+        myc: Some(MycStatusView {
+            executable: config.myc.executable.display().to_string(),
+            state: if readiness.ready {
+                "ready"
+            } else {
+                "unconfigured"
+            }
+            .to_owned(),
+            source: readiness.source,
+            service_status: None,
+            ready: readiness.ready,
+            reason: readiness.reason,
+            reasons: readiness.reasons,
+            remote_session_count: usize::from(readiness.signer_session_ref.is_some()),
+            local_signer: None,
+            remote_sessions: Vec::new(),
+            custody: None,
+        }),
     }
 }
 
@@ -272,23 +276,6 @@ fn disabled_binding_status() -> SignerBindingStatusView {
         reason: Some(
             "remote myc signer binding is disabled while cli signer mode is `local`".to_owned(),
         ),
-    }
-}
-
-fn deferred_myc_binding_status() -> SignerBindingStatusView {
-    SignerBindingStatusView {
-        capability_id: SIGNER_REMOTE_NIP46_CAPABILITY.to_owned(),
-        provider_runtime_id: SIGNER_BINDING_PROVIDER_RUNTIME_ID.to_owned(),
-        binding_model: SIGNER_BINDING_MODEL.to_owned(),
-        state: "deferred".to_owned(),
-        source: "target cli signer mode contract".to_owned(),
-        target_kind: None,
-        target: None,
-        managed_account_ref: None,
-        signer_session_ref: None,
-        resolved_session_ref: None,
-        matched_session_count: None,
-        reason: Some(MYC_DEFERRED_REASON.to_owned()),
     }
 }
 
@@ -361,24 +348,192 @@ fn local_write_kind_readiness(
         .collect()
 }
 
-fn deferred_write_kind_readiness() -> Vec<SignerWriteKindReadinessView> {
-    cli_write_kinds()
-        .iter()
-        .map(|kind| SignerWriteKindReadinessView {
-            command: kind.command.to_owned(),
-            event_kind: kind.event_kind,
-            permission: "signer_mode_local_required".to_owned(),
-            ready: false,
-            reason: Some(MYC_DEFERRED_REASON.to_owned()),
-        })
-        .collect()
-}
-
 fn local_availability(value: RadrootsNostrLocalSignerAvailability) -> &'static str {
     match value {
         RadrootsNostrLocalSignerAvailability::PublicOnly => "public_only",
         RadrootsNostrLocalSignerAvailability::SecretBacked => "secret_backed",
     }
+}
+
+#[derive(Debug, Clone)]
+struct MycBindingReadiness {
+    binding: SignerBindingStatusView,
+    ready: bool,
+    source: String,
+    reason: Option<String>,
+    reasons: Vec<String>,
+    signer_session_ref: Option<String>,
+}
+
+fn myc_binding_readiness(
+    config: &RuntimeConfig,
+    actor_pubkey: Option<&str>,
+) -> MycBindingReadiness {
+    let Some(binding) = config.capability_binding(SIGNER_REMOTE_NIP46_CAPABILITY) else {
+        let reason = "signer.remote_nip46 binding is missing".to_owned();
+        return MycBindingReadiness {
+            binding: missing_myc_binding_status(reason.clone()),
+            ready: false,
+            source: "no explicit capability binding".to_owned(),
+            reason: Some(reason.clone()),
+            reasons: vec![reason],
+            signer_session_ref: None,
+        };
+    };
+
+    let mut reasons = Vec::new();
+    if binding.target_kind != CapabilityBindingTargetKind::ExplicitEndpoint {
+        reasons.push(format!(
+            "signer.remote_nip46 binding target_kind `{}` is not supported for CLI Myc signing; use `explicit_endpoint`",
+            binding.target_kind.as_str()
+        ));
+    }
+    if let Err(reason) = validate_myc_target(binding.target.as_str()) {
+        reasons.push(reason);
+    }
+    if let (Some(managed_account_ref), Some(actor_pubkey)) =
+        (binding.managed_account_ref.as_deref(), actor_pubkey)
+    {
+        if managed_account_ref != actor_pubkey {
+            reasons.push(format!(
+                "signer.remote_nip46 managed_account_ref `{managed_account_ref}` does not match actor pubkey `{actor_pubkey}`"
+            ));
+        }
+    }
+    let signer_session_ref = binding.signer_session_ref.clone();
+    if let Some(session_ref) = signer_session_ref.as_deref() {
+        match crate::runtime::account::load_secret_backend_secret(
+            config,
+            session_ref,
+            MYC_NIP46_SESSION_SECRET_SERVICE,
+        ) {
+            Ok(Some(secret)) if secret.trim().is_empty() => {
+                reasons.push(format!(
+                    "signer.remote_nip46 signer_session_ref `{session_ref}` resolved to an empty client secret"
+                ));
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                reasons.push(format!(
+                    "signer.remote_nip46 signer_session_ref `{session_ref}` was not found in the account secret backend"
+                ));
+            }
+            Err(error) => reasons.push(error.to_string()),
+        }
+    } else {
+        reasons.push("signer.remote_nip46 signer_session_ref is missing".to_owned());
+    }
+
+    let ready = reasons.is_empty();
+    let reason = reasons.first().cloned();
+    let source = binding.source.as_str().to_owned();
+    MycBindingReadiness {
+        binding: SignerBindingStatusView {
+            capability_id: binding.capability_id.clone(),
+            provider_runtime_id: binding.provider_runtime_id.clone(),
+            binding_model: binding.binding_model.clone(),
+            state: if ready { "ready" } else { "unconfigured" }.to_owned(),
+            source: source.clone(),
+            target_kind: Some(binding.target_kind.as_str().to_owned()),
+            target: Some(binding.target.clone()),
+            managed_account_ref: binding.managed_account_ref.clone(),
+            signer_session_ref: binding.signer_session_ref.clone(),
+            resolved_session_ref: binding.signer_session_ref.clone().filter(|_| ready),
+            matched_session_count: Some(usize::from(ready)),
+            reason: reason.clone(),
+        },
+        ready,
+        source,
+        reason,
+        reasons,
+        signer_session_ref,
+    }
+}
+
+fn missing_myc_binding_status(reason: String) -> SignerBindingStatusView {
+    SignerBindingStatusView {
+        capability_id: SIGNER_REMOTE_NIP46_CAPABILITY.to_owned(),
+        provider_runtime_id: SIGNER_BINDING_PROVIDER_RUNTIME_ID.to_owned(),
+        binding_model: SIGNER_BINDING_MODEL.to_owned(),
+        state: "unconfigured".to_owned(),
+        source: "no explicit capability binding".to_owned(),
+        target_kind: None,
+        target: None,
+        managed_account_ref: None,
+        signer_session_ref: None,
+        resolved_session_ref: None,
+        matched_session_count: Some(0),
+        reason: Some(reason),
+    }
+}
+
+fn validate_myc_target(value: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.starts_with("nostrconnect://") {
+        return Err(
+            "signer.remote_nip46 target must be a bunker URI or discovery URL; raw nostrconnect client URIs are signer-side only"
+                .to_owned(),
+        );
+    }
+    let bunker_uri = if trimmed.starts_with("bunker://") {
+        trimmed.to_owned()
+    } else {
+        let url = Url::parse(trimmed)
+            .map_err(|error| format!("signer.remote_nip46 target is invalid: {error}"))?;
+        url.query_pairs()
+            .find(|(key, _)| key == "uri")
+            .map(|(_, uri)| uri.into_owned())
+            .ok_or_else(|| {
+                "signer.remote_nip46 discovery target is missing `uri` query parameter".to_owned()
+            })?
+    };
+    match radroots_nostr_connect::prelude::RadrootsNostrConnectUri::parse(bunker_uri.as_str())
+        .map_err(|error| format!("signer.remote_nip46 target is invalid: {error}"))?
+    {
+        radroots_nostr_connect::prelude::RadrootsNostrConnectUri::Bunker(_) => Ok(()),
+        radroots_nostr_connect::prelude::RadrootsNostrConnectUri::Client(_) => Err(
+            "signer.remote_nip46 target must resolve to a bunker URI; raw nostrconnect client URIs are signer-side only"
+                .to_owned(),
+        ),
+    }
+}
+
+fn myc_write_kind_readiness(
+    ready: bool,
+    reason: Option<String>,
+) -> Vec<SignerWriteKindReadinessView> {
+    let permissions = radroots_sdk_myc_nip46_product_permission_strings();
+    cli_write_kinds()
+        .iter()
+        .map(|kind| {
+            let event_kind = kind.event_kind.to_string();
+            let permission = permissions
+                .iter()
+                .find(|permission| permission.contains(event_kind.as_str()))
+                .cloned()
+                .unwrap_or_else(|| format!("sign_event:{event_kind}"));
+            let permission_ready = ready
+                && permissions
+                    .iter()
+                    .any(|permission| permission.contains(event_kind.as_str()));
+            SignerWriteKindReadinessView {
+                command: kind.command.to_owned(),
+                event_kind: kind.event_kind,
+                permission,
+                ready: permission_ready,
+                reason: if permission_ready {
+                    None
+                } else {
+                    reason.clone().or_else(|| {
+                        Some(
+                            "SDK Myc signer permission is not configured for this event kind"
+                                .to_owned(),
+                        )
+                    })
+                },
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

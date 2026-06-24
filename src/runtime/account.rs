@@ -1,4 +1,4 @@
-use std::{fmt, path::Path};
+use std::{fmt, path::Path, sync::Arc};
 
 use radroots_identity::{
     IdentityError, RadrootsIdentity, RadrootsIdentityPublic, load_identity_profile,
@@ -7,8 +7,9 @@ use radroots_nostr_accounts::prelude::{
     RadrootsNostrAccountRecord, RadrootsNostrAccountStatus, RadrootsNostrAccountsError,
     RadrootsNostrAccountsManager,
 };
+use radroots_protected_store::RadrootsProtectedFileSecretVault;
 use radroots_secret_vault::{
-    RadrootsHostVaultCapabilities, RadrootsResolvedSecretBackend,
+    RadrootsHostVaultCapabilities, RadrootsResolvedSecretBackend, RadrootsSecretBackend,
     RadrootsSecretBackendAvailability, RadrootsSecretBackendSelection, RadrootsSecretVault,
     RadrootsSecretVaultError, RadrootsSecretVaultOsKeyring,
 };
@@ -594,6 +595,26 @@ pub fn secret_backend_status(config: &RuntimeConfig) -> AccountSecretBackendStat
     }
 }
 
+pub fn load_secret_backend_secret(
+    config: &RuntimeConfig,
+    slot: &str,
+    service_name: &str,
+) -> Result<Option<String>, RuntimeError> {
+    if slot.trim().is_empty() {
+        return Err(RuntimeError::Config(
+            "secret backend slot must not be empty".to_owned(),
+        ));
+    }
+    let resolved = resolve_secret_backend(config).map_err(secret_backend_resolution_error)?;
+    let vault = secret_vault_for_backend(config, resolved.backend, service_name)?;
+    vault.load_secret(slot).map_err(|error| {
+        RuntimeError::Config(format!(
+            "failed to load secret `{slot}` from account secret backend `{}`: {error}",
+            resolved.backend.kind()
+        ))
+    })
+}
+
 fn snapshot_from_manager(
     manager: &RadrootsNostrAccountsManager,
 ) -> Result<AccountSnapshot, RuntimeError> {
@@ -771,6 +792,36 @@ fn resolve_secret_backend(
             SecretBackendResolutionError::Invalid(format!("account secret backend: {error}"))
         }
     })
+}
+
+fn secret_backend_resolution_error(error: SecretBackendResolutionError) -> RuntimeError {
+    match error {
+        SecretBackendResolutionError::Unavailable(reason)
+        | SecretBackendResolutionError::Invalid(reason) => RuntimeError::Config(reason),
+    }
+}
+
+fn secret_vault_for_backend(
+    config: &RuntimeConfig,
+    backend: RadrootsSecretBackend,
+    service_name: &str,
+) -> Result<Arc<dyn RadrootsSecretVault>, RuntimeError> {
+    match backend {
+        RadrootsSecretBackend::HostVault(_) => {
+            Ok(Arc::new(RadrootsSecretVaultOsKeyring::new(service_name)))
+        }
+        RadrootsSecretBackend::EncryptedFile => Ok(Arc::new(
+            RadrootsProtectedFileSecretVault::new(config.account.secrets_dir.as_path()),
+        )),
+        RadrootsSecretBackend::ExternalCommand => Err(RuntimeError::Config(
+            "external_command account secret backend is not supported for CLI signer sessions"
+                .to_owned(),
+        )),
+        RadrootsSecretBackend::Memory => Err(RuntimeError::Config(
+            "memory account secret backend is not supported for persisted CLI signer sessions"
+                .to_owned(),
+        )),
+    }
 }
 
 fn account_secret_backend_selection(config: &RuntimeConfig) -> RadrootsSecretBackendSelection {

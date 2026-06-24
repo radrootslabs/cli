@@ -30,6 +30,7 @@ use crate::runtime::account::{
 use crate::runtime::config::{PublishTransport, RuntimeConfig, SignerBackend};
 use crate::runtime::logging::LoggingState;
 use crate::runtime::sdk::CliSdkAdapterError;
+use crate::runtime::signer::resolve_signer_status;
 use crate::view::runtime::{
     CommandDisposition, LocalBackupView, LocalRestoreView, PublishProviderRuntimeView,
     PublishRelayRuntimeView, PublishRuntimeView,
@@ -874,14 +875,12 @@ fn direct_nostr_relay_publish_readiness(
     }
 
     if matches!(config.signer.backend, SignerBackend::Myc) {
-        return (
-            "unavailable",
-            false,
-            Some(
-                "direct_nostr_relay publish transport requires signer mode `local` for signed writes; signer mode `myc` is deferred"
-                    .to_owned(),
-            ),
-        );
+        let signer = resolve_signer_status(config);
+        return if signer.state == "ready" {
+            ("ready", true, None)
+        } else {
+            ("unconfigured", false, signer.reason)
+        };
     }
 
     let Some(resolved_account) = account.resolved_account.as_ref() else {
@@ -920,14 +919,12 @@ fn radrootsd_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, O
     }
 
     if matches!(config.signer.backend, SignerBackend::Myc) {
-        return (
-            "unavailable",
-            false,
-            Some(
-                "radrootsd_proxy publish transport requires signer mode `local` for signed writes; signer mode `myc` is deferred"
-                    .to_owned(),
-            ),
-        );
+        let signer = resolve_signer_status(config);
+        return if signer.state == "ready" {
+            ("ready", true, None)
+        } else {
+            ("unconfigured", false, signer.reason)
+        };
     }
 
     ("ready", true, None)
@@ -952,12 +949,16 @@ fn signer_health_view(config: &RuntimeConfig, account: &AccountResolution) -> Va
                 },
             })
         }
-        SignerBackend::Myc => json!({
-            "state": "unavailable",
-            "backend": config.signer.backend.as_str(),
-            "write_capable_account": false,
-            "reason": "signer mode `myc` is deferred for CLI writes",
-        }),
+        SignerBackend::Myc => {
+            let signer = resolve_signer_status(config);
+            json!({
+                "state": signer.state,
+                "backend": config.signer.backend.as_str(),
+                "write_capable_account": signer.reason.is_none(),
+                "reason": signer.reason,
+                "binding_state": signer.binding.state,
+            })
+        }
     }
 }
 

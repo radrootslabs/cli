@@ -335,7 +335,7 @@ where
 fn listing_relay_unavailable(view: &ListingMutationView) -> bool {
     matches!(
         view.source.as_str(),
-        "direct Nostr relay publish · local key" | "SDK listing publish · local key"
+        "direct Nostr relay publish · local key" | "SDK listing publish · configured signer"
     ) && (view.reason.as_deref().is_some_and(|reason| {
         reason.contains("configured relay")
             || reason.contains("direct relay connection failed")

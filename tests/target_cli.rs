@@ -4,22 +4,33 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use nostr::nips::nip44::{self, Version};
+use nostr::{EventBuilder, Keys, Kind, PublicKey, SecretKey, Tag};
 use radroots_events::RadrootsNostrEventPtr;
 use radroots_events::ids::{
     RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId, RadrootsPublicKey,
 };
-use radroots_events::kinds::KIND_ORDER_REQUEST;
+use radroots_events::kinds::{KIND_LISTING, KIND_ORDER_REQUEST};
 use radroots_events::order::{RadrootsOrderEconomics, RadrootsOrderItem, RadrootsOrderRequest};
 use radroots_events_codec::order::order_request_event_build;
+use radroots_identity::RadrootsIdentity;
 use radroots_local_events::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecordInput, LocalEventsStore,
     LocalRecordFamily, LocalRecordStatus, PublishOutboxStatus, RelayDeliveryEvidence,
     SourceRuntime, canonical_relay_set_fingerprint,
 };
 use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
+use radroots_nostr_connect::prelude::{
+    RADROOTS_NOSTR_CONNECT_RPC_KIND, RadrootsNostrConnectRequest,
+    RadrootsNostrConnectRequestMessage, RadrootsNostrConnectResponse,
+};
 use radroots_replica_db::{farm, migrations};
 use radroots_replica_db_schema::farm::IFarmFields;
 use radroots_replica_sync::radroots_replica_pending_publish_batch;
@@ -32,9 +43,10 @@ use support::{
     assert_no_daemon_runtime_reference, assert_no_removed_command_reference, create_listing_draft,
     duplicate_orderable_listing_row, identity_public, identity_secret, json_from_stdout,
     make_listing_publishable, ndjson_from_stdout, radroots, remove_orderable_listing,
-    replace_latest_listing_event_id, seed_orderable_listing, toml_string,
-    update_orderable_listing_available_amount, update_orderable_listing_primary_bin_id,
-    write_public_identity_profile, write_secret_identity_profile,
+    replace_latest_listing_event_id, seed_orderable_listing, store_test_session_secret,
+    toml_string, update_orderable_listing_available_amount,
+    update_orderable_listing_primary_bin_id, write_public_identity_profile,
+    write_secret_identity_profile,
 };
 
 const LISTING_ADDR: &str =
@@ -128,6 +140,345 @@ impl RadrootsdProxyJsonRpcServer {
     fn join(self) -> Value {
         self.handle.join().expect("radrootsd proxy server join")
     }
+}
+
+#[derive(Clone, Copy)]
+enum Nip46RelayFinish {
+    SignResponse,
+    ProductPublish,
+}
+
+struct Nip46RelayReport {
+    connection_count: usize,
+    req_count: usize,
+    sign_request_count: usize,
+    published_events: Vec<RadrootsNostrEvent>,
+}
+
+struct Nip46RelayState {
+    connection_count: Mutex<usize>,
+    req_count: Mutex<usize>,
+    sign_request_count: Mutex<usize>,
+    published_events: Mutex<Vec<RadrootsNostrEvent>>,
+    pending_responses: Mutex<Vec<RadrootsNostrEvent>>,
+    done: AtomicBool,
+    finish: Nip46RelayFinish,
+}
+
+struct Nip46RelayServer {
+    endpoint: String,
+    state: Arc<Nip46RelayState>,
+    handle: JoinHandle<()>,
+}
+
+impl Nip46RelayServer {
+    fn new(remote_keys: Keys, user_keys: Keys, finish: Nip46RelayFinish) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind nip46 relay");
+        listener.set_nonblocking(true).expect("nip46 nonblocking");
+        let endpoint = format!("ws://{}", listener.local_addr().expect("nip46 addr"));
+        let state = Arc::new(Nip46RelayState {
+            connection_count: Mutex::new(0),
+            req_count: Mutex::new(0),
+            sign_request_count: Mutex::new(0),
+            published_events: Mutex::new(Vec::new()),
+            pending_responses: Mutex::new(Vec::new()),
+            done: AtomicBool::new(false),
+            finish,
+        });
+        let thread_state = Arc::clone(&state);
+        let remote_keys = Arc::new(remote_keys);
+        let user_keys = Arc::new(user_keys);
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline && !thread_state.done.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        *thread_state
+                            .connection_count
+                            .lock()
+                            .expect("connection count lock") += 1;
+                        let connection_state = Arc::clone(&thread_state);
+                        let remote_keys = Arc::clone(&remote_keys);
+                        let user_keys = Arc::clone(&user_keys);
+                        thread::spawn(move || {
+                            handle_nip46_relay_connection(
+                                stream,
+                                (*remote_keys).clone(),
+                                (*user_keys).clone(),
+                                connection_state,
+                            );
+                        });
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept nip46 relay connection: {error}"),
+                }
+            }
+            assert!(
+                thread_state.done.load(Ordering::SeqCst),
+                "timed out waiting for NIP-46 relay proof; connections {}; req {}; sign requests {}; published events {}",
+                *thread_state
+                    .connection_count
+                    .lock()
+                    .expect("connection count lock"),
+                *thread_state.req_count.lock().expect("req count lock"),
+                *thread_state
+                    .sign_request_count
+                    .lock()
+                    .expect("sign count lock"),
+                thread_state
+                    .published_events
+                    .lock()
+                    .expect("published events lock")
+                    .len(),
+            );
+        });
+        Self {
+            endpoint,
+            state,
+            handle,
+        }
+    }
+
+    fn endpoint(&self) -> &str {
+        self.endpoint.as_str()
+    }
+
+    fn join(self) -> Nip46RelayReport {
+        self.handle.join().expect("nip46 relay server join");
+        Nip46RelayReport {
+            connection_count: *self
+                .state
+                .connection_count
+                .lock()
+                .expect("connection count lock"),
+            req_count: *self.state.req_count.lock().expect("req count lock"),
+            sign_request_count: *self
+                .state
+                .sign_request_count
+                .lock()
+                .expect("sign count lock"),
+            published_events: self
+                .state
+                .published_events
+                .lock()
+                .expect("published events lock")
+                .clone(),
+        }
+    }
+}
+
+fn handle_nip46_relay_connection(
+    stream: TcpStream,
+    remote_keys: Keys,
+    user_keys: Keys,
+    state: Arc<Nip46RelayState>,
+) {
+    stream
+        .set_nonblocking(false)
+        .expect("nip46 blocking stream");
+    let mut websocket = tungstenite::accept(stream).expect("accept nip46 websocket");
+    let mut subscriptions = Vec::<String>::new();
+    loop {
+        let message = match websocket.read() {
+            Ok(message) => message,
+            Err(_) => return,
+        };
+        if !message.is_text() {
+            continue;
+        }
+        let value: Value =
+            serde_json::from_str(message.to_text().expect("nip46 text")).expect("nip46 json");
+        match value.get(0).and_then(Value::as_str) {
+            Some("REQ") => {
+                *state.req_count.lock().expect("req count lock") += 1;
+                let subscription_id = value
+                    .get(1)
+                    .and_then(Value::as_str)
+                    .expect("nip46 subscription id")
+                    .to_owned();
+                subscriptions.push(subscription_id.clone());
+                websocket
+                    .send(tungstenite::Message::Text(
+                        json!(["EOSE", subscription_id]).to_string().into(),
+                    ))
+                    .expect("send nip46 eose");
+                send_pending_nip46_responses(&mut websocket, subscription_id.as_str(), &state);
+            }
+            Some("CLOSE") => {}
+            Some("EVENT") => {
+                let event: RadrootsNostrEvent =
+                    serde_json::from_value(value.get(1).cloned().expect("nip46 relay event"))
+                        .expect("parse nip46 relay event");
+                if event.kind == Kind::Custom(RADROOTS_NOSTR_CONNECT_RPC_KIND) {
+                    handle_nip46_sign_request(
+                        &mut websocket,
+                        &subscriptions,
+                        event,
+                        &remote_keys,
+                        &user_keys,
+                        &state,
+                    );
+                } else {
+                    handle_nip46_product_publish(&mut websocket, event, &state);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn handle_nip46_sign_request(
+    websocket: &mut tungstenite::WebSocket<TcpStream>,
+    subscriptions: &[String],
+    event: RadrootsNostrEvent,
+    remote_keys: &Keys,
+    user_keys: &Keys,
+    state: &Nip46RelayState,
+) {
+    send_relay_ok(websocket, &event);
+    let decrypted = nip44::decrypt(remote_keys.secret_key(), &event.pubkey, &event.content)
+        .expect("decrypt nip46 request");
+    let request: RadrootsNostrConnectRequestMessage =
+        serde_json::from_str(&decrypted).expect("decode nip46 request");
+    let response = match request.request {
+        RadrootsNostrConnectRequest::SignEvent(unsigned_event) => {
+            let signed = unsigned_event
+                .sign_with_keys(user_keys)
+                .expect("sign nip46 request");
+            RadrootsNostrConnectResponse::SignedEvent(signed)
+        }
+        other => RadrootsNostrConnectResponse::Error {
+            result: None,
+            error: format!("unexpected test NIP-46 method `{}`", other.method()),
+        },
+    };
+    let response_event =
+        nip46_response_event(remote_keys, event.pubkey, request.id.as_str(), response);
+    state
+        .pending_responses
+        .lock()
+        .expect("pending response lock")
+        .push(response_event.clone());
+    for subscription_id in subscriptions {
+        send_nip46_response(websocket, subscription_id.as_str(), &response_event);
+    }
+    *state
+        .sign_request_count
+        .lock()
+        .expect("sign request count lock") += 1;
+    if matches!(state.finish, Nip46RelayFinish::SignResponse) {
+        state.done.store(true, Ordering::SeqCst);
+    }
+}
+
+fn send_pending_nip46_responses(
+    websocket: &mut tungstenite::WebSocket<TcpStream>,
+    subscription_id: &str,
+    state: &Nip46RelayState,
+) {
+    let responses = state
+        .pending_responses
+        .lock()
+        .expect("pending response lock")
+        .clone();
+    for response in responses {
+        send_nip46_response(websocket, subscription_id, &response);
+    }
+}
+
+fn send_nip46_response(
+    websocket: &mut tungstenite::WebSocket<TcpStream>,
+    subscription_id: &str,
+    response_event: &RadrootsNostrEvent,
+) {
+    websocket
+        .send(tungstenite::Message::Text(
+            json!(["EVENT", subscription_id, response_event])
+                .to_string()
+                .into(),
+        ))
+        .expect("send nip46 response event");
+}
+
+fn handle_nip46_product_publish(
+    websocket: &mut tungstenite::WebSocket<TcpStream>,
+    event: RadrootsNostrEvent,
+    state: &Nip46RelayState,
+) {
+    send_relay_ok(websocket, &event);
+    state
+        .published_events
+        .lock()
+        .expect("published events lock")
+        .push(event);
+    if matches!(state.finish, Nip46RelayFinish::ProductPublish) {
+        state.done.store(true, Ordering::SeqCst);
+    }
+}
+
+fn nip46_response_event(
+    remote_keys: &Keys,
+    client_public_key: PublicKey,
+    request_id: &str,
+    response: RadrootsNostrConnectResponse,
+) -> RadrootsNostrEvent {
+    let envelope = response
+        .into_envelope(request_id)
+        .expect("nip46 response envelope");
+    let payload = serde_json::to_string(&envelope).expect("nip46 response payload");
+    let ciphertext = nip44::encrypt(
+        remote_keys.secret_key(),
+        &client_public_key,
+        payload,
+        Version::V2,
+    )
+    .expect("nip46 response ciphertext");
+    EventBuilder::new(Kind::Custom(RADROOTS_NOSTR_CONNECT_RPC_KIND), ciphertext)
+        .tag(Tag::public_key(client_public_key))
+        .sign_with_keys(remote_keys)
+        .expect("nip46 response event")
+}
+
+fn send_relay_ok(websocket: &mut tungstenite::WebSocket<TcpStream>, event: &RadrootsNostrEvent) {
+    websocket
+        .send(tungstenite::Message::Text(
+            json!(["OK", event.id.to_hex(), true, ""])
+                .to_string()
+                .into(),
+        ))
+        .expect("send relay ok");
+}
+
+fn nostr_keys_from_identity(identity: &RadrootsIdentity) -> Keys {
+    let secret_key_hex = identity.secret_key_hex();
+    Keys::new(SecretKey::from_hex(secret_key_hex.as_str()).expect("secret key"))
+}
+
+fn myc_nip46_config(
+    remote_signer_pubkey: &str,
+    relay_endpoint: &str,
+    managed_account_ref: &str,
+    session_ref: &str,
+) -> String {
+    format!(
+        r#"[signer]
+backend = "myc"
+
+[[capability_binding]]
+capability = "signer.remote_nip46"
+provider = "myc"
+target_kind = "explicit_endpoint"
+target = "bunker://{}?relay={}"
+managed_account_ref = "{}"
+signer_session_ref = "{}"
+"#,
+        toml_string(remote_signer_pubkey),
+        toml_string(relay_endpoint),
+        toml_string(managed_account_ref),
+        toml_string(session_ref),
+    )
 }
 
 fn handle_radrootsd_proxy_connection(mut stream: TcpStream, expected_token: &str) -> Value {
@@ -1055,7 +1406,7 @@ fn config_get_radrootsd_proxy_with_token_file_reports_ready_transport() {
 }
 
 #[test]
-fn config_get_marks_radrootsd_proxy_unavailable_with_myc_signer() {
+fn config_get_marks_radrootsd_proxy_unconfigured_with_incomplete_myc_signer() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config(
         r#"[publish]
@@ -1084,12 +1435,12 @@ signer_session_ref = "session_ready"
     assert!(output.status.success());
     assert_eq!(value["operation_id"], "config.get");
     assert_eq!(value["result"]["publish"]["transport"], "radrootsd_proxy");
-    assert_eq!(value["result"]["publish"]["state"], "unavailable");
+    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
     assert_eq!(value["result"]["publish"]["executable"], false);
-    assert_contains(&value["result"]["publish"]["reason"], "signer mode `local`");
+    assert_contains(&value["result"]["publish"]["reason"], "signer.remote_nip46");
     assert_eq!(
         value["result"]["publish"]["provider"]["state"],
-        "unavailable"
+        "unconfigured"
     );
     assert_eq!(value["result"]["actions"][0], "radroots signer status get");
 }
@@ -1183,7 +1534,7 @@ fn config_get_marks_relay_publish_ready_with_secret_backed_local_account() {
 }
 
 #[test]
-fn config_get_marks_relay_publish_unavailable_with_deferred_signer_mode() {
+fn config_get_marks_relay_publish_unconfigured_with_missing_myc_binding() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     sandbox.write_app_config("[signer]\nbackend = \"myc\"\n");
@@ -1203,12 +1554,15 @@ fn config_get_marks_relay_publish_unavailable_with_deferred_signer_mode() {
     );
     assert_eq!(value["result"]["publish"]["relay"]["ready"], true);
     assert_eq!(value["result"]["publish"]["signed_write_required"], true);
-    assert_eq!(value["result"]["publish"]["state"], "unavailable");
+    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
     assert_eq!(value["result"]["publish"]["executable"], false);
-    assert_contains(&value["result"]["publish"]["reason"], "signer mode `local`");
+    assert_contains(
+        &value["result"]["publish"]["reason"],
+        "signer.remote_nip46 binding is missing",
+    );
     assert_eq!(
         value["result"]["publish"]["provider"]["state"],
-        "unavailable"
+        "unconfigured"
     );
 }
 
@@ -1246,7 +1600,7 @@ fn config_get_marks_relay_publish_unconfigured_with_watch_only_account() {
 }
 
 #[test]
-fn health_surfaces_publish_state_under_deferred_signer_mode() {
+fn health_surfaces_publish_state_under_missing_myc_binding() {
     let sandbox = RadrootsCliSandbox::new();
     let missing_myc = sandbox.root().join("bin/missing-myc");
     let token_file = radrootsd_proxy_token_file(&sandbox);
@@ -1264,16 +1618,19 @@ fn health_surfaces_publish_state_under_deferred_signer_mode() {
     assert_eq!(value["result"]["publish"]["executable"], false);
     assert_eq!(
         value["result"]["publish"]["provider"]["state"],
-        "unavailable"
+        "unconfigured"
     );
-    assert_contains(&value["result"]["publish"]["reason"], "signer mode `local`");
+    assert_contains(
+        &value["result"]["publish"]["reason"],
+        "signer.remote_nip46 binding is missing",
+    );
     assert_eq!(value["result"]["store"]["state"], "ready");
     assert_eq!(
         value["result"]["store"]["source"],
         "SDK canonical event store and outbox"
     );
     assert_eq!(value["result"]["store"]["canonical_store"], "sdk");
-    assert_eq!(value["result"]["signer"]["state"], "unavailable");
+    assert_eq!(value["result"]["signer"]["state"], "unconfigured");
     assert_eq!(value["result"]["actions"][0], "radroots account create");
     assert_eq!(value["result"]["actions"][1], "radroots signer status get");
     assert_eq!(
@@ -1546,7 +1903,10 @@ fn radrootsd_proxy_listing_publish_update_and_archive_dry_run_without_direct_rel
         assert!(output.status.success());
         assert_eq!(value["operation_id"], format!("listing.{operation}"));
         assert_eq!(value["result"]["state"], "dry_run");
-        assert_eq!(value["result"]["source"], "SDK listing publish · local key");
+        assert_eq!(
+            value["result"]["source"],
+            "SDK listing publish · configured signer"
+        );
         assert_eq!(value["result"]["dry_run"], true);
         assert_eq!(
             value["result"]["target_relays"]
@@ -1628,7 +1988,10 @@ token_file = "{}"
     );
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"]["state"], "published");
-    assert_eq!(value["result"]["source"], "SDK listing publish · local key");
+    assert_eq!(
+        value["result"]["source"],
+        "SDK listing publish · configured signer"
+    );
     assert_eq!(value["result"]["dry_run"], false);
     assert_eq!(
         request["params"]["event"]["id"],
@@ -1658,6 +2021,242 @@ token_file = "{}"
     assert_eq!(status["result"]["queue"]["publishing_count"], 0);
     assert_eq!(status["result"]["queue"]["retryable_count"], 0);
     assert_eq!(status["result"]["queue"]["failed_terminal_count"], 0);
+}
+
+#[test]
+fn direct_relay_listing_publish_uses_myc_nip46_sdk_signer() {
+    let sandbox = RadrootsCliSandbox::new();
+    let user_identity = identity_secret(90);
+    let client_identity = identity_secret(91);
+    let remote_identity = identity_secret(92);
+    let user_public = user_identity.to_public();
+    let user_keys = nostr_keys_from_identity(&user_identity);
+    let remote_keys = nostr_keys_from_identity(&remote_identity);
+    let remote_pubkey = remote_keys.public_key().to_hex();
+    let relay = Nip46RelayServer::new(
+        remote_keys.clone(),
+        user_keys,
+        Nip46RelayFinish::ProductPublish,
+    );
+    let relay_endpoint = relay.endpoint().to_owned();
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "myc-direct-user", &user_public);
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    store_test_session_secret(
+        &sandbox,
+        "session_ready",
+        client_identity.secret_key_hex().as_str(),
+    );
+    sandbox.write_app_config(
+        myc_nip46_config(
+            remote_pubkey.as_str(),
+            relay_endpoint.as_str(),
+            account_id,
+            "session_ready",
+        )
+        .as_str(),
+    );
+    let signer = sandbox.json_success(&["--format", "json", "signer", "status", "get"]);
+    assert_eq!(signer["result"]["state"], "ready");
+    assert_eq!(signer["result"]["binding"]["state"], "ready");
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Myc Relay Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let listing_file = create_listing_draft(&sandbox, "myc-direct-relay-live");
+    make_listing_publishable(
+        &listing_file,
+        farm["result"]["config"]["farm_d_tag"]
+            .as_str()
+            .expect("farm d tag"),
+    );
+
+    let output = sandbox
+        .command()
+        .args([
+            "--format",
+            "json",
+            "--approval-token",
+            "approve",
+            "--relay",
+            relay_endpoint.as_str(),
+            "listing",
+            "publish",
+            listing_file.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .expect("run myc direct listing publish");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+
+    assert!(
+        output.status.success(),
+        "stderr `{}` stdout `{}`",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report = relay.join();
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"]["state"], "published");
+    assert_eq!(
+        value["result"]["source"],
+        "SDK listing publish · configured signer"
+    );
+    assert_eq!(value["result"]["target_relays"][0], relay_endpoint);
+    assert!(report.connection_count >= 1);
+    assert!(report.req_count >= 1);
+    assert_eq!(report.sign_request_count, 1);
+    assert_eq!(report.published_events.len(), 1);
+    let published = &report.published_events[0];
+    assert_eq!(published.kind, Kind::Custom(KIND_LISTING as u16));
+    assert_eq!(published.pubkey.to_hex(), user_public.public_key_hex);
+    assert_eq!(
+        published.id.to_hex(),
+        value["result"]["event_id"].as_str().expect("event id")
+    );
+}
+
+#[test]
+fn radrootsd_proxy_listing_publish_uses_myc_nip46_sdk_signer() {
+    let sandbox = RadrootsCliSandbox::new();
+    let user_identity = identity_secret(93);
+    let client_identity = identity_secret(94);
+    let remote_identity = identity_secret(95);
+    let user_public = user_identity.to_public();
+    let user_keys = nostr_keys_from_identity(&user_identity);
+    let remote_keys = nostr_keys_from_identity(&remote_identity);
+    let remote_pubkey = remote_keys.public_key().to_hex();
+    let relay = Nip46RelayServer::new(
+        remote_keys.clone(),
+        user_keys,
+        Nip46RelayFinish::SignResponse,
+    );
+    let proxy = RadrootsdProxyJsonRpcServer::once("proxy_test_token");
+    let token_file = radrootsd_proxy_token_file(&sandbox);
+    let public_identity_file =
+        write_public_identity_profile(&sandbox, "myc-proxy-user", &user_public);
+    let imported = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "import",
+        "--default",
+        public_identity_file.to_string_lossy().as_ref(),
+    ]);
+    let account_id = imported["result"]["account"]["id"]
+        .as_str()
+        .expect("account id");
+    store_test_session_secret(
+        &sandbox,
+        "session_ready",
+        client_identity.secret_key_hex().as_str(),
+    );
+    let config = format!(
+        r#"[publish]
+transport = "radrootsd_proxy"
+
+[publish.radrootsd_proxy]
+url = "{}"
+token_file = "{}"
+
+{}"#,
+        toml_string(proxy.endpoint()),
+        toml_string(token_file.display().to_string().as_str()),
+        myc_nip46_config(
+            remote_pubkey.as_str(),
+            relay.endpoint(),
+            account_id,
+            "session_ready",
+        ),
+    );
+    sandbox.write_app_config(config.as_str());
+    let farm = sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Myc Proxy Farm",
+        "--location",
+        "farmstand",
+        "--country",
+        "US",
+        "--delivery-method",
+        "pickup",
+    ]);
+    let listing_file = create_listing_draft(&sandbox, "myc-radrootsd-proxy-live");
+    make_listing_publishable(
+        &listing_file,
+        farm["result"]["config"]["farm_d_tag"]
+            .as_str()
+            .expect("farm d tag"),
+    );
+
+    let output = sandbox
+        .command()
+        .args([
+            "--format",
+            "json",
+            "--approval-token",
+            "approve",
+            "listing",
+            "publish",
+            listing_file.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .expect("run myc proxy listing publish");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
+
+    assert!(
+        output.status.success(),
+        "stderr `{}` stdout `{}`",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report = relay.join();
+    let request = proxy.join();
+    assert_eq!(value["operation_id"], "listing.publish");
+    assert_eq!(value["result"]["state"], "published");
+    assert_eq!(
+        value["result"]["source"],
+        "SDK listing publish · configured signer"
+    );
+    assert!(report.connection_count >= 1);
+    assert!(report.req_count >= 1);
+    assert_eq!(report.sign_request_count, 1);
+    assert_eq!(report.published_events.len(), 0);
+    assert_eq!(request["params"]["event"]["kind"], KIND_LISTING);
+    assert_eq!(
+        request["params"]["event"]["pubkey"],
+        user_public.public_key_hex
+    );
+    assert_eq!(
+        request["params"]["event"]["id"],
+        value["result"]["event_id"]
+    );
 }
 
 #[test]
@@ -2581,7 +3180,7 @@ fn offline_listing_publish_enqueues_sdk_outbox_without_direct_relay_push() {
     assert_eq!(publish["result"]["state"], "queued");
     assert_eq!(
         publish["result"]["source"],
-        "SDK listing publish · local key"
+        "SDK listing publish · configured signer"
     );
     assert_eq!(publish["result"]["target_relays"][0], relay);
     assert_eq!(publish["result"]["actions"][0], "radroots sync push");
@@ -5022,7 +5621,7 @@ fn farm_publish_uses_sdk_outbox_without_legacy_signed_event_records() {
     assert_eq!(publish["result"], serde_json::Value::Null);
     assert_eq!(publish["errors"][0]["code"], "network_unavailable");
     let detail = &publish["errors"][0]["detail"];
-    assert_eq!(detail["source"], "SDK farm publish · local key");
+    assert_eq!(detail["source"], "SDK farm publish · configured signer");
     assert_eq!(detail["state"], "unavailable");
     assert_eq!(detail["profile"]["state"], "not_submitted");
     assert_eq!(detail["profile"]["event_id"], serde_json::Value::Null);
@@ -5089,7 +5688,7 @@ fn listing_publish_failure_uses_sdk_outbox_without_legacy_local_event_record() {
     assert_eq!(publish["errors"][0]["code"], "network_unavailable");
     assert_eq!(
         publish["errors"][0]["detail"]["source"],
-        "SDK listing publish · local key"
+        "SDK listing publish · configured signer"
     );
     assert_eq!(publish["errors"][0]["detail"]["state"], "unavailable");
     assert_eq!(

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use radroots_authority::{RadrootsActorContext, RadrootsLocalEventSigner};
+use radroots_authority::RadrootsActorContext;
 use radroots_events::contract::RadrootsActorRole;
 use radroots_events::farm::{RadrootsFarm, RadrootsFarmLocation};
 use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
@@ -9,7 +9,6 @@ use radroots_events::listing::RadrootsListingLocation;
 use radroots_events::profile::{RadrootsProfile, RadrootsProfileType};
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
-use radroots_nostr::prelude::RadrootsNostrKeys;
 use radroots_sdk::{
     FarmEnqueuePublishRequest, FarmEnqueueReceipt, FarmPreparePublishRequest, FarmPublishPlan,
     PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt, PushOutboxRelayOutcomeKind,
@@ -31,8 +30,9 @@ use crate::runtime::farm_config::{
 use crate::runtime::local_events::append_local_work;
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, sdk_relay_target_policy, sdk_relay_url_policy,
+    validate_configured_signer_for_actor,
 };
-use crate::runtime::signer::{ActorWriteBindingError, resolve_actor_write_authority};
+use crate::runtime::signer::ActorWriteBindingError;
 use crate::view::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
     FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishView,
@@ -42,7 +42,7 @@ use crate::view::runtime::{
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
 const FARM_SELLER_ACTOR_SOURCE: &str = "farm_config";
-const SDK_FARM_WRITE_SOURCE: &str = "SDK farm publish · local key";
+const SDK_FARM_WRITE_SOURCE: &str = "SDK farm publish · configured signer";
 const SDK_PROFILE_NOT_SUBMITTED_METHOD: &str = "sdk.farm.profile.not_submitted";
 const SDK_FARM_PUBLISH_METHOD: &str = "sdk.farm.publish.v1";
 const SDK_PROFILE_NOT_SUBMITTED_REASON: &str =
@@ -518,15 +518,26 @@ fn relay_farm_publish_readiness(
     }
 
     if matches!(config.signer.backend, SignerBackend::Myc) {
+        if let Err(error) = validate_configured_signer_for_actor(
+            config,
+            Some(account.record.account_id.as_str()),
+            account.record.public_identity.public_key_hex.as_str(),
+            "farm seller",
+        ) {
+            return FarmPublishReadiness {
+                state: "unconfigured",
+                executable: false,
+                reason: Some(error.to_string()),
+                missing: vec!["Remote signer binding".to_owned()],
+                actions: vec!["radroots signer status get".to_owned()],
+            };
+        }
         return FarmPublishReadiness {
-            state: "unavailable",
-            executable: false,
-            reason: Some(
-                "direct_nostr_relay farm publish requires signer mode `local`; signer mode `myc` is deferred"
-                    .to_owned(),
-            ),
-            missing: vec!["Local signer mode".to_owned()],
-            actions: vec!["radroots signer status get".to_owned()],
+            state: "ready",
+            executable: true,
+            reason: None,
+            missing: Vec::new(),
+            actions: Vec::new(),
         };
     }
 
@@ -644,12 +655,14 @@ fn publish_via_sdk(
 ) -> Result<FarmPublishView, CliSdkAdapterError> {
     let input = sdk_farm_publish_input(&resolved, account_pubkey.as_str())?;
     if config.output.dry_run {
-        if let Err(error) = resolve_farm_signing_identity(
+        if let Err(error) = validate_configured_signer_for_actor(
             config,
-            resolved.document.selection.account.as_str(),
+            Some(resolved.document.selection.account.as_str()),
             account_pubkey.as_str(),
+            "farm seller",
         ) {
-            return match error {
+            let binding_error = ActorWriteBindingError::from_runtime(error);
+            return match binding_error {
                 ActorWriteBindingError::Account(failure) => Err(RuntimeError::from(failure).into()),
                 error => Ok(binding_error_publish_view(
                     config,
@@ -681,18 +694,18 @@ fn publish_via_sdk(
         ));
     }
 
-    let session = CliSdkSession::connect(config)?;
-    let signer = sdk_farm_signer(
+    let session = CliSdkSession::connect_for_actor(
         config,
-        resolved.document.selection.account.as_str(),
+        Some(resolved.document.selection.account.as_str()),
         account_pubkey.as_str(),
+        "farm seller",
     )?;
     let mut request =
         FarmEnqueuePublishRequest::new(input.actor, input.farm, sdk_relay_target_policy(config));
     if let Some(idempotency_key) = farm_idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }
-    let enqueue = session.block_on(session.sdk().farms().enqueue_publish(request, &signer))?;
+    let enqueue = session.block_on(session.sdk().farms().enqueue_publish(request))?;
     let push = session.block_on(
         session.sdk().sync().push_outbox(
             PushOutboxRequest::new()
@@ -775,39 +788,6 @@ fn missing_publish_view(
         reason: Some(reason),
         actions,
     }
-}
-
-fn resolve_farm_signing_identity(
-    config: &RuntimeConfig,
-    account_id: &str,
-    account_pubkey: &str,
-) -> Result<account::AccountSigningIdentity, ActorWriteBindingError> {
-    if !matches!(
-        config.signer.backend,
-        crate::runtime::config::SignerBackend::Local
-    ) {
-        return resolve_actor_write_authority(config, "farm", account_pubkey).and_then(|_| {
-            Err(ActorWriteBindingError::Unconfigured(
-                "farm publish requires signer mode `local`".to_owned(),
-            ))
-        });
-    }
-    let signing = account::resolve_local_signing_identity_for_account(config, account_id)
-        .map_err(ActorWriteBindingError::from_runtime)?;
-    let selected_pubkey = signing
-        .account
-        .record
-        .public_identity
-        .public_key_hex
-        .as_str();
-    if !selected_pubkey.eq_ignore_ascii_case(account_pubkey) {
-        return Err(ActorWriteBindingError::Account(
-            account::AccountRuntimeFailure::mismatch(format!(
-                "account mismatch: resolved account pubkey `{selected_pubkey}` cannot sign farm-bound seller pubkey `{account_pubkey}`"
-            )),
-        ));
-    }
-    Ok(signing)
 }
 
 fn base_publish_view(
@@ -975,20 +955,6 @@ fn sdk_farm_publish_input(
         actor,
         farm: resolved.document.farm.clone(),
     })
-}
-
-fn sdk_farm_signer(
-    config: &RuntimeConfig,
-    account_id: &str,
-    account_pubkey: &str,
-) -> Result<RadrootsLocalEventSigner, RuntimeError> {
-    let signing = match resolve_farm_signing_identity(config, account_id, account_pubkey) {
-        Ok(signing) => signing,
-        Err(ActorWriteBindingError::Account(failure)) => return Err(failure.into()),
-        Err(error) => return Err(RuntimeError::Config(error.reason())),
-    };
-    let keys: RadrootsNostrKeys = signing.identity.into_keys();
-    RadrootsLocalEventSigner::new(keys).map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 fn sdk_prepared_publish_view(

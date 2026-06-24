@@ -5422,7 +5422,7 @@ fn enqueue_order_revision_proposal_via_sdk(
         session
             .sdk()
             .orders()
-            .enqueue_revision_proposal(request, &signer),
+            .enqueue_revision_proposal_with_explicit_signer(request, &signer),
     )?;
     let push = push_one_sdk_outbox_event(&session, policy)?;
     Ok(sdk_enqueued_order_revision_view(
@@ -5467,7 +5467,7 @@ fn enqueue_order_revision_decision_via_sdk(
         session
             .sdk()
             .orders()
-            .enqueue_revision_decision(request, &signer),
+            .enqueue_revision_decision_with_explicit_signer(request, &signer),
     )?;
     let push = push_one_sdk_outbox_event(&session, policy)?;
     Ok(sdk_enqueued_order_revision_decision_view(
@@ -5526,7 +5526,7 @@ fn enqueue_order_cancellation_via_sdk(
         session
             .sdk()
             .orders()
-            .enqueue_cancellation(request, &signer),
+            .enqueue_cancellation_with_explicit_signer(request, &signer),
     )?;
     let push = push_one_sdk_outbox_event(&session, policy)?;
     Ok(sdk_enqueued_order_cancellation_view(
@@ -6122,7 +6122,12 @@ fn enqueue_order_decision_via_sdk(
     let keys: RadrootsNostrKeys = signing.identity.into_keys();
     let signer = RadrootsLocalEventSigner::new(keys)
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-    let enqueue = session.block_on(session.sdk().orders().enqueue_decision(request, &signer))?;
+    let enqueue = session.block_on(
+        session
+            .sdk()
+            .orders()
+            .enqueue_decision_with_explicit_signer(request, &signer),
+    )?;
     let push = session.block_on(
         session.sdk().sync().push_outbox(
             PushOutboxRequest::new()
@@ -9465,7 +9470,12 @@ fn submit_via_sdk(
     let keys: RadrootsNostrKeys = signing.identity.into_keys();
     let signer = RadrootsLocalEventSigner::new(keys)
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-    let enqueue = session.block_on(session.sdk().orders().enqueue_submit(request, &signer))?;
+    let enqueue = session.block_on(
+        session
+            .sdk()
+            .orders()
+            .enqueue_submit_with_explicit_signer(request, &signer),
+    )?;
     let push = session.block_on(
         session.sdk().sync().push_outbox(
             PushOutboxRequest::new()

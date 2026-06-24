@@ -317,7 +317,6 @@ pub enum CapabilityBindingTargetKind {
     ExplicitEndpoint,
 }
 
-#[cfg(test)]
 impl CapabilityBindingTargetKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -333,7 +332,6 @@ pub enum CapabilityBindingSource {
     WorkspaceConfig,
 }
 
-#[cfg(test)]
 impl CapabilityBindingSource {
     pub fn as_str(self) -> &'static str {
         match self {

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use radroots_authority::{RadrootsActorContext, RadrootsLocalEventSigner};
+use radroots_authority::RadrootsActorContext;
 use radroots_core::{
     RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreDiscount, RadrootsCoreDiscountScope,
     RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney,
@@ -24,7 +24,6 @@ use radroots_events::trade_validation::RadrootsTradeValidationListingError;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_local_events::{LocalEventRecord, LocalRecordFamily, SourceRuntime};
-use radroots_nostr::prelude::RadrootsNostrKeys;
 use radroots_replica_db::ReplicaSql;
 use radroots_sdk::{
     ListingEnqueuePublishRequest, ListingEnqueueReceipt, ListingPreparePublishRequest,
@@ -42,7 +41,7 @@ use crate::cli::global::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
-use crate::runtime::config::{RuntimeConfig, SignerBackend};
+use crate::runtime::config::RuntimeConfig;
 use crate::runtime::farm_config;
 use crate::runtime::local_events::{
     append_local_work, get_shared_record, list_shared_records_before, list_shared_records_latest,
@@ -50,6 +49,7 @@ use crate::runtime::local_events::{
 };
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, sdk_relay_target_policy, sdk_relay_url_policy,
+    validate_configured_signer_for_actor,
 };
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
@@ -66,7 +66,7 @@ const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
 const LISTING_APP_RECORD_SOURCE: &str = "shared local events · app";
-const SDK_LISTING_WRITE_SOURCE: &str = "SDK listing publish · local key";
+const SDK_LISTING_WRITE_SOURCE: &str = "SDK listing publish · configured signer";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 const LISTING_SELLER_ACTOR_SOURCE_FARM_CONFIG: &str = "farm_config";
 const LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
@@ -1741,7 +1741,7 @@ pub fn publish_via_sdk(
 ) -> Result<ListingMutationView, CliSdkAdapterError> {
     let input = sdk_listing_publish_input(config, args)?;
     if config.output.dry_run {
-        validate_local_listing_signer(config, &input.canonical)?;
+        validate_configured_listing_signer(config, &input.canonical)?;
         let session = CliSdkSession::connect_memory(config)?;
         let plan = session.sdk().listings().prepare_publish(
             ListingPreparePublishRequest::from_document(
@@ -1758,8 +1758,12 @@ pub fn publish_via_sdk(
         ));
     }
 
-    let session = CliSdkSession::connect(config)?;
-    let signer = sdk_listing_signer(config, &input.canonical)?;
+    let session = CliSdkSession::connect_for_actor(
+        config,
+        Some(input.canonical.seller_account_id.as_str()),
+        input.canonical.seller_pubkey.as_str(),
+        "listing seller",
+    )?;
     let mut request = ListingEnqueuePublishRequest::from_document(
         input.actor,
         input.document,
@@ -1768,8 +1772,7 @@ pub fn publish_via_sdk(
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }
-    let enqueue_receipt =
-        session.block_on(session.sdk().listings().enqueue_publish(request, &signer))?;
+    let enqueue_receipt = session.block_on(session.sdk().listings().enqueue_publish(request))?;
     let push_receipt = if args.offline {
         None
     } else {
@@ -1840,15 +1843,6 @@ fn sdk_listing_publish_input(
         actor,
         document,
     })
-}
-
-fn sdk_listing_signer(
-    config: &RuntimeConfig,
-    canonical: &CanonicalListingDraft,
-) -> Result<RadrootsLocalEventSigner, RuntimeError> {
-    let signing = resolve_listing_signing_identity(config, canonical)?;
-    let keys: RadrootsNostrKeys = signing.identity.into_keys();
-    RadrootsLocalEventSigner::new(keys).map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 fn sdk_prepared_publish_view(
@@ -2152,8 +2146,8 @@ fn mutate(
         });
     }
 
-    if config.output.dry_run && matches!(config.signer.backend, SignerBackend::Local) {
-        validate_local_listing_signer(config, &canonical)?;
+    if config.output.dry_run {
+        validate_configured_listing_signer(config, &canonical)?;
     }
 
     mutate_via_sdk_from_canonical(config, args, operation, canonical)
@@ -2183,8 +2177,12 @@ fn mutate_via_sdk_from_canonical(
         ));
     }
 
-    let session = CliSdkSession::connect(config)?;
-    let signer = sdk_listing_signer(config, &canonical)?;
+    let session = CliSdkSession::connect_for_actor(
+        config,
+        Some(canonical.seller_account_id.as_str()),
+        canonical.seller_pubkey.as_str(),
+        "listing seller",
+    )?;
     let mut request = ListingEnqueuePublishRequest::from_document(
         actor,
         document,
@@ -2193,8 +2191,7 @@ fn mutate_via_sdk_from_canonical(
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }
-    let enqueue_receipt =
-        session.block_on(session.sdk().listings().enqueue_publish(request, &signer))?;
+    let enqueue_receipt = session.block_on(session.sdk().listings().enqueue_publish(request))?;
     let push_receipt = if args.offline {
         None
     } else {
@@ -2794,87 +2791,16 @@ fn invalid_validation_view(
     }
 }
 
-fn validate_local_listing_signer(
+fn validate_configured_listing_signer(
     config: &RuntimeConfig,
     canonical: &CanonicalListingDraft,
 ) -> Result<(), RuntimeError> {
-    resolve_listing_signing_identity(config, canonical).map(|_| ())
-}
-
-fn resolve_listing_signing_identity(
-    config: &RuntimeConfig,
-    canonical: &CanonicalListingDraft,
-) -> Result<account::AccountSigningIdentity, RuntimeError> {
-    let signing = account::resolve_local_signing_identity_for_account(
+    validate_configured_signer_for_actor(
         config,
-        canonical.seller_account_id.as_str(),
+        Some(canonical.seller_account_id.as_str()),
+        canonical.seller_pubkey.as_str(),
+        "listing seller",
     )
-    .map_err(|error| listing_bound_signing_error(error, canonical))?;
-    let account_pubkey = signing
-        .account
-        .record
-        .public_identity
-        .public_key_hex
-        .as_str();
-    if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
-        return Err(account::AccountRuntimeFailure::mismatch_with_detail(
-            format!(
-                "account mismatch: listing-bound seller account `{}` pubkey `{account_pubkey}` cannot sign listing seller_pubkey `{}`",
-                canonical.seller_account_id, canonical.seller_pubkey
-            ),
-            json!({
-                "seller_actor_source": canonical.seller_actor_source,
-                "listing_seller_account_id": canonical.seller_account_id,
-                "listing_seller_pubkey": canonical.seller_pubkey,
-                "account_pubkey": account_pubkey,
-                "actions": [
-                    "radroots account import <path>",
-                    "radroots account attach-secret <account-id> <path>",
-                ],
-            }),
-        )
-        .into());
-    }
-    Ok(signing)
-}
-
-fn listing_bound_signing_error(
-    error: RuntimeError,
-    canonical: &CanonicalListingDraft,
-) -> RuntimeError {
-    match error {
-        RuntimeError::Account(account::AccountRuntimeFailure::Unresolved(issue)) => {
-            account::AccountRuntimeFailure::unresolved_with_detail(
-                issue.message().to_owned(),
-                json!({
-                    "seller_actor_source": canonical.seller_actor_source,
-                    "listing_seller_account_id": canonical.seller_account_id,
-                    "listing_seller_pubkey": canonical.seller_pubkey,
-                    "actions": [
-                        "radroots account import <path>",
-                        format!("radroots listing rebind <file> {}", canonical.seller_account_id),
-                    ],
-                }),
-            )
-            .into()
-        }
-        RuntimeError::Account(account::AccountRuntimeFailure::WatchOnly(issue)) => {
-            account::AccountRuntimeFailure::watch_only_with_detail(
-                &canonical.seller_account_id,
-                json!({
-                    "seller_actor_source": canonical.seller_actor_source,
-                    "listing_seller_account_id": canonical.seller_account_id,
-                    "listing_seller_pubkey": canonical.seller_pubkey,
-                    "reason": issue.message(),
-                    "actions": [
-                        format!("radroots account attach-secret {} <path>", canonical.seller_account_id),
-                    ],
-                }),
-            )
-            .into()
-        }
-        other => other,
-    }
 }
 
 fn issue_from_trade_validation(

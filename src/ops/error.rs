@@ -281,6 +281,12 @@ impl OperationAdapterError {
                     RuntimeFailureAvailability::Unconfigured,
                 )
             }
+            RuntimeError::Config(_) if looks_like_signer_failure(&lowered) => {
+                Self::SignerUnconfigured {
+                    operation_id: operation_id.to_owned(),
+                    message,
+                }
+            }
             RuntimeError::Config(_) if looks_like_validation_failure(&lowered) => {
                 Self::ValidationFailed {
                     operation_id: operation_id.to_owned(),

@@ -211,12 +211,7 @@ pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
 pub fn requires_local_signer_mode(operation_id: &str) -> bool {
     matches!(
         operation_id,
-        "signer.status.get"
-            | "farm.publish"
-            | "sync.push"
-            | "listing.publish"
-            | "listing.update"
-            | "listing.archive"
+        "sync.push"
             | "order.submit"
             | "order.accept"
             | "order.decline"
@@ -577,12 +572,7 @@ mod tests {
             .map(|operation| operation.operation_id)
             .collect::<BTreeSet<_>>();
         let expected = [
-            "signer.status.get",
             "sync.push",
-            "farm.publish",
-            "listing.publish",
-            "listing.update",
-            "listing.archive",
             "order.submit",
             "order.accept",
             "order.decline",
