@@ -3,7 +3,8 @@ use serde_json::Value;
 
 use crate::cli::global::{
     FarmCreateArgs, FarmFieldArg, FarmPrivateLocationKeyArgs, FarmPrivateLocationSetArgs,
-    FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs, FarmUpdateArgs,
+    FarmPrivateLocationSetInput, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
+    FarmUpdateArgs,
 };
 use crate::ops::{
     FarmCreateRequest, FarmCreateResult, FarmFulfillmentUpdateRequest, FarmFulfillmentUpdateResult,
@@ -130,24 +131,16 @@ impl OperationService<FarmLocationSetRequest> for FarmOperationService<'_> {
         &self,
         request: OperationRequest<FarmLocationSetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let lookup = string_input(&request, "lookup").unwrap_or_else(|| "geonames".to_owned());
-        if lookup != "geonames" {
-            return Err(invalid_input(
-                request.operation_id(),
-                format!("farm location lookup `{lookup}` is not supported"),
-            ));
-        }
         let args = FarmPrivateLocationSetArgs {
             farm_d_tag: string_input(&request, "farm_d_tag"),
-            latitude: required_f64(&request, "latitude")?,
-            longitude: required_f64(&request, "longitude")?,
-            lookup,
+            input: farm_private_location_input(&request)?,
+            label: string_input(&request, "label"),
         };
         let view =
             crate::runtime::farm::private_location_set(self.config, &args).map_err(|error| {
                 OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
             })?;
-        serialized_operation_result::<FarmLocationSetResult, _>(&view)
+        farm_private_location_set_result(request.operation_id(), &view)
     }
 }
 
@@ -348,6 +341,29 @@ fn farm_publish_result(
     }
 }
 
+fn farm_private_location_set_result(
+    operation_id: &str,
+    view: &crate::view::runtime::FarmPrivateLocationView,
+) -> Result<OperationResult<FarmLocationSetResult>, OperationAdapterError> {
+    match view.state.as_str() {
+        "no_match" => Err(OperationAdapterError::not_found_with_detail(
+            operation_id,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| "GeoNames lookup returned no matching locality".to_owned()),
+            serde_json::to_value(view).unwrap_or(Value::Null),
+        )),
+        "ambiguous" => Err(OperationAdapterError::validation_failed_with_detail(
+            operation_id,
+            view.reason
+                .clone()
+                .unwrap_or_else(|| "GeoNames lookup matched multiple localities".to_owned()),
+            serde_json::to_value(view).unwrap_or(Value::Null),
+        )),
+        _ => serialized_operation_result::<FarmLocationSetResult, _>(view),
+    }
+}
+
 fn farm_publish_relay_unavailable(view: &FarmPublishView) -> bool {
     view.state == "partial"
         || !view.profile.failed_relays.is_empty()
@@ -422,7 +438,89 @@ where
         .map(str::to_owned)
 }
 
-fn required_f64<P>(request: &OperationRequest<P>, key: &str) -> Result<f64, OperationAdapterError>
+fn farm_private_location_input<P>(
+    request: &OperationRequest<P>,
+) -> Result<FarmPrivateLocationSetInput, OperationAdapterError>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    if request.payload.input().contains_key("lookup") {
+        return Err(invalid_input(
+            request.operation_id(),
+            "`lookup` is not a supported farm location input".to_owned(),
+        ));
+    }
+
+    let lat = optional_f64(request, "lat")?;
+    let lng = optional_f64(request, "lng")?;
+    let city = trimmed_string_input(request, "city")?;
+    let region = trimmed_string_input(request, "region")?;
+    let country = trimmed_string_input(request, "country")?;
+    let query = trimmed_string_input(request, "query")?;
+    let geonames_id = optional_i64(request, "geonames_id")?;
+
+    if (lat.is_some() || lng.is_some()) && !(lat.is_some() && lng.is_some()) {
+        return Err(invalid_input(
+            request.operation_id(),
+            "`lat` and `lng` must be provided together".to_owned(),
+        ));
+    }
+    if (region.is_some() || country.is_some()) && city.is_none() {
+        return Err(invalid_input(
+            request.operation_id(),
+            "`region` and `country` require `city`".to_owned(),
+        ));
+    }
+
+    let mode_count = usize::from(lat.is_some())
+        + usize::from(city.is_some())
+        + usize::from(query.is_some())
+        + usize::from(geonames_id.is_some());
+
+    if mode_count != 1 {
+        return Err(invalid_input(
+            request.operation_id(),
+            "farm location requires exactly one of `lat`/`lng`, `city`, `query`, or `geonames_id`"
+                .to_owned(),
+        ));
+    }
+
+    if let (Some(latitude), Some(longitude)) = (lat, lng) {
+        return Ok(FarmPrivateLocationSetInput::Exact {
+            latitude,
+            longitude,
+        });
+    }
+    if let Some(city) = city {
+        return Ok(FarmPrivateLocationSetInput::City {
+            city,
+            region,
+            country,
+        });
+    }
+    if let Some(query) = query {
+        return Ok(FarmPrivateLocationSetInput::Query(query));
+    }
+    if let Some(geonames_id) = geonames_id {
+        if geonames_id <= 0 {
+            return Err(invalid_input(
+                request.operation_id(),
+                "`geonames_id` must be a positive integer".to_owned(),
+            ));
+        }
+        return Ok(FarmPrivateLocationSetInput::GeonamesId(geonames_id));
+    }
+
+    Err(invalid_input(
+        request.operation_id(),
+        "farm location input could not be resolved".to_owned(),
+    ))
+}
+
+fn optional_f64<P>(
+    request: &OperationRequest<P>,
+    key: &str,
+) -> Result<Option<f64>, OperationAdapterError>
 where
     P: OperationRequestPayload + OperationRequestData,
 {
@@ -430,14 +528,62 @@ where
         .payload
         .input()
         .get(key)
-        .and_then(Value::as_f64)
-        .filter(|value| value.is_finite())
-        .ok_or_else(|| {
-            invalid_input(
-                request.operation_id(),
-                format!("missing required finite `{key}` input"),
-            )
+        .map(|value| {
+            value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| {
+                    invalid_input(
+                        request.operation_id(),
+                        format!("`{key}` must be a finite number"),
+                    )
+                })
         })
+        .transpose()
+}
+
+fn optional_i64<P>(
+    request: &OperationRequest<P>,
+    key: &str,
+) -> Result<Option<i64>, OperationAdapterError>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    request
+        .payload
+        .input()
+        .get(key)
+        .map(|value| {
+            value.as_i64().ok_or_else(|| {
+                invalid_input(
+                    request.operation_id(),
+                    format!("`{key}` must be an integer"),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn trimmed_string_input<P>(
+    request: &OperationRequest<P>,
+    key: &str,
+) -> Result<Option<String>, OperationAdapterError>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    string_input(request, key)
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Err(invalid_input(
+                    request.operation_id(),
+                    format!("`{key}` must not be empty"),
+                ))
+            } else {
+                Ok(trimmed.to_owned())
+            }
+        })
+        .transpose()
 }
 
 fn bool_input<P>(request: &OperationRequest<P>, key: &str) -> Option<bool>
@@ -460,13 +606,14 @@ mod tests {
 
     use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
-    use serde_json::{Map, Value};
+    use serde_json::{Map, Value, json};
     use tempfile::tempdir;
 
     use super::FarmOperationService;
     use crate::ops::{
-        FarmCreateRequest, FarmGetRequest, FarmPublishRequest, FarmReadinessCheckRequest,
-        FarmRebindRequest, OperationAdapter, OperationContext, OperationData, OperationRequest,
+        FarmCreateRequest, FarmGetRequest, FarmLocationSetRequest, FarmPublishRequest,
+        FarmReadinessCheckRequest, FarmRebindRequest, OperationAdapter, OperationContext,
+        OperationData, OperationRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -474,6 +621,9 @@ mod tests {
         PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
         RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
         SignerConfig, Verbosity,
+    };
+    use crate::view::runtime::{
+        FarmPrivateExactLocationView, FarmPrivateLocationCandidateView, FarmPrivateLocationView,
     };
 
     #[test]
@@ -558,6 +708,132 @@ mod tests {
         assert!(format!("{error}").contains("approval_token"));
         assert_eq!(error.to_output_error().code, "approval_required");
         assert_eq!(error.to_output_error().exit_code, 6);
+    }
+
+    #[test]
+    fn farm_service_accepts_canonical_location_set_modes() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(FarmOperationService::new(&config));
+        let cases = [
+            value_data(&[
+                ("lat", json!(48.429456)),
+                ("lng", json!(-123.349786)),
+                ("label", json!("farm gate")),
+            ]),
+            value_data(&[
+                ("city", json!("Victoria")),
+                ("region", json!("BC")),
+                ("country", json!("CA")),
+            ]),
+            value_data(&[("query", json!("Victoria, BC"))]),
+            value_data(&[("geonames_id", json!(6174041))]),
+        ];
+
+        for input in cases {
+            let request = OperationRequest::new(
+                OperationContext::default(),
+                FarmLocationSetRequest::from_data(input),
+            )
+            .expect("farm location request");
+            let envelope = service
+                .execute(request)
+                .expect("farm location set result")
+                .to_envelope(OperationContext::default().envelope_context("req_farm_location"))
+                .expect("farm location envelope");
+
+            assert_eq!(envelope.operation_id, "farm.location.set");
+            assert_eq!(envelope.result["state"], "unconfigured");
+        }
+    }
+
+    #[test]
+    fn farm_service_rejects_invalid_location_set_modes() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let service = OperationAdapter::new(FarmOperationService::new(&config));
+        let cases = [
+            (
+                value_data(&[("lookup", json!("Victoria, BC"))]),
+                "`lookup` is not a supported farm location input",
+            ),
+            (
+                value_data(&[("lat", json!(48.429456))]),
+                "`lat` and `lng` must be provided together",
+            ),
+            (
+                value_data(&[
+                    ("lat", json!(48.429456)),
+                    ("lng", json!(-123.349786)),
+                    ("city", json!("Victoria")),
+                ]),
+                "requires exactly one",
+            ),
+            (
+                value_data(&[("query", json!("Victoria")), ("country", json!("CA"))]),
+                "`region` and `country` require `city`",
+            ),
+            (
+                value_data(&[("geonames_id", json!(0))]),
+                "`geonames_id` must be a positive integer",
+            ),
+            (
+                value_data(&[("city", json!(" "))]),
+                "`city` must not be empty",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            let request = OperationRequest::new(
+                OperationContext::default(),
+                FarmLocationSetRequest::from_data(input),
+            )
+            .expect("farm location request");
+            let error = service
+                .execute(request)
+                .expect_err("invalid location input");
+
+            assert!(format!("{error}").contains(expected));
+        }
+    }
+
+    #[test]
+    fn farm_location_set_maps_lookup_failures_to_output_errors() {
+        let no_match = location_lookup_view("no_match", Vec::new());
+        let no_match_error =
+            super::farm_private_location_set_result("farm.location.set", &no_match)
+                .expect_err("no match error")
+                .to_output_error();
+        assert_eq!(no_match_error.code, "not_found");
+        assert_eq!(
+            no_match_error.detail.as_ref().expect("no match detail")["state"],
+            "no_match"
+        );
+
+        let ambiguous = location_lookup_view(
+            "ambiguous",
+            vec![FarmPrivateLocationCandidateView {
+                geonames_feature_id: 3002,
+                geonames_country_id: "CA".to_owned(),
+                name: "Shared Market".to_owned(),
+                display_name: "Shared Market, British Columbia, Canada".to_owned(),
+                exact_location: FarmPrivateExactLocationView {
+                    lat: 48.7,
+                    lng: -123.2,
+                },
+                region: Some("British Columbia".to_owned()),
+                country: Some("Canada".to_owned()),
+            }],
+        );
+        let ambiguous_error =
+            super::farm_private_location_set_result("farm.location.set", &ambiguous)
+                .expect_err("ambiguous error")
+                .to_output_error();
+        assert_eq!(ambiguous_error.code, "validation_failed");
+        assert_eq!(
+            ambiguous_error.detail.as_ref().expect("ambiguous detail")["candidates"][0]["geonames_feature_id"],
+            3002
+        );
     }
 
     fn sample_config(root: &Path) -> RuntimeConfig {
@@ -667,5 +943,36 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), Value::String((*value).to_owned())))
             .collect::<Map<String, Value>>()
+    }
+
+    fn value_data(entries: &[(&str, Value)]) -> OperationData {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), value.clone()))
+            .collect::<Map<String, Value>>()
+    }
+
+    fn location_lookup_view(
+        state: &str,
+        candidates: Vec<FarmPrivateLocationCandidateView>,
+    ) -> FarmPrivateLocationView {
+        FarmPrivateLocationView {
+            state: state.to_owned(),
+            source: "test".to_owned(),
+            farm_addr: Some("30401:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAA".to_owned()),
+            farm_d_tag: Some("AAAAAAAAAAAAAAAAAAAAAA".to_owned()),
+            seller_account_id: Some("acct_test".to_owned()),
+            seller_pubkey: Some("1111111111111111111111111111111111111111111111111111111111111111".to_owned()),
+            label: None,
+            exact_location: None,
+            public_locality: None,
+            geonames_feature_id: None,
+            geonames_country_id: None,
+            geonames_database_path: Some("cache/shared/geonames/geonames-1.0.db".to_owned()),
+            cleared: None,
+            candidates,
+            reason: Some(format!("{state} reason")),
+            actions: Vec::new(),
+        }
     }
 }

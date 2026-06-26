@@ -105,10 +105,10 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
             FarmCommand::Location(args) => match &args.command {
                 FarmLocationCommand::Set(args) => {
                     if let Some(latitude) = args.lat {
-                        insert_number(&mut input, "latitude", latitude);
+                        insert_number(&mut input, "lat", latitude);
                     }
                     if let Some(longitude) = args.lng {
-                        insert_number(&mut input, "longitude", longitude);
+                        insert_number(&mut input, "lng", longitude);
                     }
                     insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
                     insert_string(&mut input, "city", &args.city);

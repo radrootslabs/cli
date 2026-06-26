@@ -820,6 +820,8 @@ pub struct FarmPrivateLocationView {
     pub seller_account_id: Option<String>,
     pub seller_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exact_location: Option<FarmPrivateExactLocationView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_locality: Option<FarmPrivatePublicLocalityView>,
@@ -831,6 +833,8 @@ pub struct FarmPrivateLocationView {
     pub geonames_database_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cleared: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<FarmPrivateLocationCandidateView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -855,11 +859,26 @@ pub struct FarmPrivatePublicLocalityView {
     pub geohash5: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmPrivateLocationCandidateView {
+    pub geonames_feature_id: i64,
+    pub geonames_country_id: String,
+    pub name: String,
+    pub display_name: String,
+    pub exact_location: FarmPrivateExactLocationView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+}
+
 impl FarmPrivateLocationView {
     pub fn disposition(&self) -> CommandDisposition {
         match self.state.as_str() {
             "unconfigured" => CommandDisposition::Unconfigured,
             "missing" => CommandDisposition::NotFound,
+            "no_match" => CommandDisposition::NotFound,
+            "ambiguous" => CommandDisposition::ValidationFailed,
             _ => CommandDisposition::Success,
         }
     }

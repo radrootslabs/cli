@@ -171,6 +171,45 @@ mod tests {
     }
 
     #[test]
+    fn adapter_maps_farm_location_set_inputs() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "farm",
+            "location",
+            "set",
+            "--lat",
+            "48.429456",
+            "--lng",
+            "-123.349786",
+            "--label",
+            "farm gate",
+        ])
+        .expect("target args parse");
+
+        let request = TargetOperationRequest::from_target_args(&parsed)
+            .expect("operation request from target args");
+        let TargetOperationRequest::FarmLocationSet(request) = request else {
+            panic!("expected farm location set request")
+        };
+
+        assert_eq!(request.operation_id(), "farm.location.set");
+        assert_eq!(
+            request.payload.input.get("lat").and_then(Value::as_f64),
+            Some(48.429456)
+        );
+        assert_eq!(
+            request.payload.input.get("lng").and_then(Value::as_f64),
+            Some(-123.349786)
+        );
+        assert_eq!(
+            request.payload.input.get("label").and_then(Value::as_str),
+            Some("farm gate")
+        );
+        assert!(!request.payload.input.contains_key("latitude"));
+        assert!(!request.payload.input.contains_key("longitude"));
+    }
+
+    #[test]
     fn adapter_maps_listing_rebind_inputs() {
         let parsed = TargetCliArgs::try_parse_from([
             "radroots",

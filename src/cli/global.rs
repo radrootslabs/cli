@@ -135,9 +135,23 @@ pub struct FarmUpdateArgs {
 #[derive(Debug, Clone)]
 pub struct FarmPrivateLocationSetArgs {
     pub farm_d_tag: Option<String>,
-    pub latitude: f64,
-    pub longitude: f64,
-    pub lookup: String,
+    pub input: FarmPrivateLocationSetInput,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum FarmPrivateLocationSetInput {
+    Exact {
+        latitude: f64,
+        longitude: f64,
+    },
+    City {
+        city: String,
+        region: Option<String>,
+        country: Option<String>,
+    },
+    Query(String),
+    GeonamesId(i64),
 }
 
 #[derive(Debug, Clone, Default)]

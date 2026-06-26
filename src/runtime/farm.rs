@@ -12,15 +12,18 @@ use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
 use radroots_sdk::{
     FarmEnqueuePublishRequest, FarmEnqueueReceipt, FarmPreparePublishRequest,
-    FarmPrivateLocationClearRequest, FarmPrivateLocationReceipt, FarmPrivateLocationUpsertRequest,
-    FarmPublishPlan, PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
-    PushOutboxRelayOutcomeKind, PushOutboxRequest, SdkExactLocation, SdkMutationState,
+    FarmPrivateLocationClearRequest, FarmPrivateLocationInput, FarmPrivateLocationLookupCandidate,
+    FarmPrivateLocationReceipt, FarmPrivateLocationSetRequest, FarmPrivateLocationSetResult,
+    FarmPublishPlan, GeocoderLocalityQuery, PushOutboxEventReceipt, PushOutboxEventState,
+    PushOutboxReceipt, PushOutboxRelayOutcomeKind, PushOutboxRequest, SdkExactLocation,
+    SdkMutationState,
 };
 use serde_json::json;
 
 use crate::cli::global::{
     FarmCreateArgs, FarmFieldArg, FarmPrivateLocationKeyArgs, FarmPrivateLocationSetArgs,
-    FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs, FarmUpdateArgs,
+    FarmPrivateLocationSetInput, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
+    FarmUpdateArgs,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::account::{self, AccountRecordView};
@@ -37,10 +40,10 @@ use crate::runtime::sdk::{
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::view::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
-    FarmPrivateExactLocationView, FarmPrivateLocationView, FarmPrivatePublicLocalityView,
-    FarmPublicationView, FarmPublishComponentView, FarmPublishEventView, FarmPublishView,
-    FarmRebindView, FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView,
-    RelayFailureView,
+    FarmPrivateExactLocationView, FarmPrivateLocationCandidateView, FarmPrivateLocationView,
+    FarmPrivatePublicLocalityView, FarmPublicationView, FarmPublishComponentView,
+    FarmPublishEventView, FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView,
+    FarmSetupView, FarmStatusView, RelayFailureView,
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
@@ -352,19 +355,41 @@ pub fn private_location_set(
     };
     let session = CliSdkSession::connect(config)?;
     let geonames_status = session.sdk().geonames().ensure()?;
-    let request = FarmPrivateLocationUpsertRequest::new(
+    let mut request = FarmPrivateLocationSetRequest::new(
         target.actor.clone(),
         target.farm_d_tag.clone(),
-        SdkExactLocation::new(args.latitude, args.longitude),
+        sdk_private_location_input(&args.input),
     );
-    let receipt = session.block_on(session.sdk().farms().upsert_private_location(request))?;
-    Ok(private_location_view_from_receipt(
-        "set",
-        target,
-        Some(receipt),
-        Some(geonames_status.path.display().to_string()),
-        None,
-    ))
+    if let Some(label) = args.label.clone() {
+        request = request.with_label(label);
+    }
+    let geonames_database_path = Some(geonames_status.path.display().to_string());
+    match session.block_on(session.sdk().farms().set_private_location(request))? {
+        FarmPrivateLocationSetResult::Stored(receipt) => Ok(private_location_view_from_receipt(
+            "set",
+            target,
+            Some(receipt),
+            geonames_database_path,
+            None,
+        )),
+        FarmPrivateLocationSetResult::NoMatch(lookup) => Ok(private_location_view_from_lookup(
+            "no_match",
+            target,
+            lookup.candidates,
+            geonames_database_path,
+            Some("GeoNames lookup returned no matching locality".to_owned()),
+        )),
+        FarmPrivateLocationSetResult::Ambiguous(lookup) => Ok(private_location_view_from_lookup(
+            "ambiguous",
+            target,
+            lookup.candidates,
+            geonames_database_path,
+            Some(
+                "GeoNames lookup matched multiple localities; retry with --region, --country, or --geonames-id"
+                    .to_owned(),
+            ),
+        )),
+    }
 }
 
 pub fn private_location_get(
@@ -414,18 +439,23 @@ pub fn private_location_clear(
         farm_d_tag: Some(target.farm_d_tag),
         seller_account_id: Some(target.seller_account_id),
         seller_pubkey: Some(target.seller_pubkey),
+        label: None,
         exact_location: None,
         public_locality: None,
         geonames_feature_id: None,
         geonames_country_id: None,
         geonames_database_path: None,
         cleared: Some(receipt.cleared),
+        candidates: Vec::new(),
         reason: (!receipt.cleared)
             .then(|| "no private exact farm location was stored for this farm".to_owned()),
         actions: if receipt.cleared {
             Vec::new()
         } else {
-            vec!["radroots farm location set --lat <lat> --lng <lng>".to_owned()]
+            vec![
+                "radroots farm location set --city <city> --region <region> --country <country>"
+                    .to_owned(),
+            ]
         },
     })
 }
@@ -1398,12 +1428,14 @@ fn private_location_unconfigured_view() -> FarmPrivateLocationView {
         farm_d_tag: None,
         seller_account_id: None,
         seller_pubkey: None,
+        label: None,
         exact_location: None,
         public_locality: None,
         geonames_feature_id: None,
         geonames_country_id: None,
         geonames_database_path: None,
         cleared: None,
+        candidates: Vec::new(),
         reason: Some("create and bind a farm before storing private location".to_owned()),
         actions: vec![
             "radroots account create".to_owned(),
@@ -1427,6 +1459,7 @@ fn private_location_view_from_receipt(
         farm_d_tag: Some(target.farm_d_tag),
         seller_account_id: Some(target.seller_account_id),
         seller_pubkey: Some(target.seller_pubkey),
+        label: receipt_ref.and_then(|receipt| receipt.label.clone()),
         exact_location: receipt_ref.map(|receipt| FarmPrivateExactLocationView {
             lat: receipt.exact_location.latitude,
             lng: receipt.exact_location.longitude,
@@ -1442,13 +1475,101 @@ fn private_location_view_from_receipt(
         geonames_country_id: receipt_ref.and_then(|receipt| receipt.geonames_country_id.clone()),
         geonames_database_path,
         cleared: None,
+        candidates: Vec::new(),
         reason,
         actions: if receipt.is_some() {
             Vec::new()
         } else {
-            vec!["radroots farm location set --lat <lat> --lng <lng>".to_owned()]
+            vec![
+                "radroots farm location set --city <city> --region <region> --country <country>"
+                    .to_owned(),
+            ]
         },
     }
+}
+
+fn private_location_view_from_lookup(
+    state: &str,
+    target: PrivateFarmLocationTarget,
+    candidates: Vec<FarmPrivateLocationLookupCandidate>,
+    geonames_database_path: Option<String>,
+    reason: Option<String>,
+) -> FarmPrivateLocationView {
+    let actions = if state == "ambiguous" {
+        vec![
+            "radroots farm location set --geonames-id <id>".to_owned(),
+            "radroots farm location set --city <city> --region <region> --country <country>"
+                .to_owned(),
+        ]
+    } else {
+        vec![
+            "radroots farm location set --query \"<city>, <region>, <country>\"".to_owned(),
+            "radroots farm location set --lat <lat> --lng <lng>".to_owned(),
+        ]
+    };
+    FarmPrivateLocationView {
+        state: state.to_owned(),
+        source: SDK_FARM_PRIVATE_LOCATION_SOURCE.to_owned(),
+        farm_addr: Some(target.farm_addr.to_string()),
+        farm_d_tag: Some(target.farm_d_tag),
+        seller_account_id: Some(target.seller_account_id),
+        seller_pubkey: Some(target.seller_pubkey),
+        label: None,
+        exact_location: None,
+        public_locality: None,
+        geonames_feature_id: None,
+        geonames_country_id: None,
+        geonames_database_path,
+        cleared: None,
+        candidates: private_location_candidate_views(candidates),
+        reason,
+        actions,
+    }
+}
+
+fn sdk_private_location_input(input: &FarmPrivateLocationSetInput) -> FarmPrivateLocationInput {
+    match input {
+        FarmPrivateLocationSetInput::Exact {
+            latitude,
+            longitude,
+        } => FarmPrivateLocationInput::exact(SdkExactLocation::new(*latitude, *longitude)),
+        FarmPrivateLocationSetInput::City {
+            city,
+            region,
+            country,
+        } => {
+            let mut query = GeocoderLocalityQuery::structured(city.clone());
+            if let Some(region) = region {
+                query = query.with_region(region.clone());
+            }
+            if let Some(country) = country {
+                query = query.with_country(country.clone());
+            }
+            FarmPrivateLocationInput::Locality(query)
+        }
+        FarmPrivateLocationSetInput::Query(query) => FarmPrivateLocationInput::query(query.clone()),
+        FarmPrivateLocationSetInput::GeonamesId(id) => FarmPrivateLocationInput::geonames_id(*id),
+    }
+}
+
+fn private_location_candidate_views(
+    candidates: Vec<FarmPrivateLocationLookupCandidate>,
+) -> Vec<FarmPrivateLocationCandidateView> {
+    candidates
+        .into_iter()
+        .map(|candidate| FarmPrivateLocationCandidateView {
+            geonames_feature_id: candidate.geonames_feature_id,
+            geonames_country_id: candidate.geonames_country_id,
+            name: candidate.name,
+            display_name: candidate.display_name,
+            exact_location: FarmPrivateExactLocationView {
+                lat: candidate.exact_location.latitude,
+                lng: candidate.exact_location.longitude,
+            },
+            region: candidate.region,
+            country: candidate.country,
+        })
+        .collect()
 }
 
 fn init_document(
