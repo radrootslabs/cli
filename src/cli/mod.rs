@@ -299,8 +299,9 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{
-        AccountCommand, FarmCommand, ListingCommand, TargetCliArgs, TargetOutputFormat,
-        TradeCommand, TradeRevisionCommand, ValidationCommand, ValidationReceiptCommand,
+        AccountCommand, FarmCommand, FarmLocationCommand, ListingCommand, TargetCliArgs,
+        TargetOutputFormat, TradeCommand, TradeRevisionCommand, ValidationCommand,
+        ValidationReceiptCommand,
     };
     use crate::registry::OPERATION_REGISTRY;
 
@@ -429,6 +430,34 @@ mod tests {
             panic!("expected farm rebind command")
         };
         assert_eq!(args.selector.as_deref(), Some("acct_test"));
+    }
+
+    #[test]
+    fn target_parser_accepts_negative_farm_location_coordinates() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "farm",
+            "location",
+            "set",
+            "--lat",
+            "48.429456",
+            "--lng",
+            "-123.349786",
+        ])
+        .expect("target args parse");
+
+        assert_eq!(parsed.command.operation_id(), "farm.location.set");
+        let crate::cli::TargetCommand::Farm(farm) = parsed.command else {
+            panic!("expected farm command")
+        };
+        let FarmCommand::Location(location) = farm.command else {
+            panic!("expected farm location command")
+        };
+        let FarmLocationCommand::Set(args) = location.command else {
+            panic!("expected farm location set command")
+        };
+        assert_eq!(args.lat, Some(48.429456));
+        assert_eq!(args.lng, Some(-123.349786));
     }
 
     #[test]

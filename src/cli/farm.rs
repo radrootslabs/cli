@@ -87,9 +87,9 @@ pub enum FarmLocationCommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct FarmLocationSetArgs {
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     pub lat: Option<f64>,
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     pub lng: Option<f64>,
     #[arg(long = "farm-d-tag")]
     pub farm_d_tag: Option<String>,
