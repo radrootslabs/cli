@@ -20,6 +20,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
 [features]
 default = ["sp1-verify"]
 sp1-verify = ["radroots_sp1_host_trade/sp1_verify"]
+test-fixture-geonames-asset = ["radroots_sdk/test-fixture-geonames-asset"]
 
 [dependencies]
 chacha20poly1305 = "0.10"
