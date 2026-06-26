@@ -3,91 +3,91 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderArgs {
+pub struct TradeArgs {
     #[command(subcommand)]
-    pub command: OrderCommand,
+    pub command: TradeCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum OrderCommand {
-    Submit(OrderSubmitArgs),
-    Get(OrderKeyArgs),
+pub enum TradeCommand {
+    Submit(TradeSubmitArgs),
+    Get(TradeKeyArgs),
     List,
-    App(OrderAppArgs),
-    Rebind(OrderRebindArgs),
-    Accept(OrderKeyArgs),
-    Decline(OrderDeclineArgs),
-    Cancel(OrderCancelArgs),
-    Revision(OrderRevisionArgs),
-    Status(OrderStatusArgs),
-    Event(OrderEventArgs),
+    App(TradeAppArgs),
+    Rebind(TradeRebindArgs),
+    Accept(TradeKeyArgs),
+    Decline(TradeDeclineArgs),
+    Cancel(TradeCancelArgs),
+    Revision(TradeRevisionArgs),
+    Status(TradeStatusArgs),
+    Event(TradeEventArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderSubmitArgs {
-    pub order_id: Option<String>,
+pub struct TradeSubmitArgs {
+    pub trade_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderKeyArgs {
-    pub order_id: Option<String>,
+pub struct TradeKeyArgs {
+    pub trade_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderAppArgs {
+pub struct TradeAppArgs {
     #[command(subcommand)]
-    pub command: OrderAppCommand,
+    pub command: TradeAppCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum OrderAppCommand {
+pub enum TradeAppCommand {
     List,
-    Export(OrderAppExportArgs),
+    Export(TradeAppExportArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderAppExportArgs {
+pub struct TradeAppExportArgs {
     pub record_id: Option<String>,
     #[arg(long)]
     pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderRebindArgs {
-    pub order_id: Option<String>,
+pub struct TradeRebindArgs {
+    pub trade_id: Option<String>,
     pub selector: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderDeclineArgs {
-    pub order_id: Option<String>,
+pub struct TradeDeclineArgs {
+    pub trade_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderCancelArgs {
-    pub order_id: Option<String>,
+pub struct TradeCancelArgs {
+    pub trade_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderRevisionArgs {
+pub struct TradeRevisionArgs {
     #[command(subcommand)]
-    pub command: OrderRevisionCommand,
+    pub command: TradeRevisionCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum OrderRevisionCommand {
-    Propose(OrderRevisionProposeArgs),
-    Accept(OrderRevisionDecisionArgs),
-    Decline(OrderRevisionDeclineArgs),
+pub enum TradeRevisionCommand {
+    Propose(TradeRevisionProposeArgs),
+    Accept(TradeRevisionDecisionArgs),
+    Decline(TradeRevisionDeclineArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderRevisionProposeArgs {
-    pub order_id: Option<String>,
+pub struct TradeRevisionProposeArgs {
+    pub trade_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
     #[arg(long)]
@@ -107,15 +107,15 @@ pub struct OrderRevisionProposeArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderRevisionDecisionArgs {
-    pub order_id: Option<String>,
+pub struct TradeRevisionDecisionArgs {
+    pub trade_id: Option<String>,
     #[arg(long)]
     pub revision_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderRevisionDeclineArgs {
-    pub order_id: Option<String>,
+pub struct TradeRevisionDeclineArgs {
+    pub trade_id: Option<String>,
     #[arg(long)]
     pub revision_id: Option<String>,
     #[arg(long)]
@@ -123,24 +123,24 @@ pub struct OrderRevisionDeclineArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderStatusArgs {
+pub struct TradeStatusArgs {
     #[command(subcommand)]
-    pub command: OrderStatusCommand,
+    pub command: TradeStatusCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum OrderStatusCommand {
-    Get(OrderKeyArgs),
+pub enum TradeStatusCommand {
+    Get(TradeKeyArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct OrderEventArgs {
+pub struct TradeEventArgs {
     #[command(subcommand)]
-    pub command: OrderEventCommand,
+    pub command: TradeEventCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum OrderEventCommand {
-    List(OrderKeyArgs),
-    Watch(OrderKeyArgs),
+pub enum TradeEventCommand {
+    List(TradeKeyArgs),
+    Watch(TradeKeyArgs),
 }

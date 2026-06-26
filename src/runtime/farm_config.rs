@@ -408,6 +408,7 @@ mod tests {
             workspace_config_path: (profile == "repo_local")
                 .then(|| repo_local_root.join("config.toml")),
             app_data_root: root.join("home/.radroots/data/apps/cli"),
+            shared_cache_root: root.join("home/.radroots/cache"),
             app_logs_root: root.join("home/.radroots/logs/apps/cli"),
             shared_accounts_data_root: root.join("home/.radroots/data/shared/accounts"),
             shared_accounts_secrets_root: root.join("home/.radroots/secrets/shared/accounts"),

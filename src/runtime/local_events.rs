@@ -168,6 +168,7 @@ mod tests {
             ),
             workspace_config_path: None,
             app_data_root: PathBuf::from("/repo/infra/local/runtime/radroots/data/apps/cli"),
+            shared_cache_root: PathBuf::from("/repo/infra/local/runtime/radroots/cache"),
             app_logs_root: PathBuf::from("/repo/infra/local/runtime/radroots/logs/apps/cli"),
             shared_accounts_data_root: PathBuf::from(shared_accounts_data_root),
             shared_accounts_secrets_root: PathBuf::from(

@@ -549,6 +549,7 @@ mod tests {
 
     fn sample_config(root: &Path) -> RuntimeConfig {
         let data = root.join("data");
+        let cache = root.join("cache");
         let logs = root.join("logs");
         let secrets = root.join("secrets");
         RuntimeConfig {
@@ -580,6 +581,7 @@ mod tests {
                 app_config_path: root.join("config/apps/cli/config.toml"),
                 workspace_config_path: None,
                 app_data_root: data.join("apps/cli"),
+                shared_cache_root: cache.clone(),
                 app_logs_root: logs.join("apps/cli"),
                 shared_accounts_data_root: data.join("shared/accounts"),
                 shared_accounts_secrets_root: secrets.join("shared/accounts"),

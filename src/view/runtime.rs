@@ -248,6 +248,7 @@ pub struct PathsRuntimeView {
     pub workspace_config_enabled: bool,
     pub workspace_config_path: Option<String>,
     pub app_data_root: String,
+    pub shared_cache_root: String,
     pub app_logs_root: String,
     pub shared_accounts_data_root: String,
     pub shared_accounts_secrets_root: String,
@@ -811,6 +812,60 @@ impl FarmSetView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct FarmPrivateLocationView {
+    pub state: String,
+    pub source: String,
+    pub farm_addr: Option<String>,
+    pub farm_d_tag: Option<String>,
+    pub seller_account_id: Option<String>,
+    pub seller_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact_location: Option<FarmPrivateExactLocationView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_locality: Option<FarmPrivatePublicLocalityView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geonames_feature_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geonames_country_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geonames_database_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleared: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmPrivateExactLocationView {
+    pub lat: f64,
+    pub lng: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FarmPrivatePublicLocalityView {
+    pub primary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    pub geohash5: String,
+}
+
+impl FarmPrivateLocationView {
+    pub fn disposition(&self) -> CommandDisposition {
+        match self.state.as_str() {
+            "unconfigured" => CommandDisposition::Unconfigured,
+            "missing" => CommandDisposition::NotFound,
+            _ => CommandDisposition::Success,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct FarmRebindView {
     pub state: String,
     pub source: String,
@@ -1114,7 +1169,7 @@ pub struct FindHyfView {
 pub struct MarketReadinessView {
     pub protocol_valid: bool,
     pub marketplace_eligible: bool,
-    pub order_request_enabled: bool,
+    pub checkout_enabled: bool,
     pub primary_bin_verified: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reason_codes: Vec<String>,
@@ -1125,7 +1180,7 @@ impl MarketReadinessView {
         Self {
             protocol_valid: false,
             marketplace_eligible: false,
-            order_request_enabled: false,
+            checkout_enabled: false,
             primary_bin_verified: false,
             reason_codes: vec![reason_code.into()],
         }
@@ -1169,7 +1224,7 @@ impl MarketReadinessView {
             && !price_currency.trim().is_empty()
             && price_per_amount.is_finite()
             && price_per_amount > 0.0;
-        let order_request_enabled =
+        let checkout_enabled =
             marketplace_eligible && inventory_available && primary_bin_verified && price_available;
         let mut reason_codes = Vec::new();
         if !protocol_valid {
@@ -1178,8 +1233,8 @@ impl MarketReadinessView {
         if protocol_valid && !marketplace_eligible {
             reason_codes.push("listing_marketplace_ineligible".to_owned());
         }
-        if marketplace_eligible && !order_request_enabled {
-            reason_codes.push("listing_order_request_disabled".to_owned());
+        if marketplace_eligible && !checkout_enabled {
+            reason_codes.push("listing_checkout_disabled".to_owned());
             if !inventory_available {
                 reason_codes.push("listing_inventory_unavailable".to_owned());
             }
@@ -1195,7 +1250,7 @@ impl MarketReadinessView {
         Self {
             protocol_valid,
             marketplace_eligible,
-            order_request_enabled,
+            checkout_enabled,
             primary_bin_verified,
             reason_codes,
         }
@@ -1223,7 +1278,7 @@ mod market_readiness_tests {
         );
         assert!(enabled.protocol_valid);
         assert!(enabled.marketplace_eligible);
-        assert!(enabled.order_request_enabled);
+        assert!(enabled.checkout_enabled);
         assert!(enabled.primary_bin_verified);
         assert!(enabled.reason_codes.is_empty());
 
@@ -1240,7 +1295,7 @@ mod market_readiness_tests {
         );
         assert!(!invalid.protocol_valid);
         assert!(!invalid.marketplace_eligible);
-        assert!(!invalid.order_request_enabled);
+        assert!(!invalid.checkout_enabled);
         assert!(!invalid.primary_bin_verified);
         assert_eq!(invalid.reason_codes, vec!["listing_protocol_invalid"]);
 
@@ -1257,7 +1312,7 @@ mod market_readiness_tests {
         );
         assert!(ineligible.protocol_valid);
         assert!(!ineligible.marketplace_eligible);
-        assert!(!ineligible.order_request_enabled);
+        assert!(!ineligible.checkout_enabled);
         assert!(ineligible.primary_bin_verified);
         assert_eq!(
             ineligible.reason_codes,
@@ -1277,14 +1332,11 @@ mod market_readiness_tests {
         );
         assert!(order_request_disabled.protocol_valid);
         assert!(order_request_disabled.marketplace_eligible);
-        assert!(!order_request_disabled.order_request_enabled);
+        assert!(!order_request_disabled.checkout_enabled);
         assert!(order_request_disabled.primary_bin_verified);
         assert_eq!(
             order_request_disabled.reason_codes,
-            vec![
-                "listing_order_request_disabled",
-                "listing_inventory_unavailable"
-            ]
+            vec!["listing_checkout_disabled", "listing_inventory_unavailable"]
         );
 
         let primary_bin_missing = MarketReadinessView::from_market_projection(
@@ -1300,14 +1352,11 @@ mod market_readiness_tests {
         );
         assert!(primary_bin_missing.protocol_valid);
         assert!(primary_bin_missing.marketplace_eligible);
-        assert!(!primary_bin_missing.order_request_enabled);
+        assert!(!primary_bin_missing.checkout_enabled);
         assert!(!primary_bin_missing.primary_bin_verified);
         assert_eq!(
             primary_bin_missing.reason_codes,
-            vec![
-                "listing_order_request_disabled",
-                "listing_primary_bin_missing"
-            ]
+            vec!["listing_checkout_disabled", "listing_primary_bin_missing"]
         );
 
         let primary_bin_blank = MarketReadinessView::from_market_projection(
@@ -1323,10 +1372,7 @@ mod market_readiness_tests {
         );
         assert_eq!(
             primary_bin_blank.reason_codes,
-            vec![
-                "listing_order_request_disabled",
-                "listing_primary_bin_missing"
-            ]
+            vec!["listing_checkout_disabled", "listing_primary_bin_missing"]
         );
 
         let primary_bin_invalid = MarketReadinessView::from_market_projection(
@@ -1342,14 +1388,11 @@ mod market_readiness_tests {
         );
         assert!(primary_bin_invalid.protocol_valid);
         assert!(primary_bin_invalid.marketplace_eligible);
-        assert!(!primary_bin_invalid.order_request_enabled);
+        assert!(!primary_bin_invalid.checkout_enabled);
         assert!(!primary_bin_invalid.primary_bin_verified);
         assert_eq!(
             primary_bin_invalid.reason_codes,
-            vec![
-                "listing_order_request_disabled",
-                "listing_primary_bin_invalid"
-            ]
+            vec!["listing_checkout_disabled", "listing_primary_bin_invalid"]
         );
     }
 }
@@ -1449,6 +1492,7 @@ pub struct JobWatchFrameView {
 pub struct OrderNewView {
     pub state: String,
     pub source: String,
+    #[serde(rename = "trade_id")]
     pub order_id: String,
     pub file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1497,6 +1541,7 @@ pub struct OrderGetView {
     pub source: String,
     pub lookup: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "trade_id")]
     pub order_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
@@ -1554,6 +1599,7 @@ pub struct OrderListView {
     pub source: String,
     pub count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "trades")]
     pub orders: Vec<OrderSummaryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
@@ -1614,6 +1660,7 @@ pub struct OrderAppRecordSummaryView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub listing_relays: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "trade_id")]
     pub order_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub buyer_account_id: Option<String>,
@@ -1638,6 +1685,7 @@ pub struct OrderAppRecordExportView {
     pub file: String,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "trade_id")]
     pub order_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
@@ -1678,6 +1726,7 @@ impl OrderAppRecordExportView {
 pub struct OrderSubmitView {
     pub state: String,
     pub source: String,
+    #[serde(rename = "trade_id")]
     pub order_id: String,
     pub file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1750,8 +1799,11 @@ pub struct OrderRebindView {
     pub lookup: String,
     pub file: String,
     pub dry_run: bool,
+    #[serde(rename = "from_trade_id")]
     pub from_order_id: String,
+    #[serde(rename = "to_trade_id")]
     pub to_order_id: String,
+    #[serde(rename = "trade_id_changed")]
     pub order_id_changed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from_buyer_account_id: Option<String>,
@@ -1787,6 +1839,7 @@ impl OrderRebindView {
 pub struct OrderDecisionView {
     pub state: String,
     pub source: String,
+    #[serde(rename = "trade_id")]
     pub order_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
@@ -1854,6 +1907,7 @@ impl OrderDecisionView {
 pub struct OrderCancellationView {
     pub state: String,
     pub source: String,
+    #[serde(rename = "trade_id")]
     pub order_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
@@ -1922,6 +1976,7 @@ impl OrderCancellationView {
 pub struct OrderRevisionProposalView {
     pub state: String,
     pub source: String,
+    #[serde(rename = "trade_id")]
     pub order_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision_id: Option<String>,
@@ -1995,6 +2050,7 @@ impl OrderRevisionProposalView {
 pub struct OrderRevisionDecisionView {
     pub state: String,
     pub source: String,
+    #[serde(rename = "trade_id")]
     pub order_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision_id: Option<String>,
@@ -2071,6 +2127,7 @@ impl OrderRevisionDecisionView {
 pub struct OrderStatusView {
     pub state: String,
     pub source: String,
+    #[serde(rename = "trade_id")]
     pub order_id: String,
     pub actor_context_source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2233,6 +2290,7 @@ impl OrderStatusView {
 pub struct OrderWorkflowView {
     pub state: String,
     pub source: String,
+    #[serde(rename = "trade_id")]
     pub order_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
@@ -2269,6 +2327,7 @@ pub struct OrderEventListView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "trades")]
     pub orders: Vec<OrderEventListEntryView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,

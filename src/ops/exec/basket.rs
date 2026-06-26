@@ -79,8 +79,8 @@ struct BasketAdjustment {
 struct BasketQuote {
     quote_id: String,
     quote_version: u32,
-    order_id: String,
-    order_file: String,
+    trade_id: String,
+    trade_file: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     economics: Option<RadrootsOrderEconomics>,
     ready_for_submit: bool,
@@ -516,7 +516,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
                 "basket_id": basket_id,
                 "file": loaded.file.display().to_string(),
                 "item": item,
-                "order": order,
+                "trade": order,
                 "actions": ["radroots basket quote create"],
             }));
         }
@@ -542,8 +542,8 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
                 .as_ref()
                 .map(|economics| economics.quote_version)
                 .unwrap_or(1),
-            order_id: order.order_id.clone(),
-            order_file: order.file.clone(),
+            trade_id: order.order_id.clone(),
+            trade_file: order.file.clone(),
             economics: quote_economics,
             ready_for_submit: order.ready_for_submit,
             created_at_unix: now_unix(),
@@ -559,7 +559,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
             "basket_id": loaded.document.basket.basket_id,
             "file": loaded.file.display().to_string(),
             "quote": quote,
-            "order": order,
+            "trade": order,
             "actions": quote_actions(&order),
         }))
     }
@@ -1083,9 +1083,9 @@ fn basket_actions(document: &BasketDocument, issues: &[BasketIssue]) -> Vec<Stri
 
 fn quote_actions(order: &OrderNewView) -> Vec<String> {
     if order.ready_for_submit {
-        vec![format!("radroots order submit {}", order.order_id)]
+        vec![format!("radroots trade submit {}", order.order_id)]
     } else {
-        let mut actions = vec![format!("radroots order get {}", order.order_id)];
+        let mut actions = vec![format!("radroots trade get {}", order.order_id)];
         actions.extend(order.actions.iter().cloned());
         actions
     }
@@ -1528,30 +1528,30 @@ mod tests {
         assert_eq!(envelope.operation_id, "basket.quote.create");
         assert_eq!(envelope.result["state"], "quoted");
         assert!(
-            envelope.result["quote"]["order_id"]
+            envelope.result["quote"]["trade_id"]
                 .as_str()
                 .unwrap()
                 .starts_with("ord_")
         );
         assert!(
-            envelope.result["order"]["buyer_account_id"]
+            envelope.result["trade"]["buyer_account_id"]
                 .as_str()
                 .expect("buyer account id")
                 .len()
                 > 8
         );
         assert!(
-            envelope.result["order"]["buyer_pubkey"]
+            envelope.result["trade"]["buyer_pubkey"]
                 .as_str()
                 .expect("buyer pubkey")
                 .len()
                 == 64
         );
         assert_eq!(
-            envelope.result["order"]["buyer_actor_source"],
+            envelope.result["trade"]["buyer_actor_source"],
             "resolved_account"
         );
-        let order_file = PathBuf::from(envelope.result["quote"]["order_file"].as_str().unwrap());
+        let order_file = PathBuf::from(envelope.result["quote"]["trade_file"].as_str().unwrap());
         assert!(order_file.exists());
         let draft = std::fs::read_to_string(order_file).expect("read order draft");
         assert!(draft.contains("[buyer_actor]"));
@@ -1584,12 +1584,12 @@ mod tests {
         assert_eq!(envelope.operation_id, "basket.quote.create");
         assert_eq!(envelope.dry_run, true);
         assert_eq!(envelope.result["state"], "dry_run");
-        assert_eq!(envelope.result["order"]["state"], "dry_run");
+        assert_eq!(envelope.result["trade"]["state"], "dry_run");
         assert_eq!(
-            envelope.result["order"]["buyer_actor_source"],
+            envelope.result["trade"]["buyer_actor_source"],
             "resolved_account"
         );
-        assert!(!PathBuf::from(envelope.result["order"]["file"].as_str().unwrap()).exists());
+        assert!(!PathBuf::from(envelope.result["trade"]["file"].as_str().unwrap()).exists());
     }
 
     #[test]
@@ -1848,6 +1848,7 @@ mod tests {
 
     fn sample_config(root: &Path) -> RuntimeConfig {
         let data = root.join("data");
+        let cache = root.join("cache");
         let logs = root.join("logs");
         let secrets = root.join("secrets");
         RuntimeConfig {
@@ -1879,6 +1880,7 @@ mod tests {
                 app_config_path: root.join("config/apps/cli/config.toml"),
                 workspace_config_path: None,
                 app_data_root: data.join("apps/cli"),
+                shared_cache_root: cache.clone(),
                 app_logs_root: logs.join("apps/cli"),
                 shared_accounts_data_root: data.join("shared/accounts"),
                 shared_accounts_secrets_root: secrets.join("shared/accounts"),

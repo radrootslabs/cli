@@ -2103,6 +2103,7 @@ mod tests {
                 ),
                 workspace_config_path: None,
                 app_data_root: PathBuf::from("/home/tester/.radroots/data/apps/cli"),
+                shared_cache_root: PathBuf::from("/home/tester/.radroots/cache"),
                 app_logs_root: PathBuf::from("/home/tester/.radroots/logs/apps/cli"),
                 shared_accounts_data_root: PathBuf::from(
                     "/home/tester/.radroots/data/shared/accounts"

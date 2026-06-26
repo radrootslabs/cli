@@ -64,18 +64,50 @@ pub const FARM_PROFILE_UPDATE: OperationSpec = operation!(
     true
 );
 
-pub const FARM_LOCATION_UPDATE: OperationSpec = operation!(
-    "farm.location.update",
-    "radroots farm location update",
+pub const FARM_LOCATION_SET: OperationSpec = operation!(
+    "farm.location.set",
+    "radroots farm location set",
     "farm",
-    "farm_location_update",
-    "FarmLocationUpdateRequest",
-    "FarmLocationUpdateResult",
-    "Update farm location fields.",
+    "farm_location_set",
+    "FarmLocationSetRequest",
+    "FarmLocationSetResult",
+    "Set private exact farm location and derived public locality.",
     Seller,
     true,
     Conditional,
     Medium,
+    false,
+    true
+);
+
+pub const FARM_LOCATION_GET: OperationSpec = operation!(
+    "farm.location.get",
+    "radroots farm location get",
+    "farm",
+    "farm_location_get",
+    "FarmLocationGetRequest",
+    "FarmLocationGetResult",
+    "Get private exact farm location for the configured farm.",
+    Seller,
+    false,
+    None,
+    Low,
+    false,
+    false
+);
+
+pub const FARM_LOCATION_CLEAR: OperationSpec = operation!(
+    "farm.location.clear",
+    "radroots farm location clear",
+    "farm",
+    "farm_location_clear",
+    "FarmLocationClearRequest",
+    "FarmLocationClearResult",
+    "Clear private exact farm location for the configured farm.",
+    Seller,
+    true,
+    Required,
+    High,
     false,
     true
 );

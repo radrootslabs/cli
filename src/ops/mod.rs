@@ -215,21 +215,21 @@ mod tests {
     #[test]
     fn adapter_maps_order_rebind_inputs() {
         let parsed =
-            TargetCliArgs::try_parse_from(["radroots", "order", "rebind", "ord_test", "acct_test"])
+            TargetCliArgs::try_parse_from(["radroots", "trade", "rebind", "ord_test", "acct_test"])
                 .expect("target args parse");
 
         let request = TargetOperationRequest::from_target_args(&parsed)
             .expect("operation request from target args");
-        let TargetOperationRequest::OrderRebind(request) = request else {
+        let TargetOperationRequest::TradeRebind(request) = request else {
             panic!("expected order rebind request")
         };
 
-        assert_eq!(request.operation_id(), "order.rebind");
+        assert_eq!(request.operation_id(), "trade.rebind");
         assert_eq!(
             request
                 .payload
                 .input
-                .get("order_id")
+                .get("trade_id")
                 .and_then(Value::as_str),
             Some("ord_test")
         );
@@ -247,7 +247,7 @@ mod tests {
     fn adapter_maps_order_lifecycle_inputs() {
         let revision = TargetCliArgs::try_parse_from([
             "radroots",
-            "order",
+            "trade",
             "revision",
             "propose",
             "ord_test",
@@ -271,15 +271,15 @@ mod tests {
         .expect("target args parse");
         let request =
             TargetOperationRequest::from_target_args(&revision).expect("operation request");
-        let TargetOperationRequest::OrderRevisionPropose(request) = request else {
+        let TargetOperationRequest::TradeRevisionPropose(request) = request else {
             panic!("expected order revision propose request")
         };
-        assert_eq!(request.operation_id(), "order.revision.propose");
+        assert_eq!(request.operation_id(), "trade.revision.propose");
         assert_eq!(
             request
                 .payload
                 .input
-                .get("order_id")
+                .get("trade_id")
                 .and_then(Value::as_str),
             Some("ord_test")
         );
@@ -342,7 +342,7 @@ mod tests {
 
         let revision_accept = TargetCliArgs::try_parse_from([
             "radroots",
-            "order",
+            "trade",
             "revision",
             "accept",
             "ord_test",
@@ -352,15 +352,15 @@ mod tests {
         .expect("target args parse");
         let request =
             TargetOperationRequest::from_target_args(&revision_accept).expect("operation request");
-        let TargetOperationRequest::OrderRevisionAccept(request) = request else {
+        let TargetOperationRequest::TradeRevisionAccept(request) = request else {
             panic!("expected order revision accept request")
         };
-        assert_eq!(request.operation_id(), "order.revision.accept");
+        assert_eq!(request.operation_id(), "trade.revision.accept");
         assert_eq!(
             request
                 .payload
                 .input
-                .get("order_id")
+                .get("trade_id")
                 .and_then(Value::as_str),
             Some("ord_test")
         );
@@ -375,7 +375,7 @@ mod tests {
 
         let revision_decline = TargetCliArgs::try_parse_from([
             "radroots",
-            "order",
+            "trade",
             "revision",
             "decline",
             "ord_test",
@@ -387,15 +387,15 @@ mod tests {
         .expect("target args parse");
         let request =
             TargetOperationRequest::from_target_args(&revision_decline).expect("operation request");
-        let TargetOperationRequest::OrderRevisionDecline(request) = request else {
+        let TargetOperationRequest::TradeRevisionDecline(request) = request else {
             panic!("expected order revision decline request")
         };
-        assert_eq!(request.operation_id(), "order.revision.decline");
+        assert_eq!(request.operation_id(), "trade.revision.decline");
         assert_eq!(
             request
                 .payload
                 .input
-                .get("order_id")
+                .get("trade_id")
                 .and_then(Value::as_str),
             Some("ord_test")
         );
@@ -414,7 +414,7 @@ mod tests {
 
         let cancel = TargetCliArgs::try_parse_from([
             "radroots",
-            "order",
+            "trade",
             "cancel",
             "ord_test",
             "--reason",
@@ -422,15 +422,15 @@ mod tests {
         ])
         .expect("target args parse");
         let request = TargetOperationRequest::from_target_args(&cancel).expect("operation request");
-        let TargetOperationRequest::OrderCancel(request) = request else {
+        let TargetOperationRequest::TradeCancel(request) = request else {
             panic!("expected order cancel request")
         };
-        assert_eq!(request.operation_id(), "order.cancel");
+        assert_eq!(request.operation_id(), "trade.cancel");
         assert_eq!(
             request
                 .payload
                 .input
-                .get("order_id")
+                .get("trade_id")
                 .and_then(Value::as_str),
             Some("ord_test")
         );
@@ -473,7 +473,7 @@ mod tests {
 
     #[test]
     fn approval_errors_map_to_structured_exit_code() {
-        let error = OperationAdapterError::approval_required("order.submit");
+        let error = OperationAdapterError::approval_required("trade.submit");
         let output_error = error.to_output_error();
 
         assert_eq!(output_error.code, "approval_required");

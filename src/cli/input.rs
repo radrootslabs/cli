@@ -46,9 +46,9 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
         AccountCommand, AccountSelectionCommand, BasketAdjustmentCommand, BasketCommand,
         BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
         FarmLocationCommand, FarmProfileCommand, ListingAppCommand, ListingCommand, MarketCommand,
-        MarketListingCommand, MarketProductCommand, OrderAppCommand, OrderCommand,
-        OrderEventCommand, OrderRevisionCommand, OrderStatusCommand, StoreBackupCommand,
-        StoreCommand, ValidationCommand, ValidationReceiptCommand,
+        MarketListingCommand, MarketProductCommand, StoreBackupCommand, StoreCommand,
+        TradeAppCommand, TradeCommand, TradeEventCommand, TradeRevisionCommand, TradeStatusCommand,
+        ValidationCommand, ValidationReceiptCommand,
     };
 
     let mut input = OperationData::new();
@@ -103,9 +103,18 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                 }
             },
             FarmCommand::Location(args) => match &args.command {
-                FarmLocationCommand::Update(args) => {
-                    insert_string(&mut input, "field", &args.field);
-                    insert_string(&mut input, "value", &args.value);
+                FarmLocationCommand::Set(args) => {
+                    if let Some(latitude) = args.lat {
+                        insert_number(&mut input, "latitude", latitude);
+                    }
+                    if let Some(longitude) = args.lng {
+                        insert_number(&mut input, "longitude", longitude);
+                    }
+                    insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
+                    input.insert("lookup".to_owned(), Value::String(args.lookup.clone()));
+                }
+                FarmLocationCommand::Get(args) | FarmLocationCommand::Clear(args) => {
+                    insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
                 }
             },
             FarmCommand::Fulfillment(args) => match &args.command {
@@ -227,34 +236,34 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
             },
             BasketCommand::List => {}
         },
-        TargetCommand::Order(args) => match &args.command {
-            OrderCommand::Submit(args) => {
-                insert_string(&mut input, "order_id", &args.order_id);
+        TargetCommand::Trade(args) => match &args.command {
+            TradeCommand::Submit(args) => {
+                insert_string(&mut input, "trade_id", &args.trade_id);
             }
-            OrderCommand::Get(args) => insert_string(&mut input, "order_id", &args.order_id),
-            OrderCommand::App(args) => match &args.command {
-                OrderAppCommand::Export(args) => {
+            TradeCommand::Get(args) => insert_string(&mut input, "trade_id", &args.trade_id),
+            TradeCommand::App(args) => match &args.command {
+                TradeAppCommand::Export(args) => {
                     insert_string(&mut input, "record_id", &args.record_id);
                     insert_path(&mut input, "output", &args.output);
                 }
-                OrderAppCommand::List => {}
+                TradeAppCommand::List => {}
             },
-            OrderCommand::Rebind(args) => {
-                insert_string(&mut input, "order_id", &args.order_id);
+            TradeCommand::Rebind(args) => {
+                insert_string(&mut input, "trade_id", &args.trade_id);
                 insert_string(&mut input, "selector", &args.selector);
             }
-            OrderCommand::Accept(args) => insert_string(&mut input, "order_id", &args.order_id),
-            OrderCommand::Decline(args) => {
-                insert_string(&mut input, "order_id", &args.order_id);
+            TradeCommand::Accept(args) => insert_string(&mut input, "trade_id", &args.trade_id),
+            TradeCommand::Decline(args) => {
+                insert_string(&mut input, "trade_id", &args.trade_id);
                 insert_string(&mut input, "reason", &args.reason);
             }
-            OrderCommand::Cancel(args) => {
-                insert_string(&mut input, "order_id", &args.order_id);
+            TradeCommand::Cancel(args) => {
+                insert_string(&mut input, "trade_id", &args.trade_id);
                 insert_string(&mut input, "reason", &args.reason);
             }
-            OrderCommand::Revision(revision) => match &revision.command {
-                OrderRevisionCommand::Propose(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id);
+            TradeCommand::Revision(revision) => match &revision.command {
+                TradeRevisionCommand::Propose(args) => {
+                    insert_string(&mut input, "trade_id", &args.trade_id);
                     insert_string(&mut input, "reason", &args.reason);
                     insert_string(&mut input, "bin_id", &args.bin_id);
                     if let Some(bin_count) = args.bin_count {
@@ -269,27 +278,27 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                     insert_string(&mut input, "adjustment_currency", &args.adjustment_currency);
                     insert_string(&mut input, "adjustment_reason", &args.adjustment_reason);
                 }
-                OrderRevisionCommand::Accept(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id);
+                TradeRevisionCommand::Accept(args) => {
+                    insert_string(&mut input, "trade_id", &args.trade_id);
                     insert_string(&mut input, "revision_id", &args.revision_id);
                 }
-                OrderRevisionCommand::Decline(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id);
+                TradeRevisionCommand::Decline(args) => {
+                    insert_string(&mut input, "trade_id", &args.trade_id);
                     insert_string(&mut input, "revision_id", &args.revision_id);
                     insert_string(&mut input, "reason", &args.reason);
                 }
             },
-            OrderCommand::Status(status) => match &status.command {
-                OrderStatusCommand::Get(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id)
+            TradeCommand::Status(status) => match &status.command {
+                TradeStatusCommand::Get(args) => {
+                    insert_string(&mut input, "trade_id", &args.trade_id)
                 }
             },
-            OrderCommand::Event(event) => match &event.command {
-                OrderEventCommand::List(args) | OrderEventCommand::Watch(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id)
+            TradeCommand::Event(event) => match &event.command {
+                TradeEventCommand::List(args) | TradeEventCommand::Watch(args) => {
+                    insert_string(&mut input, "trade_id", &args.trade_id)
                 }
             },
-            OrderCommand::List => {}
+            TradeCommand::List => {}
         },
         TargetCommand::Validation(args) => match &args.command {
             ValidationCommand::Receipt(receipt) => match &receipt.command {
@@ -297,7 +306,7 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                     insert_string(&mut input, "receipt_event_id", &args.receipt_event_id);
                 }
                 ValidationReceiptCommand::List(args) => {
-                    insert_string(&mut input, "order_id", &args.order_id);
+                    insert_string(&mut input, "trade_id", &args.trade_id);
                 }
             },
         },
@@ -326,6 +335,12 @@ fn insert_string_array(input: &mut OperationData, key: &str, values: &[String]) 
         .collect::<Vec<_>>();
     if !values.is_empty() {
         input.insert(key.to_owned(), Value::Array(values));
+    }
+}
+
+fn insert_number(input: &mut OperationData, key: &str, value: f64) {
+    if let Some(number) = serde_json::Number::from_f64(value) {
+        input.insert(key.to_owned(), Value::Number(number));
     }
 }
 

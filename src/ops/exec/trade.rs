@@ -4,21 +4,21 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::cli::global::{
-    OrderAppRecordExportArgs, OrderCancelArgs, OrderDecisionArg, OrderDecisionArgs,
-    OrderRebindArgs, OrderRevisionDecisionArg, OrderRevisionDecisionArgs, OrderRevisionProposeArgs,
-    OrderStatusArgs, OrderSubmitArgs, RecordLookupArgs,
+    RecordLookupArgs, TradeAppRecordExportArgs, TradeCancelArgs, TradeDecisionArg,
+    TradeDecisionArgs, TradeRebindArgs, TradeRevisionDecisionArg, TradeRevisionDecisionArgs,
+    TradeRevisionProposeArgs, TradeStatusArgs, TradeSubmitArgs,
 };
 use crate::ops::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
-    OperationResult, OperationResultData, OperationService, OrderAcceptRequest, OrderAcceptResult,
-    OrderAppExportRequest, OrderAppExportResult, OrderAppListRequest, OrderAppListResult,
-    OrderCancelRequest, OrderCancelResult, OrderDeclineRequest, OrderDeclineResult,
-    OrderEventListRequest, OrderEventListResult, OrderEventWatchRequest, OrderEventWatchResult,
-    OrderGetRequest, OrderGetResult, OrderListRequest, OrderListResult, OrderRebindRequest,
-    OrderRebindResult, OrderRevisionAcceptRequest, OrderRevisionAcceptResult,
-    OrderRevisionDeclineRequest, OrderRevisionDeclineResult, OrderRevisionProposeRequest,
-    OrderRevisionProposeResult, OrderStatusGetRequest, OrderStatusGetResult, OrderSubmitRequest,
-    OrderSubmitResult,
+    OperationResult, OperationResultData, OperationService, TradeAcceptRequest, TradeAcceptResult,
+    TradeAppExportRequest, TradeAppExportResult, TradeAppListRequest, TradeAppListResult,
+    TradeCancelRequest, TradeCancelResult, TradeDeclineRequest, TradeDeclineResult,
+    TradeEventListRequest, TradeEventListResult, TradeEventWatchRequest, TradeEventWatchResult,
+    TradeGetRequest, TradeGetResult, TradeListRequest, TradeListResult, TradeRebindRequest,
+    TradeRebindResult, TradeRevisionAcceptRequest, TradeRevisionAcceptResult,
+    TradeRevisionDeclineRequest, TradeRevisionDeclineResult, TradeRevisionProposeRequest,
+    TradeRevisionProposeResult, TradeStatusGetRequest, TradeStatusGetResult, TradeSubmitRequest,
+    TradeSubmitResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -28,24 +28,24 @@ use crate::view::runtime::{
     OrderSubmitView,
 };
 
-const ORDER_EVENT_WATCH_DEFERRED_REASON: &str = "relay-backed order event watch is not implemented";
+const TRADE_EVENT_WATCH_DEFERRED_REASON: &str = "relay-backed trade event watch is not implemented";
 
-pub struct OrderOperationService<'a> {
+pub struct TradeOperationService<'a> {
     config: &'a RuntimeConfig,
 }
 
-impl<'a> OrderOperationService<'a> {
+impl<'a> TradeOperationService<'a> {
     pub fn new(config: &'a RuntimeConfig) -> Self {
         Self { config }
     }
 }
 
-impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
-    type Result = OrderSubmitResult;
+impl OperationService<TradeSubmitRequest> for TradeOperationService<'_> {
+    type Result = TradeSubmitResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderSubmitRequest>,
+        request: OperationRequest<TradeSubmitRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
@@ -53,8 +53,8 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
             ));
         }
 
-        let key = required_order_key(&request)?;
-        let args = OrderSubmitArgs {
+        let key = required_trade_key(&request)?;
+        let args = TradeSubmitArgs {
             key,
             idempotency_key: request
                 .context
@@ -69,57 +69,57 @@ impl OperationService<OrderSubmitRequest> for OrderOperationService<'_> {
         let view = crate::runtime::order::submit(&config, &args).map_err(|error| {
             OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
-        submit_result::<OrderSubmitResult>(request.operation_id(), &view)
+        submit_result::<TradeSubmitResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderGetRequest> for OrderOperationService<'_> {
-    type Result = OrderGetResult;
+impl OperationService<TradeGetRequest> for TradeOperationService<'_> {
+    type Result = TradeGetResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderGetRequest>,
+        request: OperationRequest<TradeGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let args = RecordLookupArgs {
-            key: required_order_key(&request)?,
+            key: required_trade_key(&request)?,
         };
         let view = map_runtime(crate::runtime::order::get(self.config, &args))?;
-        serialized_target_result::<OrderGetResult, _>(&view)
+        serialized_target_result::<TradeGetResult, _>(&view)
     }
 }
 
-impl OperationService<OrderListRequest> for OrderOperationService<'_> {
-    type Result = OrderListResult;
+impl OperationService<TradeListRequest> for TradeOperationService<'_> {
+    type Result = TradeListResult;
 
     fn execute(
         &self,
-        _request: OperationRequest<OrderListRequest>,
+        _request: OperationRequest<TradeListRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let view = map_runtime(crate::runtime::order::list(self.config))?;
-        serialized_target_result::<OrderListResult, _>(&view)
+        serialized_target_result::<TradeListResult, _>(&view)
     }
 }
 
-impl OperationService<OrderAppListRequest> for OrderOperationService<'_> {
-    type Result = OrderAppListResult;
+impl OperationService<TradeAppListRequest> for TradeOperationService<'_> {
+    type Result = TradeAppListResult;
 
     fn execute(
         &self,
-        _request: OperationRequest<OrderAppListRequest>,
+        _request: OperationRequest<TradeAppListRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let view = map_runtime(crate::runtime::order::app_record_list(self.config))?;
-        serialized_target_result::<OrderAppListResult, _>(&view)
+        serialized_target_result::<TradeAppListResult, _>(&view)
     }
 }
 
-impl OperationService<OrderAppExportRequest> for OrderOperationService<'_> {
-    type Result = OrderAppExportResult;
+impl OperationService<TradeAppExportRequest> for TradeOperationService<'_> {
+    type Result = TradeAppExportResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderAppExportRequest>,
+        request: OperationRequest<TradeAppExportRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = OrderAppRecordExportArgs {
+        let args = TradeAppRecordExportArgs {
             record_id: required_string_input(&request, "record_id")?,
             output: optional_path_input(&request, "output"),
         };
@@ -130,19 +130,19 @@ impl OperationService<OrderAppExportRequest> for OrderOperationService<'_> {
         let view = crate::runtime::order::app_record_export(&config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
-        order_app_record_export_result::<OrderAppExportResult>(request.operation_id(), &view)
+        order_app_record_export_result::<TradeAppExportResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderRebindRequest> for OrderOperationService<'_> {
-    type Result = OrderRebindResult;
+impl OperationService<TradeRebindRequest> for TradeOperationService<'_> {
+    type Result = TradeRebindResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderRebindRequest>,
+        request: OperationRequest<TradeRebindRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = OrderRebindArgs {
-            key: required_order_key(&request)?,
+        let args = TradeRebindArgs {
+            key: required_trade_key(&request)?,
             selector: required_string_input(&request, "selector")?,
         };
         if request.context.dry_run {
@@ -150,7 +150,7 @@ impl OperationService<OrderRebindRequest> for OrderOperationService<'_> {
                 crate::runtime::order::rebind_preflight(self.config, &args).map_err(|error| {
                     OperationAdapterError::runtime_failure(request.operation_id(), error)
                 })?;
-            return order_rebind_result::<OrderRebindResult>(request.operation_id(), &view);
+            return order_rebind_result::<TradeRebindResult>(request.operation_id(), &view);
         }
         if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
@@ -161,16 +161,16 @@ impl OperationService<OrderRebindRequest> for OrderOperationService<'_> {
         let view = crate::runtime::order::rebind(self.config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
-        order_rebind_result::<OrderRebindResult>(request.operation_id(), &view)
+        order_rebind_result::<TradeRebindResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderAcceptRequest> for OrderOperationService<'_> {
-    type Result = OrderAcceptResult;
+impl OperationService<TradeAcceptRequest> for TradeOperationService<'_> {
+    type Result = TradeAcceptResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderAcceptRequest>,
+        request: OperationRequest<TradeAcceptRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
@@ -178,9 +178,9 @@ impl OperationService<OrderAcceptRequest> for OrderOperationService<'_> {
             ));
         }
 
-        let args = OrderDecisionArgs {
-            key: required_order_key(&request)?,
-            decision: OrderDecisionArg::Accept,
+        let args = TradeDecisionArgs {
+            key: required_trade_key(&request)?,
+            decision: TradeDecisionArg::Accept,
             reason: None,
             idempotency_key: request
                 .context
@@ -195,16 +195,16 @@ impl OperationService<OrderAcceptRequest> for OrderOperationService<'_> {
         let view = crate::runtime::order::decide(&config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
-        decision_result::<OrderAcceptResult>(request.operation_id(), &view)
+        decision_result::<TradeAcceptResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderDeclineRequest> for OrderOperationService<'_> {
-    type Result = OrderDeclineResult;
+impl OperationService<TradeDeclineRequest> for TradeOperationService<'_> {
+    type Result = TradeDeclineResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderDeclineRequest>,
+        request: OperationRequest<TradeDeclineRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let reason = string_input(&request, "reason")
             .map(|reason| reason.trim().to_owned())
@@ -221,9 +221,9 @@ impl OperationService<OrderDeclineRequest> for OrderOperationService<'_> {
             ));
         }
 
-        let args = OrderDecisionArgs {
-            key: required_order_key(&request)?,
-            decision: OrderDecisionArg::Decline,
+        let args = TradeDecisionArgs {
+            key: required_trade_key(&request)?,
+            decision: TradeDecisionArg::Decline,
             reason: Some(reason),
             idempotency_key: request
                 .context
@@ -238,16 +238,16 @@ impl OperationService<OrderDeclineRequest> for OrderOperationService<'_> {
         let view = crate::runtime::order::decide(&config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
-        decision_result::<OrderDeclineResult>(request.operation_id(), &view)
+        decision_result::<TradeDeclineResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderCancelRequest> for OrderOperationService<'_> {
-    type Result = OrderCancelResult;
+impl OperationService<TradeCancelRequest> for TradeOperationService<'_> {
+    type Result = TradeCancelResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderCancelRequest>,
+        request: OperationRequest<TradeCancelRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let reason = string_input(&request, "reason")
             .map(|reason| reason.trim().to_owned())
@@ -264,8 +264,8 @@ impl OperationService<OrderCancelRequest> for OrderOperationService<'_> {
             ));
         }
 
-        let args = OrderCancelArgs {
-            key: required_order_key(&request)?,
+        let args = TradeCancelArgs {
+            key: required_trade_key(&request)?,
             reason,
             idempotency_key: request
                 .context
@@ -280,16 +280,16 @@ impl OperationService<OrderCancelRequest> for OrderOperationService<'_> {
         let view = crate::runtime::order::cancel(&config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
-        cancellation_result::<OrderCancelResult>(request.operation_id(), &view)
+        cancellation_result::<TradeCancelResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderRevisionProposeRequest> for OrderOperationService<'_> {
-    type Result = OrderRevisionProposeResult;
+impl OperationService<TradeRevisionProposeRequest> for TradeOperationService<'_> {
+    type Result = TradeRevisionProposeResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderRevisionProposeRequest>,
+        request: OperationRequest<TradeRevisionProposeRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let reason = string_input(&request, "reason")
             .map(|reason| reason.trim().to_owned())
@@ -306,8 +306,8 @@ impl OperationService<OrderRevisionProposeRequest> for OrderOperationService<'_>
             ));
         }
 
-        let args = OrderRevisionProposeArgs {
-            key: required_order_key(&request)?,
+        let args = TradeRevisionProposeArgs {
+            key: required_trade_key(&request)?,
             reason,
             bin_id: string_input(&request, "bin_id"),
             bin_count: u32_input(&request, "bin_count"),
@@ -329,21 +329,21 @@ impl OperationService<OrderRevisionProposeRequest> for OrderOperationService<'_>
         let view = crate::runtime::order::revision_propose(&config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
-        revision_proposal_result::<OrderRevisionProposeResult>(request.operation_id(), &view)
+        revision_proposal_result::<TradeRevisionProposeResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderRevisionAcceptRequest> for OrderOperationService<'_> {
-    type Result = OrderRevisionAcceptResult;
+impl OperationService<TradeRevisionAcceptRequest> for TradeOperationService<'_> {
+    type Result = TradeRevisionAcceptResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderRevisionAcceptRequest>,
+        request: OperationRequest<TradeRevisionAcceptRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = OrderRevisionDecisionArgs {
-            key: required_order_key(&request)?,
+        let args = TradeRevisionDecisionArgs {
+            key: required_trade_key(&request)?,
             revision_id: required_string_input(&request, "revision_id")?,
-            decision: OrderRevisionDecisionArg::Accept,
+            decision: TradeRevisionDecisionArg::Accept,
             reason: None,
             idempotency_key: request
                 .context
@@ -364,16 +364,16 @@ impl OperationService<OrderRevisionAcceptRequest> for OrderOperationService<'_> 
         let view = crate::runtime::order::revision_decide(&config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
-        revision_decision_result::<OrderRevisionAcceptResult>(request.operation_id(), &view)
+        revision_decision_result::<TradeRevisionAcceptResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderRevisionDeclineRequest> for OrderOperationService<'_> {
-    type Result = OrderRevisionDeclineResult;
+impl OperationService<TradeRevisionDeclineRequest> for TradeOperationService<'_> {
+    type Result = TradeRevisionDeclineResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderRevisionDeclineRequest>,
+        request: OperationRequest<TradeRevisionDeclineRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let reason = string_input(&request, "reason")
             .map(|reason| reason.trim().to_owned())
@@ -384,10 +384,10 @@ impl OperationService<OrderRevisionDeclineRequest> for OrderOperationService<'_>
                     "missing required `reason` input".to_owned(),
                 )
             })?;
-        let args = OrderRevisionDecisionArgs {
-            key: required_order_key(&request)?,
+        let args = TradeRevisionDecisionArgs {
+            key: required_trade_key(&request)?,
             revision_id: required_string_input(&request, "revision_id")?,
-            decision: OrderRevisionDecisionArg::Decline,
+            decision: TradeRevisionDecisionArg::Decline,
             reason: Some(reason),
             idempotency_key: request
                 .context
@@ -408,58 +408,58 @@ impl OperationService<OrderRevisionDeclineRequest> for OrderOperationService<'_>
         let view = crate::runtime::order::revision_decide(&config, &args).map_err(|error| {
             OperationAdapterError::runtime_failure(request.operation_id(), error)
         })?;
-        revision_decision_result::<OrderRevisionDeclineResult>(request.operation_id(), &view)
+        revision_decision_result::<TradeRevisionDeclineResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderStatusGetRequest> for OrderOperationService<'_> {
-    type Result = OrderStatusGetResult;
+impl OperationService<TradeStatusGetRequest> for TradeOperationService<'_> {
+    type Result = TradeStatusGetResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderStatusGetRequest>,
+        request: OperationRequest<TradeStatusGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = OrderStatusArgs {
-            key: required_order_key(&request)?,
+        let args = TradeStatusArgs {
+            key: required_trade_key(&request)?,
         };
         let view = crate::runtime::order::status(self.config, &args).map_err(|error| {
             OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
-        status_result::<OrderStatusGetResult>(request.operation_id(), &view)
+        status_result::<TradeStatusGetResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderEventListRequest> for OrderOperationService<'_> {
-    type Result = OrderEventListResult;
+impl OperationService<TradeEventListRequest> for TradeOperationService<'_> {
+    type Result = TradeEventListResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderEventListRequest>,
+        request: OperationRequest<TradeEventListRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let order_id = string_input(&request, "order_id");
-        let view = crate::runtime::order::event_list(self.config, order_id.as_deref()).map_err(
+        let trade_id = string_input(&request, "trade_id");
+        let view = crate::runtime::order::event_list(self.config, trade_id.as_deref()).map_err(
             |error| OperationAdapterError::runtime_failure(request.operation_id(), error),
         )?;
-        event_list_result::<OrderEventListResult>(request.operation_id(), &view)
+        event_list_result::<TradeEventListResult>(request.operation_id(), &view)
     }
 }
 
-impl OperationService<OrderEventWatchRequest> for OrderOperationService<'_> {
-    type Result = OrderEventWatchResult;
+impl OperationService<TradeEventWatchRequest> for TradeOperationService<'_> {
+    type Result = TradeEventWatchResult;
 
     fn execute(
         &self,
-        request: OperationRequest<OrderEventWatchRequest>,
+        request: OperationRequest<TradeEventWatchRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let order_id = required_order_key(&request)?;
-        let action = format!("radroots order status get {order_id}");
+        let trade_id = required_trade_key(&request)?;
+        let action = format!("radroots trade status get {trade_id}");
         Err(OperationAdapterError::not_implemented_with_detail(
             request.operation_id(),
-            ORDER_EVENT_WATCH_DEFERRED_REASON.to_owned(),
+            TRADE_EVENT_WATCH_DEFERRED_REASON.to_owned(),
             json!({
                 "state": "not_implemented",
-                "order_id": order_id,
-                "reason": ORDER_EVENT_WATCH_DEFERRED_REASON,
+                "trade_id": trade_id,
+                "reason": TRADE_EVENT_WATCH_DEFERRED_REASON,
                 "actions": [action],
             }),
         ))
@@ -534,7 +534,7 @@ where
 fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
     json!({
         "state": &view.state,
-        "order_id": &view.order_id,
+        "trade_id": &view.order_id,
         "listing_addr": &view.listing_addr,
         "listing_event_id": &view.listing_event_id,
         "request_event_id": &view.request_event_id,
@@ -620,7 +620,7 @@ where
 fn order_cancellation_error_detail(view: &OrderCancellationView) -> Value {
     json!({
         "state": &view.state,
-        "order_id": &view.order_id,
+        "trade_id": &view.order_id,
         "listing_addr": &view.listing_addr,
         "request_event_id": &view.request_event_id,
         "decision_event_id": &view.decision_event_id,
@@ -710,7 +710,7 @@ where
 fn order_revision_proposal_error_detail(view: &OrderRevisionProposalView) -> Value {
     json!({
         "state": &view.state,
-        "order_id": &view.order_id,
+        "trade_id": &view.order_id,
         "revision_id": &view.revision_id,
         "listing_addr": &view.listing_addr,
         "request_event_id": &view.request_event_id,
@@ -805,7 +805,7 @@ where
 fn order_revision_decision_error_detail(view: &OrderRevisionDecisionView) -> Value {
     json!({
         "state": &view.state,
-        "order_id": &view.order_id,
+        "trade_id": &view.order_id,
         "revision_id": &view.revision_id,
         "decision": &view.decision,
         "listing_addr": &view.listing_addr,
@@ -884,7 +884,7 @@ where
 fn order_status_error_detail(view: &OrderStatusView) -> Value {
     json!({
         "state": &view.state,
-        "order_id": &view.order_id,
+        "trade_id": &view.order_id,
         "request_event_id": &view.request_event_id,
         "decision_event_id": &view.decision_event_id,
         "agreement_event_id": &view.agreement_event_id,
@@ -1081,7 +1081,7 @@ fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
     json!({
         "state": &view.state,
         "source": &view.source,
-        "order_id": &view.order_id,
+        "trade_id": &view.order_id,
         "file": &view.file,
         "listing_lookup": &view.listing_lookup,
         "listing_addr": &view.listing_addr,
@@ -1157,18 +1157,16 @@ fn order_event_list_error_detail(view: &crate::view::runtime::OrderEventListView
     })
 }
 
-fn required_order_key<P>(request: &OperationRequest<P>) -> Result<String, OperationAdapterError>
+fn required_trade_key<P>(request: &OperationRequest<P>) -> Result<String, OperationAdapterError>
 where
     P: OperationRequestPayload + OperationRequestData,
 {
-    string_input(request, "order_id")
-        .or_else(|| string_input(request, "key"))
-        .ok_or_else(|| {
-            invalid_input(
-                request.operation_id(),
-                "missing required `order_id` input".to_owned(),
-            )
-        })
+    string_input(request, "trade_id").ok_or_else(|| {
+        invalid_input(
+            request.operation_id(),
+            "missing required `trade_id` input".to_owned(),
+        )
+    })
 }
 
 fn required_string_input<P>(
@@ -1247,13 +1245,13 @@ mod tests {
     use serde_json::{Map, Value};
     use tempfile::tempdir;
 
-    use super::{OrderOperationService, decision_result};
+    use super::{TradeOperationService, decision_result};
     use crate::ops::{
-        OperationAdapter, OperationContext, OperationData, OperationRequest, OrderAcceptRequest,
-        OrderAcceptResult, OrderCancelRequest, OrderDeclineRequest, OrderDeclineResult,
-        OrderEventListRequest, OrderEventWatchRequest, OrderGetRequest, OrderListRequest,
-        OrderRevisionAcceptRequest, OrderRevisionDeclineRequest, OrderRevisionProposeRequest,
-        OrderStatusGetRequest, OrderSubmitRequest,
+        OperationAdapter, OperationContext, OperationData, OperationRequest, TradeAcceptRequest,
+        TradeAcceptResult, TradeCancelRequest, TradeDeclineRequest, TradeDeclineResult,
+        TradeEventListRequest, TradeEventWatchRequest, TradeGetRequest, TradeListRequest,
+        TradeRevisionAcceptRequest, TradeRevisionDeclineRequest, TradeRevisionProposeRequest,
+        TradeStatusGetRequest, TradeSubmitRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -1268,10 +1266,10 @@ mod tests {
     fn order_service_get_and_list_preserve_order_truth() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let get = OperationRequest::new(
             OperationContext::default(),
-            OrderGetRequest::from_data(data(&[("order_id", "ord_missing")])),
+            TradeGetRequest::from_data(data(&[("trade_id", "ord_missing")])),
         )
         .expect("order get request");
         let get_envelope = service
@@ -1280,19 +1278,19 @@ mod tests {
             .to_envelope(OperationContext::default().envelope_context("req_order_get"))
             .expect("order get envelope");
 
-        assert_eq!(get_envelope.operation_id, "order.get");
+        assert_eq!(get_envelope.operation_id, "trade.get");
         assert_eq!(get_envelope.result["state"], "missing");
-        assert_eq!(get_envelope.result["actions"][0], "radroots order list");
+        assert_eq!(get_envelope.result["actions"][0], "radroots trade list");
         assert_eq!(get_envelope.result["actions"][1], "radroots basket create");
 
-        let list = OperationRequest::new(OperationContext::default(), OrderListRequest::default())
+        let list = OperationRequest::new(OperationContext::default(), TradeListRequest::default())
             .expect("order list request");
         let list_envelope = service
             .execute(list)
             .expect("order list result")
             .to_envelope(OperationContext::default().envelope_context("req_order_list"))
             .expect("order list envelope");
-        assert_eq!(list_envelope.operation_id, "order.list");
+        assert_eq!(list_envelope.operation_id, "trade.list");
         assert_eq!(list_envelope.result["state"], "empty");
         assert_eq!(list_envelope.result["actions"][0], "radroots basket create");
     }
@@ -1301,10 +1299,10 @@ mod tests {
     fn order_submit_requires_approval_token() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let submit = OperationRequest::new(
             OperationContext::default(),
-            OrderSubmitRequest::from_data(data(&[("order_id", "ord_missing")])),
+            TradeSubmitRequest::from_data(data(&[("trade_id", "ord_missing")])),
         )
         .expect("order submit request");
         let error = service.execute(submit).expect_err("approval required");
@@ -1318,12 +1316,12 @@ mod tests {
     fn order_submit_with_approval_returns_not_found_for_missing_order() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let mut context = OperationContext::default();
         context.approval_token = Some("approve_test".to_owned());
         let submit = OperationRequest::new(
             context.clone(),
-            OrderSubmitRequest::from_data(data(&[("order_id", "ord_missing")])),
+            TradeSubmitRequest::from_data(data(&[("trade_id", "ord_missing")])),
         )
         .expect("order submit request");
         let error = service.execute(submit).expect_err("missing order error");
@@ -1333,18 +1331,18 @@ mod tests {
         assert_eq!(output_error.exit_code, 4);
         assert!(output_error.message.contains("ord_missing"));
         let envelope = crate::out::envelope::OutputEnvelope::failure(
-            "order.submit",
+            "trade.submit",
             output_error,
             context.envelope_context("req_order_submit"),
         );
         let detail = envelope.errors[0].detail.as_ref().expect("submit detail");
         assert_eq!(detail["state"], "missing");
-        assert_eq!(detail["order_id"], "ord_missing");
-        assert_eq!(detail["actions"][0], "radroots order list");
+        assert_eq!(detail["trade_id"], "ord_missing");
+        assert_eq!(detail["actions"][0], "radroots trade list");
         assert_eq!(detail["actions"][1], "radroots basket create");
         assert_eq!(
             envelope.next_actions[0].command.as_deref(),
-            Some("radroots order list")
+            Some("radroots trade list")
         );
         assert_eq!(
             envelope.next_actions[1].command.as_deref(),
@@ -1356,10 +1354,10 @@ mod tests {
     fn order_accept_requires_approval_token() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let accept = OperationRequest::new(
             OperationContext::default(),
-            OrderAcceptRequest::from_data(data(&[("order_id", "ord_pending")])),
+            TradeAcceptRequest::from_data(data(&[("trade_id", "ord_pending")])),
         )
         .expect("order accept request");
         let error = service.execute(accept).expect_err("approval required");
@@ -1371,12 +1369,12 @@ mod tests {
     fn order_accept_unconfigured_preserves_decision_detail() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let mut context = OperationContext::default();
         context.dry_run = true;
         let accept = OperationRequest::new(
             context,
-            OrderAcceptRequest::from_data(data(&[("order_id", "ord_pending")])),
+            TradeAcceptRequest::from_data(data(&[("trade_id", "ord_pending")])),
         )
         .expect("order accept request");
         let error = service
@@ -1387,7 +1385,7 @@ mod tests {
 
         assert_eq!(output_error.code, "operation_unavailable");
         assert_eq!(detail["state"], "unconfigured");
-        assert_eq!(detail["order_id"], "ord_pending");
+        assert_eq!(detail["trade_id"], "ord_pending");
         assert_eq!(detail["decision"], "accepted");
         assert!(detail["target_relays"].as_array().unwrap().is_empty());
     }
@@ -1395,7 +1393,7 @@ mod tests {
     #[test]
     fn order_decision_already_decided_maps_to_validation_failure() {
         let view = already_decided_view();
-        let error = match decision_result::<OrderAcceptResult>("order.accept", &view) {
+        let error = match decision_result::<TradeAcceptResult>("trade.accept", &view) {
             Ok(_) => panic!("already decided view should fail validation"),
             Err(error) => error,
         };
@@ -1405,19 +1403,19 @@ mod tests {
         assert_eq!(output_error.exit_code, 10);
         let detail = output_error.detail.expect("validation detail");
         assert_eq!(detail["state"], "already_decided");
-        assert_eq!(detail["operation_id"], "order.accept");
+        assert_eq!(detail["operation_id"], "trade.accept");
         assert_eq!(detail["listing_event_id"], "l".repeat(64));
         assert_eq!(detail["event_id"], "d".repeat(64));
         assert_eq!(detail["event_kind"], 3423);
         assert_eq!(detail["idempotency_key"], "idem_test");
         assert_eq!(detail["signer_mode"], "local");
-        assert_eq!(detail["actions"][0], "radroots order status get ord_test");
+        assert_eq!(detail["actions"][0], "radroots trade status get ord_test");
     }
 
     #[test]
     fn order_decision_invalid_maps_to_validation_failure() {
         let view = invalid_decision_view();
-        let error = match decision_result::<OrderDeclineResult>("order.decline", &view) {
+        let error = match decision_result::<TradeDeclineResult>("trade.decline", &view) {
             Ok(_) => panic!("invalid view should fail validation"),
             Err(error) => error,
         };
@@ -1427,11 +1425,11 @@ mod tests {
         assert_eq!(output_error.exit_code, 10);
         assert_eq!(
             output_error.message,
-            "active order events for `ord_test` failed reducer validation"
+            "active trade events for `ord_test` failed reducer validation"
         );
         let detail = output_error.detail.expect("validation detail");
         assert_eq!(detail["state"], "invalid");
-        assert_eq!(detail["operation_id"], "order.decline");
+        assert_eq!(detail["operation_id"], "trade.decline");
         assert_eq!(detail["listing_event_id"], "l".repeat(64));
         assert_eq!(detail["event_id"], Value::Null);
         assert_eq!(detail["event_kind"], Value::Null);
@@ -1443,10 +1441,10 @@ mod tests {
     fn order_decline_requires_reason_before_approval() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let decline = OperationRequest::new(
             OperationContext::default(),
-            OrderDeclineRequest::from_data(data(&[("order_id", "ord_pending")])),
+            TradeDeclineRequest::from_data(data(&[("trade_id", "ord_pending")])),
         )
         .expect("order decline request");
         let error = service.execute(decline).expect_err("reason required");
@@ -1460,10 +1458,10 @@ mod tests {
     fn order_decline_rejects_blank_reason_before_approval() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let decline = OperationRequest::new(
             OperationContext::default(),
-            OrderDeclineRequest::from_data(data(&[("order_id", "ord_pending"), ("reason", " ")])),
+            TradeDeclineRequest::from_data(data(&[("trade_id", "ord_pending"), ("reason", " ")])),
         )
         .expect("order decline request");
         let error = service.execute(decline).expect_err("reason required");
@@ -1477,10 +1475,10 @@ mod tests {
     fn order_cancel_requires_reason_before_approval() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let cancel = OperationRequest::new(
             OperationContext::default(),
-            OrderCancelRequest::from_data(data(&[("order_id", "ord_pending")])),
+            TradeCancelRequest::from_data(data(&[("trade_id", "ord_pending")])),
         )
         .expect("order cancel request");
         let error = service.execute(cancel).expect_err("reason required");
@@ -1494,11 +1492,11 @@ mod tests {
     fn order_cancel_requires_approval_token() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let cancel = OperationRequest::new(
             OperationContext::default(),
-            OrderCancelRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
+            TradeCancelRequest::from_data(data(&[
+                ("trade_id", "ord_pending"),
                 ("reason", "changed plans"),
             ])),
         )
@@ -1512,10 +1510,10 @@ mod tests {
     fn order_revision_propose_requires_reason_before_approval() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let revision = OperationRequest::new(
             OperationContext::default(),
-            OrderRevisionProposeRequest::from_data(data(&[("order_id", "ord_pending")])),
+            TradeRevisionProposeRequest::from_data(data(&[("trade_id", "ord_pending")])),
         )
         .expect("order revision request");
         let error = service.execute(revision).expect_err("reason required");
@@ -1529,16 +1527,16 @@ mod tests {
     fn order_revision_propose_requires_approval_token() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let mut input = data(&[
-            ("order_id", "ord_pending"),
+            ("trade_id", "ord_pending"),
             ("reason", "update count"),
             ("bin_id", "bin-1"),
         ]);
         input.insert("bin_count".to_owned(), Value::from(3));
         let revision = OperationRequest::new(
             OperationContext::default(),
-            OrderRevisionProposeRequest::from_data(input),
+            TradeRevisionProposeRequest::from_data(input),
         )
         .expect("order revision request");
         let error = service.execute(revision).expect_err("approval required");
@@ -1550,11 +1548,11 @@ mod tests {
     fn order_revision_accept_requires_approval_token() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let revision = OperationRequest::new(
             OperationContext::default(),
-            OrderRevisionAcceptRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
+            TradeRevisionAcceptRequest::from_data(data(&[
+                ("trade_id", "ord_pending"),
                 ("revision_id", "rev_pending"),
             ])),
         )
@@ -1568,11 +1566,11 @@ mod tests {
     fn order_revision_decline_requires_reason_before_approval() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let revision = OperationRequest::new(
             OperationContext::default(),
-            OrderRevisionDeclineRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
+            TradeRevisionDeclineRequest::from_data(data(&[
+                ("trade_id", "ord_pending"),
                 ("revision_id", "rev_pending"),
             ])),
         )
@@ -1588,11 +1586,11 @@ mod tests {
     fn order_revision_decline_requires_approval_token() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let revision = OperationRequest::new(
             OperationContext::default(),
-            OrderRevisionDeclineRequest::from_data(data(&[
-                ("order_id", "ord_pending"),
+            TradeRevisionDeclineRequest::from_data(data(&[
+                ("trade_id", "ord_pending"),
                 ("revision_id", "rev_pending"),
                 ("reason", "keep original order"),
             ])),
@@ -1607,10 +1605,10 @@ mod tests {
     fn order_status_get_uses_local_sdk_projection_without_relay() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let status = OperationRequest::new(
             OperationContext::default(),
-            OrderStatusGetRequest::from_data(data(&[("order_id", "ord_pending")])),
+            TradeStatusGetRequest::from_data(data(&[("trade_id", "ord_pending")])),
         )
         .expect("order status request");
         let envelope = service
@@ -1619,14 +1617,14 @@ mod tests {
             .to_envelope(OperationContext::default().envelope_context("req_order_status"))
             .expect("status envelope");
 
-        assert_eq!(envelope.operation_id, "order.status.get");
+        assert_eq!(envelope.operation_id, "trade.status.get");
         assert_eq!(envelope.result["state"], "missing");
-        assert_eq!(envelope.result["source"], "SDK local order projection");
+        assert_eq!(envelope.result["source"], "SDK local trade projection");
         assert_eq!(
             envelope.result["actor_context_source"],
             "sdk_local_projection"
         );
-        assert_eq!(envelope.result["order_id"], "ord_pending");
+        assert_eq!(envelope.result["trade_id"], "ord_pending");
         assert_eq!(envelope.result["fetched_count"], 0);
         assert_eq!(envelope.result["decoded_count"], 0);
         assert_eq!(envelope.result["skipped_count"], 0);
@@ -1637,16 +1635,16 @@ mod tests {
     fn order_event_list_requires_relay_configuration() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let context = OperationContext::default();
-        let request = OperationRequest::new(context.clone(), OrderEventListRequest::default())
+        let request = OperationRequest::new(context.clone(), TradeEventListRequest::default())
             .expect("order event list request");
         let output_error = service
             .execute(request)
             .expect_err("order event list unconfigured")
             .to_output_error();
         let envelope = crate::out::envelope::OutputEnvelope::failure(
-            "order.event.list",
+            "trade.event.list",
             output_error,
             context.envelope_context("req_order_event_list"),
         );
@@ -1656,11 +1654,11 @@ mod tests {
         assert!(envelope.errors[0].message.contains("configured relay"));
         assert_eq!(
             envelope.errors[0].detail.as_ref().unwrap()["actions"][0],
-            "radroots --relay wss://relay.example.com order event list"
+            "radroots --relay wss://relay.example.com trade event list"
         );
         assert_eq!(
             envelope.next_actions[0].command.as_deref(),
-            Some("radroots --relay wss://relay.example.com order event list")
+            Some("radroots --relay wss://relay.example.com trade event list")
         );
     }
 
@@ -1669,16 +1667,16 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
         config.relay.urls = vec!["ws://127.0.0.1:9".to_owned()];
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let context = OperationContext::default();
-        let request = OperationRequest::new(context.clone(), OrderEventListRequest::default())
+        let request = OperationRequest::new(context.clone(), TradeEventListRequest::default())
             .expect("order event list request");
         let output_error = service
             .execute(request)
             .expect_err("order event list missing account")
             .to_output_error();
         let envelope = crate::out::envelope::OutputEnvelope::failure(
-            "order.event.list",
+            "trade.event.list",
             output_error,
             context.envelope_context("req_order_event_list"),
         );
@@ -1703,22 +1701,22 @@ mod tests {
     fn order_event_watch_returns_deferred_error_with_target_action() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
-        let service = OperationAdapter::new(OrderOperationService::new(&config));
+        let service = OperationAdapter::new(TradeOperationService::new(&config));
         let request = OperationRequest::new(
             OperationContext::default(),
-            OrderEventWatchRequest::from_data(data(&[("order_id", "ord_missing")])),
+            TradeEventWatchRequest::from_data(data(&[("trade_id", "ord_missing")])),
         )
         .expect("order event watch request");
         let error = service
             .execute(request)
             .expect_err("order event watch deferred");
         let envelope = crate::out::envelope::OutputEnvelope::failure(
-            "order.event.watch",
+            "trade.event.watch",
             error.to_output_error(),
             OperationContext::default().envelope_context("req_order_watch"),
         );
 
-        assert_eq!(envelope.operation_id, "order.event.watch");
+        assert_eq!(envelope.operation_id, "trade.event.watch");
         assert!(envelope.result.is_null());
         assert_eq!(envelope.errors[0].code, "not_implemented");
         assert_eq!(
@@ -1726,17 +1724,18 @@ mod tests {
             "not_implemented"
         );
         assert_eq!(
-            envelope.errors[0].detail.as_ref().unwrap()["order_id"],
+            envelope.errors[0].detail.as_ref().unwrap()["trade_id"],
             "ord_missing"
         );
         assert_eq!(
             envelope.next_actions[0].command.as_deref(),
-            Some("radroots order status get ord_missing")
+            Some("radroots trade status get ord_missing")
         );
     }
 
     fn sample_config(root: &Path) -> RuntimeConfig {
         let data = root.join("data");
+        let cache = root.join("cache");
         let logs = root.join("logs");
         let secrets = root.join("secrets");
         RuntimeConfig {
@@ -1768,6 +1767,7 @@ mod tests {
                 app_config_path: root.join("config/apps/cli/config.toml"),
                 workspace_config_path: None,
                 app_data_root: data.join("apps/cli"),
+                shared_cache_root: cache.clone(),
                 app_logs_root: logs.join("apps/cli"),
                 shared_accounts_data_root: data.join("shared/accounts"),
                 shared_accounts_secrets_root: secrets.join("shared/accounts"),
@@ -1873,7 +1873,7 @@ mod tests {
                     .to_owned(),
             ),
             issues: Vec::new(),
-            actions: vec!["radroots order status get ord_test".to_owned()],
+            actions: vec!["radroots trade status get ord_test".to_owned()],
         }
     }
 
@@ -1884,7 +1884,7 @@ mod tests {
         view.event_id = None;
         view.event_kind = None;
         view.reason =
-            Some("active order events for `ord_test` failed reducer validation".to_owned());
+            Some("active trade events for `ord_test` failed reducer validation".to_owned());
         view
     }
 }

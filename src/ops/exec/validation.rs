@@ -87,7 +87,7 @@ where
     P: OperationRequestPayload + OperationRequestData,
 {
     Ok(ValidationReceiptListArgs {
-        order_id: required_string(request, "order_id")?,
+        order_id: required_string(request, "trade_id")?,
     })
 }
 

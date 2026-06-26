@@ -1262,7 +1262,7 @@ fn root_help_exposes_only_target_namespaces() {
         "listing",
         "market",
         "basket",
-        "order",
+        "trade",
     ] {
         assert!(
             help_lists(&stdout, namespace),
@@ -2352,9 +2352,9 @@ fn listing_update_publish_attempts_direct_relay_with_approval() {
 #[test]
 fn removed_order_submit_watch_flag_is_rejected_publicly() {
     let output = radroots()
-        .args(["order", "submit", "--watch"])
+        .args(["trade", "submit", "--watch"])
         .output()
-        .expect("run removed order submit watch flag");
+        .expect("run removed trade submit watch flag");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
@@ -2382,24 +2382,24 @@ fn removed_command_families_are_rejected_publicly() {
 fn seller_order_decision_and_status_commands_are_public() {
     for (operation_id, args) in [
         (
-            "order.accept",
+            "trade.accept",
             [
                 "--format",
                 "json",
                 "--dry-run",
-                "order",
+                "trade",
                 "accept",
                 "ord_public",
             ]
             .as_slice(),
         ),
         (
-            "order.decline",
+            "trade.decline",
             [
                 "--format",
                 "json",
                 "--dry-run",
-                "order",
+                "trade",
                 "decline",
                 "ord_public",
                 "--reason",
@@ -2408,12 +2408,12 @@ fn seller_order_decision_and_status_commands_are_public() {
             .as_slice(),
         ),
         (
-            "order.cancel",
+            "trade.cancel",
             [
                 "--format",
                 "json",
                 "--dry-run",
-                "order",
+                "trade",
                 "cancel",
                 "ord_public",
                 "--reason",
@@ -2422,8 +2422,8 @@ fn seller_order_decision_and_status_commands_are_public() {
             .as_slice(),
         ),
         (
-            "order.status.get",
-            ["--format", "json", "order", "status", "get", "ord_public"].as_slice(),
+            "trade.status.get",
+            ["--format", "json", "trade", "status", "get", "ord_public"].as_slice(),
         ),
     ] {
         let output = radroots()
@@ -2440,7 +2440,7 @@ fn seller_order_decision_and_status_commands_are_public() {
     }
 
     let output = radroots()
-        .args(["order", "decision", "accept", "ord_deferred"])
+        .args(["trade", "decision", "accept", "ord_deferred"])
         .output()
         .expect("run removed nested decision command");
 
@@ -2452,11 +2452,11 @@ fn seller_order_decision_and_status_commands_are_public() {
 #[test]
 fn removed_order_post_agreement_subcommands_are_rejected_publicly() {
     for args in [
-        ["order", "fulfillment", "update", "ord_public"].as_slice(),
-        ["order", "receipt", "record", "ord_public"].as_slice(),
-        ["order", "payment", "record", "ord_public"].as_slice(),
-        ["order", "settlement", "accept", "ord_public"].as_slice(),
-        ["order", "settlement", "reject", "ord_public"].as_slice(),
+        ["trade", "fulfillment", "update", "ord_public"].as_slice(),
+        ["trade", "receipt", "record", "ord_public"].as_slice(),
+        ["trade", "payment", "record", "ord_public"].as_slice(),
+        ["trade", "settlement", "accept", "ord_public"].as_slice(),
+        ["trade", "settlement", "reject", "ord_public"].as_slice(),
     ] {
         let output = radroots()
             .args(args)
@@ -2481,7 +2481,7 @@ fn target_outputs_do_not_suggest_removed_command_families() {
         [
             "--format",
             "json",
-            "order",
+            "trade",
             "get",
             "ord_AAAAAAAAAAAAAAAAAAAAAA",
         ]
@@ -2840,15 +2840,15 @@ fn human_market_refresh_missing_store_shows_action() {
 #[test]
 fn human_failure_output_preserves_error_code_and_message() {
     let output = radroots()
-        .args(["--format", "human", "order", "submit"])
+        .args(["--format", "human", "trade", "submit"])
         .output()
-        .expect("run order submit");
+        .expect("run trade submit");
 
     assert_eq!(output.status.code(), Some(6));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
-    assert!(stdout.starts_with("order.submit: error\n"));
-    assert!(stdout.contains("request_id: req_order_submit_"));
+    assert!(stdout.starts_with("trade.submit: error\n"));
+    assert!(stdout.contains("request_id: req_trade_submit_"));
     assert!(stdout.contains("error: approval_required"));
     assert!(stdout.contains("message: missing required `approval_token` input"));
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
@@ -2860,7 +2860,7 @@ fn human_failure_output_renders_structured_error_detail() {
         .args([
             "--format",
             "human",
-            "order",
+            "trade",
             "event",
             "watch",
             "ord_missing",
@@ -2871,12 +2871,12 @@ fn human_failure_output_renders_structured_error_detail() {
     assert_eq!(output.status.code(), Some(3));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
-    assert!(stdout.starts_with("order.event.watch: error\n"));
-    assert!(stdout.contains("request_id: req_order_event_watch_"));
+    assert!(stdout.starts_with("trade.event.watch: error\n"));
+    assert!(stdout.contains("request_id: req_trade_event_watch_"));
     assert!(stdout.contains("error: not_implemented"));
     assert!(stdout.contains("state: not_implemented"));
-    assert!(stdout.contains("reason: relay-backed order event watch is not implemented"));
-    assert!(stdout.contains("- radroots order status get ord_missing"));
+    assert!(stdout.contains("reason: relay-backed trade event watch is not implemented"));
+    assert!(stdout.contains("- radroots trade status get ord_missing"));
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }
 
@@ -2973,7 +2973,7 @@ fn unsupported_ndjson_returns_structured_invalid_input() {
         .args([
             "--format",
             "ndjson",
-            "order",
+            "trade",
             "event",
             "watch",
             "ord_missing",
@@ -2984,9 +2984,9 @@ fn unsupported_ndjson_returns_structured_invalid_input() {
     assert_eq!(watch_output.status.code(), Some(2));
     let watch_frames = ndjson_from_stdout(&watch_output);
     assert_eq!(watch_frames.len(), 2);
-    assert_eq!(watch_frames[0]["operation_id"], "order.event.watch");
+    assert_eq!(watch_frames[0]["operation_id"], "trade.event.watch");
     assert_eq!(watch_frames[0]["frame_type"], "started");
-    assert_eq!(watch_frames[1]["operation_id"], "order.event.watch");
+    assert_eq!(watch_frames[1]["operation_id"], "trade.event.watch");
     assert_eq!(watch_frames[1]["frame_type"], "error");
     assert_eq!(watch_frames[1]["errors"][0]["code"], "invalid_input");
     assert_eq!(watch_frames[1]["errors"][0]["exit_code"], 2);
@@ -3048,16 +3048,16 @@ fn offline_forbids_external_network_operations() {
             ["--format", "json", "--offline", "market", "refresh"].as_slice(),
         ),
         (
-            "order.submit",
-            ["--format", "json", "--offline", "order", "submit"].as_slice(),
+            "trade.submit",
+            ["--format", "json", "--offline", "trade", "submit"].as_slice(),
         ),
         (
-            "order.cancel",
+            "trade.cancel",
             [
                 "--format",
                 "json",
                 "--offline",
-                "order",
+                "trade",
                 "cancel",
                 "ord_offline_cancel",
                 "--reason",
@@ -3066,14 +3066,14 @@ fn offline_forbids_external_network_operations() {
             .as_slice(),
         ),
         (
-            "order.revision.propose",
+            "trade.revision.propose",
             [
                 "--format",
                 "json",
                 "--offline",
                 "--approval-token",
                 "approve",
-                "order",
+                "trade",
                 "revision",
                 "propose",
                 "ord_offline_revision",
@@ -3087,14 +3087,14 @@ fn offline_forbids_external_network_operations() {
             .as_slice(),
         ),
         (
-            "order.revision.accept",
+            "trade.revision.accept",
             [
                 "--format",
                 "json",
                 "--offline",
                 "--approval-token",
                 "approve",
-                "order",
+                "trade",
                 "revision",
                 "accept",
                 "ord_offline_revision",
@@ -3104,14 +3104,14 @@ fn offline_forbids_external_network_operations() {
             .as_slice(),
         ),
         (
-            "order.revision.decline",
+            "trade.revision.decline",
             [
                 "--format",
                 "json",
                 "--offline",
                 "--approval-token",
                 "approve",
-                "order",
+                "trade",
                 "revision",
                 "decline",
                 "ord_offline_revision",
@@ -3328,26 +3328,26 @@ fn listing_publish_idempotency_conflict_maps_sdk_partial_mutation_recovery() {
 fn offline_rejects_order_decision_dry_run() {
     for (operation_id, args) in [
         (
-            "order.accept",
+            "trade.accept",
             [
                 "--format",
                 "json",
                 "--offline",
                 "--dry-run",
-                "order",
+                "trade",
                 "accept",
                 "ord_offline_decision",
             ]
             .as_slice(),
         ),
         (
-            "order.decline",
+            "trade.decline",
             [
                 "--format",
                 "json",
                 "--offline",
                 "--dry-run",
-                "order",
+                "trade",
                 "decline",
                 "ord_offline_decision",
                 "--reason",
@@ -3356,13 +3356,13 @@ fn offline_rejects_order_decision_dry_run() {
             .as_slice(),
         ),
         (
-            "order.cancel",
+            "trade.cancel",
             [
                 "--format",
                 "json",
                 "--offline",
                 "--dry-run",
-                "order",
+                "trade",
                 "cancel",
                 "ord_offline_decision",
                 "--reason",
@@ -3371,13 +3371,13 @@ fn offline_rejects_order_decision_dry_run() {
             .as_slice(),
         ),
         (
-            "order.revision.propose",
+            "trade.revision.propose",
             [
                 "--format",
                 "json",
                 "--offline",
                 "--dry-run",
-                "order",
+                "trade",
                 "revision",
                 "propose",
                 "ord_offline_revision",
@@ -3391,13 +3391,13 @@ fn offline_rejects_order_decision_dry_run() {
             .as_slice(),
         ),
         (
-            "order.revision.accept",
+            "trade.revision.accept",
             [
                 "--format",
                 "json",
                 "--offline",
                 "--dry-run",
-                "order",
+                "trade",
                 "revision",
                 "accept",
                 "ord_offline_revision",
@@ -3407,13 +3407,13 @@ fn offline_rejects_order_decision_dry_run() {
             .as_slice(),
         ),
         (
-            "order.revision.decline",
+            "trade.revision.decline",
             [
                 "--format",
                 "json",
                 "--offline",
                 "--dry-run",
-                "order",
+                "trade",
                 "revision",
                 "decline",
                 "ord_offline_revision",
@@ -3502,16 +3502,16 @@ fn online_requires_relay_for_external_network_operations() {
             ["--format", "json", "--online", "market", "refresh"].as_slice(),
         ),
         (
-            "order.event.list",
-            ["--format", "json", "--online", "order", "event", "list"].as_slice(),
+            "trade.event.list",
+            ["--format", "json", "--online", "trade", "event", "list"].as_slice(),
         ),
         (
-            "order.cancel",
+            "trade.cancel",
             [
                 "--format",
                 "json",
                 "--online",
-                "order",
+                "trade",
                 "cancel",
                 "ord_missing",
                 "--reason",
@@ -3520,14 +3520,14 @@ fn online_requires_relay_for_external_network_operations() {
             .as_slice(),
         ),
         (
-            "order.revision.propose",
+            "trade.revision.propose",
             [
                 "--format",
                 "json",
                 "--online",
                 "--approval-token",
                 "approve",
-                "order",
+                "trade",
                 "revision",
                 "propose",
                 "ord_missing",
@@ -3541,13 +3541,13 @@ fn online_requires_relay_for_external_network_operations() {
             .as_slice(),
         ),
         (
-            "order.revision.accept",
+            "trade.revision.accept",
             [
                 "--format",
                 "json",
                 "--online",
                 "--dry-run",
-                "order",
+                "trade",
                 "revision",
                 "accept",
                 "ord_missing",
@@ -3557,13 +3557,13 @@ fn online_requires_relay_for_external_network_operations() {
             .as_slice(),
         ),
         (
-            "order.revision.decline",
+            "trade.revision.decline",
             [
                 "--format",
                 "json",
                 "--online",
                 "--dry-run",
-                "order",
+                "trade",
                 "revision",
                 "decline",
                 "ord_missing",
@@ -3603,15 +3603,15 @@ fn order_status_get_uses_sdk_local_projection_without_relay_fetch() {
         "--format",
         "json",
         "--online",
-        "order",
+        "trade",
         "status",
         "get",
         "ord_missing",
     ]);
 
-    assert_eq!(local["operation_id"], "order.status.get");
+    assert_eq!(local["operation_id"], "trade.status.get");
     assert_eq!(local["result"]["state"], "missing");
-    assert_eq!(local["result"]["source"], "SDK local order projection");
+    assert_eq!(local["result"]["source"], "SDK local trade projection");
     assert_eq!(
         local["result"]["actor_context_source"],
         "sdk_local_projection"
@@ -3627,17 +3627,17 @@ fn order_status_get_uses_sdk_local_projection_without_relay_fetch() {
         "json",
         "--relay",
         closed_relay.as_str(),
-        "order",
+        "trade",
         "status",
         "get",
         "ord_missing",
     ]);
 
-    assert_eq!(with_closed_relay["operation_id"], "order.status.get");
+    assert_eq!(with_closed_relay["operation_id"], "trade.status.get");
     assert_eq!(with_closed_relay["result"]["state"], "missing");
     assert_eq!(
         with_closed_relay["result"]["source"],
-        "SDK local order projection"
+        "SDK local trade projection"
     );
     assert_eq!(with_closed_relay["result"]["fetched_count"], 0);
     assert_eq!(with_closed_relay["result"]["decoded_count"], 0);
@@ -3647,10 +3647,10 @@ fn order_status_get_uses_sdk_local_projection_without_relay_fetch() {
 fn order_status_get_invalid_order_id_uses_sdk_error_contract() {
     let sandbox = RadrootsCliSandbox::new();
     let (output, value) =
-        sandbox.json_output(&["--format", "json", "order", "status", "get", "bad order id"]);
+        sandbox.json_output(&["--format", "json", "trade", "status", "get", "bad order id"]);
 
     assert!(!output.status.success());
-    assert_eq!(value["operation_id"], "order.status.get");
+    assert_eq!(value["operation_id"], "trade.status.get");
     assert_eq!(value["result"], Value::Null);
     assert_eq!(value["errors"][0]["code"], "invalid_order_id");
     assert_eq!(value["errors"][0]["exit_code"], 2);
@@ -3684,7 +3684,7 @@ fn online_order_event_watch_returns_deferred_without_relay_preflight() {
         "--format",
         "json",
         "--online",
-        "order",
+        "trade",
         "event",
         "watch",
         "ord_missing",
@@ -3692,14 +3692,14 @@ fn online_order_event_watch_returns_deferred_without_relay_preflight() {
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "order.event.watch");
+    assert_eq!(value["operation_id"], "trade.event.watch");
     assert_eq!(value["result"], Value::Null);
     assert_eq!(value["errors"][0]["code"], "not_implemented");
     assert_eq!(value["errors"][0]["detail"]["state"], "not_implemented");
-    assert_eq!(value["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(value["errors"][0]["detail"]["trade_id"], "ord_missing");
     assert_eq!(
         value["next_actions"][0]["command"],
-        "radroots order status get ord_missing"
+        "radroots trade status get ord_missing"
     );
     assert!(
         !value["errors"][0]["message"]
@@ -3707,7 +3707,7 @@ fn online_order_event_watch_returns_deferred_without_relay_preflight() {
             .expect("message")
             .contains("configured relay")
     );
-    assert_no_daemon_runtime_reference(&value, &["order", "event", "watch"]);
+    assert_no_daemon_runtime_reference(&value, &["trade", "event", "watch"]);
 }
 
 #[test]
@@ -4984,43 +4984,43 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
         listing_event_id.as_str(),
     );
 
-    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
-    assert_eq!(app_list["operation_id"], "order.app.list");
+    let app_list = sandbox.json_success(&["--format", "json", "trade", "app", "list"]);
+    assert_eq!(app_list["operation_id"], "trade.app.list");
     assert_eq!(app_list["result"]["state"], "ready");
     assert_eq!(app_list["result"]["count"], 1);
     assert_eq!(app_list["result"]["records"][0]["record_id"], record_id);
-    assert_eq!(app_list["result"]["records"][0]["order_id"], order_id);
+    assert_eq!(app_list["result"]["records"][0]["trade_id"], order_id);
     assert_eq!(app_list["result"]["records"][0]["ready_for_submit"], true);
     assert_eq!(app_list["result"]["records"][0]["exportable"], true);
-    assert_no_removed_command_reference(&app_list, &["order", "app", "list"]);
-    assert_no_daemon_runtime_reference(&app_list, &["order", "app", "list"]);
+    assert_no_removed_command_reference(&app_list, &["trade", "app", "list"]);
+    assert_no_daemon_runtime_reference(&app_list, &["trade", "app", "list"]);
 
-    let orders = sandbox.json_success(&["--format", "json", "order", "list"]);
-    assert_eq!(orders["operation_id"], "order.list");
+    let orders = sandbox.json_success(&["--format", "json", "trade", "list"]);
+    assert_eq!(orders["operation_id"], "trade.list");
     assert_eq!(orders["result"]["state"], "ready");
     assert_eq!(orders["result"]["count"], 1);
-    assert_eq!(orders["result"]["orders"][0]["id"], order_id);
-    assert_eq!(orders["result"]["orders"][0]["ready_for_submit"], true);
+    assert_eq!(orders["result"]["trades"][0]["id"], order_id);
+    assert_eq!(orders["result"]["trades"][0]["ready_for_submit"], true);
     assert_eq!(
-        orders["result"]["orders"][0]["listing_event_id"],
+        orders["result"]["trades"][0]["listing_event_id"],
         listing_event_id
     );
     assert_eq!(
-        orders["result"]["orders"][0]["buyer_account_id"],
+        orders["result"]["trades"][0]["buyer_account_id"],
         account_id
     );
     assert_eq!(
-        orders["result"]["orders"][0]["file"],
+        orders["result"]["trades"][0]["file"],
         format!("shared-local-events/{record_id}")
     );
-    assert_no_removed_command_reference(&orders, &["order", "list"]);
-    assert_no_daemon_runtime_reference(&orders, &["order", "list"]);
+    assert_no_removed_command_reference(&orders, &["trade", "list"]);
+    assert_no_daemon_runtime_reference(&orders, &["trade", "list"]);
 
     let get_by_record =
-        sandbox.json_success(&["--format", "json", "order", "get", record_id.as_str()]);
-    assert_eq!(get_by_record["operation_id"], "order.get");
+        sandbox.json_success(&["--format", "json", "trade", "get", record_id.as_str()]);
+    assert_eq!(get_by_record["operation_id"], "trade.get");
     assert_eq!(get_by_record["result"]["state"], "ready");
-    assert_eq!(get_by_record["result"]["order_id"], order_id);
+    assert_eq!(get_by_record["result"]["trade_id"], order_id);
     assert_eq!(get_by_record["result"]["ready_for_submit"], true);
 
     let export_path = sandbox.root().join("app-order.toml");
@@ -5029,14 +5029,14 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
         "--format",
         "json",
         "--dry-run",
-        "order",
+        "trade",
         "app",
         "export",
         record_id.as_str(),
         "--output",
         export_path_arg.as_ref(),
     ]);
-    assert_eq!(dry_run["operation_id"], "order.app.export");
+    assert_eq!(dry_run["operation_id"], "trade.app.export");
     assert_eq!(dry_run["result"]["state"], "dry_run");
     assert_eq!(dry_run["result"]["valid"], true);
     assert!(!export_path.exists());
@@ -5044,18 +5044,18 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
     let export = sandbox.json_success(&[
         "--format",
         "json",
-        "order",
+        "trade",
         "app",
         "export",
         record_id.as_str(),
         "--output",
         export_path_arg.as_ref(),
     ]);
-    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["operation_id"], "trade.app.export");
     assert_eq!(export["result"]["state"], "exported");
-    assert_eq!(export["result"]["order_id"], order_id);
+    assert_eq!(export["result"]["trade_id"], order_id);
     assert!(export_path.exists());
-    let exported_contents = fs::read_to_string(&export_path).expect("exported order draft");
+    let exported_contents = fs::read_to_string(&export_path).expect("exported trade draft");
     assert!(exported_contents.contains("kind = \"order_draft_v1\""));
     assert!(exported_contents.contains(format!("order_id = \"{order_id}\"").as_str()));
     assert!(exported_contents.contains("source = \"resolved_account\""));
@@ -5064,13 +5064,13 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
         "--format",
         "json",
         "--dry-run",
-        "order",
+        "trade",
         "submit",
         record_id.as_str(),
     ]);
-    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["operation_id"], "trade.submit");
     assert_eq!(submit["result"]["state"], "dry_run");
-    assert_eq!(submit["result"]["source"], "SDK order submit · local key");
+    assert_eq!(submit["result"]["source"], "SDK trade submit · local key");
     assert_eq!(submit["result"]["event_kind"], 3422);
     assert_eq!(
         submit["result"]["target_relays"][0],
@@ -5148,7 +5148,7 @@ fn order_app_records_treat_matching_signed_evidence_as_submitted() {
         &signed_event,
     );
 
-    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    let app_list = sandbox.json_success(&["--format", "json", "trade", "app", "list"]);
     let listed = &app_list["result"]["records"][0];
     assert_eq!(listed["record_id"], record_id);
     assert_eq!(listed["status"], "submitted");
@@ -5156,16 +5156,16 @@ fn order_app_records_treat_matching_signed_evidence_as_submitted() {
     assert_eq!(listed["exportable"], false);
     assert_eq!(
         listed["actions"].as_array().expect("actions"),
-        &vec![json!(format!("radroots order status get {order_id}"))]
+        &vec![json!(format!("radroots trade status get {order_id}"))]
     );
 
-    let orders = sandbox.json_success(&["--format", "json", "order", "list"]);
+    let orders = sandbox.json_success(&["--format", "json", "trade", "list"]);
     assert_eq!(orders["result"]["state"], "ready");
-    assert_eq!(orders["result"]["orders"][0]["state"], "submitted");
-    assert_eq!(orders["result"]["orders"][0]["ready_for_submit"], false);
+    assert_eq!(orders["result"]["trades"][0]["state"], "submitted");
+    assert_eq!(orders["result"]["trades"][0]["ready_for_submit"], false);
 
     let get_by_record =
-        sandbox.json_success(&["--format", "json", "order", "get", record_id.as_str()]);
+        sandbox.json_success(&["--format", "json", "trade", "get", record_id.as_str()]);
     assert_eq!(get_by_record["result"]["state"], "submitted");
     assert_eq!(get_by_record["result"]["ready_for_submit"], false);
     assert_eq!(
@@ -5180,7 +5180,7 @@ fn order_app_records_treat_matching_signed_evidence_as_submitted() {
         get_by_record["result"]["actions"]
             .as_array()
             .expect("actions"),
-        &vec![json!(format!("radroots order status get {order_id}"))]
+        &vec![json!(format!("radroots trade status get {order_id}"))]
     );
 
     let export_path = sandbox.root().join("submitted-app-order.toml");
@@ -5188,7 +5188,7 @@ fn order_app_records_treat_matching_signed_evidence_as_submitted() {
     let (export_output, export) = sandbox.json_output(&[
         "--format",
         "json",
-        "order",
+        "trade",
         "app",
         "export",
         record_id.as_str(),
@@ -5196,7 +5196,7 @@ fn order_app_records_treat_matching_signed_evidence_as_submitted() {
         export_path_arg.as_ref(),
     ]);
     assert!(!export_output.status.success());
-    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["operation_id"], "trade.app.export");
     assert_eq!(export["errors"][0]["detail"]["state"], "already_submitted");
     assert_eq!(export["errors"][0]["detail"]["valid"], false);
     assert!(!export_path.exists());
@@ -5205,11 +5205,11 @@ fn order_app_records_treat_matching_signed_evidence_as_submitted() {
         "--format",
         "json",
         "--dry-run",
-        "order",
+        "trade",
         "submit",
         record_id.as_str(),
     ]);
-    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["operation_id"], "trade.submit");
     assert_eq!(submit["result"]["state"], "submitted");
     assert_eq!(submit["result"]["deduplicated"], true);
     assert_eq!(submit["result"]["event_id"], signed_event_id);
@@ -5282,7 +5282,7 @@ fn order_app_records_fail_closed_when_signed_evidence_conflicts() {
         &signed_event,
     );
 
-    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    let app_list = sandbox.json_success(&["--format", "json", "trade", "app", "list"]);
     let listed = &app_list["result"]["records"][0];
     assert_eq!(listed["record_id"], record_id);
     assert_eq!(listed["status"], "conflict");
@@ -5310,7 +5310,7 @@ fn order_app_records_fail_closed_when_signed_evidence_conflicts() {
     let (export_output, export) = sandbox.json_output(&[
         "--format",
         "json",
-        "order",
+        "trade",
         "app",
         "export",
         record_id.as_str(),
@@ -5318,7 +5318,7 @@ fn order_app_records_fail_closed_when_signed_evidence_conflicts() {
         export_path_arg.as_ref(),
     ]);
     assert!(!export_output.status.success());
-    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["operation_id"], "trade.app.export");
     assert_eq!(export["errors"][0]["detail"]["state"], "conflict");
     assert_eq!(
         export["errors"][0]["detail"]["issues"][0]["code"],
@@ -5330,12 +5330,12 @@ fn order_app_records_fail_closed_when_signed_evidence_conflicts() {
         "--format",
         "json",
         "--dry-run",
-        "order",
+        "trade",
         "submit",
         record_id.as_str(),
     ]);
     assert!(!submit_output.status.success());
-    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["operation_id"], "trade.submit");
     assert_eq!(submit["errors"][0]["detail"]["state"], "invalid");
     assert_eq!(
         submit["errors"][0]["detail"]["issues"][0]["code"],
@@ -5371,7 +5371,7 @@ fn order_app_records_fail_closed_when_not_current_or_supported() {
         Vec::new(),
     );
 
-    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    let app_list = sandbox.json_success(&["--format", "json", "trade", "app", "list"]);
     assert_eq!(
         app_list["result"]["records"][0]["record_id"],
         stale_record_id
@@ -5390,7 +5390,7 @@ fn order_app_records_fail_closed_when_not_current_or_supported() {
     let (output, stale_export) = sandbox.json_output(&[
         "--format",
         "json",
-        "order",
+        "trade",
         "app",
         "export",
         stale_record_id.as_str(),
@@ -5398,7 +5398,7 @@ fn order_app_records_fail_closed_when_not_current_or_supported() {
         export_path_arg.as_ref(),
     ]);
     assert!(!output.status.success());
-    assert_eq!(stale_export["operation_id"], "order.app.export");
+    assert_eq!(stale_export["operation_id"], "trade.app.export");
     assert_eq!(stale_export["result"], Value::Null);
     assert_eq!(stale_export["errors"][0]["detail"]["state"], "stale");
     assert_eq!(stale_export["errors"][0]["detail"]["valid"], false);
@@ -5408,13 +5408,13 @@ fn order_app_records_fail_closed_when_not_current_or_supported() {
         "--format",
         "json",
         "--dry-run",
-        "order",
+        "trade",
         "submit",
         stale_record_id.as_str(),
     ]);
     assert!(!submit_output.status.success());
     assert_eq!(submit_output.status.code(), Some(3));
-    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["operation_id"], "trade.submit");
     assert_eq!(submit["errors"][0]["code"], "operation_unavailable");
     assert_eq!(
         submit["errors"][0]["detail"]["issues"][0]["code"],
@@ -5450,7 +5450,7 @@ fn order_app_records_fail_closed_when_unsupported() {
         vec!["seller_pubkey_required"],
     );
 
-    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    let app_list = sandbox.json_success(&["--format", "json", "trade", "app", "list"]);
     assert_eq!(app_list["result"]["records"][0]["record_id"], record_id);
     assert_eq!(app_list["result"]["records"][0]["ready_for_submit"], false);
     assert_eq!(app_list["result"]["records"][0]["exportable"], false);
@@ -5466,7 +5466,7 @@ fn order_app_records_fail_closed_when_unsupported() {
     let (export_output, export) = sandbox.json_output(&[
         "--format",
         "json",
-        "order",
+        "trade",
         "app",
         "export",
         record_id.as_str(),
@@ -5474,7 +5474,7 @@ fn order_app_records_fail_closed_when_unsupported() {
         export_path_arg.as_ref(),
     ]);
     assert!(!export_output.status.success());
-    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["operation_id"], "trade.app.export");
     assert_eq!(export["errors"][0]["detail"]["state"], "unsupported");
     assert_eq!(
         export["errors"][0]["detail"]["issues"][0]["code"],
@@ -5483,7 +5483,7 @@ fn order_app_records_fail_closed_when_unsupported() {
     assert!(!export_path.exists());
 
     let (submit_output, submit) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+        sandbox.json_output(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
     assert!(!submit_output.status.success());
     assert_eq!(
         submit["errors"][0]["detail"]["issues"][0]["code"],
@@ -5519,7 +5519,7 @@ fn order_app_records_fail_closed_when_supported_record_is_malformed() {
         vec!["unit_price_required"],
     );
 
-    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    let app_list = sandbox.json_success(&["--format", "json", "trade", "app", "list"]);
     assert_eq!(app_list["result"]["records"][0]["record_id"], record_id);
     assert_eq!(app_list["result"]["records"][0]["ready_for_submit"], false);
     assert_eq!(app_list["result"]["records"][0]["exportable"], false);
@@ -5535,7 +5535,7 @@ fn order_app_records_fail_closed_when_supported_record_is_malformed() {
     let (export_output, export) = sandbox.json_output(&[
         "--format",
         "json",
-        "order",
+        "trade",
         "app",
         "export",
         record_id.as_str(),
@@ -5543,7 +5543,7 @@ fn order_app_records_fail_closed_when_supported_record_is_malformed() {
         export_path_arg.as_ref(),
     ]);
     assert!(!export_output.status.success());
-    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["operation_id"], "trade.app.export");
     assert_eq!(export["errors"][0]["detail"]["state"], "invalid");
     assert_eq!(
         export["errors"][0]["detail"]["issues"][0]["code"],
@@ -5552,9 +5552,9 @@ fn order_app_records_fail_closed_when_supported_record_is_malformed() {
     assert!(!export_path.exists());
 
     let (submit_output, submit) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+        sandbox.json_output(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
     assert!(!submit_output.status.success());
-    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["operation_id"], "trade.submit");
     assert_eq!(
         submit["errors"][0]["detail"]["issues"][0]["code"],
         "invalid_app_order_record"
@@ -5600,7 +5600,7 @@ fn order_app_records_fail_closed_when_order_id_conflicts() {
         Vec::new(),
     );
 
-    let app_list = sandbox.json_success(&["--format", "json", "order", "app", "list"]);
+    let app_list = sandbox.json_success(&["--format", "json", "trade", "app", "list"]);
     assert_eq!(app_list["result"]["count"], 1);
     assert_eq!(
         app_list["result"]["records"][0]["record_id"],
@@ -5620,7 +5620,7 @@ fn order_app_records_fail_closed_when_order_id_conflicts() {
     let (export_output, export) = sandbox.json_output(&[
         "--format",
         "json",
-        "order",
+        "trade",
         "app",
         "export",
         conflicting_record_id.as_str(),
@@ -5628,7 +5628,7 @@ fn order_app_records_fail_closed_when_order_id_conflicts() {
         export_path_arg.as_ref(),
     ]);
     assert!(!export_output.status.success());
-    assert_eq!(export["operation_id"], "order.app.export");
+    assert_eq!(export["operation_id"], "trade.app.export");
     assert_eq!(export["errors"][0]["detail"]["state"], "conflict");
     assert_eq!(
         export["errors"][0]["detail"]["issues"][0]["code"],
@@ -5637,7 +5637,7 @@ fn order_app_records_fail_closed_when_order_id_conflicts() {
     assert!(!export_path.exists());
 
     let (submit_output, submit) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+        sandbox.json_output(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
     assert!(!submit_output.status.success());
     assert_eq!(
         submit["errors"][0]["detail"]["issues"][0]["code"],
@@ -6099,7 +6099,7 @@ fn market_order_request_readiness_gates_buyer_intent_actions() {
     let result = &search["result"]["results"][0];
     assert_eq!(result["protocol_valid"], true);
     assert_eq!(result["marketplace_eligible"], true);
-    assert_eq!(result["order_request_enabled"], true);
+    assert_eq!(result["checkout_enabled"], true);
     assert_eq!(result["primary_bin_verified"], true);
     assert!(result.get("reason_codes").is_none());
     assert!(
@@ -6121,7 +6121,7 @@ fn market_order_request_readiness_gates_buyer_intent_actions() {
     assert_eq!(listing["operation_id"], "market.listing.get");
     assert_eq!(listing["result"]["protocol_valid"], true);
     assert_eq!(listing["result"]["marketplace_eligible"], true);
-    assert_eq!(listing["result"]["order_request_enabled"], true);
+    assert_eq!(listing["result"]["checkout_enabled"], true);
     assert_eq!(listing["result"]["primary_bin_verified"], true);
     assert!(
         listing["result"]["actions"]
@@ -6138,11 +6138,11 @@ fn market_order_request_readiness_gates_buyer_intent_actions() {
     let disabled_result = &disabled_search["result"]["results"][0];
     assert_eq!(disabled_result["protocol_valid"], true);
     assert_eq!(disabled_result["marketplace_eligible"], true);
-    assert_eq!(disabled_result["order_request_enabled"], false);
+    assert_eq!(disabled_result["checkout_enabled"], false);
     assert_eq!(disabled_result["primary_bin_verified"], true);
     assert_eq!(
         disabled_result["reason_codes"][0],
-        "listing_order_request_disabled"
+        "listing_checkout_disabled"
     );
     assert_eq!(
         disabled_result["reason_codes"][1],
@@ -6166,11 +6166,11 @@ fn market_order_request_readiness_gates_buyer_intent_actions() {
     ]);
     assert_eq!(disabled_listing["result"]["protocol_valid"], true);
     assert_eq!(disabled_listing["result"]["marketplace_eligible"], true);
-    assert_eq!(disabled_listing["result"]["order_request_enabled"], false);
+    assert_eq!(disabled_listing["result"]["checkout_enabled"], false);
     assert_eq!(disabled_listing["result"]["primary_bin_verified"], true);
     assert_eq!(
         disabled_listing["result"]["reason_codes"][0],
-        "listing_order_request_disabled"
+        "listing_checkout_disabled"
     );
     assert!(
         disabled_listing["result"]
@@ -6186,11 +6186,11 @@ fn market_order_request_readiness_gates_buyer_intent_actions() {
         sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
     let no_bin_result = &no_bin_search["result"]["results"][0];
     assert_eq!(no_bin_result["primary_bin_id"], Value::Null);
-    assert_eq!(no_bin_result["order_request_enabled"], false);
+    assert_eq!(no_bin_result["checkout_enabled"], false);
     assert_eq!(no_bin_result["primary_bin_verified"], false);
     assert_eq!(
         no_bin_result["reason_codes"][0],
-        "listing_order_request_disabled"
+        "listing_checkout_disabled"
     );
     assert_eq!(
         no_bin_result["reason_codes"][1],
@@ -6213,7 +6213,7 @@ fn market_order_request_readiness_gates_buyer_intent_actions() {
         "pasture-eggs",
     ]);
     assert_eq!(no_bin_listing["result"]["primary_bin_id"], Value::Null);
-    assert_eq!(no_bin_listing["result"]["order_request_enabled"], false);
+    assert_eq!(no_bin_listing["result"]["checkout_enabled"], false);
     assert_eq!(no_bin_listing["result"]["primary_bin_verified"], false);
     assert_eq!(
         no_bin_listing["result"]["reason_codes"][1],
@@ -6232,7 +6232,7 @@ fn market_order_request_readiness_gates_buyer_intent_actions() {
         sandbox.json_success(&["--format", "json", "market", "product", "search", "eggs"]);
     let invalid_bin_result = &invalid_bin_search["result"]["results"][0];
     assert_eq!(invalid_bin_result["primary_bin_id"], "missing-bin");
-    assert_eq!(invalid_bin_result["order_request_enabled"], false);
+    assert_eq!(invalid_bin_result["checkout_enabled"], false);
     assert_eq!(invalid_bin_result["primary_bin_verified"], false);
     assert_eq!(
         invalid_bin_result["reason_codes"][1],
@@ -6258,10 +6258,7 @@ fn market_order_request_readiness_gates_buyer_intent_actions() {
         invalid_bin_listing["result"]["primary_bin_id"],
         "missing-bin"
     );
-    assert_eq!(
-        invalid_bin_listing["result"]["order_request_enabled"],
-        false
-    );
+    assert_eq!(invalid_bin_listing["result"]["checkout_enabled"], false);
     assert_eq!(invalid_bin_listing["result"]["primary_bin_verified"], false);
     assert_eq!(
         invalid_bin_listing["result"]["reason_codes"][1],
@@ -6285,7 +6282,7 @@ fn market_order_request_readiness_gates_buyer_intent_actions() {
         "pasture-eggs",
     ]);
     assert_eq!(restored_listing["result"]["primary_bin_id"], "bin-1");
-    assert_eq!(restored_listing["result"]["order_request_enabled"], true);
+    assert_eq!(restored_listing["result"]["checkout_enabled"], true);
     assert_eq!(restored_listing["result"]["primary_bin_verified"], true);
     assert!(
         restored_listing["result"]
@@ -6345,28 +6342,28 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
         "sync.push",
         &["--relay", "ws://127.0.0.1:9", "sync", "push"],
     );
-    assert_required_approval_token_rejected(&sandbox, "order.submit", &["order", "submit"]);
+    assert_required_approval_token_rejected(&sandbox, "trade.submit", &["trade", "submit"]);
     assert_required_approval_token_rejected(
         &sandbox,
-        "order.rebind",
-        &["order", "rebind", "ord_missing", "acct_missing"],
+        "trade.rebind",
+        &["trade", "rebind", "ord_missing", "acct_missing"],
     );
-    assert_required_approval_token_rejected(&sandbox, "order.accept", &["order", "accept"]);
+    assert_required_approval_token_rejected(&sandbox, "trade.accept", &["trade", "accept"]);
     assert_required_approval_token_rejected(
         &sandbox,
-        "order.decline",
-        &["order", "decline", "--reason", "out_of_stock"],
-    );
-    assert_required_approval_token_rejected(
-        &sandbox,
-        "order.cancel",
-        &["order", "cancel", "--reason", "changed plans"],
+        "trade.decline",
+        &["trade", "decline", "--reason", "out_of_stock"],
     );
     assert_required_approval_token_rejected(
         &sandbox,
-        "order.revision.accept",
+        "trade.cancel",
+        &["trade", "cancel", "--reason", "changed plans"],
+    );
+    assert_required_approval_token_rejected(
+        &sandbox,
+        "trade.revision.accept",
         &[
-            "order",
+            "trade",
             "revision",
             "accept",
             "ord_pending",
@@ -6376,9 +6373,9 @@ fn required_approval_token_rejects_absent_empty_and_whitespace_values() {
     );
     assert_required_approval_token_rejected(
         &sandbox,
-        "order.revision.decline",
+        "trade.revision.decline",
         &[
-            "order",
+            "trade",
             "revision",
             "decline",
             "ord_pending",
@@ -6420,11 +6417,11 @@ fn order_submit_missing_order_returns_not_found_while_read_view_stays_successful
     let get = sandbox.json_success(&[
         "--format",
         "json",
-        "order",
+        "trade",
         "get",
         "ord_missing_submit_target",
     ]);
-    assert_eq!(get["operation_id"], "order.get");
+    assert_eq!(get["operation_id"], "trade.get");
     assert_eq!(get["result"]["state"], "missing");
     assert_eq!(get["errors"].as_array().expect("errors").len(), 0);
 
@@ -6433,18 +6430,18 @@ fn order_submit_missing_order_returns_not_found_while_read_view_stays_successful
         "json",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "submit",
         "ord_missing_submit_target",
     ]);
 
     assert_eq!(output.status.code(), Some(4));
-    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["operation_id"], "trade.submit");
     assert_eq!(submit["errors"][0]["code"], "not_found");
     assert_eq!(submit["errors"][0]["exit_code"], 4);
     assert_eq!(submit["errors"][0]["detail"]["class"], "resource");
-    assert_no_removed_command_reference(&submit, &["order", "submit"]);
-    assert_no_daemon_runtime_reference(&submit, &["order", "submit"]);
+    assert_no_removed_command_reference(&submit, &["trade", "submit"]);
+    assert_no_daemon_runtime_reference(&submit, &["trade", "submit"]);
 }
 
 fn create_ready_order(sandbox: &RadrootsCliSandbox, basket_id: &str) -> String {
@@ -6466,7 +6463,7 @@ fn create_ready_order(sandbox: &RadrootsCliSandbox, basket_id: &str) -> String {
         "2",
     ]);
     let quote = sandbox.json_success(&["--format", "json", "basket", "quote", "create", basket_id]);
-    quote["result"]["quote"]["order_id"]
+    quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id")
         .to_owned()
@@ -6477,13 +6474,13 @@ fn rewrite_order_bin(sandbox: &RadrootsCliSandbox, order_id: &str, bin_id: &str)
         .root()
         .join("data/apps/cli/orders/drafts")
         .join(format!("{order_id}.toml"));
-    let contents = fs::read_to_string(&path).expect("read order draft");
+    let contents = fs::read_to_string(&path).expect("read trade draft");
     let updated = contents.replace(
         "bin_id = \"bin-1\"",
         format!("bin_id = \"{bin_id}\"").as_str(),
     );
     assert_ne!(updated, contents);
-    fs::write(path, updated).expect("rewrite order draft bin");
+    fs::write(path, updated).expect("rewrite trade draft bin");
 }
 
 fn rewrite_order_buyer_actor_pubkey(sandbox: &RadrootsCliSandbox, order_id: &str, pubkey: &str) {
@@ -6491,7 +6488,7 @@ fn rewrite_order_buyer_actor_pubkey(sandbox: &RadrootsCliSandbox, order_id: &str
         .root()
         .join("data/apps/cli/orders/drafts")
         .join(format!("{order_id}.toml"));
-    let contents = fs::read_to_string(&path).expect("read order draft");
+    let contents = fs::read_to_string(&path).expect("read trade draft");
     let mut in_buyer_actor = false;
     let mut replaced = false;
     let updated = contents
@@ -6511,7 +6508,7 @@ fn rewrite_order_buyer_actor_pubkey(sandbox: &RadrootsCliSandbox, order_id: &str
         .collect::<Vec<_>>()
         .join("\n");
     assert!(replaced, "buyer_actor pubkey field");
-    fs::write(path, format!("{updated}\n")).expect("rewrite order draft buyer actor");
+    fs::write(path, format!("{updated}\n")).expect("rewrite trade draft buyer actor");
 }
 
 fn line_indent(line: &str) -> &str {
@@ -6614,11 +6611,11 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(quote["operation_id"], "basket.quote.create");
     assert_eq!(quote["result"]["state"], "quoted");
     assert_no_removed_command_reference(&quote, &["basket", "quote", "create"]);
-    let order_id = quote["result"]["quote"]["order_id"]
+    let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
     let quote_economics = &quote["result"]["quote"]["economics"];
-    let order_file = quote["result"]["order"]["file"]
+    let order_file = quote["result"]["trade"]["file"]
         .as_str()
         .expect("order file");
     assert_eq!(quote["result"]["quote"]["ready_for_submit"], true);
@@ -6635,56 +6632,56 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(quote_economics["discounts"], Value::Array(Vec::new()));
     assert_eq!(quote_economics["adjustments"], Value::Array(Vec::new()));
     assert_eq!(
-        quote["result"]["order"]["economics"],
+        quote["result"]["trade"]["economics"],
         quote_economics.clone()
     );
-    let order_draft = fs::read_to_string(order_file).expect("read order draft");
+    let order_draft = fs::read_to_string(order_file).expect("read trade draft");
     assert!(order_draft.contains("[buyer_actor]"));
     assert!(order_draft.contains("source = \"resolved_account\""));
     assert!(order_draft.contains("[order.economics]"));
     assert!(order_draft.contains("pricing_basis = \"listing_event\""));
-    assert_eq!(quote["result"]["order"]["buyer_account_id"], account_id);
+    assert_eq!(quote["result"]["trade"]["buyer_account_id"], account_id);
     assert_eq!(
-        quote["result"]["order"]["buyer_actor_source"],
+        quote["result"]["trade"]["buyer_actor_source"],
         "resolved_account"
     );
     assert_eq!(
-        quote["result"]["order"]["listing_event_id"],
+        quote["result"]["trade"]["listing_event_id"],
         listing_event_id
     );
 
-    let orders = sandbox.json_success(&["--format", "json", "order", "list"]);
-    assert_eq!(orders["operation_id"], "order.list");
+    let orders = sandbox.json_success(&["--format", "json", "trade", "list"]);
+    assert_eq!(orders["operation_id"], "trade.list");
     assert_eq!(orders["result"]["state"], "ready");
     assert_eq!(orders["result"]["count"], 1);
-    assert_eq!(orders["result"]["orders"][0]["id"], order_id);
-    assert_eq!(orders["result"]["orders"][0]["ready_for_submit"], true);
+    assert_eq!(orders["result"]["trades"][0]["id"], order_id);
+    assert_eq!(orders["result"]["trades"][0]["ready_for_submit"], true);
     assert_eq!(
-        orders["result"]["orders"][0]["listing_event_id"],
+        orders["result"]["trades"][0]["listing_event_id"],
         listing_event_id
     );
     assert_eq!(
-        orders["result"]["orders"][0]["buyer_account_id"],
+        orders["result"]["trades"][0]["buyer_account_id"],
         account_id
     );
     assert_eq!(
-        orders["result"]["orders"][0]["buyer_actor_source"],
+        orders["result"]["trades"][0]["buyer_actor_source"],
         "resolved_account"
     );
     assert_eq!(
-        orders["result"]["orders"][0]["economics"],
+        orders["result"]["trades"][0]["economics"],
         quote_economics.clone()
     );
-    assert_eq!(orders["result"]["orders"][0]["issues"], Value::Null);
-    assert_no_removed_command_reference(&orders, &["order", "list"]);
-    assert_no_daemon_runtime_reference(&orders, &["order", "list"]);
+    assert_eq!(orders["result"]["trades"][0]["issues"], Value::Null);
+    assert_no_removed_command_reference(&orders, &["trade", "list"]);
+    assert_no_daemon_runtime_reference(&orders, &["trade", "list"]);
 
     let submit =
-        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
-    assert_eq!(submit["operation_id"], "order.submit");
+        sandbox.json_success(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
+    assert_eq!(submit["operation_id"], "trade.submit");
     assert_eq!(submit["dry_run"], true);
     assert_eq!(submit["result"]["state"], "dry_run");
-    assert_eq!(submit["result"]["source"], "SDK order submit · local key");
+    assert_eq!(submit["result"]["source"], "SDK trade submit · local key");
     assert_eq!(submit["result"]["event_kind"], 3422);
     assert_eq!(
         submit["result"]["target_relays"][0],
@@ -6697,21 +6694,21 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
             .len(),
         64
     );
-    assert_no_removed_command_reference(&submit, &["order", "submit", "--dry-run"]);
-    assert_no_daemon_runtime_reference(&submit, &["order", "submit", "--dry-run"]);
+    assert_no_removed_command_reference(&submit, &["trade", "submit", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&submit, &["trade", "submit", "--dry-run"]);
 
     let (output, unavailable_submit) = sandbox.json_output(&[
         "--format",
         "json",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "submit",
         order_id,
     ]);
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(3), "{unavailable_submit}");
-    assert_eq!(unavailable_submit["operation_id"], "order.submit");
+    assert_eq!(unavailable_submit["operation_id"], "trade.submit");
     assert_eq!(unavailable_submit["result"], Value::Null);
     assert_eq!(
         unavailable_submit["errors"][0]["code"],
@@ -6731,11 +6728,11 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
             .expect("message")
             .contains("SDK relay publish")
     );
-    assert_no_removed_command_reference(&unavailable_submit, &["order", "submit"]);
-    assert_no_daemon_runtime_reference(&unavailable_submit, &["order", "submit"]);
+    assert_no_removed_command_reference(&unavailable_submit, &["trade", "submit"]);
+    assert_no_daemon_runtime_reference(&unavailable_submit, &["trade", "submit"]);
 
-    let order_after_submit = sandbox.json_success(&["--format", "json", "order", "get", order_id]);
-    assert_eq!(order_after_submit["operation_id"], "order.get");
+    let order_after_submit = sandbox.json_success(&["--format", "json", "trade", "get", order_id]);
+    assert_eq!(order_after_submit["operation_id"], "trade.get");
     assert_eq!(order_after_submit["result"]["state"], "ready");
     assert_eq!(
         order_after_submit["result"]["economics"],
@@ -6743,26 +6740,26 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     );
     assert_eq!(order_after_submit["result"]["job"], Value::Null);
     assert_eq!(order_after_submit["result"]["workflow"], Value::Null);
-    assert_no_daemon_runtime_reference(&order_after_submit, &["order", "get"]);
+    assert_no_daemon_runtime_reference(&order_after_submit, &["trade", "get"]);
 
     let (watch_output, watch) =
-        sandbox.json_output(&["--format", "json", "order", "event", "watch", order_id]);
+        sandbox.json_output(&["--format", "json", "trade", "event", "watch", order_id]);
     assert!(!watch_output.status.success());
     assert_eq!(watch_output.status.code(), Some(3));
-    assert_eq!(watch["operation_id"], "order.event.watch");
+    assert_eq!(watch["operation_id"], "trade.event.watch");
     assert_eq!(watch["result"], Value::Null);
     assert_eq!(watch["errors"][0]["code"], "not_implemented");
     assert_eq!(watch["errors"][0]["detail"]["state"], "not_implemented");
-    assert_eq!(watch["errors"][0]["detail"]["order_id"], order_id);
+    assert_eq!(watch["errors"][0]["detail"]["trade_id"], order_id);
     assert_eq!(
         watch["next_actions"][0]["command"],
-        format!("radroots order status get {order_id}")
+        format!("radroots trade status get {order_id}")
     );
-    assert_no_daemon_runtime_reference(&watch, &["order", "event", "watch"]);
+    assert_no_daemon_runtime_reference(&watch, &["trade", "event", "watch"]);
     assert!(
         !serde_json::to_string(&watch)
             .expect("watch json")
-            .contains("local order drafts")
+            .contains("local trade drafts")
     );
 }
 
@@ -6771,7 +6768,7 @@ fn order_get_and_list_report_missing_bound_buyer_account() {
     let sandbox = RadrootsCliSandbox::new();
     let order_id = create_ready_order(&sandbox, "missing_buyer_account");
 
-    let ready = sandbox.json_success(&["--format", "json", "order", "get", order_id.as_str()]);
+    let ready = sandbox.json_success(&["--format", "json", "trade", "get", order_id.as_str()]);
     let account_id = ready["result"]["buyer_account_id"]
         .as_str()
         .expect("buyer account id");
@@ -6790,8 +6787,8 @@ fn order_get_and_list_report_missing_bound_buyer_account() {
         account_id,
     ]);
 
-    let missing = sandbox.json_success(&["--format", "json", "order", "get", order_id.as_str()]);
-    assert_eq!(missing["operation_id"], "order.get");
+    let missing = sandbox.json_success(&["--format", "json", "trade", "get", order_id.as_str()]);
+    assert_eq!(missing["operation_id"], "trade.get");
     assert_eq!(missing["result"]["state"], "draft");
     assert_eq!(missing["result"]["ready_for_submit"], false);
     assert_eq!(missing["result"]["buyer_account_id"], account_id);
@@ -6816,14 +6813,14 @@ fn order_get_and_list_report_missing_bound_buyer_account() {
             .expect("actions")
             .iter()
             .any(|action| action
-                == &Value::String(format!("radroots order rebind {order_id} <selector>")))
+                == &Value::String(format!("radroots trade rebind {order_id} <selector>")))
     );
 
-    let list = sandbox.json_success(&["--format", "json", "order", "list"]);
+    let list = sandbox.json_success(&["--format", "json", "trade", "list"]);
     assert_eq!(list["result"]["state"], "degraded");
-    assert_eq!(list["result"]["orders"][0]["ready_for_submit"], false);
+    assert_eq!(list["result"]["trades"][0]["ready_for_submit"], false);
     assert!(
-        list["result"]["orders"][0]["issues"]
+        list["result"]["trades"][0]["issues"]
             .as_array()
             .expect("issues")
             .iter()
@@ -6834,15 +6831,15 @@ fn order_get_and_list_report_missing_bound_buyer_account() {
         "--format",
         "json",
         "--dry-run",
-        "order",
+        "trade",
         "submit",
         order_id.as_str(),
     ]);
     assert!(!submit_output.status.success());
     assert_eq!(submit_output.status.code(), Some(5));
-    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["operation_id"], "trade.submit");
     assert_eq!(submit["errors"][0]["code"], "account_unresolved");
-    assert_eq!(submit["errors"][0]["detail"]["order_id"], order_id);
+    assert_eq!(submit["errors"][0]["detail"]["trade_id"], order_id);
 }
 
 #[test]
@@ -6890,11 +6887,11 @@ fn order_get_marks_watch_only_bound_buyer_unready() {
         "create",
         "watch_buyer",
     ]);
-    let order_id = quote["result"]["quote"]["order_id"]
+    let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
 
-    let get = sandbox.json_success(&["--format", "json", "order", "get", order_id]);
+    let get = sandbox.json_success(&["--format", "json", "trade", "get", order_id]);
     assert_eq!(get["result"]["state"], "draft");
     assert_eq!(get["result"]["ready_for_submit"], false);
     assert_eq!(get["result"]["buyer_account_id"], account_id);
@@ -6919,10 +6916,10 @@ fn order_get_marks_watch_only_bound_buyer_unready() {
     );
 
     let (submit_output, submit) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+        sandbox.json_output(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
     assert!(!submit_output.status.success());
     assert_eq!(submit_output.status.code(), Some(7));
-    assert_eq!(submit["operation_id"], "order.submit");
+    assert_eq!(submit["operation_id"], "trade.submit");
     assert_eq!(submit["errors"][0]["code"], "account_watch_only");
     assert_eq!(
         submit["errors"][0]["detail"]["order_buyer_account_id"],
@@ -6937,7 +6934,7 @@ fn order_get_marks_bound_buyer_pubkey_mismatch_unready() {
     let other_pubkey = identity_public(93).public_key_hex;
     rewrite_order_buyer_actor_pubkey(&sandbox, order_id.as_str(), other_pubkey.as_str());
 
-    let get = sandbox.json_success(&["--format", "json", "order", "get", order_id.as_str()]);
+    let get = sandbox.json_success(&["--format", "json", "trade", "get", order_id.as_str()]);
     assert_eq!(get["result"]["state"], "draft");
     assert_eq!(get["result"]["ready_for_submit"], false);
     assert_eq!(get["result"]["buyer_custody"], "secret_backed");
@@ -6955,7 +6952,7 @@ fn order_get_marks_bound_buyer_pubkey_mismatch_unready() {
             .expect("actions")
             .iter()
             .any(|action| action
-                == &Value::String(format!("radroots order rebind {order_id} <selector>")))
+                == &Value::String(format!("radroots trade rebind {order_id} <selector>")))
     );
 }
 
@@ -6977,15 +6974,15 @@ fn order_rebind_previews_and_writes_bound_buyer_actor_updates() {
         "--format",
         "json",
         "--dry-run",
-        "order",
+        "trade",
         "rebind",
         order_id.as_str(),
         second_account_id,
     ]);
-    assert_eq!(dry_run["operation_id"], "order.rebind");
+    assert_eq!(dry_run["operation_id"], "trade.rebind");
     assert_eq!(dry_run["result"]["state"], "dry_run");
-    assert_eq!(dry_run["result"]["from_order_id"], order_id);
-    assert_eq!(dry_run["result"]["order_id_changed"], true);
+    assert_eq!(dry_run["result"]["from_trade_id"], order_id);
+    assert_eq!(dry_run["result"]["trade_id_changed"], true);
     assert_eq!(dry_run["result"]["buyer_pubkey_changed"], true);
     assert_eq!(dry_run["result"]["to_buyer_account_id"], second_account_id);
     assert_eq!(
@@ -7000,13 +6997,13 @@ fn order_rebind_previews_and_writes_bound_buyer_actor_updates() {
     let (unapproved_output, unapproved) = sandbox.json_output(&[
         "--format",
         "json",
-        "order",
+        "trade",
         "rebind",
         order_id.as_str(),
         second_account_id,
     ]);
     assert!(!unapproved_output.status.success());
-    assert_eq!(unapproved["operation_id"], "order.rebind");
+    assert_eq!(unapproved["operation_id"], "trade.rebind");
     assert_eq!(unapproved["errors"][0]["code"], "approval_required");
 
     let rebound = sandbox.json_success(&[
@@ -7014,16 +7011,16 @@ fn order_rebind_previews_and_writes_bound_buyer_actor_updates() {
         "json",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "rebind",
         order_id.as_str(),
         second_account_id,
     ]);
-    assert_eq!(rebound["operation_id"], "order.rebind");
+    assert_eq!(rebound["operation_id"], "trade.rebind");
     assert_eq!(rebound["result"]["state"], "rebound");
-    assert_eq!(rebound["result"]["from_order_id"], order_id);
-    assert_eq!(rebound["result"]["order_id_changed"], true);
-    let rebound_order_id = rebound["result"]["to_order_id"]
+    assert_eq!(rebound["result"]["from_trade_id"], order_id);
+    assert_eq!(rebound["result"]["trade_id_changed"], true);
+    let rebound_order_id = rebound["result"]["to_trade_id"]
         .as_str()
         .expect("rebound order id");
     assert_ne!(rebound_order_id, order_id);
@@ -7035,7 +7032,7 @@ fn order_rebind_previews_and_writes_bound_buyer_actor_updates() {
     assert!(after.contains(format!("order_id = \"{rebound_order_id}\"").as_str()));
     assert!(after.contains(format!("quote_id = \"quote_{rebound_order_id}\"").as_str()));
 
-    let get = sandbox.json_success(&["--format", "json", "order", "get", rebound_order_id]);
+    let get = sandbox.json_success(&["--format", "json", "trade", "get", rebound_order_id]);
     assert_eq!(get["result"]["state"], "ready");
     assert_eq!(get["result"]["buyer_account_id"], second_account_id);
     assert_eq!(get["result"]["buyer_actor_source"], "order_rebind");
@@ -7045,14 +7042,14 @@ fn order_rebind_previews_and_writes_bound_buyer_actor_updates() {
         "json",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "rebind",
         rebound_order_id,
         second_account_id,
     ]);
     assert_eq!(same["result"]["state"], "rebound");
-    assert_eq!(same["result"]["order_id_changed"], false);
-    assert_eq!(same["result"]["to_order_id"], rebound_order_id);
+    assert_eq!(same["result"]["trade_id_changed"], false);
+    assert_eq!(same["result"]["to_trade_id"], rebound_order_id);
 }
 
 #[test]
@@ -7096,7 +7093,7 @@ fn order_rebind_refuses_visible_published_request() {
         "create",
         "visible_rebind",
     ]);
-    let order_id = quote["result"]["quote"]["order_id"]
+    let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
     let economics: RadrootsOrderEconomics =
@@ -7120,7 +7117,7 @@ fn order_rebind_refuses_visible_published_request() {
         "--dry-run",
         "--relay",
         relay.endpoint(),
-        "order",
+        "trade",
         "rebind",
         order_id,
         target_account_id,
@@ -7129,7 +7126,7 @@ fn order_rebind_refuses_visible_published_request() {
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(10));
-    assert_eq!(value["operation_id"], "order.rebind");
+    assert_eq!(value["operation_id"], "trade.rebind");
     assert_eq!(value["errors"][0]["code"], "validation_failed");
     assert_eq!(
         value["errors"][0]["detail"]["existing_request_check"],
@@ -7184,7 +7181,7 @@ fn order_status_and_event_list_use_draft_context_after_account_override_drift() 
         "create",
         "draft_status",
     ]);
-    let order_id = quote["result"]["quote"]["order_id"]
+    let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
     let economics: RadrootsOrderEconomics =
@@ -7206,14 +7203,14 @@ fn order_status_and_event_list_use_draft_context_after_account_override_drift() 
         "json",
         "--account-id",
         drift_account_id,
-        "order",
+        "trade",
         "status",
         "get",
         order_id,
     ]);
 
-    assert_eq!(status["operation_id"], "order.status.get");
-    assert_eq!(status["result"]["source"], "SDK local order projection");
+    assert_eq!(status["operation_id"], "trade.status.get");
+    assert_eq!(status["result"]["source"], "SDK local trade projection");
     assert_eq!(
         status["result"]["actor_context_source"],
         "sdk_local_projection"
@@ -7230,18 +7227,18 @@ fn order_status_and_event_list_use_draft_context_after_account_override_drift() 
         drift_account_id,
         "--relay",
         event_list_relay.endpoint(),
-        "order",
+        "trade",
         "event",
         "list",
         order_id,
     ]);
     event_list_relay.join();
 
-    assert_eq!(events["operation_id"], "order.event.list");
+    assert_eq!(events["operation_id"], "trade.event.list");
     assert_eq!(events["result"]["actor_context_source"], "order_draft");
     assert_eq!(events["result"]["seller_pubkey"], "1".repeat(64));
     assert_eq!(events["result"]["count"], 1);
-    assert_eq!(events["result"]["orders"][0]["id"], order_id);
+    assert_eq!(events["result"]["trades"][0]["id"], order_id);
 }
 
 #[test]
@@ -7299,7 +7296,7 @@ fn order_cancel_uses_bound_buyer_after_default_account_drift() {
         "create",
         "bound_cancel",
     ]);
-    let order_id = quote["result"]["quote"]["order_id"]
+    let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
     let economics: RadrootsOrderEconomics =
@@ -7331,7 +7328,7 @@ fn order_cancel_uses_bound_buyer_after_default_account_drift() {
         "--dry-run",
         "--relay",
         relay.endpoint(),
-        "order",
+        "trade",
         "cancel",
         order_id,
         "--reason",
@@ -7339,7 +7336,7 @@ fn order_cancel_uses_bound_buyer_after_default_account_drift() {
     ]);
     relay.join();
 
-    assert_eq!(cancel["operation_id"], "order.cancel");
+    assert_eq!(cancel["operation_id"], "trade.cancel");
     assert_eq!(cancel["result"]["state"], "dry_run");
     assert_eq!(cancel["result"]["buyer_pubkey"], buyer.public_key_hex());
     assert_eq!(cancel["result"]["signer_mode"], "local");
@@ -7356,7 +7353,7 @@ fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft()
 
     for (operation_id, command) in [
         (
-            "order.revision.accept",
+            "trade.revision.accept",
             vec![
                 "--format",
                 "json",
@@ -7365,7 +7362,7 @@ fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft()
                 drift_account_id,
                 "--relay",
                 "ws://127.0.0.1:9",
-                "order",
+                "trade",
                 "revision",
                 "accept",
                 order_id.as_str(),
@@ -7374,7 +7371,7 @@ fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft()
             ],
         ),
         (
-            "order.cancel",
+            "trade.cancel",
             vec![
                 "--format",
                 "json",
@@ -7383,7 +7380,7 @@ fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft()
                 drift_account_id,
                 "--relay",
                 "ws://127.0.0.1:9",
-                "order",
+                "trade",
                 "cancel",
                 order_id.as_str(),
                 "--reason",
@@ -7398,7 +7395,7 @@ fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft()
         assert_eq!(value["operation_id"], operation_id);
         assert_eq!(value["result"], Value::Null);
         assert_eq!(value["errors"][0]["code"], "account_mismatch");
-        assert_eq!(value["errors"][0]["detail"]["order_id"], order_id);
+        assert_eq!(value["errors"][0]["detail"]["trade_id"], order_id);
         assert_eq!(
             value["errors"][0]["detail"]["attempted_buyer_account_id"],
             drift_account_id
@@ -7419,19 +7416,19 @@ fn order_submit_requires_local_replica_freshness_before_signing() {
         "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "submit",
         order_id.as_str(),
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["errors"][0]["code"], "operation_unavailable");
     assert_eq!(value["errors"][0]["detail"]["state"], "unconfigured");
     assert_eq!(
         value["errors"][0]["detail"]["issues"][0]["field"],
-        "order.listing_addr"
+        "trade.listing_addr"
     );
     assert!(
         value["errors"][0]["message"]
@@ -7451,20 +7448,20 @@ fn order_submit_dry_run_requires_local_replica_freshness() {
         "--format",
         "json",
         "--dry-run",
-        "order",
+        "trade",
         "submit",
         order_id.as_str(),
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["errors"][0]["code"], "operation_unavailable");
     assert_eq!(value["errors"][0]["detail"]["state"], "unconfigured");
     assert_eq!(
         value["errors"][0]["detail"]["issues"][0]["field"],
-        "order.listing_addr"
+        "trade.listing_addr"
     );
 }
 
@@ -7481,18 +7478,18 @@ fn order_submit_rejects_missing_or_archived_local_listing_before_publish() {
         "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "submit",
         order_id.as_str(),
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["errors"][0]["code"], "operation_unavailable");
     assert_eq!(
         value["errors"][0]["detail"]["issues"][0]["field"],
-        "order.listing_addr"
+        "trade.listing_addr"
     );
     assert!(
         value["errors"][0]["message"]
@@ -7516,18 +7513,18 @@ fn order_submit_rejects_superseded_local_listing_event_before_publish() {
         "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "submit",
         order_id.as_str(),
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(3));
-    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["errors"][0]["code"], "operation_unavailable");
     assert_eq!(
         value["errors"][0]["detail"]["issues"][0]["field"],
-        "order.listing_event_id"
+        "trade.listing_event_id"
     );
     assert!(
         value["errors"][0]["detail"]["issues"][0]["message"]
@@ -7565,7 +7562,7 @@ fn order_submit_rejects_over_available_quantity_before_publish() {
         "create",
         "over_quantity",
     ]);
-    let order_id = quote["result"]["quote"]["order_id"]
+    let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
 
@@ -7576,14 +7573,14 @@ fn order_submit_rejects_over_available_quantity_before_publish() {
         "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "submit",
         order_id,
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(10));
-    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["errors"][0]["code"], "validation_failed");
     assert_eq!(
         value["errors"][0]["detail"]["issues"][0]["code"],
@@ -7595,8 +7592,8 @@ fn order_submit_rejects_over_available_quantity_before_publish() {
             .expect("issue message")
             .contains("available quantity 5")
     );
-    assert_no_removed_command_reference(&value, &["order", "submit"]);
-    assert_no_daemon_runtime_reference(&value, &["order", "submit"]);
+    assert_no_removed_command_reference(&value, &["trade", "submit"]);
+    assert_no_daemon_runtime_reference(&value, &["trade", "submit"]);
 }
 
 #[test]
@@ -7612,14 +7609,14 @@ fn order_submit_rejects_unknown_local_listing_bin_before_publish() {
         "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "submit",
         order_id.as_str(),
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(10));
-    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["errors"][0]["code"], "validation_failed");
     assert_eq!(
         value["errors"][0]["detail"]["issues"][0]["code"],
@@ -7635,8 +7632,8 @@ fn order_submit_rejects_unknown_local_listing_bin_before_publish() {
             .expect("issue message")
             .contains("expected primary bin `bin-1`")
     );
-    assert_no_removed_command_reference(&value, &["order", "submit"]);
-    assert_no_daemon_runtime_reference(&value, &["order", "submit"]);
+    assert_no_removed_command_reference(&value, &["trade", "submit"]);
+    assert_no_daemon_runtime_reference(&value, &["trade", "submit"]);
 }
 
 #[test]
@@ -7842,14 +7839,14 @@ fn order_submit_rejects_stale_invalid_verified_primary_bin_before_relay_prefligh
         "--format",
         "json",
         "--dry-run",
-        "order",
+        "trade",
         "submit",
         &order_id,
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(10));
-    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["errors"][0]["code"], "validation_failed");
     assert_eq!(
@@ -7860,8 +7857,8 @@ fn order_submit_rejects_stale_invalid_verified_primary_bin_before_relay_prefligh
         value["errors"][0]["detail"]["issues"][0]["field"],
         "inventory.primary_bin_id"
     );
-    assert_no_removed_command_reference(&value, &["order", "submit", "--dry-run"]);
-    assert_no_daemon_runtime_reference(&value, &["order", "submit", "--dry-run"]);
+    assert_no_removed_command_reference(&value, &["trade", "submit", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&value, &["trade", "submit", "--dry-run"]);
 }
 
 #[test]
@@ -7892,16 +7889,16 @@ fn order_submit_dry_run_rejects_over_available_quantity_before_relay_preflight()
         "create",
         "dry_over_quantity",
     ]);
-    let order_id = quote["result"]["quote"]["order_id"]
+    let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
 
     let (output, value) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "order", "submit", order_id]);
+        sandbox.json_output(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(10));
-    assert_eq!(value["operation_id"], "order.submit");
+    assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["errors"][0]["code"], "validation_failed");
     assert_eq!(
@@ -7941,31 +7938,31 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
         "create",
         "ready_order",
     ]);
-    let order_id = quote["result"]["quote"]["order_id"]
+    let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
     assert_eq!(quote["result"]["quote"]["ready_for_submit"], true);
     assert_eq!(
-        quote["result"]["order"]["buyer_account_id"],
+        quote["result"]["trade"]["buyer_account_id"],
         first_account_id
     );
     assert_eq!(
-        quote["result"]["order"]["listing_event_id"],
+        quote["result"]["trade"]["listing_event_id"],
         listing_event_id
     );
 
     let dry_run =
-        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
-    assert_eq!(dry_run["operation_id"], "order.submit");
+        sandbox.json_success(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
+    assert_eq!(dry_run["operation_id"], "trade.submit");
     assert_eq!(dry_run["dry_run"], true);
     assert_eq!(dry_run["result"]["state"], "dry_run");
-    assert_eq!(dry_run["result"]["source"], "SDK order submit · local key");
+    assert_eq!(dry_run["result"]["source"], "SDK trade submit · local key");
     assert_eq!(dry_run["result"]["event_kind"], 3422);
     assert_eq!(
         dry_run["result"]["target_relays"][0],
         ORDERABLE_LISTING_RELAY
     );
-    assert_no_daemon_runtime_reference(&dry_run, &["order", "submit", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&dry_run, &["trade", "submit", "--dry-run"]);
 
     let second = sandbox.json_success(&["--format", "json", "account", "create"]);
     let second_account_id = second["result"]["account"]["id"]
@@ -7980,8 +7977,8 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
         second_account_id,
     ]);
     let drift =
-        sandbox.json_success(&["--format", "json", "--dry-run", "order", "submit", order_id]);
-    assert_eq!(drift["operation_id"], "order.submit");
+        sandbox.json_success(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
+    assert_eq!(drift["operation_id"], "trade.submit");
     assert_eq!(drift["result"]["state"], "dry_run");
     assert_eq!(drift["result"]["buyer_account_id"], first_account_id);
 
@@ -7991,18 +7988,18 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
         "--account-id",
         second_account_id,
         "--dry-run",
-        "order",
+        "trade",
         "submit",
         order_id,
     ]);
 
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(5));
-    assert_eq!(mismatch["operation_id"], "order.submit");
+    assert_eq!(mismatch["operation_id"], "trade.submit");
     assert_eq!(mismatch["errors"][0]["code"], "account_mismatch");
     assert_eq!(mismatch["errors"][0]["detail"]["class"], "account");
-    assert_no_removed_command_reference(&mismatch, &["order", "submit", "--dry-run"]);
-    assert_no_daemon_runtime_reference(&mismatch, &["order", "submit", "--dry-run"]);
+    assert_no_removed_command_reference(&mismatch, &["trade", "submit", "--dry-run"]);
+    assert_no_daemon_runtime_reference(&mismatch, &["trade", "submit", "--dry-run"]);
 
     let (network_output, network_mismatch) = sandbox.json_output(&[
         "--format",
@@ -8013,18 +8010,18 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
         "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "submit",
         order_id,
     ]);
 
     assert!(!network_output.status.success());
     assert_eq!(network_output.status.code(), Some(5));
-    assert_eq!(network_mismatch["operation_id"], "order.submit");
+    assert_eq!(network_mismatch["operation_id"], "trade.submit");
     assert_eq!(network_mismatch["result"], Value::Null);
     assert_eq!(network_mismatch["errors"][0]["code"], "account_mismatch");
     assert_eq!(network_mismatch["errors"][0]["detail"]["class"], "account");
-    assert_no_daemon_runtime_reference(&network_mismatch, &["order", "submit"]);
+    assert_no_daemon_runtime_reference(&network_mismatch, &["trade", "submit"]);
 }
 
 #[test]

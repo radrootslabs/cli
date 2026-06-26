@@ -113,9 +113,9 @@ fn sdk_order_status_state(status: OrderStatusKind) -> &'static str {
 
 fn sdk_order_status_reason(status: OrderStatusKind, order_id: &str) -> Option<String> {
     match status {
-        OrderStatusKind::Missing => Some(format!("no local SDK order events matched `{order_id}`")),
+        OrderStatusKind::Missing => Some(format!("no local SDK trade events matched `{order_id}`")),
         OrderStatusKind::Invalid => Some(format!(
-            "local SDK order events for `{order_id}` failed reducer validation"
+            "local SDK trade events for `{order_id}` failed reducer validation"
         )),
         _ => None,
     }
@@ -167,7 +167,7 @@ fn sdk_order_status_issue_view(issue: &SdkOrderStatusIssue) -> OrderIssueView {
     OrderIssueView {
         code: code.clone(),
         field: "sdk_order_status".to_owned(),
-        message: format!("SDK order status reported `{code}`"),
+        message: format!("SDK trade status reported `{code}`"),
         event_ids: issue
             .event_ids
             .iter()

@@ -88,11 +88,11 @@ mod farm;
 mod health;
 mod listing;
 mod market;
-mod order;
 mod relay;
 mod signer;
 mod store;
 mod sync;
+mod trade;
 mod validation;
 mod workspace;
 
@@ -126,7 +126,9 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
     farm::FARM_GET,
     farm::FARM_REBIND,
     farm::FARM_PROFILE_UPDATE,
-    farm::FARM_LOCATION_UPDATE,
+    farm::FARM_LOCATION_SET,
+    farm::FARM_LOCATION_GET,
+    farm::FARM_LOCATION_CLEAR,
     farm::FARM_FULFILLMENT_UPDATE,
     farm::FARM_READINESS_CHECK,
     farm::FARM_PUBLISH,
@@ -153,21 +155,21 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
     basket::BASKET_ADJUSTMENT_REMOVE,
     basket::BASKET_VALIDATE,
     basket::BASKET_QUOTE_CREATE,
-    order::ORDER_SUBMIT,
-    order::ORDER_GET,
-    order::ORDER_LIST,
-    order::ORDER_APP_LIST,
-    order::ORDER_APP_EXPORT,
-    order::ORDER_REBIND,
-    order::ORDER_ACCEPT,
-    order::ORDER_DECLINE,
-    order::ORDER_CANCEL,
-    order::ORDER_REVISION_PROPOSE,
-    order::ORDER_REVISION_ACCEPT,
-    order::ORDER_REVISION_DECLINE,
-    order::ORDER_STATUS_GET,
-    order::ORDER_EVENT_LIST,
-    order::ORDER_EVENT_WATCH,
+    trade::TRADE_SUBMIT,
+    trade::TRADE_GET,
+    trade::TRADE_LIST,
+    trade::TRADE_APP_LIST,
+    trade::TRADE_APP_EXPORT,
+    trade::TRADE_REBIND,
+    trade::TRADE_ACCEPT,
+    trade::TRADE_DECLINE,
+    trade::TRADE_CANCEL,
+    trade::TRADE_REVISION_PROPOSE,
+    trade::TRADE_REVISION_ACCEPT,
+    trade::TRADE_REVISION_DECLINE,
+    trade::TRADE_STATUS_GET,
+    trade::TRADE_EVENT_LIST,
+    trade::TRADE_EVENT_WATCH,
     validation::VALIDATION_RECEIPT_GET,
     validation::VALIDATION_RECEIPT_LIST,
     validation::VALIDATION_RECEIPT_VERIFY,
@@ -189,19 +191,19 @@ pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
         | "listing.publish"
         | "listing.update"
         | "listing.archive"
-        | "order.submit"
-        | "order.event.list"
+        | "trade.submit"
+        | "trade.event.list"
         | "validation.receipt.get"
         | "validation.receipt.list"
         | "validation.receipt.verify" => NetworkRequirement::External {
             dry_run_requires_network: false,
         },
-        "order.accept"
-        | "order.decline"
-        | "order.cancel"
-        | "order.revision.propose"
-        | "order.revision.accept"
-        | "order.revision.decline" => NetworkRequirement::External {
+        "trade.accept"
+        | "trade.decline"
+        | "trade.cancel"
+        | "trade.revision.propose"
+        | "trade.revision.accept"
+        | "trade.revision.decline" => NetworkRequirement::External {
             dry_run_requires_network: true,
         },
         _ => NetworkRequirement::Local,
@@ -212,13 +214,13 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
     matches!(
         operation_id,
         "sync.push"
-            | "order.submit"
-            | "order.accept"
-            | "order.decline"
-            | "order.cancel"
-            | "order.revision.propose"
-            | "order.revision.accept"
-            | "order.revision.decline"
+            | "trade.submit"
+            | "trade.accept"
+            | "trade.decline"
+            | "trade.cancel"
+            | "trade.revision.propose"
+            | "trade.revision.accept"
+            | "trade.revision.decline"
     )
 }
 
@@ -231,13 +233,13 @@ pub fn requires_direct_nostr_relay_publish_transport(operation_id: &str) -> bool
             | "listing.publish"
             | "listing.update"
             | "listing.archive"
-            | "order.submit"
-            | "order.accept"
-            | "order.decline"
-            | "order.cancel"
-            | "order.revision.propose"
-            | "order.revision.accept"
-            | "order.revision.decline"
+            | "trade.submit"
+            | "trade.accept"
+            | "trade.decline"
+            | "trade.cancel"
+            | "trade.revision.propose"
+            | "trade.revision.accept"
+            | "trade.revision.decline"
     )
 }
 
@@ -290,7 +292,9 @@ mod tests {
         "farm.get",
         "farm.rebind",
         "farm.profile.update",
-        "farm.location.update",
+        "farm.location.set",
+        "farm.location.get",
+        "farm.location.clear",
         "farm.fulfillment.update",
         "farm.readiness.check",
         "farm.publish",
@@ -317,21 +321,21 @@ mod tests {
         "basket.adjustment.remove",
         "basket.validate",
         "basket.quote.create",
-        "order.submit",
-        "order.get",
-        "order.list",
-        "order.app.list",
-        "order.app.export",
-        "order.rebind",
-        "order.accept",
-        "order.decline",
-        "order.cancel",
-        "order.revision.propose",
-        "order.revision.accept",
-        "order.revision.decline",
-        "order.status.get",
-        "order.event.list",
-        "order.event.watch",
+        "trade.submit",
+        "trade.get",
+        "trade.list",
+        "trade.app.list",
+        "trade.app.export",
+        "trade.rebind",
+        "trade.accept",
+        "trade.decline",
+        "trade.cancel",
+        "trade.revision.propose",
+        "trade.revision.accept",
+        "trade.revision.decline",
+        "trade.status.get",
+        "trade.event.list",
+        "trade.event.watch",
         "validation.receipt.get",
         "validation.receipt.list",
         "validation.receipt.verify",
@@ -353,7 +357,8 @@ mod tests {
         "farm.create",
         "farm.rebind",
         "farm.profile.update",
-        "farm.location.update",
+        "farm.location.set",
+        "farm.location.clear",
         "farm.fulfillment.update",
         "farm.publish",
         "listing.create",
@@ -370,15 +375,15 @@ mod tests {
         "basket.adjustment.add",
         "basket.adjustment.remove",
         "basket.quote.create",
-        "order.submit",
-        "order.app.export",
-        "order.rebind",
-        "order.accept",
-        "order.decline",
-        "order.cancel",
-        "order.revision.propose",
-        "order.revision.accept",
-        "order.revision.decline",
+        "trade.submit",
+        "trade.app.export",
+        "trade.rebind",
+        "trade.accept",
+        "trade.decline",
+        "trade.cancel",
+        "trade.revision.propose",
+        "trade.revision.accept",
+        "trade.revision.decline",
     ];
 
     const INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[];
@@ -391,7 +396,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 74);
+        assert_eq!(OPERATION_REGISTRY.len(), 76);
     }
 
     #[test]
@@ -437,19 +442,20 @@ mod tests {
             "account.remove",
             "sync.push",
             "farm.rebind",
+            "farm.location.clear",
             "farm.publish",
             "listing.rebind",
             "listing.publish",
             "listing.update",
             "listing.archive",
-            "order.submit",
-            "order.rebind",
-            "order.accept",
-            "order.decline",
-            "order.cancel",
-            "order.revision.propose",
-            "order.revision.accept",
-            "order.revision.decline",
+            "trade.submit",
+            "trade.rebind",
+            "trade.accept",
+            "trade.decline",
+            "trade.cancel",
+            "trade.revision.propose",
+            "trade.revision.accept",
+            "trade.revision.decline",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -515,8 +521,8 @@ mod tests {
             "market.refresh",
             "market.product.search",
             "basket.list",
-            "order.list",
-            "order.event.list",
+            "trade.list",
+            "trade.event.list",
             "validation.receipt.list",
         ]
         .into_iter()
@@ -546,14 +552,14 @@ mod tests {
             "listing.publish",
             "listing.update",
             "listing.archive",
-            "order.submit",
-            "order.accept",
-            "order.decline",
-            "order.cancel",
-            "order.revision.propose",
-            "order.revision.accept",
-            "order.revision.decline",
-            "order.event.list",
+            "trade.submit",
+            "trade.accept",
+            "trade.decline",
+            "trade.cancel",
+            "trade.revision.propose",
+            "trade.revision.accept",
+            "trade.revision.decline",
+            "trade.event.list",
             "validation.receipt.get",
             "validation.receipt.list",
             "validation.receipt.verify",
@@ -573,13 +579,13 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected = [
             "sync.push",
-            "order.submit",
-            "order.accept",
-            "order.decline",
-            "order.cancel",
-            "order.revision.propose",
-            "order.revision.accept",
-            "order.revision.decline",
+            "trade.submit",
+            "trade.accept",
+            "trade.decline",
+            "trade.cancel",
+            "trade.revision.propose",
+            "trade.revision.accept",
+            "trade.revision.decline",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -602,13 +608,13 @@ mod tests {
             "listing.publish",
             "listing.update",
             "listing.archive",
-            "order.submit",
-            "order.accept",
-            "order.decline",
-            "order.cancel",
-            "order.revision.propose",
-            "order.revision.accept",
-            "order.revision.decline",
+            "trade.submit",
+            "trade.accept",
+            "trade.decline",
+            "trade.cancel",
+            "trade.revision.propose",
+            "trade.revision.accept",
+            "trade.revision.decline",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -642,7 +648,7 @@ mod tests {
             OperationRole::Buyer
         );
         assert_eq!(
-            get_operation("order.list").unwrap().role,
+            get_operation("trade.list").unwrap().role,
             OperationRole::Any
         );
     }

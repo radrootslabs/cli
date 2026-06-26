@@ -132,6 +132,19 @@ pub struct FarmUpdateArgs {
     pub value: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct FarmPrivateLocationSetArgs {
+    pub farm_d_tag: Option<String>,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub lookup: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FarmPrivateLocationKeyArgs {
+    pub farm_d_tag: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FarmPublishArgs {
     pub scope: Option<FarmScopeArg>,
@@ -208,30 +221,30 @@ pub struct OrderDraftAdjustmentArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderSubmitArgs {
+pub struct TradeSubmitArgs {
     pub key: String,
     pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderAppRecordExportArgs {
+pub struct TradeAppRecordExportArgs {
     pub record_id: String,
     pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderRebindArgs {
+pub struct TradeRebindArgs {
     pub key: String,
     pub selector: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OrderDecisionArg {
+pub enum TradeDecisionArg {
     Accept,
     Decline,
 }
 
-impl OrderDecisionArg {
+impl TradeDecisionArg {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Accept => "accepted",
@@ -248,22 +261,22 @@ impl OrderDecisionArg {
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderDecisionArgs {
+pub struct TradeDecisionArgs {
     pub key: String,
-    pub decision: OrderDecisionArg,
+    pub decision: TradeDecisionArg,
     pub reason: Option<String>,
     pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderCancelArgs {
+pub struct TradeCancelArgs {
     pub key: String,
     pub reason: String,
     pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderRevisionProposeArgs {
+pub struct TradeRevisionProposeArgs {
     pub key: String,
     pub reason: String,
     pub bin_id: Option<String>,
@@ -277,12 +290,12 @@ pub struct OrderRevisionProposeArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OrderRevisionDecisionArg {
+pub enum TradeRevisionDecisionArg {
     Accept,
     Decline,
 }
 
-impl OrderRevisionDecisionArg {
+impl TradeRevisionDecisionArg {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Accept => "accepted",
@@ -299,16 +312,16 @@ impl OrderRevisionDecisionArg {
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderRevisionDecisionArgs {
+pub struct TradeRevisionDecisionArgs {
     pub key: String,
     pub revision_id: String,
-    pub decision: OrderRevisionDecisionArg,
+    pub decision: TradeRevisionDecisionArg,
     pub reason: Option<String>,
     pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderStatusArgs {
+pub struct TradeStatusArgs {
     pub key: String,
 }
 

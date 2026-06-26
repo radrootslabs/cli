@@ -33,8 +33,8 @@ pub struct ValidationReceiptEventArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct ValidationReceiptListArgs {
-    #[arg(long)]
-    pub order_id: Option<String>,
+    #[arg(long = "trade-id")]
+    pub trade_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

@@ -320,31 +320,31 @@ fn cli_write_kinds() -> [CliWriteKind; 12] {
             event_kind: KIND_LISTING,
         },
         CliWriteKind {
-            command: "order.submit",
+            command: "trade.submit",
             event_kind: KIND_ORDER_REQUEST,
         },
         CliWriteKind {
-            command: "order.accept",
+            command: "trade.accept",
             event_kind: KIND_ORDER_DECISION,
         },
         CliWriteKind {
-            command: "order.decline",
+            command: "trade.decline",
             event_kind: KIND_ORDER_DECISION,
         },
         CliWriteKind {
-            command: "order.cancel",
+            command: "trade.cancel",
             event_kind: KIND_ORDER_CANCELLATION,
         },
         CliWriteKind {
-            command: "order.revision.propose",
+            command: "trade.revision.propose",
             event_kind: KIND_ORDER_REVISION_PROPOSAL,
         },
         CliWriteKind {
-            command: "order.revision.accept",
+            command: "trade.revision.accept",
             event_kind: KIND_ORDER_REVISION_DECISION,
         },
         CliWriteKind {
-            command: "order.revision.decline",
+            command: "trade.revision.decline",
             event_kind: KIND_ORDER_REVISION_DECISION,
         },
     ]
@@ -623,13 +623,13 @@ mod tests {
                 "listing.publish",
                 "listing.update",
                 "listing.archive",
-                "order.submit",
-                "order.accept",
-                "order.decline",
-                "order.cancel",
-                "order.revision.propose",
-                "order.revision.accept",
-                "order.revision.decline",
+                "trade.submit",
+                "trade.accept",
+                "trade.decline",
+                "trade.cancel",
+                "trade.revision.propose",
+                "trade.revision.accept",
+                "trade.revision.decline",
             ]
         );
         assert!(!commands.contains(&"signer.status.get"));
@@ -639,7 +639,7 @@ mod tests {
     fn order_submit_readiness_uses_active_order_request_kind() {
         let write_kind = cli_write_kinds()
             .into_iter()
-            .find(|kind| kind.command == "order.submit")
+            .find(|kind| kind.command == "trade.submit")
             .expect("order submit readiness");
 
         assert_eq!(write_kind.event_kind, KIND_ORDER_REQUEST);
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     fn order_decision_readiness_uses_active_order_decision_kind() {
-        for command in ["order.accept", "order.decline"] {
+        for command in ["trade.accept", "trade.decline"] {
             let write_kind = cli_write_kinds()
                 .into_iter()
                 .find(|kind| kind.command == command)
@@ -663,13 +663,13 @@ mod tests {
     fn order_revision_readiness_uses_active_revision_kinds() {
         let proposal = cli_write_kinds()
             .into_iter()
-            .find(|kind| kind.command == "order.revision.propose")
+            .find(|kind| kind.command == "trade.revision.propose")
             .expect("order revision propose readiness");
 
         assert_eq!(proposal.event_kind, KIND_ORDER_REVISION_PROPOSAL);
         assert_ne!(proposal.event_kind, RESERVED_ORDER_KIND_3431);
 
-        for command in ["order.revision.accept", "order.revision.decline"] {
+        for command in ["trade.revision.accept", "trade.revision.decline"] {
             let write_kind = cli_write_kinds()
                 .into_iter()
                 .find(|kind| kind.command == command)
@@ -684,7 +684,7 @@ mod tests {
     fn order_cancel_readiness_uses_order_cancellation_kind() {
         let cancel = cli_write_kinds()
             .into_iter()
-            .find(|kind| kind.command == "order.cancel")
+            .find(|kind| kind.command == "trade.cancel")
             .expect("order cancel readiness");
         assert_eq!(cancel.event_kind, KIND_ORDER_CANCELLATION);
         assert_ne!(cancel.event_kind, RESERVED_ORDER_KIND_3431);
@@ -709,7 +709,7 @@ mod tests {
         for (command, event_kind) in [
             ("farm.publish", KIND_FARM),
             ("listing.publish", KIND_LISTING),
-            ("order.submit", KIND_ORDER_REQUEST),
+            ("trade.submit", KIND_ORDER_REQUEST),
         ] {
             let entry = readiness
                 .iter()

@@ -80,15 +80,27 @@ pub struct FarmLocationArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum FarmLocationCommand {
-    Update(FarmLocationUpdateArgs),
+    Set(FarmLocationSetArgs),
+    Get(FarmLocationKeyArgs),
+    Clear(FarmLocationKeyArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct FarmLocationUpdateArgs {
+pub struct FarmLocationSetArgs {
     #[arg(long)]
-    pub field: Option<String>,
+    pub lat: Option<f64>,
     #[arg(long)]
-    pub value: Option<String>,
+    pub lng: Option<f64>,
+    #[arg(long = "farm-d-tag")]
+    pub farm_d_tag: Option<String>,
+    #[arg(long = "lookup", default_value = "geonames")]
+    pub lookup: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct FarmLocationKeyArgs {
+    #[arg(long = "farm-d-tag")]
+    pub farm_d_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

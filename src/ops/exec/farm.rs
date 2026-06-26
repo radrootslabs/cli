@@ -2,12 +2,13 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::cli::global::{
-    FarmCreateArgs, FarmFieldArg, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
-    FarmUpdateArgs,
+    FarmCreateArgs, FarmFieldArg, FarmPrivateLocationKeyArgs, FarmPrivateLocationSetArgs,
+    FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs, FarmUpdateArgs,
 };
 use crate::ops::{
     FarmCreateRequest, FarmCreateResult, FarmFulfillmentUpdateRequest, FarmFulfillmentUpdateResult,
-    FarmGetRequest, FarmGetResult, FarmLocationUpdateRequest, FarmLocationUpdateResult,
+    FarmGetRequest, FarmGetResult, FarmLocationClearRequest, FarmLocationClearResult,
+    FarmLocationGetRequest, FarmLocationGetResult, FarmLocationSetRequest, FarmLocationSetResult,
     FarmProfileUpdateRequest, FarmProfileUpdateResult, FarmPublishRequest, FarmPublishResult,
     FarmReadinessCheckRequest, FarmReadinessCheckResult, FarmRebindRequest, FarmRebindResult,
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
@@ -122,14 +123,72 @@ impl OperationService<FarmProfileUpdateRequest> for FarmOperationService<'_> {
     }
 }
 
-impl OperationService<FarmLocationUpdateRequest> for FarmOperationService<'_> {
-    type Result = FarmLocationUpdateResult;
+impl OperationService<FarmLocationSetRequest> for FarmOperationService<'_> {
+    type Result = FarmLocationSetResult;
 
     fn execute(
         &self,
-        request: OperationRequest<FarmLocationUpdateRequest>,
+        request: OperationRequest<FarmLocationSetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        farm_set::<FarmLocationUpdateResult>(&request, self.config, location_field(&request)?)
+        let lookup = string_input(&request, "lookup").unwrap_or_else(|| "geonames".to_owned());
+        if lookup != "geonames" {
+            return Err(invalid_input(
+                request.operation_id(),
+                format!("farm location lookup `{lookup}` is not supported"),
+            ));
+        }
+        let args = FarmPrivateLocationSetArgs {
+            farm_d_tag: string_input(&request, "farm_d_tag"),
+            latitude: required_f64(&request, "latitude")?,
+            longitude: required_f64(&request, "longitude")?,
+            lookup,
+        };
+        let view =
+            crate::runtime::farm::private_location_set(self.config, &args).map_err(|error| {
+                OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
+            })?;
+        serialized_operation_result::<FarmLocationSetResult, _>(&view)
+    }
+}
+
+impl OperationService<FarmLocationGetRequest> for FarmOperationService<'_> {
+    type Result = FarmLocationGetResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<FarmLocationGetRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = FarmPrivateLocationKeyArgs {
+            farm_d_tag: string_input(&request, "farm_d_tag"),
+        };
+        let view =
+            crate::runtime::farm::private_location_get(self.config, &args).map_err(|error| {
+                OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
+            })?;
+        serialized_operation_result::<FarmLocationGetResult, _>(&view)
+    }
+}
+
+impl OperationService<FarmLocationClearRequest> for FarmOperationService<'_> {
+    type Result = FarmLocationClearResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<FarmLocationClearRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                request.operation_id(),
+            ));
+        }
+        let args = FarmPrivateLocationKeyArgs {
+            farm_d_tag: string_input(&request, "farm_d_tag"),
+        };
+        let view =
+            crate::runtime::farm::private_location_clear(self.config, &args).map_err(|error| {
+                OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
+            })?;
+        serialized_operation_result::<FarmLocationClearResult, _>(&view)
     }
 }
 
@@ -363,6 +422,24 @@ where
         .map(str::to_owned)
 }
 
+fn required_f64<P>(request: &OperationRequest<P>, key: &str) -> Result<f64, OperationAdapterError>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    request
+        .payload
+        .input()
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| {
+            invalid_input(
+                request.operation_id(),
+                format!("missing required finite `{key}` input"),
+            )
+        })
+}
+
 fn bool_input<P>(request: &OperationRequest<P>, key: &str) -> Option<bool>
 where
     P: OperationRequestPayload + OperationRequestData,
@@ -485,6 +562,7 @@ mod tests {
 
     fn sample_config(root: &Path) -> RuntimeConfig {
         let data = root.join("data");
+        let cache = root.join("cache");
         let logs = root.join("logs");
         let secrets = root.join("secrets");
         RuntimeConfig {
@@ -516,6 +594,7 @@ mod tests {
                 app_config_path: root.join("config/apps/cli/config.toml"),
                 workspace_config_path: None,
                 app_data_root: data.join("apps/cli"),
+                shared_cache_root: cache.clone(),
                 app_logs_root: logs.join("apps/cli"),
                 shared_accounts_data_root: data.join("shared/accounts"),
                 shared_accounts_secrets_root: secrets.join("shared/accounts"),

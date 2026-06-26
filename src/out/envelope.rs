@@ -180,7 +180,7 @@ fn output_resource_from_value(value: &Value) -> Option<OutputResource> {
             "listing",
             "basket",
             "quote",
-            "order",
+            "trade",
         ];
         nested_fields
             .into_iter()
@@ -198,6 +198,7 @@ fn nested_output_resource(field: &str, value: &Value) -> Option<OutputResource> 
     if resource.kind == "resource" {
         resource.kind = match field {
             "resolved_account" | "default_account" | "bound_account" => "account",
+            "order" => "trade",
             other => other,
         }
         .to_owned();
@@ -232,7 +233,7 @@ fn output_resource_from_fields(object: &serde_json::Map<String, Value>) -> Optio
         ("listing_address", "listing"),
         ("listing_addr", "listing"),
         ("basket_id", "basket"),
-        ("order_id", "order"),
+        ("order_id", "trade"),
     ]
     .into_iter()
     .find_map(|(field, kind)| {
@@ -550,14 +551,14 @@ mod tests {
             CliExitCode::ApprovalRequiredOrDenied,
         );
         let envelope = OutputEnvelope::failure(
-            "order.submit",
+            "trade.submit",
             error,
             EnvelopeContext::new("req_order", false),
         );
         let value = serde_json::to_value(envelope).expect("serialize envelope");
 
         assert_eq!(value["schema_version"], OUTPUT_SCHEMA_VERSION);
-        assert_eq!(value["operation_id"], "order.submit");
+        assert_eq!(value["operation_id"], "trade.submit");
         assert_eq!(value["status"], "error");
         assert_eq!(value["reason_code"], "approval_required");
         assert_eq!(value["result"], Value::Null);
@@ -575,22 +576,22 @@ mod tests {
         );
         error.detail = Some(json!({
             "actions": [
-                "radroots order list",
+                "radroots trade list",
                 "run radroots basket create"
             ]
         }));
         let envelope = OutputEnvelope::failure(
-            "order.submit",
+            "trade.submit",
             error,
             EnvelopeContext::new("req_order", true),
         );
 
         assert_eq!(envelope.next_actions.len(), 2);
         assert_eq!(envelope.next_actions[0].kind, NextActionKind::CliCommand);
-        assert_eq!(envelope.next_actions[0].label, "order list");
+        assert_eq!(envelope.next_actions[0].label, "trade list");
         assert_eq!(
             envelope.next_actions[0].command.as_deref(),
-            Some("radroots order list")
+            Some("radroots trade list")
         );
         assert_eq!(envelope.next_actions[1].kind, NextActionKind::CliCommand);
         assert_eq!(envelope.next_actions[1].label, "basket create");
@@ -714,7 +715,7 @@ mod tests {
         assert_eq!(frames[0].payload["output_format"], "human");
         assert_eq!(frames[1].payload["status"], "error");
         assert_eq!(frames[1].payload["reason_code"], "not_implemented");
-        assert_eq!(frames[1].payload["resource"]["kind"], "order");
+        assert_eq!(frames[1].payload["resource"]["kind"], "trade");
         assert_eq!(frames[1].payload["resource"]["id"], "ord_test");
         assert_eq!(frames[1].errors[0].reason_code, "not_implemented");
     }

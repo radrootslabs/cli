@@ -300,6 +300,7 @@ mod tests {
                 app_config_path: PathBuf::from("/tmp/config/apps/cli/config.toml"),
                 workspace_config_path: None,
                 app_data_root: PathBuf::from("/tmp/data"),
+                shared_cache_root: PathBuf::from("/tmp/cache"),
                 app_logs_root: PathBuf::from("/tmp/logs"),
                 shared_accounts_data_root: PathBuf::from("/tmp/shared/accounts"),
                 shared_accounts_secrets_root: PathBuf::from("/tmp/shared/accounts-secrets"),

@@ -19,7 +19,7 @@ use crate::cli::input::runtime_invocation_args_from_target;
 use crate::cli::{TargetCliArgs, TargetOutputFormat};
 use crate::ops::exec::{
     BasketOperationService, CoreOperationService, FarmOperationService, ListingOperationService,
-    MarketOperationService, OrderOperationService, RuntimeOperationService,
+    MarketOperationService, RuntimeOperationService, TradeOperationService,
     ValidationOperationService,
 };
 use crate::ops::{
@@ -158,7 +158,13 @@ fn execute_request(
         TargetOperationRequest::FarmProfileUpdate(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        TargetOperationRequest::FarmLocationUpdate(request) => {
+        TargetOperationRequest::FarmLocationSet(request) => {
+            execute_with(FarmOperationService::new(config), request)
+        }
+        TargetOperationRequest::FarmLocationGet(request) => {
+            execute_with(FarmOperationService::new(config), request)
+        }
+        TargetOperationRequest::FarmLocationClear(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
         TargetOperationRequest::FarmFulfillmentUpdate(request) => {
@@ -239,50 +245,50 @@ fn execute_request(
         TargetOperationRequest::BasketQuoteCreate(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderSubmit(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeSubmit(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderGet(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeGet(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderList(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeList(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderAppList(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeAppList(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderAppExport(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeAppExport(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderRebind(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeRebind(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderAccept(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeAccept(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderDecline(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeDecline(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderCancel(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeCancel(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderRevisionPropose(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeRevisionPropose(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderRevisionAccept(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeRevisionAccept(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderRevisionDecline(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeRevisionDecline(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderStatusGet(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeStatusGet(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderEventList(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeEventList(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::OrderEventWatch(request) => {
-            execute_with(OrderOperationService::new(config), request)
+        TargetOperationRequest::TradeEventWatch(request) => {
+            execute_with(TradeOperationService::new(config), request)
         }
         TargetOperationRequest::ValidationReceiptGet(request) => {
             execute_with(ValidationOperationService::new(config), request)

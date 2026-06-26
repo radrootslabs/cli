@@ -2134,7 +2134,7 @@ fn local_seller_publish_commands_attempt_configured_relay() {
         "create",
         "direct_order",
     ]);
-    let order_id = quote["result"]["quote"]["order_id"]
+    let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
     let (order_output, order_value) = sandbox.json_output(&[
@@ -2144,24 +2144,24 @@ fn local_seller_publish_commands_attempt_configured_relay() {
         relay,
         "--approval-token",
         "approve",
-        "order",
+        "trade",
         "submit",
         order_id,
     ]);
     assert!(!order_output.status.success());
-    assert_eq!(order_value["operation_id"], "order.submit");
+    assert_eq!(order_value["operation_id"], "trade.submit");
     assert_eq!(order_value["result"], serde_json::Value::Null);
     assert_eq!(order_value["errors"][0]["code"], "operation_unavailable");
     assert_eq!(
         order_value["errors"][0]["detail"]["issues"][0]["field"],
-        "order.listing_addr"
+        "trade.listing_addr"
     );
     assert_contains(
         &order_value["errors"][0]["detail"]["issues"][0]["message"],
         "local market freshness",
     );
-    assert_no_removed_command_reference(&order_value, &["order", "submit"]);
-    assert_no_daemon_runtime_reference(&order_value, &["order", "submit"]);
+    assert_no_removed_command_reference(&order_value, &["trade", "submit"]);
+    assert_no_daemon_runtime_reference(&order_value, &["trade", "submit"]);
 }
 
 #[test]
@@ -2171,11 +2171,11 @@ fn local_order_event_list_attempts_configured_direct_relay() {
     let relay = "ws://127.0.0.1:9";
 
     let (output, value) = sandbox.json_output(&[
-        "--format", "json", "--relay", relay, "order", "event", "list",
+        "--format", "json", "--relay", relay, "trade", "event", "list",
     ]);
 
     assert!(!output.status.success());
-    assert_direct_relay_connection_failure(&value, "order.event.list", &["order", "event", "list"]);
+    assert_direct_relay_connection_failure(&value, "trade.event.list", &["trade", "event", "list"]);
     assert_eq!(value["errors"][0]["detail"]["state"], "unavailable");
     assert_eq!(value["errors"][0]["detail"]["target_relays"][0], relay);
     assert_eq!(
@@ -2204,17 +2204,17 @@ fn local_order_event_list_attempts_configured_direct_relay() {
 #[test]
 fn local_order_failure_envelopes_are_structured_and_actionable() {
     let sandbox = RadrootsCliSandbox::new();
-    let watch_args = ["--format", "json", "order", "event", "watch", "ord_missing"];
+    let watch_args = ["--format", "json", "trade", "event", "watch", "ord_missing"];
     let (watch_output, watch) = sandbox.json_output(&watch_args);
     assert!(!watch_output.status.success());
-    assert_eq!(watch["operation_id"], "order.event.watch");
+    assert_eq!(watch["operation_id"], "trade.event.watch");
     assert_eq!(watch["result"], Value::Null);
     assert_eq!(watch["errors"][0]["code"], "not_implemented");
     assert_eq!(watch["errors"][0]["detail"]["state"], "not_implemented");
-    assert_eq!(watch["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(watch["errors"][0]["detail"]["trade_id"], "ord_missing");
     assert_eq!(
         watch["next_actions"][0]["command"],
-        "radroots order status get ord_missing"
+        "radroots trade status get ord_missing"
     );
     assert_no_daemon_runtime_reference(&watch, &watch_args);
 
@@ -2224,7 +2224,7 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
         "--publish-transport",
         "direct_nostr_relay",
         "--dry-run",
-        "order",
+        "trade",
         "submit",
         "ord_missing",
     ];
@@ -2232,33 +2232,33 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     assert!(!submit_output.status.success());
     assert_eq!(submit["errors"][0]["code"], "not_found");
     assert_eq!(submit["errors"][0]["detail"]["state"], "missing");
-    assert_eq!(submit["errors"][0]["detail"]["order_id"], "ord_missing");
-    assert_eq!(submit["next_actions"][0]["command"], "radroots order list");
+    assert_eq!(submit["errors"][0]["detail"]["trade_id"], "ord_missing");
+    assert_eq!(submit["next_actions"][0]["command"], "radroots trade list");
     assert_eq!(
         submit["next_actions"][1]["command"],
         "radroots basket create"
     );
     assert_no_daemon_runtime_reference(&submit, &submit_args);
 
-    let status_args = ["--format", "json", "order", "status", "get", "ord_missing"];
+    let status_args = ["--format", "json", "trade", "status", "get", "ord_missing"];
     let status = sandbox.json_success(&status_args);
-    assert_eq!(status["operation_id"], "order.status.get");
+    assert_eq!(status["operation_id"], "trade.status.get");
     assert_eq!(status["result"]["state"], "missing");
-    assert_eq!(status["result"]["source"], "SDK local order projection");
+    assert_eq!(status["result"]["source"], "SDK local trade projection");
     assert_eq!(
         status["result"]["actor_context_source"],
         "sdk_local_projection"
     );
-    assert_eq!(status["result"]["order_id"], "ord_missing");
+    assert_eq!(status["result"]["trade_id"], "ord_missing");
     assert_eq!(status["result"]["fetched_count"], 0);
     assert_eq!(status["result"]["decoded_count"], 0);
     assert_eq!(
         status["result"]["reason"],
-        "no local SDK order events matched `ord_missing`"
+        "no local SDK trade events matched `ord_missing`"
     );
     assert_no_daemon_runtime_reference(&status, &status_args);
 
-    let event_list_no_relay_args = ["--format", "json", "order", "event", "list"];
+    let event_list_no_relay_args = ["--format", "json", "trade", "event", "list"];
     let (event_list_no_relay_output, event_list_no_relay) =
         sandbox.json_output(&event_list_no_relay_args);
     assert!(!event_list_no_relay_output.status.success());
@@ -2272,7 +2272,7 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     );
     assert_eq!(
         event_list_no_relay["next_actions"][0]["command"],
-        "radroots --relay wss://relay.example.com order event list"
+        "radroots --relay wss://relay.example.com trade event list"
     );
     assert_no_daemon_runtime_reference(&event_list_no_relay, &event_list_no_relay_args);
 
@@ -2281,7 +2281,7 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
         "json",
         "--relay",
         "ws://127.0.0.1:9",
-        "order",
+        "trade",
         "event",
         "list",
     ];
@@ -2308,7 +2308,7 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
         "--publish-transport",
         "direct_nostr_relay",
         "--dry-run",
-        "order",
+        "trade",
         "accept",
         "ord_missing",
     ];
@@ -2316,7 +2316,7 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     assert!(!accept_output.status.success());
     assert_eq!(accept["errors"][0]["code"], "operation_unavailable");
     assert_eq!(accept["errors"][0]["detail"]["state"], "unconfigured");
-    assert_eq!(accept["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(accept["errors"][0]["detail"]["trade_id"], "ord_missing");
     assert_eq!(accept["errors"][0]["detail"]["decision"], "accepted");
     assert_no_daemon_runtime_reference(&accept, &accept_args);
 
@@ -2326,7 +2326,7 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
         "--publish-transport",
         "direct_nostr_relay",
         "--dry-run",
-        "order",
+        "trade",
         "decline",
         "ord_missing",
         "--reason",
@@ -2336,7 +2336,7 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     assert!(!decline_output.status.success());
     assert_eq!(decline["errors"][0]["code"], "operation_unavailable");
     assert_eq!(decline["errors"][0]["detail"]["state"], "unconfigured");
-    assert_eq!(decline["errors"][0]["detail"]["order_id"], "ord_missing");
+    assert_eq!(decline["errors"][0]["detail"]["trade_id"], "ord_missing");
     assert_eq!(decline["errors"][0]["detail"]["decision"], "declined");
     assert_no_daemon_runtime_reference(&decline, &decline_args);
 }

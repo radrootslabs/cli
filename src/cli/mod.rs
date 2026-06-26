@@ -10,11 +10,11 @@ pub mod health;
 pub mod input;
 pub mod listing;
 pub mod market;
-pub mod order;
 pub mod relay;
 pub mod signer;
 pub mod store;
 pub mod sync;
+pub mod trade;
 pub mod validation;
 pub mod workspace;
 
@@ -25,11 +25,11 @@ pub use farm::*;
 pub use health::*;
 pub use listing::*;
 pub use market::*;
-pub use order::*;
 pub use relay::*;
 pub use signer::*;
 pub use store::*;
 pub use sync::*;
+pub use trade::*;
 pub use validation::*;
 pub use workspace::*;
 
@@ -130,10 +130,10 @@ pub enum TargetCommand {
     Listing(ListingArgs),
     #[command(about = "Refresh and query market data from the local replica.")]
     Market(MarketArgs),
-    #[command(about = "Prepare baskets and quotes before order coordination.")]
+    #[command(about = "Prepare baskets and quotes before trade coordination.")]
     Basket(BasketArgs),
-    #[command(about = "Coordinate buyer and farmer order agreement events.")]
-    Order(OrderArgs),
+    #[command(about = "Coordinate buyer and farmer trade agreement events.")]
+    Trade(TradeArgs),
     #[command(about = "Inspect validation receipts and proof state.")]
     Validation(ValidationArgs),
 }
@@ -204,7 +204,9 @@ impl TargetCommand {
                     FarmProfileCommand::Update(_) => "farm.profile.update",
                 },
                 FarmCommand::Location(location) => match location.command {
-                    FarmLocationCommand::Update(_) => "farm.location.update",
+                    FarmLocationCommand::Set(_) => "farm.location.set",
+                    FarmLocationCommand::Get(_) => "farm.location.get",
+                    FarmLocationCommand::Clear(_) => "farm.location.clear",
                 },
                 FarmCommand::Fulfillment(fulfillment) => match fulfillment.command {
                     FarmFulfillmentCommand::Update(_) => "farm.fulfillment.update",
@@ -255,29 +257,29 @@ impl TargetCommand {
                     BasketQuoteCommand::Create(_) => "basket.quote.create",
                 },
             },
-            Self::Order(args) => match &args.command {
-                OrderCommand::Submit(_) => "order.submit",
-                OrderCommand::Get(_) => "order.get",
-                OrderCommand::List => "order.list",
-                OrderCommand::App(app) => match &app.command {
-                    OrderAppCommand::List => "order.app.list",
-                    OrderAppCommand::Export(_) => "order.app.export",
+            Self::Trade(args) => match &args.command {
+                TradeCommand::Submit(_) => "trade.submit",
+                TradeCommand::Get(_) => "trade.get",
+                TradeCommand::List => "trade.list",
+                TradeCommand::App(app) => match &app.command {
+                    TradeAppCommand::List => "trade.app.list",
+                    TradeAppCommand::Export(_) => "trade.app.export",
                 },
-                OrderCommand::Rebind(_) => "order.rebind",
-                OrderCommand::Accept(_) => "order.accept",
-                OrderCommand::Decline(_) => "order.decline",
-                OrderCommand::Cancel(_) => "order.cancel",
-                OrderCommand::Revision(revision) => match &revision.command {
-                    OrderRevisionCommand::Propose(_) => "order.revision.propose",
-                    OrderRevisionCommand::Accept(_) => "order.revision.accept",
-                    OrderRevisionCommand::Decline(_) => "order.revision.decline",
+                TradeCommand::Rebind(_) => "trade.rebind",
+                TradeCommand::Accept(_) => "trade.accept",
+                TradeCommand::Decline(_) => "trade.decline",
+                TradeCommand::Cancel(_) => "trade.cancel",
+                TradeCommand::Revision(revision) => match &revision.command {
+                    TradeRevisionCommand::Propose(_) => "trade.revision.propose",
+                    TradeRevisionCommand::Accept(_) => "trade.revision.accept",
+                    TradeRevisionCommand::Decline(_) => "trade.revision.decline",
                 },
-                OrderCommand::Status(status) => match &status.command {
-                    OrderStatusCommand::Get(_) => "order.status.get",
+                TradeCommand::Status(status) => match &status.command {
+                    TradeStatusCommand::Get(_) => "trade.status.get",
                 },
-                OrderCommand::Event(event) => match &event.command {
-                    OrderEventCommand::List(_) => "order.event.list",
-                    OrderEventCommand::Watch(_) => "order.event.watch",
+                TradeCommand::Event(event) => match &event.command {
+                    TradeEventCommand::List(_) => "trade.event.list",
+                    TradeEventCommand::Watch(_) => "trade.event.watch",
                 },
             },
             Self::Validation(args) => match &args.command {
@@ -297,8 +299,8 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{
-        AccountCommand, FarmCommand, ListingCommand, OrderCommand, OrderRevisionCommand,
-        TargetCliArgs, TargetOutputFormat, ValidationCommand, ValidationReceiptCommand,
+        AccountCommand, FarmCommand, ListingCommand, TargetCliArgs, TargetOutputFormat,
+        TradeCommand, TradeRevisionCommand, ValidationCommand, ValidationReceiptCommand,
     };
     use crate::registry::OPERATION_REGISTRY;
 
@@ -332,7 +334,7 @@ mod tests {
             "listing",
             "market",
             "basket",
-            "order",
+            "trade",
             "validation",
         ]
         .into_iter()
@@ -460,17 +462,17 @@ mod tests {
     #[test]
     fn target_parser_accepts_order_rebind_inputs() {
         let parsed =
-            TargetCliArgs::try_parse_from(["radroots", "order", "rebind", "ord_test", "acct_test"])
+            TargetCliArgs::try_parse_from(["radroots", "trade", "rebind", "ord_test", "acct_test"])
                 .expect("target args parse");
 
-        assert_eq!(parsed.command.operation_id(), "order.rebind");
-        let crate::cli::TargetCommand::Order(order) = parsed.command else {
-            panic!("expected order command")
+        assert_eq!(parsed.command.operation_id(), "trade.rebind");
+        let crate::cli::TargetCommand::Trade(trade) = parsed.command else {
+            panic!("expected trade command")
         };
-        let OrderCommand::Rebind(args) = order.command else {
-            panic!("expected order rebind command")
+        let TradeCommand::Rebind(args) = trade.command else {
+            panic!("expected trade rebind command")
         };
-        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
         assert_eq!(args.selector.as_deref(), Some("acct_test"));
     }
 
@@ -478,7 +480,7 @@ mod tests {
     fn target_parser_accepts_order_cancel_reason() {
         let parsed = TargetCliArgs::try_parse_from([
             "radroots",
-            "order",
+            "trade",
             "cancel",
             "ord_test",
             "--reason",
@@ -486,14 +488,14 @@ mod tests {
         ])
         .expect("target args parse");
 
-        assert_eq!(parsed.command.operation_id(), "order.cancel");
-        let crate::cli::TargetCommand::Order(order) = parsed.command else {
-            panic!("expected order command")
+        assert_eq!(parsed.command.operation_id(), "trade.cancel");
+        let crate::cli::TargetCommand::Trade(trade) = parsed.command else {
+            panic!("expected trade command")
         };
-        let OrderCommand::Cancel(args) = order.command else {
-            panic!("expected order cancel command")
+        let TradeCommand::Cancel(args) = trade.command else {
+            panic!("expected trade cancel command")
         };
-        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
         assert_eq!(args.reason.as_deref(), Some("changed plans"));
     }
 
@@ -501,7 +503,7 @@ mod tests {
     fn target_parser_accepts_order_revision_propose_inputs() {
         let parsed = TargetCliArgs::try_parse_from([
             "radroots",
-            "order",
+            "trade",
             "revision",
             "propose",
             "ord_test",
@@ -524,17 +526,17 @@ mod tests {
         ])
         .expect("target args parse");
 
-        assert_eq!(parsed.command.operation_id(), "order.revision.propose");
-        let crate::cli::TargetCommand::Order(order) = parsed.command else {
-            panic!("expected order command")
+        assert_eq!(parsed.command.operation_id(), "trade.revision.propose");
+        let crate::cli::TargetCommand::Trade(trade) = parsed.command else {
+            panic!("expected trade command")
         };
-        let OrderCommand::Revision(revision) = order.command else {
-            panic!("expected order revision command")
+        let TradeCommand::Revision(revision) = trade.command else {
+            panic!("expected trade revision command")
         };
-        let OrderRevisionCommand::Propose(args) = revision.command else {
-            panic!("expected order revision propose command")
+        let TradeRevisionCommand::Propose(args) = revision.command else {
+            panic!("expected trade revision propose command")
         };
-        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
         assert_eq!(args.reason.as_deref(), Some("update count"));
         assert_eq!(args.bin_id.as_deref(), Some("bin-1"));
         assert_eq!(args.bin_count, Some(3));
@@ -546,7 +548,7 @@ mod tests {
     fn target_parser_accepts_order_revision_decision_inputs() {
         let accepted = TargetCliArgs::try_parse_from([
             "radroots",
-            "order",
+            "trade",
             "revision",
             "accept",
             "ord_test",
@@ -555,45 +557,45 @@ mod tests {
         ])
         .expect("target args parse");
 
-        assert_eq!(accepted.command.operation_id(), "order.revision.accept");
-        let crate::cli::TargetCommand::Order(order) = accepted.command else {
-            panic!("expected order command")
+        assert_eq!(accepted.command.operation_id(), "trade.revision.accept");
+        let crate::cli::TargetCommand::Trade(trade) = accepted.command else {
+            panic!("expected trade command")
         };
-        let OrderCommand::Revision(revision) = order.command else {
-            panic!("expected order revision command")
+        let TradeCommand::Revision(revision) = trade.command else {
+            panic!("expected trade revision command")
         };
-        let OrderRevisionCommand::Accept(args) = revision.command else {
-            panic!("expected order revision accept command")
+        let TradeRevisionCommand::Accept(args) = revision.command else {
+            panic!("expected trade revision accept command")
         };
-        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
         assert_eq!(args.revision_id.as_deref(), Some("rev_test"));
 
         let declined = TargetCliArgs::try_parse_from([
             "radroots",
-            "order",
+            "trade",
             "revision",
             "decline",
             "ord_test",
             "--revision-id",
             "rev_test",
             "--reason",
-            "keep original order",
+            "keep original trade",
         ])
         .expect("target args parse");
 
-        assert_eq!(declined.command.operation_id(), "order.revision.decline");
-        let crate::cli::TargetCommand::Order(order) = declined.command else {
-            panic!("expected order command")
+        assert_eq!(declined.command.operation_id(), "trade.revision.decline");
+        let crate::cli::TargetCommand::Trade(trade) = declined.command else {
+            panic!("expected trade command")
         };
-        let OrderCommand::Revision(revision) = order.command else {
-            panic!("expected order revision command")
+        let TradeCommand::Revision(revision) = trade.command else {
+            panic!("expected trade revision command")
         };
-        let OrderRevisionCommand::Decline(args) = revision.command else {
-            panic!("expected order revision decline command")
+        let TradeRevisionCommand::Decline(args) = revision.command else {
+            panic!("expected trade revision decline command")
         };
-        assert_eq!(args.order_id.as_deref(), Some("ord_test"));
+        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
         assert_eq!(args.revision_id.as_deref(), Some("rev_test"));
-        assert_eq!(args.reason.as_deref(), Some("keep original order"));
+        assert_eq!(args.reason.as_deref(), Some("keep original trade"));
     }
 
     #[test]
@@ -624,7 +626,7 @@ mod tests {
             "validation",
             "receipt",
             "list",
-            "--order-id",
+            "--trade-id",
             "ord_1",
         ])
         .expect("target args parse");
@@ -636,7 +638,7 @@ mod tests {
         let ValidationReceiptCommand::List(args) = receipt.command else {
             panic!("expected validation receipt list command")
         };
-        assert_eq!(args.order_id.as_deref(), Some("ord_1"));
+        assert_eq!(args.trade_id.as_deref(), Some("ord_1"));
 
         let verify = TargetCliArgs::try_parse_from([
             "radroots",

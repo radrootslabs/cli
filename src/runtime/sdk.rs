@@ -52,6 +52,7 @@ pub enum CliSdkAdapterError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliSdkConfig {
     pub storage_root: PathBuf,
+    pub geonames_cache_root: PathBuf,
     pub relay_url_policy: SdkRelayUrlPolicy,
     pub relay_urls: Vec<String>,
     pub publish_transport: SdkPublishTransport,
@@ -61,6 +62,7 @@ impl CliSdkConfig {
     pub fn from_runtime_config(config: &RuntimeConfig) -> Result<Self, RuntimeError> {
         Ok(Self {
             storage_root: sdk_storage_root(config),
+            geonames_cache_root: config.paths.shared_cache_root.clone(),
             relay_url_policy: sdk_relay_url_policy(config),
             relay_urls: config.relay.urls.clone(),
             publish_transport: sdk_publish_transport(config)?,
@@ -73,6 +75,7 @@ impl CliSdkConfig {
                 .storage(RadrootsSdkStorageConfig::Directory(
                     self.storage_root.clone(),
                 ))
+                .geonames_cache_root(self.geonames_cache_root.clone())
                 .relay_url_policy(self.relay_url_policy)
                 .publish_transport(self.publish_transport.clone()),
             |builder, relay_url| builder.relay_url(relay_url.clone()),
@@ -590,6 +593,7 @@ pub(crate) fn sdk_runtime() -> Result<Runtime, RuntimeError> {
 fn memory_builder(config: &CliSdkConfig) -> RadrootsClientBuilder {
     config.relay_urls.iter().fold(
         RadrootsClient::builder()
+            .geonames_cache_root(config.geonames_cache_root.clone())
             .relay_url_policy(config.relay_url_policy)
             .publish_transport(config.publish_transport.clone()),
         |builder, relay_url| builder.relay_url(relay_url.clone()),
@@ -797,7 +801,7 @@ mod tests {
             section: "dependencies",
             name: "radroots_replica_db",
             owner: "legacy-replica-and-market-projection",
-            reason: "legacy derived replica status, export, market reads, sync pull, basket lookup, and order draft preflight",
+            reason: "legacy derived replica status, export, market reads, sync pull, basket lookup, and trade draft preflight",
             lifecycle: "transitional until those derived projection surfaces migrate",
         },
         DirectRrRsDependency {
@@ -869,12 +873,12 @@ mod tests {
         LegacyDirectRelayConsumer {
             path: "src/runtime/order.rs",
             required_tokens: &[
-                "legacy_order_preflight_relay_status",
+                "sdk_order_status_from_relay_receipt",
                 "fetch_events_from_relays",
             ],
-            owner: "order.status.relay-read",
-            reason: "bounded order status and preflight reads still inspect configured relays outside SDK local storage",
-            lifecycle: "retain until order relay reads migrate to SDK-backed query APIs",
+            owner: "trade.relay-evidence-acquisition",
+            reason: "bounded trade commands acquire configured-relay evidence before SDK local ingest and projection",
+            lifecycle: "retain until trade relay acquisition moves behind SDK query APIs",
         },
         LegacyDirectRelayConsumer {
             path: "src/runtime/sync.rs",
@@ -933,7 +937,7 @@ mod tests {
             label: "order status",
             path: "src/runtime/order.rs",
             start: "pub fn status(\n    config: &RuntimeConfig",
-            end: "fn legacy_order_preflight_relay_status(",
+            end: "fn sdk_order_status_from_relay_receipt(",
             required_tokens: &["OrderStatusRequest::parse", "session.sdk().trades().status"],
         },
         MigratedCliPathGuard {
@@ -949,7 +953,7 @@ mod tests {
             ],
         },
         MigratedCliPathGuard {
-            label: "order submit",
+            label: "trade submit",
             path: "src/runtime/order.rs",
             start: "fn prepare_order_submit_via_sdk(",
             end: "fn enqueue_target_relays(",
@@ -1167,7 +1171,7 @@ mod tests {
             ("radroots store", "CLI command string"),
             ("radroots sync", "CLI command string"),
             ("radroots listing", "CLI command string"),
-            ("radroots order", "CLI command string"),
+            ("radroots trade", "CLI command string"),
         ];
 
         for file in files {
@@ -1340,6 +1344,7 @@ mod tests {
 
     fn sample_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {
         let data = root.join("data");
+        let cache = root.join("cache");
         let logs = root.join("logs");
         let secrets = root.join("secrets");
         RuntimeConfig {
@@ -1371,6 +1376,7 @@ mod tests {
                 app_config_path: root.join("config/apps/cli/config.toml"),
                 workspace_config_path: None,
                 app_data_root: data.join("apps/cli"),
+                shared_cache_root: cache.clone(),
                 app_logs_root: logs.join("apps/cli"),
                 shared_accounts_data_root: data.join("shared/accounts"),
                 shared_accounts_secrets_root: secrets.join("shared/accounts"),

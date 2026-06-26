@@ -104,7 +104,7 @@ fn market_product_search_view(mut view: FindView) -> FindView {
                     "radroots market listing get {}",
                     result.product_key
                 )];
-                if result.readiness.order_request_enabled {
+                if result.readiness.checkout_enabled {
                     actions.push("radroots basket create".to_owned());
                 }
                 actions
@@ -126,7 +126,7 @@ fn market_product_search_view(mut view: FindView) -> FindView {
 fn market_listing_get_view(mut view: ListingGetView) -> ListingGetView {
     view.actions = match view.state.as_str() {
         "ready" => {
-            if view.readiness.order_request_enabled {
+            if view.readiness.checkout_enabled {
                 vec!["radroots basket create".to_owned()]
             } else {
                 Vec::new()
@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn market_ready_actions_require_order_request_enabled() {
+    fn market_ready_actions_require_checkout_enabled() {
         let disabled_search = market_product_search_view(FindView {
             state: "ready".to_owned(),
             source: "test".to_owned(),
@@ -592,7 +592,7 @@ mod tests {
         MarketReadinessView {
             protocol_valid: true,
             marketplace_eligible: true,
-            order_request_enabled: true,
+            checkout_enabled: true,
             primary_bin_verified: true,
             reason_codes: Vec::new(),
         }
@@ -602,10 +602,10 @@ mod tests {
         MarketReadinessView {
             protocol_valid: true,
             marketplace_eligible: true,
-            order_request_enabled: false,
+            checkout_enabled: false,
             primary_bin_verified: true,
             reason_codes: vec![
-                "listing_order_request_disabled".to_owned(),
+                "listing_checkout_disabled".to_owned(),
                 "listing_inventory_unavailable".to_owned(),
             ],
         }
@@ -613,6 +613,7 @@ mod tests {
 
     fn sample_config(root: &Path) -> RuntimeConfig {
         let data = root.join("data");
+        let cache = root.join("cache");
         let logs = root.join("logs");
         let secrets = root.join("secrets");
         RuntimeConfig {
@@ -644,6 +645,7 @@ mod tests {
                 app_config_path: root.join("config/apps/cli/config.toml"),
                 workspace_config_path: None,
                 app_data_root: data.join("apps/cli"),
+                shared_cache_root: cache.clone(),
                 app_logs_root: logs.join("apps/cli"),
                 shared_accounts_data_root: data.join("shared/accounts"),
                 shared_accounts_secrets_root: secrets.join("shared/accounts"),

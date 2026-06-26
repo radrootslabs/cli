@@ -87,6 +87,7 @@ impl OperationService<WorkspaceGetRequest> for CoreOperationService<'_> {
             "workspace_config_path": self.config.paths.workspace_config_path.as_ref().map(|path| path.display().to_string()),
             "app_config_path": self.config.paths.app_config_path.display().to_string(),
             "app_data_root": self.config.paths.app_data_root.display().to_string(),
+            "shared_cache_root": self.config.paths.shared_cache_root.display().to_string(),
             "app_logs_root": self.config.paths.app_logs_root.display().to_string(),
             "local_root": self.config.local.root.display().to_string(),
             "replica_db_path": self.config.local.replica_db_path.display().to_string(),
@@ -213,6 +214,7 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
                 "app_config_path": self.config.paths.app_config_path.display().to_string(),
                 "workspace_config_path": self.config.paths.workspace_config_path.as_ref().map(|path| path.display().to_string()),
                 "app_data_root": self.config.paths.app_data_root.display().to_string(),
+                "shared_cache_root": self.config.paths.shared_cache_root.display().to_string(),
                 "app_logs_root": self.config.paths.app_logs_root.display().to_string(),
             },
             "account": {
@@ -1311,6 +1313,7 @@ mod tests {
 
     fn sample_config(root: &Path) -> RuntimeConfig {
         let data = root.join("data");
+        let cache = root.join("cache");
         let logs = root.join("logs");
         let secrets = root.join("secrets");
         RuntimeConfig {
@@ -1342,6 +1345,7 @@ mod tests {
                 app_config_path: root.join("config/apps/cli/config.toml"),
                 workspace_config_path: None,
                 app_data_root: data.join("apps/cli"),
+                shared_cache_root: cache.clone(),
                 app_logs_root: logs.join("apps/cli"),
                 shared_accounts_data_root: data.join("shared/accounts"),
                 shared_accounts_secrets_root: secrets.join("shared/accounts"),
