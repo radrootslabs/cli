@@ -66,12 +66,12 @@ pub const FARM_PROFILE_UPDATE: OperationSpec = operation!(
 
 pub const FARM_LOCATION_SET: OperationSpec = operation!(
     "farm.location.set",
-    "radroots farm location set",
+    "radroots farm location set --lat 48.429456 --lng -123.349786",
     "farm",
     "farm_location_set",
     "FarmLocationSetRequest",
     "FarmLocationSetResult",
-    "Set private exact farm location and derived public locality.",
+    "Set private farm location and derived public locality.",
     Seller,
     true,
     Conditional,

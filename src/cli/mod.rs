@@ -461,6 +461,128 @@ mod tests {
     }
 
     #[test]
+    fn target_parser_accepts_structured_farm_location_city() {
+        let parsed = TargetCliArgs::try_parse_from([
+            "radroots",
+            "farm",
+            "location",
+            "set",
+            "--city",
+            "Victoria",
+            "--region",
+            "BC",
+            "--country",
+            "CA",
+            "--label",
+            "main pickup point",
+        ])
+        .expect("target args parse");
+
+        let crate::cli::TargetCommand::Farm(farm) = parsed.command else {
+            panic!("expected farm command")
+        };
+        let FarmCommand::Location(location) = farm.command else {
+            panic!("expected farm location command")
+        };
+        let FarmLocationCommand::Set(args) = location.command else {
+            panic!("expected farm location set command")
+        };
+        assert_eq!(args.city.as_deref(), Some("Victoria"));
+        assert_eq!(args.region.as_deref(), Some("BC"));
+        assert_eq!(args.country.as_deref(), Some("CA"));
+        assert_eq!(args.label.as_deref(), Some("main pickup point"));
+    }
+
+    #[test]
+    fn target_parser_accepts_query_and_geonames_id_farm_location_modes() {
+        let query = TargetCliArgs::try_parse_from([
+            "radroots",
+            "farm",
+            "location",
+            "set",
+            "--query",
+            "Fixture Victoria, BC, CA",
+        ])
+        .expect("query args parse");
+        let crate::cli::TargetCommand::Farm(farm) = query.command else {
+            panic!("expected farm command")
+        };
+        let FarmCommand::Location(location) = farm.command else {
+            panic!("expected farm location command")
+        };
+        let FarmLocationCommand::Set(args) = location.command else {
+            panic!("expected farm location set command")
+        };
+        assert_eq!(args.query.as_deref(), Some("Fixture Victoria, BC, CA"));
+
+        let geonames_id = TargetCliArgs::try_parse_from([
+            "radroots",
+            "farm",
+            "location",
+            "set",
+            "--geonames-id",
+            "3004",
+        ])
+        .expect("geonames id args parse");
+        let crate::cli::TargetCommand::Farm(farm) = geonames_id.command else {
+            panic!("expected farm command")
+        };
+        let FarmCommand::Location(location) = farm.command else {
+            panic!("expected farm location command")
+        };
+        let FarmLocationCommand::Set(args) = location.command else {
+            panic!("expected farm location set command")
+        };
+        assert_eq!(args.geonames_id, Some(3004));
+    }
+
+    #[test]
+    fn target_parser_rejects_invalid_farm_location_modes() {
+        for argv in [
+            vec!["radroots", "farm", "location", "set", "--lat", "48.429456"],
+            vec![
+                "radroots",
+                "farm",
+                "location",
+                "set",
+                "--lat",
+                "48.429456",
+                "--lng",
+                "-123.349786",
+                "--city",
+                "Victoria",
+            ],
+            vec![
+                "radroots",
+                "farm",
+                "location",
+                "set",
+                "--query",
+                "Victoria, BC",
+                "--country",
+                "CA",
+            ],
+            vec![
+                "radroots",
+                "farm",
+                "location",
+                "set",
+                "--lookup",
+                "geonames",
+                "--lat",
+                "48.429456",
+                "--lng",
+                "-123.349786",
+            ],
+        ] {
+            assert!(
+                TargetCliArgs::try_parse_from(argv).is_err(),
+                "expected farm location args to fail"
+            );
+        }
+    }
+
+    #[test]
     fn target_parser_accepts_listing_rebind_inputs() {
         let parsed = TargetCliArgs::try_parse_from([
             "radroots",

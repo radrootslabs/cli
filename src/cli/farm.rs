@@ -1,4 +1,4 @@
-use clap::{Args, Subcommand};
+use clap::{ArgGroup, Args, Subcommand};
 
 #[derive(Debug, Clone, Args)]
 pub struct FarmArgs {
@@ -86,15 +86,31 @@ pub enum FarmLocationCommand {
 }
 
 #[derive(Debug, Clone, Args)]
+#[command(group(
+    ArgGroup::new("location_mode")
+        .args(["lat", "city", "query", "geonames_id"])
+        .required(true)
+        .multiple(false)
+))]
 pub struct FarmLocationSetArgs {
-    #[arg(long, allow_negative_numbers = true)]
+    #[arg(long, allow_negative_numbers = true, requires = "lng")]
     pub lat: Option<f64>,
-    #[arg(long, allow_negative_numbers = true)]
+    #[arg(long, allow_negative_numbers = true, requires = "lat")]
     pub lng: Option<f64>,
     #[arg(long = "farm-d-tag")]
     pub farm_d_tag: Option<String>,
-    #[arg(long = "lookup", default_value = "geonames")]
-    pub lookup: String,
+    #[arg(long)]
+    pub city: Option<String>,
+    #[arg(long, requires = "city", conflicts_with_all = ["lat", "query", "geonames_id"])]
+    pub region: Option<String>,
+    #[arg(long, requires = "city", conflicts_with_all = ["lat", "query", "geonames_id"])]
+    pub country: Option<String>,
+    #[arg(long)]
+    pub query: Option<String>,
+    #[arg(long = "geonames-id", value_parser = clap::value_parser!(i64).range(1..))]
+    pub geonames_id: Option<i64>,
+    #[arg(long)]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

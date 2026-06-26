@@ -111,7 +111,17 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                         insert_number(&mut input, "longitude", longitude);
                     }
                     insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
-                    input.insert("lookup".to_owned(), Value::String(args.lookup.clone()));
+                    insert_string(&mut input, "city", &args.city);
+                    insert_string(&mut input, "region", &args.region);
+                    insert_string(&mut input, "country", &args.country);
+                    insert_string(&mut input, "query", &args.query);
+                    if let Some(geonames_id) = args.geonames_id {
+                        input.insert(
+                            "geonames_id".to_owned(),
+                            Value::Number(serde_json::Number::from(geonames_id)),
+                        );
+                    }
+                    insert_string(&mut input, "label", &args.label);
                 }
                 FarmLocationCommand::Get(args) | FarmLocationCommand::Clear(args) => {
                     insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
