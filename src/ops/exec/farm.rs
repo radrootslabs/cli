@@ -47,6 +47,7 @@ impl OperationService<FarmCreateRequest> for FarmOperationService<'_> {
             city: string_input(&request, "city"),
             region: string_input(&request, "region"),
             country: string_input(&request, "country"),
+            geohash: string_input(&request, "geohash"),
             delivery_method: string_input(&request, "delivery_method"),
         };
         if request.context.dry_run {
@@ -241,6 +242,7 @@ fn location_field(
         Some("city") => Ok(FarmFieldArg::City),
         Some("region") => Ok(FarmFieldArg::Region),
         Some("country") => Ok(FarmFieldArg::Country),
+        Some("geohash") => Ok(FarmFieldArg::Geohash),
         Some(other) => Err(invalid_input(
             request.operation_id(),
             format!("location field `{other}` is not supported"),

@@ -92,6 +92,7 @@ pub enum FarmFieldArg {
     City,
     Region,
     Country,
+    Geohash,
     Delivery,
 }
 
@@ -114,6 +115,7 @@ pub struct FarmCreateArgs {
     pub city: Option<String>,
     pub region: Option<String>,
     pub country: Option<String>,
+    pub geohash: Option<String>,
     pub delivery_method: Option<String>,
 }
 

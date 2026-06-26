@@ -17,7 +17,7 @@ use radroots_events::ids::{RadrootsDTag, RadrootsInventoryBinId};
 use radroots_events::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
 use radroots_events::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingBin,
-    RadrootsListingDeliveryMethod, RadrootsListingLocation, RadrootsListingProduct,
+    RadrootsListingDeliveryMethod, RadrootsListingProduct, RadrootsListingPublicLocation,
     RadrootsListingStatus,
 };
 use radroots_events::trade_validation::RadrootsTradeValidationListingError;
@@ -181,6 +181,7 @@ struct ListingDraftLocation {
     region: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     country: Option<String>,
+    geohash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -417,6 +418,7 @@ fn build_listing_draft(
             city: None,
             region: None,
             country: None,
+            geohash: String::new(),
         }),
         discounts: listing_discount_drafts_from_args(args),
     };
@@ -2537,15 +2539,13 @@ fn build_delivery_method(
     })
 }
 
-fn build_location(draft: &ListingDraftDocument) -> RadrootsListingLocation {
-    RadrootsListingLocation {
+fn build_location(draft: &ListingDraftDocument) -> RadrootsListingPublicLocation {
+    RadrootsListingPublicLocation {
         primary: draft.location.primary.trim().to_owned(),
         city: draft.location.city.clone().and_then(non_empty),
         region: draft.location.region.clone().and_then(non_empty),
         country: draft.location.country.clone().and_then(non_empty),
-        lat: None,
-        lng: None,
-        geohash: None,
+        geohash: draft.location.geohash.trim().to_owned(),
     }
 }
 
@@ -2927,7 +2927,10 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
     defaults.farm_defaults_ready = !draft_missing.iter().any(|field| {
         matches!(
             field,
-            farm_config::FarmMissingField::Location | farm_config::FarmMissingField::Delivery
+            farm_config::FarmMissingField::Location
+                | farm_config::FarmMissingField::City
+                | farm_config::FarmMissingField::Delivery
+                | farm_config::FarmMissingField::Geohash
         )
     });
     if defaults.farm_defaults_ready {
@@ -2947,12 +2950,13 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
     Ok(defaults)
 }
 
-fn draft_location_from_model(location: &RadrootsListingLocation) -> ListingDraftLocation {
+fn draft_location_from_model(location: &RadrootsListingPublicLocation) -> ListingDraftLocation {
     ListingDraftLocation {
         primary: location.primary.clone(),
         city: location.city.clone(),
         region: location.region.clone(),
         country: location.country.clone(),
+        geohash: location.geohash.clone(),
     }
 }
 
@@ -3257,6 +3261,7 @@ mod tests {
                 city: None,
                 region: None,
                 country: None,
+                geohash: "dnqwy".to_owned(),
             },
             discounts: Vec::new(),
         };
@@ -3312,6 +3317,7 @@ mod tests {
                 city: None,
                 region: None,
                 country: None,
+                geohash: "dnqwy".to_owned(),
             },
             discounts: vec![super::ListingDraftDiscount {
                 id: "discount_farmstand".to_owned(),

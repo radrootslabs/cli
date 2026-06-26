@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use radroots_events::farm::RadrootsFarm;
-use radroots_events::listing::{RadrootsListingDeliveryMethod, RadrootsListingLocation};
+use radroots_events::listing::{RadrootsListingDeliveryMethod, RadrootsListingPublicLocation};
 use radroots_events::profile::RadrootsProfile;
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,7 @@ pub struct FarmConfigSelection {
 #[serde(deny_unknown_fields)]
 pub struct FarmListingDefaults {
     pub delivery_method: String,
-    pub location: RadrootsListingLocation,
+    pub location: RadrootsListingPublicLocation,
 }
 
 impl FarmListingDefaults {
@@ -86,8 +86,10 @@ pub struct ResolvedFarmConfig {
 pub enum FarmMissingField {
     Name,
     Location,
+    City,
     Delivery,
     Country,
+    Geohash,
 }
 
 impl FarmMissingField {
@@ -95,8 +97,10 @@ impl FarmMissingField {
         match self {
             Self::Name => "Farm name",
             Self::Location => "Location",
+            Self::City => "City",
             Self::Delivery => "Delivery method",
             Self::Country => "Country",
+            Self::Geohash => "Geohash",
         }
     }
 }
@@ -271,6 +275,9 @@ pub fn missing_fields(document: &FarmConfigDocument) -> Vec<FarmMissingField> {
     if !location_present {
         missing.push(FarmMissingField::Location);
     }
+    if location_present && location_city(document).is_none() {
+        missing.push(FarmMissingField::City);
+    }
 
     if trimmed(document.listing_defaults.delivery_method.as_str()).is_empty() {
         missing.push(FarmMissingField::Delivery);
@@ -278,6 +285,9 @@ pub fn missing_fields(document: &FarmConfigDocument) -> Vec<FarmMissingField> {
 
     if location_present && location_country(document).is_none() {
         missing.push(FarmMissingField::Country);
+    }
+    if location_present && location_geohash(document).is_none() {
+        missing.push(FarmMissingField::Geohash);
     }
 
     missing
@@ -294,8 +304,7 @@ fn location_primary(document: &FarmConfigDocument) -> Option<&str> {
             .farm
             .location
             .as_ref()
-            .and_then(|location| location.primary.as_deref())
-            .and_then(non_empty_ref)
+            .and_then(|location| non_empty_ref(location.primary.as_str()))
     })
 }
 
@@ -314,6 +323,33 @@ fn location_country(document: &FarmConfigDocument) -> Option<&str> {
                 .and_then(|location| location.country.as_deref())
                 .and_then(non_empty_ref)
         })
+}
+
+fn location_city(document: &FarmConfigDocument) -> Option<&str> {
+    document
+        .listing_defaults
+        .location
+        .city
+        .as_deref()
+        .and_then(non_empty_ref)
+        .or_else(|| {
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| location.city.as_deref())
+                .and_then(non_empty_ref)
+        })
+}
+
+fn location_geohash(document: &FarmConfigDocument) -> Option<&str> {
+    non_empty_ref(document.listing_defaults.location.geohash.as_str()).or_else(|| {
+        document
+            .farm
+            .location
+            .as_ref()
+            .and_then(|location| non_empty_ref(location.geohash.as_str()))
+    })
 }
 
 fn parse_delivery_method(value: &str) -> Result<RadrootsListingDeliveryMethod, RuntimeError> {
@@ -352,7 +388,7 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use radroots_events::farm::RadrootsFarmLocation;
+    use radroots_events::farm::RadrootsFarmPublicLocation;
     use tempfile::tempdir;
 
     fn sample_paths(profile: &str, root: &Path) -> PathsConfig {
@@ -407,25 +443,23 @@ mod tests {
                 website: Some("https://example.invalid/la-huerta".to_owned()),
                 picture: None,
                 banner: None,
-                location: Some(RadrootsFarmLocation {
-                    primary: Some("San Francisco, CA".to_owned()),
+                location: Some(RadrootsFarmPublicLocation {
+                    primary: "San Francisco, CA".to_owned(),
                     city: Some("San Francisco".to_owned()),
                     region: Some("CA".to_owned()),
                     country: Some("US".to_owned()),
-                    gcs: None,
+                    geohash: "9q8yy".to_owned(),
                 }),
                 tags: None,
             },
             listing_defaults: FarmListingDefaults {
                 delivery_method: "pickup".to_owned(),
-                location: RadrootsListingLocation {
+                location: RadrootsListingPublicLocation {
                     primary: "San Francisco, CA".to_owned(),
                     city: Some("San Francisco".to_owned()),
                     region: Some("CA".to_owned()),
                     country: Some("US".to_owned()),
-                    lat: None,
-                    lng: None,
-                    geohash: None,
+                    geohash: "9q8yy".to_owned(),
                 },
             },
             publication: FarmPublicationStatus::default(),

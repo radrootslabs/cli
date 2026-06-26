@@ -494,6 +494,12 @@ pub fn make_listing_publishable(path: &Path, farm_d_tag: &str) {
     let raw = fs::read_to_string(path).expect("listing draft");
     let mut seller_pubkey_present = false;
     let mut in_seller_actor = false;
+    let location_city_present = raw
+        .lines()
+        .any(|line| line.trim_start().starts_with("city ="));
+    let location_country_present = raw
+        .lines()
+        .any(|line| line.trim_start().starts_with("country ="));
     let patched = raw
         .lines()
         .map(|line| {
@@ -509,7 +515,20 @@ pub fn make_listing_publishable(path: &Path, farm_d_tag: &str) {
             } else if trimmed.starts_with("method =") {
                 format!("{}method = \"pickup\"", line_indent(line))
             } else if trimmed.starts_with("primary =") {
-                format!("{}primary = \"farmstand\"", line_indent(line))
+                let mut value = format!("{}primary = \"farmstand\"", line_indent(line));
+                if !location_city_present {
+                    value.push_str(&format!("\n{}city = \"San Francisco\"", line_indent(line)));
+                }
+                if !location_country_present {
+                    value.push_str(&format!("\n{}country = \"US\"", line_indent(line)));
+                }
+                value
+            } else if trimmed.starts_with("city =") {
+                format!("{}city = \"San Francisco\"", line_indent(line))
+            } else if trimmed.starts_with("country =") {
+                format!("{}country = \"US\"", line_indent(line))
+            } else if trimmed.starts_with("geohash =") {
+                format!("{}geohash = \"9q8yy\"", line_indent(line))
             } else {
                 line.to_owned()
             }
@@ -524,6 +543,12 @@ pub fn make_listing_publishable_with_seller(path: &Path, farm_d_tag: &str, selle
     let raw = fs::read_to_string(path).expect("listing draft");
     let mut seller_pubkey_field_present = false;
     let mut in_seller_actor = false;
+    let location_city_present = raw
+        .lines()
+        .any(|line| line.trim_start().starts_with("city ="));
+    let location_country_present = raw
+        .lines()
+        .any(|line| line.trim_start().starts_with("country ="));
     let patched = raw
         .lines()
         .map(|line| {
@@ -539,7 +564,20 @@ pub fn make_listing_publishable_with_seller(path: &Path, farm_d_tag: &str, selle
             } else if trimmed.starts_with("method =") {
                 format!("{}method = \"pickup\"", line_indent(line))
             } else if trimmed.starts_with("primary =") {
-                format!("{}primary = \"farmstand\"", line_indent(line))
+                let mut value = format!("{}primary = \"farmstand\"", line_indent(line));
+                if !location_city_present {
+                    value.push_str(&format!("\n{}city = \"San Francisco\"", line_indent(line)));
+                }
+                if !location_country_present {
+                    value.push_str(&format!("\n{}country = \"US\"", line_indent(line)));
+                }
+                value
+            } else if trimmed.starts_with("city =") {
+                format!("{}city = \"San Francisco\"", line_indent(line))
+            } else if trimmed.starts_with("country =") {
+                format!("{}country = \"US\"", line_indent(line))
+            } else if trimmed.starts_with("geohash =") {
+                format!("{}geohash = \"9q8yy\"", line_indent(line))
             } else {
                 line.to_owned()
             }

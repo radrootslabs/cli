@@ -3696,6 +3696,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "radroots_geocoder"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "hex",
+ "radroots_runtime_paths",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+ "url",
+]
+
+[[package]]
 name = "radroots_identity"
 version = "0.1.0-alpha.2"
 dependencies = [
@@ -3920,6 +3935,7 @@ dependencies = [
  "radroots_event_store",
  "radroots_events",
  "radroots_events_codec",
+ "radroots_geocoder",
  "radroots_identity",
  "radroots_nostr",
  "radroots_nostr_connect",
@@ -3927,6 +3943,7 @@ dependencies = [
  "radroots_outbox",
  "radroots_publish_proxy_protocol",
  "radroots_relay_transport",
+ "radroots_runtime_paths",
  "radroots_trade",
  "reqwest",
  "serde",
@@ -4172,6 +4189,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",

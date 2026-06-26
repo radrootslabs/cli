@@ -42,6 +42,8 @@ pub struct FarmCreateArgs {
     pub region: Option<String>,
     #[arg(long)]
     pub country: Option<String>,
+    #[arg(long)]
+    pub geohash: Option<String>,
     #[arg(long = "delivery-method")]
     pub delivery_method: Option<String>,
 }

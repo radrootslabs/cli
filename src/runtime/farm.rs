@@ -3,9 +3,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_authority::RadrootsActorContext;
 use radroots_events::contract::RadrootsActorRole;
-use radroots_events::farm::{RadrootsFarm, RadrootsFarmLocation};
+use radroots_events::farm::{RadrootsFarm, RadrootsFarmPublicLocation};
 use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
-use radroots_events::listing::RadrootsListingLocation;
+use radroots_events::listing::RadrootsListingPublicLocation;
 use radroots_events::profile::{RadrootsProfile, RadrootsProfileType};
 use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
@@ -1289,6 +1289,7 @@ fn init_document(
     let existing_city = existing_city(existing_document);
     let existing_region = existing_region(existing_document);
     let existing_country = existing_country(existing_document);
+    let existing_geohash = existing_geohash(existing_document);
     let existing_delivery = existing_delivery_method(existing_document);
     let name = optional_arg_or_existing(args.name.as_ref(), existing_name.as_ref())
         .or_else(|| draft_name_from_account(account))
@@ -1320,6 +1321,8 @@ fn init_document(
     let city = optional_arg_or_existing(args.city.as_ref(), existing_city.as_ref());
     let region = optional_arg_or_existing(args.region.as_ref(), existing_region.as_ref());
     let country = optional_arg_or_existing(args.country.as_ref(), existing_country.as_ref());
+    let geohash = optional_arg_or_existing(args.geohash.as_ref(), existing_geohash.as_ref())
+        .unwrap_or_default();
     let delivery_method =
         optional_arg_or_existing(args.delivery_method.as_ref(), existing_delivery.as_ref())
             .unwrap_or_default();
@@ -1351,25 +1354,23 @@ fn init_document(
             website,
             picture,
             banner,
-            location: Some(RadrootsFarmLocation {
-                primary: non_empty(location_primary.as_str()),
+            location: Some(RadrootsFarmPublicLocation {
+                primary: location_primary.clone(),
                 city: city.clone(),
                 region: region.clone(),
                 country: country.clone(),
-                gcs: None,
+                geohash: geohash.clone(),
             }),
             tags: None,
         },
         listing_defaults: FarmListingDefaults {
             delivery_method,
-            location: RadrootsListingLocation {
+            location: RadrootsListingPublicLocation {
                 primary: location_primary,
                 city,
                 region,
                 country,
-                lat: None,
-                lng: None,
-                geohash: None,
+                geohash,
             },
         },
         publication,
@@ -1483,7 +1484,10 @@ fn missing_blocks_listing_defaults(missing: &[FarmMissingField]) -> bool {
     missing.iter().any(|field| {
         matches!(
             field,
-            FarmMissingField::Location | FarmMissingField::Delivery
+            FarmMissingField::Location
+                | FarmMissingField::City
+                | FarmMissingField::Delivery
+                | FarmMissingField::Geohash
         )
     })
 }
@@ -1508,11 +1512,17 @@ fn missing_field_actions(missing: &[FarmMissingField]) -> Vec<String> {
                     "radroots farm set location \"San Francisco, CA\"",
                 );
             }
+            FarmMissingField::City => {
+                push_action(&mut actions, "radroots farm set city \"San Francisco\"");
+            }
             FarmMissingField::Delivery => {
                 push_action(&mut actions, "radroots farm set delivery pickup");
             }
             FarmMissingField::Country => {
                 push_action(&mut actions, "radroots farm set country US");
+            }
+            FarmMissingField::Geohash => {
+                push_action(&mut actions, "radroots farm set geohash 9q8yy");
             }
         }
     }
@@ -1537,6 +1547,7 @@ fn human_field_name(field: FarmFieldArg) -> &'static str {
         FarmFieldArg::City => "City",
         FarmFieldArg::Region => "Region",
         FarmFieldArg::Country => "Country",
+        FarmFieldArg::Geohash => "Geohash",
         FarmFieldArg::Delivery => "Delivery",
     }
 }
@@ -1580,7 +1591,7 @@ fn apply_field_update(
         }
         FarmFieldArg::Location => {
             document.listing_defaults.location.primary = value.clone();
-            ensure_farm_location(document).primary = Some(value);
+            ensure_farm_location(document).primary = value;
         }
         FarmFieldArg::City => {
             document.listing_defaults.location.city = Some(value.clone());
@@ -1594,6 +1605,10 @@ fn apply_field_update(
             document.listing_defaults.location.country = Some(value.clone());
             ensure_farm_location(document).country = Some(value);
         }
+        FarmFieldArg::Geohash => {
+            document.listing_defaults.location.geohash = value.clone();
+            ensure_farm_location(document).geohash = value;
+        }
         FarmFieldArg::Delivery => {
             document.listing_defaults.delivery_method = value;
         }
@@ -1601,20 +1616,21 @@ fn apply_field_update(
     Ok(())
 }
 
-fn ensure_farm_location(document: &mut FarmConfigDocument) -> &mut RadrootsFarmLocation {
-    let primary = non_empty(document.listing_defaults.location.primary.as_str());
+fn ensure_farm_location(document: &mut FarmConfigDocument) -> &mut RadrootsFarmPublicLocation {
+    let primary = document.listing_defaults.location.primary.clone();
     let city = document.listing_defaults.location.city.clone();
     let region = document.listing_defaults.location.region.clone();
     let country = document.listing_defaults.location.country.clone();
+    let geohash = document.listing_defaults.location.geohash.clone();
     document
         .farm
         .location
-        .get_or_insert_with(|| RadrootsFarmLocation {
+        .get_or_insert_with(|| RadrootsFarmPublicLocation {
             primary,
             city,
             region,
             country,
-            gcs: None,
+            geohash,
         })
 }
 
@@ -1805,6 +1821,21 @@ fn existing_country(existing_document: Option<&FarmConfigDocument>) -> Option<St
         })
 }
 
+fn existing_geohash(existing_document: Option<&FarmConfigDocument>) -> Option<String> {
+    existing_document
+        .and_then(|document| {
+            document
+                .farm
+                .location
+                .as_ref()
+                .and_then(|location| non_empty(location.geohash.as_str()))
+        })
+        .or_else(|| {
+            existing_document
+                .and_then(|document| non_empty(document.listing_defaults.location.geohash.as_str()))
+        })
+}
+
 fn existing_delivery_method(existing_document: Option<&FarmConfigDocument>) -> Option<String> {
     existing_document
         .and_then(|document| non_empty(document.listing_defaults.delivery_method.as_str()))
@@ -1820,8 +1851,7 @@ fn resolved_location_primary(document: &FarmConfigDocument) -> Option<String> {
             .farm
             .location
             .as_ref()
-            .and_then(|location| location.primary.as_deref())
-            .and_then(non_empty)
+            .and_then(|location| non_empty(location.primary.as_str()))
     })
 }
 

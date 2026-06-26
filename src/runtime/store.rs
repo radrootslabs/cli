@@ -5,10 +5,10 @@ use radroots_replica_db::export::{ReplicaDbExportManifestRs, export_manifest};
 use radroots_replica_db::migrations;
 use radroots_replica_sync::radroots_replica_sync_status;
 use radroots_sdk::{
-    BackupReceipt, BackupRequest, IntegrityReceipt, IntegrityRequest, RadrootsSdk, RestoreReceipt,
-    RestoreRequest, SdkBackupState, SdkEventStoreStorageStatus, SdkOutboxStorageStatus,
-    SdkRestoreState, SdkSqliteStoreStatus, SdkStorageKind, StorageStatusReceipt,
-    StorageStatusRequest,
+    BackupReceipt, BackupRequest, IntegrityReceipt, IntegrityRequest, RadrootsClient,
+    RestoreReceipt, RestoreRequest, SdkBackupState, SdkEventStoreStorageStatus,
+    SdkOutboxStorageStatus, SdkRestoreState, SdkSqliteStoreStatus, SdkStorageKind,
+    StorageStatusReceipt, StorageStatusRequest,
 };
 use radroots_sql_core::SqliteExecutor;
 use serde::Serialize;
@@ -206,7 +206,7 @@ pub fn restore(
         .with_overwrite(overwrite)
         .with_dry_run(dry_run);
     let runtime = sdk_runtime()?;
-    let receipt = runtime.block_on(RadrootsSdk::restore(request))?;
+    let receipt = runtime.block_on(RadrootsClient::restore(request))?;
     sdk_restore_view(receipt, overwrite, dry_run)
 }
 

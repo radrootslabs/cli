@@ -91,6 +91,7 @@ fn sdk_status_next_action(kind: OrderStatusNextActionKind) -> &'static str {
         OrderStatusNextActionKind::InspectEvidenceIssues => "inspect_evidence_issues",
         OrderStatusNextActionKind::AwaitSellerDecision => "await_seller_decision",
         OrderStatusNextActionKind::DecideRevision => "decide_revision",
+        OrderStatusNextActionKind::AwaitRhiValidation => "await_rhi_validation",
         OrderStatusNextActionKind::Terminal => "terminal",
         _ => "unknown",
     }
@@ -100,7 +101,9 @@ fn sdk_order_status_state(status: OrderStatusKind) -> &'static str {
     match status {
         OrderStatusKind::Missing => "missing",
         OrderStatusKind::Requested => "requested",
-        OrderStatusKind::Accepted => "accepted",
+        OrderStatusKind::RevisionProposed => "revision_proposed",
+        OrderStatusKind::AgreedPendingRhi => "pending_rhi",
+        OrderStatusKind::Committed => "committed",
         OrderStatusKind::Declined => "declined",
         OrderStatusKind::Cancelled => "cancelled",
         OrderStatusKind::Invalid => "invalid",
@@ -149,7 +152,9 @@ fn sdk_order_status_lifecycle_phase(receipt: &OrderStatusReceipt) -> &'static st
     match receipt.status {
         OrderStatusKind::Missing => "missing",
         OrderStatusKind::Requested => "requested",
-        OrderStatusKind::Accepted => "accepted",
+        OrderStatusKind::RevisionProposed => "revision_proposed",
+        OrderStatusKind::AgreedPendingRhi => "pending_rhi",
+        OrderStatusKind::Committed => "committed",
         OrderStatusKind::Declined => "declined",
         OrderStatusKind::Cancelled => "cancelled",
         OrderStatusKind::Invalid => "invalid",

@@ -18,7 +18,7 @@ use radroots_nostr_connect::prelude::{
     RadrootsNostrConnectClientTarget, RadrootsNostrConnectError, RadrootsNostrConnectUri,
 };
 use radroots_sdk::{
-    RadrootsSdk, RadrootsSdkBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
+    RadrootsClient, RadrootsClientBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
     RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
     RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
     SdkPublishTransport, SdkRelayUrlPolicy,
@@ -67,9 +67,9 @@ impl CliSdkConfig {
         })
     }
 
-    pub fn builder(&self) -> RadrootsSdkBuilder {
+    pub fn builder(&self) -> RadrootsClientBuilder {
         self.relay_urls.iter().fold(
-            RadrootsSdk::builder()
+            RadrootsClient::builder()
                 .storage(RadrootsSdkStorageConfig::Directory(
                     self.storage_root.clone(),
                 ))
@@ -82,7 +82,7 @@ impl CliSdkConfig {
 
 pub struct CliSdkSession {
     runtime: Runtime,
-    sdk: RadrootsSdk,
+    sdk: RadrootsClient,
     config: CliSdkConfig,
 }
 
@@ -156,7 +156,7 @@ impl CliSdkSession {
         })
     }
 
-    pub fn sdk(&self) -> &RadrootsSdk {
+    pub fn sdk(&self) -> &RadrootsClient {
         &self.sdk
     }
 
@@ -587,9 +587,9 @@ pub(crate) fn sdk_runtime() -> Result<Runtime, RuntimeError> {
         })
 }
 
-fn memory_builder(config: &CliSdkConfig) -> RadrootsSdkBuilder {
+fn memory_builder(config: &CliSdkConfig) -> RadrootsClientBuilder {
     config.relay_urls.iter().fold(
-        RadrootsSdk::builder()
+        RadrootsClient::builder()
             .relay_url_policy(config.relay_url_policy)
             .publish_transport(config.publish_transport.clone()),
         |builder, relay_url| builder.relay_url(relay_url.clone()),
@@ -934,7 +934,7 @@ mod tests {
             path: "src/runtime/order.rs",
             start: "pub fn status(\n    config: &RuntimeConfig",
             end: "fn legacy_order_preflight_relay_status(",
-            required_tokens: &["OrderStatusRequest::parse", "session.sdk().orders().status"],
+            required_tokens: &["OrderStatusRequest::parse", "session.sdk().trades().status"],
         },
         MigratedCliPathGuard {
             label: "order SDK status adapter",
@@ -1024,7 +1024,7 @@ mod tests {
             required_tokens: &[
                 "RestoreRequest::new",
                 "sdk_runtime()",
-                "RadrootsSdk::restore",
+                "RadrootsClient::restore",
             ],
         },
     ];

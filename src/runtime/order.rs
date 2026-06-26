@@ -79,10 +79,11 @@ use radroots_trade::order::{
     RadrootsListingInventoryAccountingProjection, RadrootsListingInventoryBinAvailability,
     RadrootsOrderCancellationRecord, RadrootsOrderDecisionRecord, RadrootsOrderIssue,
     RadrootsOrderReductionInputs, RadrootsOrderRequestRecord, RadrootsOrderRevisionDecisionRecord,
-    RadrootsOrderRevisionProposalRecord, RadrootsOrderStatus,
-    canonicalize_order_decision_for_signer, canonicalize_order_request_for_signer,
-    reduce_listing_inventory_accounting, reduce_order_events,
+    RadrootsOrderRevisionProposalRecord, canonicalize_order_decision_for_signer,
+    canonicalize_order_request_for_signer, reduce_listing_inventory_accounting,
+    reduce_order_events,
 };
+use radroots_trade::workflow::RadrootsTradeWorkflowState;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -1795,7 +1796,7 @@ pub fn status(
 ) -> Result<OrderStatusView, CliSdkAdapterError> {
     let request = OrderStatusRequest::parse(args.key.as_str())?;
     let session = CliSdkSession::connect(config)?;
-    let receipt = session.block_on(session.sdk().orders().status(request))?;
+    let receipt = session.block_on(session.sdk().trades().status(request))?;
     Ok(sdk_order_status_view(receipt))
 }
 
@@ -2776,23 +2777,28 @@ fn order_revision_proposals_from_events(
     OrderRevisionProposalCandidates { records, issues }
 }
 
-fn active_order_status_state(status: &RadrootsOrderStatus) -> &'static str {
+fn active_order_status_state(status: &RadrootsTradeWorkflowState) -> &'static str {
     match status {
-        RadrootsOrderStatus::Missing => "missing",
-        RadrootsOrderStatus::Requested => "requested",
-        RadrootsOrderStatus::Accepted => "accepted",
-        RadrootsOrderStatus::Declined => "declined",
-        RadrootsOrderStatus::Cancelled => "cancelled",
-        RadrootsOrderStatus::Invalid => "invalid",
+        RadrootsTradeWorkflowState::Missing => "missing",
+        RadrootsTradeWorkflowState::Requested => "requested",
+        RadrootsTradeWorkflowState::RevisionProposed => "revision_proposed",
+        RadrootsTradeWorkflowState::AgreedPendingRhi => "pending_rhi",
+        RadrootsTradeWorkflowState::Committed => "committed",
+        RadrootsTradeWorkflowState::Declined => "declined",
+        RadrootsTradeWorkflowState::Cancelled => "cancelled",
+        RadrootsTradeWorkflowState::Invalid => "invalid",
     }
 }
 
-fn active_order_status_reason(status: &RadrootsOrderStatus, order_id: &str) -> Option<String> {
+fn active_order_status_reason(
+    status: &RadrootsTradeWorkflowState,
+    order_id: &str,
+) -> Option<String> {
     match status {
-        RadrootsOrderStatus::Missing => {
+        RadrootsTradeWorkflowState::Missing => {
             Some(format!("no active order events matched `{order_id}`"))
         }
-        RadrootsOrderStatus::Invalid => Some(format!(
+        RadrootsTradeWorkflowState::Invalid => Some(format!(
             "active order events for `{order_id}` failed reducer validation"
         )),
         _ => None,
@@ -2800,7 +2806,7 @@ fn active_order_status_reason(status: &RadrootsOrderStatus, order_id: &str) -> O
 }
 
 fn order_status_inventory_view(
-    status: &RadrootsOrderStatus,
+    status: &RadrootsTradeWorkflowState,
     listing_event_id: Option<String>,
     decision_event_id: Option<&RadrootsEventId>,
     decisions: &[RadrootsOrderDecisionRecord],
@@ -2824,7 +2830,7 @@ fn order_status_inventory_view(
         .collect::<Vec<_>>();
 
     match status {
-        RadrootsOrderStatus::Accepted => {
+        RadrootsTradeWorkflowState::AgreedPendingRhi | RadrootsTradeWorkflowState::Committed => {
             let bins = decision_event_id
                 .and_then(|event_id| {
                     decisions
@@ -2835,7 +2841,10 @@ fn order_status_inventory_view(
                 .unwrap_or_default();
             Some(OrderInventoryView {
                 state: if inventory_issues.is_empty() {
-                    "reserved".to_owned()
+                    match status {
+                        RadrootsTradeWorkflowState::Committed => "committed".to_owned(),
+                        _ => "reserved".to_owned(),
+                    }
                 } else {
                     "invalid".to_owned()
                 },
@@ -2845,7 +2854,7 @@ fn order_status_inventory_view(
                 issues: inventory_issues,
             })
         }
-        RadrootsOrderStatus::Cancelled => Some(OrderInventoryView {
+        RadrootsTradeWorkflowState::Cancelled => Some(OrderInventoryView {
             state: if decision_event_id.is_some() {
                 "released".to_owned()
             } else {
@@ -2856,26 +2865,28 @@ fn order_status_inventory_view(
             bins: Vec::new(),
             issues: inventory_issues,
         }),
-        RadrootsOrderStatus::Declined => Some(OrderInventoryView {
+        RadrootsTradeWorkflowState::Declined => Some(OrderInventoryView {
             state: "not_reserved".to_owned(),
             listing_event_id,
             commitment_valid: true,
             bins: Vec::new(),
             issues: inventory_issues,
         }),
-        RadrootsOrderStatus::Invalid if !inventory_issues.is_empty() => Some(OrderInventoryView {
-            state: "invalid".to_owned(),
-            listing_event_id,
-            commitment_valid: false,
-            bins: Vec::new(),
-            issues: inventory_issues,
-        }),
+        RadrootsTradeWorkflowState::Invalid if !inventory_issues.is_empty() => {
+            Some(OrderInventoryView {
+                state: "invalid".to_owned(),
+                listing_event_id,
+                commitment_valid: false,
+                bins: Vec::new(),
+                issues: inventory_issues,
+            })
+        }
         _ => None,
     }
 }
 
 fn order_status_lifecycle_view(
-    status: &RadrootsOrderStatus,
+    status: &RadrootsTradeWorkflowState,
     request_event_id: Option<String>,
     last_event_id: Option<String>,
     cancellation_event_id: Option<String>,
@@ -2887,9 +2898,10 @@ fn order_status_lifecycle_view(
     let phase = order_status_lifecycle_phase(status).to_owned();
     let terminal = matches!(
         status,
-        RadrootsOrderStatus::Accepted
-            | RadrootsOrderStatus::Cancelled
-            | RadrootsOrderStatus::Invalid
+        RadrootsTradeWorkflowState::Committed
+            | RadrootsTradeWorkflowState::Declined
+            | RadrootsTradeWorkflowState::Cancelled
+            | RadrootsTradeWorkflowState::Invalid
     );
     let cancellation =
         cancellation_event_id
@@ -2970,14 +2982,16 @@ fn order_status_revision_view_from_decision(
     }
 }
 
-fn order_status_lifecycle_phase(status: &RadrootsOrderStatus) -> &'static str {
+fn order_status_lifecycle_phase(status: &RadrootsTradeWorkflowState) -> &'static str {
     match status {
-        RadrootsOrderStatus::Missing => "missing",
-        RadrootsOrderStatus::Requested => "requested",
-        RadrootsOrderStatus::Accepted => "accepted",
-        RadrootsOrderStatus::Declined => "declined",
-        RadrootsOrderStatus::Cancelled => "cancelled",
-        RadrootsOrderStatus::Invalid => "invalid",
+        RadrootsTradeWorkflowState::Missing => "missing",
+        RadrootsTradeWorkflowState::Requested => "requested",
+        RadrootsTradeWorkflowState::RevisionProposed => "revision_proposed",
+        RadrootsTradeWorkflowState::AgreedPendingRhi => "pending_rhi",
+        RadrootsTradeWorkflowState::Committed => "committed",
+        RadrootsTradeWorkflowState::Declined => "declined",
+        RadrootsTradeWorkflowState::Cancelled => "cancelled",
+        RadrootsTradeWorkflowState::Invalid => "invalid",
     }
 }
 
@@ -3333,6 +3347,67 @@ fn active_order_reducer_issue_view(issue_value: RadrootsOrderIssue) -> OrderIssu
             "prev_event_id",
             "active order reducer reported cancellation previous mismatch",
             vec![event_id],
+        ),
+        RadrootsOrderIssue::ValidationReceiptWithoutPendingAgreement { event_id } => {
+            issue_with_events(
+                "validation_receipt_without_pending_agreement",
+                "validation_receipt_event_id",
+                "active order reducer reported validation receipt without pending agreement",
+                vec![event_id],
+            )
+        }
+        RadrootsOrderIssue::ValidationReceiptOrderIdMismatch { event_id } => issue_with_events(
+            "validation_receipt_order_id_mismatch",
+            "order_id",
+            "active order reducer reported validation receipt order id mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ValidationReceiptTypeMismatch { event_id } => issue_with_events(
+            "validation_receipt_type_mismatch",
+            "validation_receipt_type",
+            "active order reducer reported validation receipt type mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ValidationReceiptRootMismatch { event_id } => issue_with_events(
+            "validation_receipt_root_mismatch",
+            "root_event_id",
+            "active order reducer reported validation receipt root mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ValidationReceiptTargetMismatch { event_id } => issue_with_events(
+            "validation_receipt_target_mismatch",
+            "target_event_id",
+            "active order reducer reported validation receipt target mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ValidationReceiptListingMismatch { event_id } => issue_with_events(
+            "validation_receipt_listing_mismatch",
+            "listing_event_id",
+            "active order reducer reported validation receipt listing mismatch",
+            vec![event_id],
+        ),
+        RadrootsOrderIssue::ConflictingValidationReceipts { event_ids } => issue_with_events(
+            "conflicting_validation_receipts",
+            "validation_receipt_event_id",
+            "active order reducer reported conflicting validation receipts",
+            event_ids,
+        ),
+        RadrootsOrderIssue::DeterministicValidationFailure { event_id, reason } => {
+            issue_with_events(
+                "deterministic_validation_failure",
+                "validation_event_id",
+                format!("active order reducer reported deterministic validation failure: {reason}"),
+                vec![event_id],
+            )
+        }
+        RadrootsOrderIssue::StaleListingEvent {
+            expected_event_id,
+            current_event_id,
+        } => issue_with_events(
+            "stale_listing_event",
+            "listing_event_id",
+            "active order reducer reported stale listing event evidence",
+            vec![expected_event_id, current_event_id],
         ),
         RadrootsOrderIssue::ForkedLifecycle { event_ids } => issue_with_events(
             "forked_lifecycle",
@@ -4378,7 +4453,7 @@ fn order_inventory_view_from_listing_projection(
             .iter()
             .map(|bin| OrderInventoryBinView {
                 bin_id: bin.bin_id.to_string(),
-                committed_count: bin.accepted_reserved_count,
+                committed_count: bin.committed_reserved_count,
                 available_count: Some(bin.available_count),
                 remaining_count: Some(bin.remaining_count),
                 over_reserved: bin.over_reserved,
@@ -5324,7 +5399,7 @@ fn prepare_order_revision_proposal_dry_run_via_sdk(
     let session = CliSdkSession::connect_memory(config).map_err(cli_sdk_error_to_runtime)?;
     session
         .sdk()
-        .orders()
+        .trades()
         .prepare_revision_proposal(OrderRevisionProposalPrepareRequest::new(
             actor,
             sdk_order_event_ptr(&payload.root_event_id, config.relay.urls.as_slice()),
@@ -5345,7 +5420,7 @@ fn prepare_order_revision_decision_dry_run_via_sdk(
     let session = CliSdkSession::connect_memory(config).map_err(cli_sdk_error_to_runtime)?;
     session
         .sdk()
-        .orders()
+        .trades()
         .prepare_revision_decision(OrderRevisionDecisionPrepareRequest::new(
             actor,
             sdk_order_event_ptr(&payload.root_event_id, config.relay.urls.as_slice()),
@@ -5381,7 +5456,7 @@ fn prepare_order_cancellation_dry_run_via_sdk(
     let session = CliSdkSession::connect_memory(config).map_err(cli_sdk_error_to_runtime)?;
     session
         .sdk()
-        .orders()
+        .trades()
         .prepare_cancellation(OrderCancellationPrepareRequest::new(
             actor,
             sdk_order_event_ptr(&root_event_id, config.relay.urls.as_slice()),
@@ -5421,7 +5496,7 @@ fn enqueue_order_revision_proposal_via_sdk(
     let enqueue = session.block_on(
         session
             .sdk()
-            .orders()
+            .trades()
             .enqueue_revision_proposal_with_explicit_signer(request, &signer),
     )?;
     let push = push_one_sdk_outbox_event(&session, policy)?;
@@ -5466,7 +5541,7 @@ fn enqueue_order_revision_decision_via_sdk(
     let enqueue = session.block_on(
         session
             .sdk()
-            .orders()
+            .trades()
             .enqueue_revision_decision_with_explicit_signer(request, &signer),
     )?;
     let push = push_one_sdk_outbox_event(&session, policy)?;
@@ -5525,7 +5600,7 @@ fn enqueue_order_cancellation_via_sdk(
     let enqueue = session.block_on(
         session
             .sdk()
-            .orders()
+            .trades()
             .enqueue_cancellation_with_explicit_signer(request, &signer),
     )?;
     let push = push_one_sdk_outbox_event(&session, policy)?;
@@ -5585,7 +5660,7 @@ fn ingest_order_evidence_events(
         session.block_on(
             session
                 .sdk()
-                .orders()
+                .trades()
                 .ingest_evidence(OrderEvidenceIngestRequest::new(event)),
         )?;
     }
@@ -6116,7 +6191,7 @@ fn enqueue_order_decision_via_sdk(
     session.block_on(
         session
             .sdk()
-            .orders()
+            .trades()
             .ingest_request_evidence(OrderRequestEvidenceIngestRequest::new(input.request_event)),
     )?;
     let keys: RadrootsNostrKeys = signing.identity.into_keys();
@@ -6125,7 +6200,7 @@ fn enqueue_order_decision_via_sdk(
     let enqueue = session.block_on(
         session
             .sdk()
-            .orders()
+            .trades()
             .enqueue_decision_with_explicit_signer(request, &signer),
     )?;
     let push = session.block_on(
@@ -9431,7 +9506,7 @@ fn prepare_order_submit_via_sdk(
     let session = CliSdkSession::connect_memory(config)?;
     let plan = session
         .sdk()
-        .orders()
+        .trades()
         .prepare_submit(OrderSubmitPrepareRequest::new(
             input.actor,
             input.listing_event,
@@ -9473,7 +9548,7 @@ fn submit_via_sdk(
     let enqueue = session.block_on(
         session
             .sdk()
-            .orders()
+            .trades()
             .enqueue_submit_with_explicit_signer(request, &signer),
     )?;
     let push = session.block_on(

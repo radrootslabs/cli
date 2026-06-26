@@ -90,6 +90,7 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                 insert_string(&mut input, "city", &args.city);
                 insert_string(&mut input, "region", &args.region);
                 insert_string(&mut input, "country", &args.country);
+                insert_string(&mut input, "geohash", &args.geohash);
                 insert_string(&mut input, "delivery_method", &args.delivery_method);
             }
             FarmCommand::Rebind(args) => {

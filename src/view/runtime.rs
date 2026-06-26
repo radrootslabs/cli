@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use radroots_events::farm::RadrootsFarm;
 use radroots_events::ids::RadrootsListingAddress;
 use radroots_events::kinds::KIND_LISTING;
-use radroots_events::listing::RadrootsListingLocation;
+use radroots_events::listing::RadrootsListingPublicLocation;
 use radroots_events::order::RadrootsOrderEconomics;
 use radroots_events::profile::RadrootsProfile;
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
@@ -1057,7 +1057,7 @@ pub struct FarmSelectionView {
 #[derive(Debug, Clone, Serialize)]
 pub struct FarmListingDefaultsView {
     pub delivery_method: String,
-    pub location: RadrootsListingLocation,
+    pub location: RadrootsListingPublicLocation,
 }
 
 #[derive(Debug, Clone, Serialize)]
