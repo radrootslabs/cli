@@ -2846,6 +2846,53 @@ fn terminal_global_presentation_flags_are_deterministic() {
 }
 
 #[test]
+fn quiet_terminal_success_output_is_header_only() {
+    let output = radroots()
+        .args(["--quiet", "workspace", "get"])
+        .output()
+        .expect("run quiet workspace get");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+
+    assert_eq!(stdout, "✓ Workspace ready\n");
+}
+
+#[test]
+fn quiet_terminal_failure_keeps_reason_and_suppresses_optional_body() {
+    let output = radroots()
+        .args(["--quiet", "trade", "event", "watch", "ord_missing"])
+        .output()
+        .expect("run quiet trade event watch");
+
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+
+    assert!(stderr.starts_with("✕ Command failed\n"));
+    assert!(stderr.contains("Reason  relay-backed trade event watch is not implemented"));
+    assert!(!stderr.contains("State   not implemented"));
+    assert!(!stderr.contains("Next\n"));
+    assert!(serde_json::from_str::<Value>(&stderr).is_err());
+}
+
+#[test]
+fn quiet_does_not_change_json_output_contract() {
+    let output = radroots()
+        .args(["--format", "json", "--quiet", "workspace", "get"])
+        .output()
+        .expect("run quiet json workspace get");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let value: Value = serde_json::from_slice(&output.stdout).expect("json envelope");
+
+    assert_eq!(value["operation_id"], "workspace.get");
+    assert_eq!(value["output_format"], "json");
+}
+
+#[test]
 fn removed_no_color_flag_is_rejected() {
     let output = radroots()
         .args(["--no-color", "workspace", "get"])

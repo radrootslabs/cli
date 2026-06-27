@@ -12,7 +12,7 @@ pub fn terminal_error_document(envelope: &OutputEnvelope) -> TerminalDocument {
     if let Some(error) = error {
         document
             .fields
-            .push(TerminalField::new("Reason", error.message.clone()));
+            .push(TerminalField::essential("Reason", error.message.clone()));
         document
             .fields
             .push(TerminalField::verbose("Code", error.reason_code.clone()));

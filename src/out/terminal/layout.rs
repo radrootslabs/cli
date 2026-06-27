@@ -22,6 +22,7 @@ impl TerminalSymbol {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalVisibility {
+    Essential,
     Normal,
     Verbose,
     Trace,
@@ -50,6 +51,14 @@ pub struct TerminalField {
 }
 
 impl TerminalField {
+    pub fn essential(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+            visibility: TerminalVisibility::Essential,
+        }
+    }
+
     pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             label: label.into(),

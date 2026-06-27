@@ -33,9 +33,14 @@ impl Default for TerminalRenderContext {
 }
 
 impl TerminalRenderContext {
+    pub fn is_quiet(&self) -> bool {
+        matches!(self.verbosity, TerminalVerbosity::Quiet)
+    }
+
     pub fn allows(&self, visibility: TerminalVisibility) -> bool {
         match visibility {
-            TerminalVisibility::Normal => true,
+            TerminalVisibility::Essential => true,
+            TerminalVisibility::Normal => !self.is_quiet(),
             TerminalVisibility::Verbose => {
                 matches!(
                     self.verbosity,
@@ -59,14 +64,16 @@ pub fn render_terminal_document(document: &TerminalDocument, cx: &TerminalRender
     for section in &document.sections {
         write_section(&mut output, section, cx);
     }
-    if !document.warnings.is_empty() {
+    if !cx.is_quiet() && !document.warnings.is_empty() {
         let _ = writeln!(output);
         let _ = writeln!(output, "Warnings");
         for warning in &document.warnings {
             let _ = writeln!(output, "  {}: {}", warning.code, warning.message);
         }
     }
-    write_next(&mut output, &document.next);
+    if !cx.is_quiet() {
+        write_next(&mut output, &document.next);
+    }
     if let Some(reference) = &document.reference
         && cx.allows(TerminalVisibility::Verbose)
         && !reference.is_empty()
@@ -192,7 +199,9 @@ fn write_reference(output: &mut String, reference: &TerminalReference) {
 mod tests {
     use super::*;
     use crate::out::terminal::actions::TerminalAction;
-    use crate::out::terminal::layout::{TerminalField, TerminalHeader, TerminalSymbol};
+    use crate::out::terminal::layout::{
+        TerminalField, TerminalHeader, TerminalSection, TerminalSymbol, TerminalWarning,
+    };
 
     #[test]
     fn renders_canonical_receipt_layout() {
@@ -233,5 +242,37 @@ mod tests {
             ..TerminalRenderContext::default()
         };
         assert!(render_terminal_document(&document, &cx).contains("Reference"));
+    }
+
+    #[test]
+    fn quiet_renders_only_header_and_essential_fields() {
+        let mut document = TerminalDocument::new(TerminalHeader::new(
+            TerminalSymbol::Failure,
+            "Command failed",
+        ))
+        .with_field(TerminalField::essential("Reason", "missing approval"))
+        .with_field(TerminalField::new("State", "not implemented"))
+        .with_section(TerminalSection::lines(
+            "Details",
+            vec!["extra context".to_owned()],
+        ))
+        .with_next(TerminalAction::command(
+            "radroots trade status get ord_test",
+        ));
+        document.warnings = vec![TerminalWarning::new("warn_test", "suppressed")];
+        document.reference = Some(TerminalReference {
+            request_id: Some("req_test".to_owned()),
+            ..TerminalReference::default()
+        });
+
+        let rendered = render_terminal_document(
+            &document,
+            &TerminalRenderContext {
+                verbosity: TerminalVerbosity::Quiet,
+                ..TerminalRenderContext::default()
+            },
+        );
+
+        assert_eq!(rendered, "✕ Command failed\n\n  Reason  missing approval");
     }
 }
