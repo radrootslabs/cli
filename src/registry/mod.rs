@@ -514,6 +514,7 @@ mod tests {
             "config.get",
             "account.list",
             "relay.list",
+            "farm.location.set",
             "sync.pull",
             "sync.push",
             "sync.watch",

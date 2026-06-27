@@ -76,7 +76,7 @@ pub const FARM_LOCATION_SET: OperationSpec = operation!(
     true,
     Conditional,
     Medium,
-    false,
+    true,
     true
 );
 
