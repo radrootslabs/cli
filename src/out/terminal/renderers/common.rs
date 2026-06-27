@@ -132,8 +132,19 @@ pub(crate) fn push_count_field(
     value: &Value,
     path: &[&str],
 ) {
-    if let Some(value) = number_path(value, path) {
-        push_field(document, label, value.to_string());
+    if let Some(value) = number_label_path(value, path) {
+        push_field(document, label, value);
+    }
+}
+
+pub(crate) fn push_number_field(
+    document: &mut TerminalDocument,
+    label: &str,
+    value: &Value,
+    path: &[&str],
+) {
+    if let Some(value) = number_label_path(value, path) {
+        push_field(document, label, value);
     }
 }
 
@@ -179,6 +190,36 @@ pub(crate) fn number_path(value: &Value, path: &[&str]) -> Option<i64> {
         current = current.get(*segment)?;
     }
     current.as_i64()
+}
+
+pub(crate) fn number_label_path(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    number_label(current)
+}
+
+pub(crate) fn number_label(value: &Value) -> Option<String> {
+    if let Some(value) = value.as_i64() {
+        return Some(value.to_string());
+    }
+    if let Some(value) = value.as_u64() {
+        return Some(value.to_string());
+    }
+    value
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .map(|value| {
+            let mut rendered = format!("{value:.6}");
+            while rendered.contains('.') && rendered.ends_with('0') {
+                rendered.pop();
+            }
+            if rendered.ends_with('.') {
+                rendered.pop();
+            }
+            rendered
+        })
 }
 
 pub(crate) fn bool_path(value: &Value, path: &[&str]) -> Option<bool> {

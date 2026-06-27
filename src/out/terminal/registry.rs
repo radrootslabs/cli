@@ -64,7 +64,9 @@ pub fn terminal_renderer_registry() -> TerminalRendererRegistry {
     let registry = crate::out::terminal::renderers::account::register(registry);
     let registry = crate::out::terminal::renderers::runtime::register(registry);
     let registry = crate::out::terminal::renderers::store::register(registry);
-    crate::out::terminal::renderers::sync::register(registry)
+    let registry = crate::out::terminal::renderers::sync::register(registry);
+    let registry = crate::out::terminal::renderers::farm::register(registry);
+    crate::out::terminal::renderers::listing::register(registry)
 }
 
 #[cfg(test)]
@@ -100,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn core_runtime_registry_covers_rcld_04_operations() {
+    fn registry_covers_core_and_seller_operations() {
         let registry = terminal_renderer_registry();
         let expected = [
             "workspace.init",
@@ -128,6 +130,26 @@ mod tests {
             "sync.pull",
             "sync.push",
             "sync.watch",
+            "farm.create",
+            "farm.get",
+            "farm.rebind",
+            "farm.profile.update",
+            "farm.location.set",
+            "farm.location.get",
+            "farm.location.clear",
+            "farm.fulfillment.update",
+            "farm.readiness.check",
+            "farm.publish",
+            "listing.create",
+            "listing.get",
+            "listing.list",
+            "listing.app.list",
+            "listing.app.export",
+            "listing.update",
+            "listing.validate",
+            "listing.rebind",
+            "listing.publish",
+            "listing.archive",
         ];
 
         assert_eq!(registry.len(), expected.len());
