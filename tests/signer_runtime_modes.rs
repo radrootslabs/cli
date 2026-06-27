@@ -1571,7 +1571,46 @@ fn farm_rebind_is_explicit_and_publish_defaults_ignore_ambient_selection() {
     );
     assert_next_action_present(
         &retarget,
-        format!("radroots farm rebind {second_account_id}").as_str(),
+        format!("radroots --dry-run farm rebind {second_account_id}").as_str(),
+    );
+    assert_next_action_present(
+        &retarget,
+        format!("radroots --approval-token approve farm rebind {second_account_id}").as_str(),
+    );
+
+    let terminal_retarget_output = sandbox
+        .command()
+        .args([
+            "farm",
+            "create",
+            "--name",
+            "Green Farm Retarget",
+            "--location",
+            "farmstand",
+            "--city",
+            "San Francisco",
+            "--country",
+            "US",
+            "--geohash",
+            "9q8yy",
+            "--delivery-method",
+            "pickup",
+        ])
+        .output()
+        .expect("terminal retarget");
+    assert!(!terminal_retarget_output.status.success());
+    assert!(terminal_retarget_output.stdout.is_empty());
+    let terminal_stderr =
+        String::from_utf8(terminal_retarget_output.stderr).expect("terminal stderr");
+    assert!(
+        terminal_stderr.contains("Next\n  radroots --dry-run farm rebind"),
+        "{terminal_stderr}"
+    );
+    assert!(
+        terminal_stderr.contains(
+            format!("radroots --approval-token approve farm rebind {second_account_id}").as_str(),
+        ),
+        "{terminal_stderr}"
     );
 
     let (missing_rebind_output, missing_rebind) = sandbox.json_output(&[
@@ -1790,7 +1829,11 @@ fn missing_farm_bound_seller_blocks_listing_create_and_guides_setup_repair() {
     assert_eq!(updated["operation_id"], "farm.profile.update");
     assert_contains(&updated["result"]["reason"], "farm-bound seller account");
     assert_action_present(&updated, "radroots account import <path>");
-    assert_action_present(&updated, "radroots farm rebind <selector>");
+    assert_action_present(&updated, "radroots --dry-run farm rebind <selector>");
+    assert_action_present(
+        &updated,
+        "radroots --approval-token approve farm rebind <selector>",
+    );
 
     let listing_path = sandbox.root().join("missing-seller-listing.toml");
     let (listing_output, listing) = sandbox.json_output(&[
@@ -1841,7 +1884,11 @@ fn missing_farm_bound_seller_blocks_listing_create_and_guides_setup_repair() {
         first_account_id
     );
     assert_next_action_present(&listing, "radroots account import <path>");
-    assert_next_action_present(&listing, "radroots farm rebind <selector>");
+    assert_next_action_present(&listing, "radroots --dry-run farm rebind <selector>");
+    assert_next_action_present(
+        &listing,
+        "radroots --approval-token approve farm rebind <selector>",
+    );
     assert!(!listing_path.exists());
 }
 

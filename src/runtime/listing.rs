@@ -2901,10 +2901,7 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
             json!({
                 "seller_actor_source": "farm_config",
                 "farm_bound_seller_account_id": account_id,
-                "actions": [
-                    "radroots account import <path>",
-                    "radroots farm rebind <selector>",
-                ],
+                "actions": crate::runtime::farm::farm_bound_seller_recovery_actions("<selector>"),
             }),
         )
         .into());

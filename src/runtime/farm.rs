@@ -212,10 +212,7 @@ fn rebind_inner(
             "farm seller binding updated".to_owned()
         }),
         actions: if dry_run {
-            vec![format!(
-                "radroots --approval-token approve farm rebind {}",
-                args.selector
-            )]
+            vec![farm_rebind_live_action(args.selector.as_str())]
         } else {
             vec!["radroots farm readiness check".to_owned()]
         },
@@ -522,8 +519,7 @@ pub fn status(
     };
     let mut actions = Vec::new();
     if account.is_none() {
-        actions.push("radroots account import <path>".to_owned());
-        actions.push("radroots farm rebind <selector>".to_owned());
+        actions.extend(farm_bound_seller_recovery_actions("<selector>"));
     } else if draft_missing.is_empty() {
         actions.extend(publish.actions.clone());
     } else {
@@ -722,10 +718,7 @@ pub fn publish(
                 resolved.document.selection.account
             ),
             vec!["Farm-bound seller account".to_owned()],
-            vec![
-                "radroots account import <path>".to_owned(),
-                "radroots farm rebind <selector>".to_owned(),
-            ],
+            farm_bound_seller_recovery_actions("<selector>"),
             config.output.dry_run,
             true,
             resolved.document.selection.account.clone(),
@@ -1583,7 +1576,7 @@ fn init_document(
         && document.selection.account != account.record.account_id.to_string()
     {
         let message = format!(
-            "account mismatch: farm config is bound to seller account `{}`; use `radroots farm rebind {}` to change the farm-bound seller account",
+            "account mismatch: farm config is bound to seller account `{}`; use `radroots --approval-token approve farm rebind {}` to change the farm-bound seller account",
             document.selection.account, account.record.account_id
         );
         return Err(account::AccountRuntimeFailure::mismatch_with_detail(
@@ -1592,7 +1585,7 @@ fn init_document(
                 "seller_actor_source": FARM_SELLER_ACTOR_SOURCE,
                 "farm_bound_seller_account_id": document.selection.account,
                 "attempted_seller_account_id": account.record.account_id.to_string(),
-                "actions": [format!("radroots farm rebind {}", account.record.account_id)],
+                "actions": farm_rebind_recovery_actions(account.record.account_id.as_str()),
             }),
         )
         .into());
@@ -1768,7 +1761,7 @@ fn farm_setup_actions(
 ) -> Vec<String> {
     let mut actions = vec!["radroots farm readiness check".to_owned()];
     if account.is_none() {
-        actions.extend(farm_bound_seller_recovery_actions());
+        actions.extend(farm_bound_seller_recovery_actions("<selector>"));
         return actions;
     }
     if farm_config::missing_fields(document).is_empty()
@@ -1785,11 +1778,25 @@ fn missing_farm_bound_seller_reason(account_id: &str) -> String {
     format!("farm-bound seller account `{account_id}` is not present in the local account store")
 }
 
-fn farm_bound_seller_recovery_actions() -> Vec<String> {
+pub(crate) fn farm_bound_seller_recovery_actions(selector: &str) -> Vec<String> {
+    let mut actions = vec!["radroots account import <path>".to_owned()];
+    actions.extend(farm_rebind_recovery_actions(selector));
+    actions
+}
+
+pub(crate) fn farm_rebind_recovery_actions(selector: &str) -> Vec<String> {
     vec![
-        "radroots account import <path>".to_owned(),
-        "radroots farm rebind <selector>".to_owned(),
+        farm_rebind_dry_run_action(selector),
+        farm_rebind_live_action(selector),
     ]
+}
+
+pub(crate) fn farm_rebind_dry_run_action(selector: &str) -> String {
+    format!("radroots --dry-run farm rebind {selector}")
+}
+
+pub(crate) fn farm_rebind_live_action(selector: &str) -> String {
+    format!("radroots --approval-token approve farm rebind {selector}")
 }
 
 fn account_recovery_actions() -> Vec<String> {
