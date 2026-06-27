@@ -3931,6 +3931,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "hex",
+ "nostr",
  "radroots_authority",
  "radroots_event_store",
  "radroots_events",
