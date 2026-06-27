@@ -672,7 +672,7 @@ fn fetch_error_parts(
             Vec::new(),
             Vec::new(),
             vec![
-                "radroots --relay wss://relay.example.com validation receipt list --order-id <order-id>"
+                "radroots --relay wss://relay.example.com validation receipt list --trade-id <trade-id>"
                     .to_owned(),
             ],
         ),

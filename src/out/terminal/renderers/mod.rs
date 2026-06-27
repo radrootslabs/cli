@@ -9,4 +9,6 @@ pub mod market;
 pub mod runtime;
 pub mod store;
 pub mod sync;
+pub mod trade;
+pub mod validation;
 pub mod workspace;

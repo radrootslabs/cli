@@ -23,7 +23,7 @@ pub const VALIDATION_RECEIPT_LIST: OperationSpec = operation!(
     "validation_receipt_list",
     "ValidationReceiptListRequest",
     "ValidationReceiptListResult",
-    "List validation receipts for one order.",
+    "List validation receipts for one trade.",
     Any,
     false,
     None,
