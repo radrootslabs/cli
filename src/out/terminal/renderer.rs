@@ -15,20 +15,10 @@ pub enum TerminalVerbosity {
     Trace,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TerminalColorPolicy {
-    Auto,
-    Always,
-    Never,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalRenderContext {
     pub verbosity: TerminalVerbosity,
-    pub color: TerminalColorPolicy,
     pub width: usize,
-    pub stdout_is_tty: bool,
-    pub stderr_is_tty: bool,
     pub dry_run: bool,
 }
 
@@ -36,10 +26,7 @@ impl Default for TerminalRenderContext {
     fn default() -> Self {
         Self {
             verbosity: TerminalVerbosity::Normal,
-            color: TerminalColorPolicy::Auto,
             width: 80,
-            stdout_is_tty: false,
-            stderr_is_tty: false,
             dry_run: false,
         }
     }

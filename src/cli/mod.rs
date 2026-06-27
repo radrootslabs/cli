@@ -100,8 +100,6 @@ pub struct TargetCliArgs {
     pub verbose: bool,
     #[arg(long = "trace", global = true, action = ArgAction::SetTrue)]
     pub trace: bool,
-    #[arg(long = "no-color", global = true, action = ArgAction::SetTrue)]
-    pub no_color: bool,
     #[command(subcommand)]
     pub command: TargetCommand,
 }
@@ -367,7 +365,6 @@ mod tests {
             "approval_test",
             "--no-input",
             "--quiet",
-            "--no-color",
             "workspace",
             "get",
         ])
@@ -386,8 +383,15 @@ mod tests {
         assert_eq!(parsed.approval_token.as_deref(), Some("approval_test"));
         assert!(parsed.no_input);
         assert!(parsed.quiet);
-        assert!(parsed.no_color);
         assert_eq!(parsed.command.operation_id(), "workspace.get");
+    }
+
+    #[test]
+    fn target_parser_rejects_removed_no_color_flag() {
+        let error = TargetCliArgs::try_parse_from(["radroots", "--no-color", "workspace", "get"])
+            .expect_err("removed no-color flag should be rejected");
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]

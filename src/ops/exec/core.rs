@@ -201,7 +201,6 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
             "output": {
                 "format": self.config.output.format.as_str(),
                 "verbosity": self.config.output.verbosity.as_str(),
-                "color": self.config.output.color,
                 "dry_run": self.config.output.dry_run,
             },
             "interaction": {
@@ -1320,7 +1319,6 @@ mod tests {
             output: OutputConfig {
                 format: OutputFormat::Terminal,
                 verbosity: Verbosity::Normal,
-                color: true,
                 dry_run: false,
             },
             interaction: InteractionConfig {

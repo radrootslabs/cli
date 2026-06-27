@@ -300,7 +300,6 @@ mod tests {
             output: OutputConfig {
                 format: OutputFormat::Terminal,
                 verbosity: Verbosity::Normal,
-                color: true,
                 dry_run: false,
             },
             interaction: InteractionConfig {

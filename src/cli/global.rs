@@ -29,7 +29,6 @@ pub struct RuntimeInvocationArgs {
     pub verbose: bool,
     pub trace: bool,
     pub dry_run: bool,
-    pub no_color: bool,
     pub no_input: bool,
     pub yes: bool,
     pub log_filter: Option<String>,

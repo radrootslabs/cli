@@ -2820,7 +2820,6 @@ fn terminal_global_presentation_flags_are_deterministic() {
     for args in [
         &["workspace", "get"][..],
         &["--quiet", "workspace", "get"][..],
-        &["--no-color", "workspace", "get"][..],
     ] {
         let output = radroots().args(args).output().expect("run terminal flag");
 
@@ -2844,6 +2843,19 @@ fn terminal_global_presentation_flags_are_deterministic() {
         assert!(stdout.contains("Request"), "{args:?}");
         assert!(!stdout.contains("\u{1b}["), "{args:?}");
     }
+}
+
+#[test]
+fn removed_no_color_flag_is_rejected() {
+    let output = radroots()
+        .args(["--no-color", "workspace", "get"])
+        .output()
+        .expect("run removed no-color flag");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("unexpected argument '--no-color'"));
 }
 
 #[test]

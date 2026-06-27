@@ -201,7 +201,6 @@ pub struct LegacyPathRuntimeView {
 pub struct OutputRuntimeView {
     pub format: String,
     pub verbosity: String,
-    pub color: bool,
     pub dry_run: bool,
 }
 

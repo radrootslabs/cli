@@ -17,7 +17,6 @@ pub fn runtime_invocation_args_from_target(args: &TargetCliArgs) -> RuntimeInvoc
         verbose: args.verbose,
         trace: args.trace,
         dry_run: args.dry_run,
-        no_color: args.no_color,
         no_input: args.no_input,
         yes: false,
         log_filter: None,

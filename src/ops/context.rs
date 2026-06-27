@@ -74,7 +74,6 @@ pub struct OperationContext {
     pub quiet: bool,
     pub verbose: bool,
     pub trace: bool,
-    pub color: bool,
 }
 
 impl OperationContext {
@@ -105,7 +104,6 @@ impl OperationContext {
             quiet: args.quiet,
             verbose: args.verbose,
             trace: args.trace,
-            color: !args.no_color,
         }
     }
 

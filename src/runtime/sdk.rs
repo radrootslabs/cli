@@ -1351,7 +1351,6 @@ mod tests {
             output: OutputConfig {
                 format: OutputFormat::Json,
                 verbosity: Verbosity::Normal,
-                color: false,
                 dry_run: false,
             },
             interaction: InteractionConfig {

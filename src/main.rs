@@ -7,7 +7,7 @@ mod registry;
 mod runtime;
 mod view;
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -29,7 +29,7 @@ use crate::ops::{
 use crate::out::envelope::{CliExitCode, OutputEnvelope, OutputError};
 use crate::out::terminal::registry::terminal_renderer_registry;
 use crate::out::terminal::renderer::{
-    TerminalColorPolicy, TerminalRenderContext, TerminalVerbosity, render_terminal_document,
+    TerminalRenderContext, TerminalVerbosity, render_terminal_document,
 };
 use crate::registry::{NetworkRequirement, network_requirement, requires_local_signer_mode};
 use crate::runtime::config::{
@@ -549,10 +549,7 @@ fn render_config_from_target_args(
         },
         terminal: TerminalRenderContext {
             verbosity: terminal_verbosity_from_flags(args.quiet, args.verbose, args.trace),
-            color: terminal_color_policy(!args.no_color),
             width: 80,
-            stdout_is_tty: std::io::stdout().is_terminal(),
-            stderr_is_tty: std::io::stderr().is_terminal(),
             dry_run: args.dry_run,
         },
     }
@@ -567,10 +564,7 @@ fn render_config_from_runtime(config: &RuntimeConfig) -> EnvelopeRenderConfig {
         },
         terminal: TerminalRenderContext {
             verbosity: terminal_verbosity_from_runtime(config.output.verbosity),
-            color: terminal_color_policy(config.output.color),
             width: 80,
-            stdout_is_tty: config.interaction.stdout_tty,
-            stderr_is_tty: std::io::stderr().is_terminal(),
             dry_run: config.output.dry_run,
         },
     }
@@ -594,14 +588,6 @@ fn terminal_verbosity_from_runtime(verbosity: Verbosity) -> TerminalVerbosity {
         Verbosity::Normal => TerminalVerbosity::Normal,
         Verbosity::Verbose => TerminalVerbosity::Verbose,
         Verbosity::Trace => TerminalVerbosity::Trace,
-    }
-}
-
-fn terminal_color_policy(color: bool) -> TerminalColorPolicy {
-    if color {
-        TerminalColorPolicy::Auto
-    } else {
-        TerminalColorPolicy::Never
     }
 }
 

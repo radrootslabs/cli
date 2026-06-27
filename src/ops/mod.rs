@@ -77,7 +77,6 @@ mod tests {
             "--quiet",
             "--verbose",
             "--trace",
-            "--no-color",
             "workspace",
             "get",
         ])
@@ -99,7 +98,6 @@ mod tests {
         assert!(context.quiet);
         assert!(context.verbose);
         assert!(context.trace);
-        assert!(!context.color);
 
         let envelope_context = context.envelope_context("req_test");
         let actor = envelope_context.actor.expect("account actor");

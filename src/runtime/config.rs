@@ -119,7 +119,6 @@ impl Verbosity {
 pub struct OutputConfig {
     pub format: OutputFormat,
     pub verbosity: Verbosity,
-    pub color: bool,
     pub dry_run: bool,
 }
 
@@ -642,7 +641,6 @@ impl RuntimeConfig {
                 workspace_config.as_ref(),
             )?,
             verbosity: resolve_verbosity(args)?,
-            color: !args.no_color,
             dry_run: args.dry_run,
         };
         let logging = LoggingConfig {
@@ -2018,7 +2016,6 @@ mod tests {
             output_format: Some(RuntimeOutputFormatArg::Terminal),
             verbose: true,
             dry_run: true,
-            no_color: true,
             log_filter: Some("debug".to_owned()),
             log_stdout: false,
             identity_path: Some(PathBuf::from("custom-identity.json")),
@@ -2073,7 +2070,6 @@ mod tests {
             OutputConfig {
                 format: OutputFormat::Terminal,
                 verbosity: Verbosity::Verbose,
-                color: false,
                 dry_run: true,
             }
         );
@@ -2226,7 +2222,6 @@ mod tests {
             OutputConfig {
                 format: OutputFormat::Json,
                 verbosity: Verbosity::Normal,
-                color: true,
                 dry_run: false,
             }
         );
