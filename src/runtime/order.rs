@@ -1971,7 +1971,10 @@ fn enrich_order_status_inventory(
         .cloned()
         .collect::<Vec<_>>();
     if relevant_issues.is_empty() {
-        if matches!(view.state.as_str(), "pending_rhi" | "committed" | "cancelled") {
+        if matches!(
+            view.state.as_str(),
+            "pending_rhi" | "committed" | "cancelled"
+        ) {
             let inventory_state = if view.state == "cancelled" {
                 "released"
             } else {
