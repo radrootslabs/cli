@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use serde_json::Value;
 
 use crate::cli::input::runtime_invocation_args_from_target;
 use crate::cli::{TargetCliArgs, TargetOutputFormat};
@@ -28,15 +27,11 @@ use crate::ops::{
     TargetOperationRequest,
 };
 use crate::out::envelope::{CliExitCode, OutputEnvelope, OutputError};
-use crate::out::terminal::actions::terminal_actions_from_next_actions;
-use crate::out::terminal::errors::terminal_error_document;
-use crate::out::terminal::layout::{
-    TerminalDocument, TerminalField, TerminalHeader, TerminalReference, TerminalSymbol,
-};
+use crate::out::terminal::registry::terminal_renderer_registry;
 use crate::out::terminal::renderer::{
     TerminalColorPolicy, TerminalRenderContext, TerminalVerbosity, render_terminal_document,
 };
-use crate::out::terminal::values::{proof_summary, string_path, transport_label};
+use crate::out::terminal::renderers::common::generic_terminal_document;
 use crate::registry::{NetworkRequirement, network_requirement, requires_local_signer_mode};
 use crate::runtime::config::{
     OutputFormat as RuntimeOutputFormat, RuntimeConfig, SignerBackend, Verbosity,
@@ -640,7 +635,12 @@ fn render_terminal_envelope(
     envelope: &OutputEnvelope,
     cx: &TerminalRenderContext,
 ) -> Result<(), runtime::RuntimeError> {
-    let rendered = render_terminal_document(&terminal_document_from_envelope(envelope), cx);
+    let registry = terminal_renderer_registry();
+    let document = registry
+        .get(envelope.operation_id.as_str())
+        .map(|renderer| renderer.render(envelope, cx))
+        .unwrap_or_else(|| generic_terminal_document(envelope));
+    let rendered = render_terminal_document(&document, cx);
     if envelope.errors.is_empty() {
         let stdout = std::io::stdout();
         let mut handle = stdout.lock();
@@ -651,213 +651,6 @@ fn render_terminal_envelope(
         writeln!(handle, "{rendered}")?;
     }
     Ok(())
-}
-
-fn terminal_document_from_envelope(envelope: &OutputEnvelope) -> TerminalDocument {
-    let display = terminal_display_source(envelope);
-    let mut document = if envelope.errors.is_empty() {
-        let status = terminal_envelope_status(envelope);
-        TerminalDocument::new(TerminalHeader::new(
-            terminal_status_symbol(status, envelope.dry_run),
-            terminal_title(envelope.operation_id.as_str(), status),
-        ))
-    } else {
-        let mut document = terminal_error_document(envelope);
-        add_terminal_display_fields(&mut document, display, false);
-        document
-    };
-    if envelope.errors.is_empty() {
-        add_terminal_display_fields(&mut document, display, true);
-    }
-    document.warnings = envelope
-        .warnings
-        .iter()
-        .map(|warning| {
-            crate::out::terminal::layout::TerminalWarning::new(
-                warning.code.clone(),
-                warning.message.clone(),
-            )
-        })
-        .collect();
-    document.next = terminal_actions_from_next_actions(&envelope.next_actions);
-    document.reference = terminal_reference(envelope);
-    document
-}
-
-fn add_terminal_display_fields(
-    document: &mut TerminalDocument,
-    display: &Value,
-    include_reason: bool,
-) {
-    if let Some(state) = terminal_state(display) {
-        push_terminal_field(document, "State", terminal_status_label(state));
-    }
-    if let Some(mode) = terminal_publish_transport(display) {
-        push_terminal_field(document, "Transport", transport_label(mode));
-    }
-    if let Some(state) = terminal_publish_state(display) {
-        push_terminal_field(document, "Publish", terminal_status_label(state));
-    }
-    if let Some(proof) = proof_summary(display) {
-        push_terminal_field(document, "Proof", proof);
-    }
-    if include_reason && let Some(reason) = terminal_reason(display) {
-        push_terminal_field(document, "Reason", reason.to_owned());
-    }
-}
-
-fn push_terminal_field(
-    document: &mut TerminalDocument,
-    label: impl Into<String>,
-    value: impl Into<String>,
-) {
-    let label = label.into();
-    let value = value.into();
-    if value.trim().is_empty() {
-        return;
-    }
-    if document
-        .fields
-        .iter()
-        .any(|field| field.label == label && field.value == value)
-    {
-        return;
-    }
-    document.fields.push(TerminalField::new(label, value));
-}
-
-fn terminal_reference(envelope: &OutputEnvelope) -> Option<TerminalReference> {
-    let reference = TerminalReference {
-        request_id: Some(envelope.request_id.clone()),
-        correlation_id: envelope.correlation_id.clone(),
-        idempotency_key: envelope.idempotency_key.clone(),
-        event_id: None,
-        event_addr: None,
-        job_id: None,
-        path: None,
-        source: None,
-    };
-    (!reference.is_empty()).then_some(reference)
-}
-
-fn terminal_display_source(envelope: &OutputEnvelope) -> &Value {
-    if !envelope.result.is_null() {
-        return &envelope.result;
-    }
-    envelope
-        .errors
-        .first()
-        .and_then(|error| error.detail.as_ref())
-        .unwrap_or(&envelope.result)
-}
-
-fn terminal_state(result: &Value) -> Option<&str> {
-    string_path(result, &["state"])
-}
-
-fn terminal_publish_transport(result: &Value) -> Option<&str> {
-    string_path(result, &["publish", "mode"])
-        .or_else(|| string_path(result, &["checks", "publish", "mode"]))
-        .or_else(|| string_path(result, &["publish_transport"]))
-}
-
-fn terminal_publish_state(result: &Value) -> Option<&str> {
-    string_path(result, &["publish", "state"])
-        .or_else(|| string_path(result, &["checks", "publish", "state"]))
-        .or_else(|| string_path(result, &["publish_state"]))
-}
-
-fn terminal_reason(result: &Value) -> Option<&str> {
-    string_path(result, &["reason"])
-        .or_else(|| string_path(result, &["publish", "reason"]))
-        .or_else(|| string_path(result, &["checks", "publish", "reason"]))
-        .or_else(|| string_path(result, &["store", "reason"]))
-        .or_else(|| string_path(result, &["checks", "store", "reason"]))
-        .or_else(|| string_path(result, &["checks", "account", "reason"]))
-}
-
-fn terminal_envelope_status(envelope: &OutputEnvelope) -> &str {
-    if !envelope.errors.is_empty() {
-        return "error";
-    }
-    if let Some(state) = envelope
-        .result
-        .get("state")
-        .and_then(|value| value.as_str())
-    {
-        return state;
-    }
-    if envelope.dry_run {
-        return "dry_run";
-    }
-    "ok"
-}
-
-fn terminal_status_symbol(status: &str, dry_run: bool) -> TerminalSymbol {
-    if dry_run || status == "dry_run" {
-        return TerminalSymbol::Neutral;
-    }
-    if terminal_status_needs_attention(status) {
-        TerminalSymbol::Attention
-    } else {
-        TerminalSymbol::Success
-    }
-}
-
-fn terminal_status_needs_attention(status: &str) -> bool {
-    matches!(
-        status,
-        "needs_attention"
-            | "unconfigured"
-            | "unavailable"
-            | "blocked"
-            | "invalid"
-            | "not_ready"
-            | "partial"
-            | "degraded"
-            | "failed"
-            | "conflict"
-    )
-}
-
-fn terminal_title(operation_id: &str, status: &str) -> String {
-    format!(
-        "{} {}",
-        operation_title(operation_id),
-        terminal_status_label(status)
-    )
-}
-
-fn operation_title(operation_id: &str) -> String {
-    let mut words = operation_id
-        .split('.')
-        .flat_map(|part| part.split('_'))
-        .filter(|part| !part.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if let Some(first) = words.first_mut() {
-        *first = capitalize_ascii_word(first);
-    }
-    words.join(" ")
-}
-
-fn terminal_status_label(status: &str) -> String {
-    status
-        .split('_')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn capitalize_ascii_word(word: &str) -> String {
-    let mut chars = word.chars();
-    let Some(first) = chars.next() else {
-        return String::new();
-    };
-    let mut rendered = String::new();
-    rendered.push(first.to_ascii_uppercase());
-    rendered.extend(chars);
-    rendered
 }
 
 fn envelope_exit_code(envelope: &OutputEnvelope) -> ExitCode {

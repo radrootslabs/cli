@@ -56,6 +56,17 @@ impl TerminalRendererRegistry {
     }
 }
 
+pub fn terminal_renderer_registry() -> TerminalRendererRegistry {
+    let registry = TerminalRendererRegistry::new();
+    let registry = crate::out::terminal::renderers::workspace::register(registry);
+    let registry = crate::out::terminal::renderers::health::register(registry);
+    let registry = crate::out::terminal::renderers::config::register(registry);
+    let registry = crate::out::terminal::renderers::account::register(registry);
+    let registry = crate::out::terminal::renderers::runtime::register(registry);
+    let registry = crate::out::terminal::renderers::store::register(registry);
+    crate::out::terminal::renderers::sync::register(registry)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::out::terminal::layout::{TerminalDocument, TerminalHeader, TerminalSymbol};
@@ -86,5 +97,45 @@ mod tests {
         assert_eq!(registry.len(), 1);
         assert!(registry.get("workspace.get").is_some());
         assert!(registry.get("missing").is_none());
+    }
+
+    #[test]
+    fn core_runtime_registry_covers_rcld_04_operations() {
+        let registry = terminal_renderer_registry();
+        let expected = [
+            "workspace.init",
+            "workspace.get",
+            "health.status.get",
+            "health.check.run",
+            "config.get",
+            "account.create",
+            "account.import",
+            "account.attach_secret",
+            "account.get",
+            "account.list",
+            "account.remove",
+            "account.selection.get",
+            "account.selection.update",
+            "account.selection.clear",
+            "signer.status.get",
+            "relay.list",
+            "store.init",
+            "store.status.get",
+            "store.export",
+            "store.backup.create",
+            "store.backup.restore",
+            "sync.status.get",
+            "sync.pull",
+            "sync.push",
+            "sync.watch",
+        ];
+
+        assert_eq!(registry.len(), expected.len());
+        for operation_id in expected {
+            assert!(
+                registry.contains(operation_id),
+                "missing terminal renderer for {operation_id}"
+            );
+        }
     }
 }

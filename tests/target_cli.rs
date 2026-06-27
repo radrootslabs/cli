@@ -2794,7 +2794,7 @@ fn default_terminal_output_is_concise_and_not_json() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
 
-    assert!(stdout.starts_with("✓ Workspace get ok\n"));
+    assert!(stdout.starts_with("✓ Workspace ready\n"));
     assert!(stderr.is_empty());
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }
@@ -2810,7 +2810,7 @@ fn explicit_terminal_output_is_accepted() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
 
-    assert!(stdout.starts_with("✓ Workspace get ok\n"));
+    assert!(stdout.starts_with("✓ Workspace ready\n"));
     assert!(stderr.is_empty());
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }
@@ -2879,7 +2879,7 @@ fn terminal_health_status_surfaces_publish_reason_and_actions() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
-    assert!(stdout.starts_with("! Health status get needs attention\n"));
+    assert!(stdout.starts_with("! Health needs attention\n"));
     assert!(stdout.contains("Publish  unconfigured"));
     assert!(stdout.contains("Reason   direct_nostr_relay publish transport requires a selected or default write-capable local account for signed writes"));
     assert!(stdout.contains("Next\n  radroots account create"));
@@ -2903,6 +2903,39 @@ fn terminal_market_refresh_missing_store_shows_action() {
     assert!(stdout.contains("Reason  local replica database is not initialized"));
     assert!(stdout.contains("Next\n  radroots store init"));
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
+}
+
+#[test]
+fn core_runtime_terminal_output_does_not_emit_secret_material() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    for args in [
+        &["config", "get"][..],
+        &["account", "list"][..],
+        &["account", "create"][..],
+        &["signer", "status", "get"][..],
+    ] {
+        let output = sandbox.command().args(args).output().expect("run command");
+        assert!(output.status.success(), "{args:?}");
+        let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+        let lowered = stdout.to_ascii_lowercase();
+
+        for forbidden in [
+            "private_key",
+            "secret_key",
+            "seed phrase",
+            "mnemonic",
+            "bearer ",
+            "token",
+            "nsec",
+            "/secrets/",
+        ] {
+            assert!(
+                !lowered.contains(forbidden),
+                "`{args:?}` terminal output leaked `{forbidden}`: {stdout}"
+            );
+        }
+    }
 }
 
 #[test]
