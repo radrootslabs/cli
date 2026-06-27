@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
+use serde_json::json;
 
 use crate::cli::input::runtime_invocation_args_from_target;
 use crate::cli::{TargetCliArgs, TargetOutputFormat};
@@ -26,12 +27,16 @@ use crate::ops::{
     OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
     TargetOperationRequest,
 };
-use crate::out::envelope::{CliExitCode, OutputEnvelope, OutputError};
+use crate::out::envelope::{CliExitCode, EnvelopeContext, OutputEnvelope, OutputError};
+use crate::out::terminal::errors::terminal_error_document;
+use crate::out::terminal::registry::TerminalRendererRegistryError;
 use crate::out::terminal::registry::terminal_renderer_registry;
 use crate::out::terminal::renderer::{
     TerminalRenderContext, TerminalVerbosity, render_terminal_document,
 };
-use crate::registry::{NetworkRequirement, network_requirement, requires_local_signer_mode};
+use crate::registry::{
+    NetworkRequirement, OPERATION_REGISTRY, network_requirement, requires_local_signer_mode,
+};
 use crate::runtime::config::{
     OutputFormat as RuntimeOutputFormat, RuntimeConfig, SignerBackend, Verbosity,
 };
@@ -59,15 +64,13 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
         render_config_from_target_args(&args, args.format.unwrap_or(TargetOutputFormat::Terminal));
     if let Err(error) = validate_pre_runtime_request_contract(&request) {
         let envelope = failure_envelope(&request, error);
-        render_envelope(&envelope, &pre_runtime_render_config)?;
-        return Ok(envelope_exit_code(&envelope));
+        return render_envelope(&envelope, &pre_runtime_render_config);
     }
     let config = match RuntimeConfig::from_system(&runtime_invocation_args_from_target(&args)) {
         Ok(config) => config,
         Err(error) => {
             let envelope = runtime_config_failure_envelope(&request, error.into());
-            render_envelope(&envelope, &pre_runtime_render_config)?;
-            return Ok(envelope_exit_code(&envelope));
+            return render_envelope(&envelope, &pre_runtime_render_config);
         }
     };
     request.set_output_format(OperationOutputFormat::from(config.output.format));
@@ -76,16 +79,14 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
         Ok(logging) => logging,
         Err(error) => {
             let envelope = runtime_config_failure_envelope(&request, error.into());
-            render_envelope(&envelope, &runtime_render_config)?;
-            return Ok(envelope_exit_code(&envelope));
+            return render_envelope(&envelope, &runtime_render_config);
         }
     };
     let envelope = match validate_request_contract(&request, &config) {
         Ok(()) => execute_request(request, &config, &logging),
         Err(error) => failure_envelope(&request, error),
     };
-    render_envelope(&envelope, &runtime_render_config)?;
-    Ok(envelope_exit_code(&envelope))
+    render_envelope(&envelope, &runtime_render_config)
 }
 
 fn execute_request(
@@ -594,7 +595,7 @@ fn terminal_verbosity_from_runtime(verbosity: Verbosity) -> TerminalVerbosity {
 fn render_envelope(
     envelope: &OutputEnvelope,
     config: &EnvelopeRenderConfig,
-) -> Result<(), runtime::RuntimeError> {
+) -> Result<ExitCode, runtime::RuntimeError> {
     match config.format {
         RenderOutputFormat::Terminal => render_terminal_envelope(envelope, &config.terminal),
         RenderOutputFormat::Json => {
@@ -602,7 +603,7 @@ fn render_envelope(
             let mut handle = stdout.lock();
             serde_json::to_writer_pretty(&mut handle, envelope)?;
             writeln!(handle)?;
-            Ok(())
+            Ok(envelope_exit_code(envelope))
         }
         RenderOutputFormat::Ndjson => {
             let stdout = std::io::stdout();
@@ -611,7 +612,7 @@ fn render_envelope(
                 serde_json::to_writer(&mut handle, &frame)?;
                 writeln!(handle)?;
             }
-            Ok(())
+            Ok(envelope_exit_code(envelope))
         }
     }
 }
@@ -619,17 +620,22 @@ fn render_envelope(
 fn render_terminal_envelope(
     envelope: &OutputEnvelope,
     cx: &TerminalRenderContext,
-) -> Result<(), runtime::RuntimeError> {
+) -> Result<ExitCode, runtime::RuntimeError> {
     let registry = terminal_renderer_registry();
-    let document = registry
-        .get(envelope.operation_id.as_str())
-        .ok_or_else(|| {
-            runtime::RuntimeError::Config(format!(
-                "missing terminal renderer for {}",
-                envelope.operation_id
-            ))
-        })?
-        .render(envelope, cx);
+    if let Err(error) = registry.validate_against_operations(OPERATION_REGISTRY) {
+        let failure = terminal_registry_failure_envelope(envelope, error);
+        render_terminal_failure_document(&failure, cx)?;
+        return Ok(envelope_exit_code(&failure));
+    }
+    let renderer = match registry.renderer_for(envelope.operation_id.as_str()) {
+        Ok(renderer) => renderer,
+        Err(error) => {
+            let failure = terminal_registry_failure_envelope(envelope, error);
+            render_terminal_failure_document(&failure, cx)?;
+            return Ok(envelope_exit_code(&failure));
+        }
+    };
+    let document = renderer.render(envelope, cx);
     let rendered = render_terminal_document(&document, cx);
     if envelope.errors.is_empty() {
         let stdout = std::io::stdout();
@@ -640,7 +646,50 @@ fn render_terminal_envelope(
         let mut handle = stderr.lock();
         writeln!(handle, "{rendered}")?;
     }
+    Ok(envelope_exit_code(envelope))
+}
+
+fn render_terminal_failure_document(
+    envelope: &OutputEnvelope,
+    cx: &TerminalRenderContext,
+) -> Result<(), runtime::RuntimeError> {
+    let document = terminal_error_document(envelope);
+    let rendered = render_terminal_document(&document, cx);
+    let stderr = std::io::stderr();
+    let mut handle = stderr.lock();
+    writeln!(handle, "{rendered}")?;
     Ok(())
+}
+
+fn terminal_registry_failure_envelope(
+    envelope: &OutputEnvelope,
+    error: TerminalRendererRegistryError,
+) -> OutputEnvelope {
+    let mut output_error = OutputError::new(
+        "internal_error",
+        format!(
+            "terminal renderer registry invariant failed for {}",
+            envelope.operation_id
+        ),
+        CliExitCode::InternalError,
+    );
+    output_error.detail = Some(json!({
+        "class": "internal",
+        "operation_id": envelope.operation_id,
+        "violations": error.violations().iter().map(|violation| {
+            json!({
+                "kind": violation.kind(),
+                "operation_id": violation.operation_id(),
+                "count": violation.count(),
+            })
+        }).collect::<Vec<_>>(),
+    }));
+    let mut context = EnvelopeContext::new(envelope.request_id.clone(), envelope.dry_run);
+    context.output_format = envelope.output_format;
+    context.correlation_id = envelope.correlation_id.clone();
+    context.idempotency_key = envelope.idempotency_key.clone();
+    context.actor = envelope.actor.clone();
+    OutputEnvelope::failure(envelope.operation_id.clone(), output_error, context)
 }
 
 fn envelope_exit_code(envelope: &OutputEnvelope) -> ExitCode {
@@ -653,4 +702,46 @@ fn envelope_exit_code(envelope: &OutputEnvelope) -> ExitCode {
 
 fn operation_config_error(error: OperationAdapterError) -> runtime::RuntimeError {
     runtime::RuntimeError::Config(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use crate::out::envelope::{EnvelopeContext, OutputEnvelope, OutputStatus};
+    use crate::out::terminal::errors::terminal_error_document;
+    use crate::out::terminal::registry::TerminalRendererRegistry;
+    use crate::out::terminal::renderer::{TerminalRenderContext, render_terminal_document};
+
+    use super::*;
+
+    #[test]
+    fn terminal_registry_failure_envelope_is_structured_internal_error() {
+        let original = OutputEnvelope::success(
+            "workspace.get",
+            Value::Null,
+            EnvelopeContext::new("req_test", false),
+        );
+        let error = TerminalRendererRegistry::new()
+            .validate_operation_ids(["workspace.get"])
+            .expect_err("missing renderer should fail");
+        let failure = terminal_registry_failure_envelope(&original, error);
+
+        assert_eq!(failure.status, OutputStatus::Error);
+        assert_eq!(failure.reason_code.as_deref(), Some("internal_error"));
+        assert_eq!(failure.errors[0].code, "internal_error");
+        let detail = failure.errors[0].detail.as_ref().expect("error detail");
+        assert_eq!(detail["violations"][0]["kind"], "missing");
+
+        let rendered = render_terminal_document(
+            &terminal_error_document(&failure),
+            &TerminalRenderContext::default(),
+        );
+        assert!(rendered.starts_with("✕ Command failed\n"));
+        assert!(
+            rendered
+                .contains("Reason  terminal renderer registry invariant failed for workspace.get")
+        );
+        assert!(!rendered.contains("RuntimeError::Config"));
+    }
 }
