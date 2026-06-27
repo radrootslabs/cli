@@ -63,6 +63,7 @@ fn add_account_fields(document: &mut TerminalDocument, result: &Value) {
         &["resolved_account", "account_id"][..],
         &["default_account", "account_id"][..],
         &["selected_account", "account_id"][..],
+        &["removed_account", "id"][..],
     ] {
         if let Some(account_id) = common::string(result, path) {
             common::push_field(document, "Account", account_id);
@@ -70,12 +71,25 @@ fn add_account_fields(document: &mut TerminalDocument, result: &Value) {
         }
     }
     common::push_path_field(document, "Label", result, &["account", "label"]);
+    common::push_path_field(document, "Label", result, &["removed_account", "label"]);
     common::push_path_field(document, "Public key", result, &["account", "public_key"]);
+    common::push_path_field(
+        document,
+        "Public key",
+        result,
+        &["removed_account", "public_key"],
+    );
     common::push_bool_field(
         document,
         "Write capable",
         result,
         &["account", "write_capable"],
+    );
+    common::push_bool_field(
+        document,
+        "Write capable",
+        result,
+        &["removed_account", "write_capable"],
     );
     common::push_path_field(document, "Source", result, &["source"]);
 }

@@ -18,6 +18,7 @@ use crate::ops::{
     StoreInitRequest, StoreInitResult, StoreStatusGetRequest, StoreStatusGetResult,
     WorkspaceGetRequest, WorkspaceGetResult, WorkspaceInitRequest, WorkspaceInitResult,
 };
+use crate::out::envelope::OutputWarning;
 use crate::runtime::RuntimeError;
 use crate::runtime::account::{
     AccountResolution, AccountRuntimeFailure, account_resolution_view, account_summary_view,
@@ -483,15 +484,29 @@ impl OperationService<AccountRemoveRequest> for CoreOperationService<'_> {
             ));
         }
 
+        let resolved_farm_config =
+            map_runtime(crate::runtime::farm_config::load(self.config, None))?;
         let result = remove_account(self.config, selector.as_str()).map_err(|error| {
             OperationAdapterError::unconfigured(request.operation_id(), error.to_string())
         })?;
-        json_operation_result::<AccountRemoveResult>(json!({
+        let removed_account_id = result.removed_account.record.account_id.to_string();
+        let farm_orphan_warning =
+            account_remove_farm_orphan_warning(resolved_farm_config.as_ref(), &removed_account_id);
+        let mut result_value = json!({
             "state": "removed",
             "removed_account": account_summary_view(&result.removed_account),
             "default_cleared": result.default_cleared,
             "remaining_account_count": result.remaining_account_count,
-        }))
+        });
+        if let Some(warning) = farm_orphan_warning.as_ref() {
+            result_value["warnings"] = json!([warning.result_value()]);
+            result_value["actions"] = json!(warning.actions.clone());
+        }
+        let mut operation_result = json_operation_result::<AccountRemoveResult>(result_value)?;
+        if let Some(warning) = farm_orphan_warning {
+            operation_result.warnings.push(warning.output_warning());
+        }
+        Ok(operation_result)
     }
 }
 
@@ -1016,6 +1031,58 @@ fn config_actions(
     publish: &PublishRuntimeView,
 ) -> Vec<String> {
     publish_recovery_actions(config, account, publish)
+}
+
+#[derive(Debug, Clone)]
+struct AccountRemoveFarmOrphanWarning {
+    message: String,
+    subject_account_id: String,
+    farm_config_scope: String,
+    farm_config_path: String,
+    actions: Vec<String>,
+}
+
+impl AccountRemoveFarmOrphanWarning {
+    const CODE: &'static str = "farm_bound_seller_orphaned";
+
+    fn result_value(&self) -> Value {
+        json!({
+            "code": Self::CODE,
+            "message": self.message.clone(),
+            "subject_account_id": self.subject_account_id.clone(),
+            "farm_config": {
+                "scope": self.farm_config_scope.clone(),
+                "path": self.farm_config_path.clone(),
+            },
+            "actions": self.actions.clone(),
+        })
+    }
+
+    fn output_warning(&self) -> OutputWarning {
+        OutputWarning {
+            code: Self::CODE.to_owned(),
+            message: self.message.clone(),
+        }
+    }
+}
+
+fn account_remove_farm_orphan_warning(
+    resolved: Option<&crate::runtime::farm_config::ResolvedFarmConfig>,
+    removed_account_id: &str,
+) -> Option<AccountRemoveFarmOrphanWarning> {
+    let resolved = resolved?;
+    if resolved.document.selection.account != removed_account_id {
+        return None;
+    }
+    Some(AccountRemoveFarmOrphanWarning {
+        message: format!(
+            "removed account `{removed_account_id}` is still bound as the farm seller account"
+        ),
+        subject_account_id: removed_account_id.to_owned(),
+        farm_config_scope: resolved.scope.as_str().to_owned(),
+        farm_config_path: resolved.path.display().to_string(),
+        actions: crate::runtime::farm::farm_bound_seller_recovery_actions("<selector>"),
+    })
 }
 
 fn publish_recovery_actions(

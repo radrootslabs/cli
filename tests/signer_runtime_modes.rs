@@ -498,6 +498,157 @@ fn account_remove_dry_run_validates_selector_without_mutating_store() {
 }
 
 #[test]
+fn account_remove_warns_when_farm_bound_seller_is_orphaned() {
+    let sandbox = RadrootsCliSandbox::new();
+    let first = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let first_account_id = first["result"]["account"]["id"]
+        .as_str()
+        .expect("first account id");
+    let farm = create_test_farm(&sandbox);
+    let farm_path = farm["result"]["config"]["path"]
+        .as_str()
+        .expect("farm path");
+    let farm_before_remove = fs::read_to_string(farm_path).expect("farm before account remove");
+    let second = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let second_account_id = second["result"]["account"]["id"]
+        .as_str()
+        .expect("second account id");
+
+    let non_bound_removed = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "remove",
+        second_account_id,
+    ]);
+
+    assert_eq!(non_bound_removed["operation_id"], "account.remove");
+    assert_eq!(non_bound_removed["result"]["state"], "removed");
+    assert_eq!(
+        non_bound_removed["result"]["removed_account"]["id"],
+        second_account_id
+    );
+    assert!(non_bound_removed["result"].get("warnings").is_none());
+    assert!(non_bound_removed["result"].get("actions").is_none());
+    assert!(
+        non_bound_removed["warnings"]
+            .as_array()
+            .expect("top-level warnings")
+            .is_empty()
+    );
+    assert!(
+        non_bound_removed["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read_to_string(farm_path).expect("farm after non-bound remove"),
+        farm_before_remove
+    );
+
+    let orphaned = sandbox.json_success(&[
+        "--format",
+        "json",
+        "--approval-token",
+        "approve",
+        "account",
+        "remove",
+        first_account_id,
+    ]);
+
+    assert_eq!(orphaned["operation_id"], "account.remove");
+    assert_eq!(orphaned["result"]["state"], "removed");
+    assert_eq!(
+        orphaned["result"]["removed_account"]["id"],
+        first_account_id
+    );
+    assert_eq!(
+        orphaned["result"]["warnings"][0]["code"],
+        "farm_bound_seller_orphaned"
+    );
+    assert_eq!(
+        orphaned["result"]["warnings"][0]["subject_account_id"],
+        first_account_id
+    );
+    assert_eq!(
+        orphaned["result"]["warnings"][0]["farm_config"]["scope"],
+        "workspace"
+    );
+    assert_eq!(
+        orphaned["result"]["warnings"][0]["farm_config"]["path"],
+        farm_path
+    );
+    assert_eq!(
+        orphaned["warnings"][0]["code"],
+        "farm_bound_seller_orphaned"
+    );
+    assert_action_present(&orphaned, "radroots account import <path>");
+    assert_action_present(&orphaned, "radroots --dry-run farm rebind <selector>");
+    assert_action_present(
+        &orphaned,
+        "radroots --approval-token approve farm rebind <selector>",
+    );
+    assert_next_action_present(&orphaned, "radroots account import <path>");
+    assert_next_action_present(&orphaned, "radroots --dry-run farm rebind <selector>");
+    assert_next_action_present(
+        &orphaned,
+        "radroots --approval-token approve farm rebind <selector>",
+    );
+    assert_eq!(
+        fs::read_to_string(farm_path).expect("farm after farm-bound remove"),
+        farm_before_remove
+    );
+}
+
+#[test]
+fn account_remove_farm_orphan_warning_renders_terminal() {
+    let sandbox = RadrootsCliSandbox::new();
+    let created = sandbox.json_success(&["--format", "json", "account", "create"]);
+    let account_id = created["result"]["account"]["id"]
+        .as_str()
+        .expect("account id")
+        .to_owned();
+    create_test_farm(&sandbox);
+
+    let output = sandbox
+        .command()
+        .args([
+            "--approval-token",
+            "approve",
+            "account",
+            "remove",
+            account_id.as_str(),
+        ])
+        .output()
+        .expect("terminal account remove");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).expect("terminal stdout");
+    assert!(stdout.contains("Account removed"), "{stdout}");
+    assert!(stdout.contains(account_id.as_str()), "{stdout}");
+    assert!(
+        stdout.contains("Warnings\n  farm_bound_seller_orphaned:"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Next\n  radroots account import <path>"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("radroots --dry-run farm rebind <selector>"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("radroots --approval-token approve farm rebind <selector>"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn account_selection_update_dry_run_validates_selector_without_mutating_selection() {
     let sandbox = RadrootsCliSandbox::new();
     let first = sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -2633,4 +2784,25 @@ fn next_action_commands(value: &Value) -> Vec<&str> {
         .iter()
         .filter_map(|entry| entry["command"].as_str())
         .collect()
+}
+
+fn create_test_farm(sandbox: &RadrootsCliSandbox) -> Value {
+    sandbox.json_success(&[
+        "--format",
+        "json",
+        "farm",
+        "create",
+        "--name",
+        "Green Farm",
+        "--location",
+        "farmstand",
+        "--city",
+        "San Francisco",
+        "--country",
+        "US",
+        "--geohash",
+        "9q8yy",
+        "--delivery-method",
+        "pickup",
+    ])
 }
