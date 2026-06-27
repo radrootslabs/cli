@@ -1,25 +1,36 @@
 use crate::cli::{TargetCliArgs, TargetOutputFormat};
-use crate::out::envelope::{EnvelopeActor, EnvelopeContext, OutputFormat};
+use crate::out::envelope::{EnvelopeActor, EnvelopeContext, OutputFormat as EnvelopeOutputFormat};
+use crate::runtime::config::OutputFormat as RuntimeOutputFormat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationOutputFormat {
-    Human,
+    Terminal,
     Json,
     Ndjson,
 }
 
 impl Default for OperationOutputFormat {
     fn default() -> Self {
-        Self::Human
+        Self::Terminal
     }
 }
 
 impl From<TargetOutputFormat> for OperationOutputFormat {
     fn from(format: TargetOutputFormat) -> Self {
         match format {
-            TargetOutputFormat::Human => Self::Human,
+            TargetOutputFormat::Terminal => Self::Terminal,
             TargetOutputFormat::Json => Self::Json,
             TargetOutputFormat::Ndjson => Self::Ndjson,
+        }
+    }
+}
+
+impl From<RuntimeOutputFormat> for OperationOutputFormat {
+    fn from(format: RuntimeOutputFormat) -> Self {
+        match format {
+            RuntimeOutputFormat::Terminal => Self::Terminal,
+            RuntimeOutputFormat::Json => Self::Json,
+            RuntimeOutputFormat::Ndjson => Self::Ndjson,
         }
     }
 }
@@ -69,7 +80,10 @@ pub struct OperationContext {
 impl OperationContext {
     pub fn from_target_args(args: &TargetCliArgs) -> Self {
         Self {
-            output_format: OperationOutputFormat::from(args.format),
+            output_format: args
+                .format
+                .map(OperationOutputFormat::from)
+                .unwrap_or_default(),
             account_id: args.account_id.clone(),
             relays: args.relay.clone(),
             network_mode: if args.offline {
@@ -98,9 +112,9 @@ impl OperationContext {
     pub fn envelope_context(&self, request_id: impl Into<String>) -> EnvelopeContext {
         let mut context = EnvelopeContext::new(request_id, self.dry_run);
         context.output_format = match self.output_format {
-            OperationOutputFormat::Human => OutputFormat::Human,
-            OperationOutputFormat::Json => OutputFormat::Json,
-            OperationOutputFormat::Ndjson => OutputFormat::Ndjson,
+            OperationOutputFormat::Terminal => EnvelopeOutputFormat::Terminal,
+            OperationOutputFormat::Json => EnvelopeOutputFormat::Json,
+            OperationOutputFormat::Ndjson => EnvelopeOutputFormat::Ndjson,
         };
         context.correlation_id = self.correlation_id.clone();
         context.idempotency_key = self.idempotency_key.clone();

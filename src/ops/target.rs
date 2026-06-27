@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use super::context::OperationContext;
+use super::context::{OperationContext, OperationOutputFormat};
 use super::error::OperationAdapterError;
 use super::request::{
     OperationData, OperationRequest, OperationRequestData, OperationRequestPayload,
@@ -59,6 +59,12 @@ macro_rules! target_operation_contracts {
             pub fn context(&self) -> &OperationContext {
                 match self {
                     $( Self::$variant(request) => &request.context, )+
+                }
+            }
+
+            pub fn set_output_format(&mut self, output_format: OperationOutputFormat) {
+                match self {
+                    $( Self::$variant(request) => request.context.output_format = output_format, )+
                 }
             }
 

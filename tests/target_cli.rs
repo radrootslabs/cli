@@ -2784,7 +2784,7 @@ fn next_actions_mirror_result_actions_for_json_and_ndjson() {
 }
 
 #[test]
-fn default_human_output_is_concise_and_not_json() {
+fn default_terminal_output_is_concise_and_not_json() {
     let output = radroots()
         .args(["workspace", "get"])
         .output()
@@ -2792,74 +2792,141 @@ fn default_human_output_is_concise_and_not_json() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
 
-    assert!(stdout.starts_with("workspace.get: ok\n"));
-    assert!(stdout.contains("request_id: req_workspace_get_"));
+    assert!(stdout.starts_with("✓ Workspace get ok\n"));
+    assert!(stderr.is_empty());
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }
 
 #[test]
-fn human_health_status_surfaces_publish_reason_and_actions() {
+fn explicit_terminal_output_is_accepted() {
+    let output = radroots()
+        .args(["--format", "terminal", "workspace", "get"])
+        .output()
+        .expect("run terminal workspace get");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+
+    assert!(stdout.starts_with("✓ Workspace get ok\n"));
+    assert!(stderr.is_empty());
+    assert!(serde_json::from_str::<Value>(&stdout).is_err());
+}
+
+#[test]
+fn human_output_format_is_rejected() {
+    let output = radroots()
+        .args(["--format", "human", "workspace", "get"])
+        .output()
+        .expect("run human format rejection");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+
+    assert!(stderr.contains("invalid value 'human'"));
+    assert!(stderr.contains("terminal"));
+    assert!(stderr.contains("json"));
+    assert!(stderr.contains("ndjson"));
+}
+
+#[test]
+fn environment_output_format_controls_default_rendering() {
+    let sandbox = RadrootsCliSandbox::new();
+    let output = sandbox
+        .command()
+        .env("RADROOTS_CLI_OUTPUT_FORMAT", "json")
+        .args(["workspace", "get"])
+        .output()
+        .expect("run env json workspace get");
+
+    assert!(output.status.success());
+    let value = json_from_stdout(&output);
+    assert_eq!(value["operation_id"], "workspace.get");
+    assert_eq!(value["output_format"], "json");
+}
+
+#[test]
+fn environment_human_output_format_is_rejected() {
+    let sandbox = RadrootsCliSandbox::new();
+    let output = sandbox
+        .command()
+        .env("RADROOTS_CLI_OUTPUT_FORMAT", "human")
+        .args(["workspace", "get"])
+        .output()
+        .expect("run env human format rejection");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+
+    assert!(stderr.starts_with("✕ Invalid input\n"));
+    assert!(stderr.contains("RADROOTS_CLI_OUTPUT_FORMAT must be `terminal`, `json`, or `ndjson`"));
+}
+
+#[test]
+fn terminal_health_status_surfaces_publish_reason_and_actions() {
     let sandbox = RadrootsCliSandbox::new();
 
     let output = sandbox
         .command()
         .args(["--relay", "ws://127.0.0.1:19007", "health", "status", "get"])
         .output()
-        .expect("run human health status");
+        .expect("run terminal health status");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
-    assert!(stdout.starts_with("health.status.get: needs_attention\n"));
-    assert!(stdout.contains("publish_state: unconfigured"));
-    assert!(stdout.contains("reason: direct_nostr_relay publish transport requires a selected or default write-capable local account for signed writes"));
-    assert!(stdout.contains("- radroots account create"));
+    assert!(stdout.starts_with("! Health status get needs attention\n"));
+    assert!(stdout.contains("Publish  unconfigured"));
+    assert!(stdout.contains("Reason   direct_nostr_relay publish transport requires a selected or default write-capable local account for signed writes"));
+    assert!(stdout.contains("Next\n  radroots account create"));
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }
 
 #[test]
-fn human_market_refresh_missing_store_shows_action() {
+fn terminal_market_refresh_missing_store_shows_action() {
     let sandbox = RadrootsCliSandbox::new();
 
     let output = sandbox
         .command()
         .args(["market", "refresh"])
         .output()
-        .expect("run human market refresh");
+        .expect("run terminal market refresh");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
-    assert!(stdout.starts_with("market.refresh: unconfigured\n"));
-    assert!(stdout.contains("reason: local replica database is not initialized"));
-    assert!(stdout.contains("- radroots store init"));
+    assert!(stdout.starts_with("! Market refresh unconfigured\n"));
+    assert!(stdout.contains("Reason  local replica database is not initialized"));
+    assert!(stdout.contains("Next\n  radroots store init"));
     assert!(serde_json::from_str::<Value>(&stdout).is_err());
 }
 
 #[test]
-fn human_failure_output_preserves_error_code_and_message() {
+fn terminal_failure_output_routes_to_stderr_and_preserves_message() {
     let output = radroots()
-        .args(["--format", "human", "trade", "submit"])
+        .args(["--format", "terminal", "trade", "submit"])
         .output()
         .expect("run trade submit");
 
     assert_eq!(output.status.code(), Some(6));
-    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
 
-    assert!(stdout.starts_with("trade.submit: error\n"));
-    assert!(stdout.contains("request_id: req_trade_submit_"));
-    assert!(stdout.contains("error: approval_required"));
-    assert!(stdout.contains("message: missing required `approval_token` input"));
-    assert!(serde_json::from_str::<Value>(&stdout).is_err());
+    assert!(stderr.starts_with("✕ Approval required\n"));
+    assert!(stderr.contains("Reason  missing required `approval_token` input"));
+    assert!(serde_json::from_str::<Value>(&stderr).is_err());
 }
 
 #[test]
-fn human_failure_output_renders_structured_error_detail() {
+fn terminal_failure_output_renders_structured_error_detail() {
     let output = radroots()
         .args([
             "--format",
-            "human",
+            "terminal",
             "trade",
             "event",
             "watch",
@@ -2869,15 +2936,14 @@ fn human_failure_output_renders_structured_error_detail() {
         .expect("run order event watch");
 
     assert_eq!(output.status.code(), Some(3));
-    let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
 
-    assert!(stdout.starts_with("trade.event.watch: error\n"));
-    assert!(stdout.contains("request_id: req_trade_event_watch_"));
-    assert!(stdout.contains("error: not_implemented"));
-    assert!(stdout.contains("state: not_implemented"));
-    assert!(stdout.contains("reason: relay-backed trade event watch is not implemented"));
-    assert!(stdout.contains("- radroots trade status get ord_missing"));
-    assert!(serde_json::from_str::<Value>(&stdout).is_err());
+    assert!(stderr.starts_with("✕ Command failed\n"));
+    assert!(stderr.contains("Reason  relay-backed trade event watch is not implemented"));
+    assert!(stderr.contains("State   not implemented"));
+    assert!(stderr.contains("Next\n  radroots trade status get ord_missing"));
+    assert!(serde_json::from_str::<Value>(&stderr).is_err());
 }
 
 #[test]

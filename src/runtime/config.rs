@@ -81,7 +81,7 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
-    Human,
+    Terminal,
     Json,
     Ndjson,
 }
@@ -89,7 +89,7 @@ pub enum OutputFormat {
 impl OutputFormat {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Human => "human",
+            Self::Terminal => "terminal",
             Self::Json => "json",
             Self::Ndjson => "ndjson",
         }
@@ -1585,7 +1585,7 @@ fn resolve_output_format(
         .and_then(|output| output.format.as_deref())
     {
         Some(value) => parse_output_format(value),
-        None => Ok(OutputFormat::Human),
+        None => Ok(OutputFormat::Terminal),
     }
 }
 
@@ -1706,7 +1706,7 @@ fn validate_logging_output_contract(
     output: &OutputConfig,
     logging: &LoggingConfig,
 ) -> Result<(), RuntimeError> {
-    if logging.stdout && matches!(output.format, OutputFormat::Json | OutputFormat::Ndjson) {
+    if logging.stdout {
         return Err(RuntimeError::Config(format!(
             "stdout logging cannot be used with {} output; unset {ENV_CLI_LOG_STDOUT} or use --no-log-stdout",
             output.format.as_str()
@@ -1781,11 +1781,11 @@ fn parse_env_file_values(raw: &str, path: &Path) -> Result<EnvFileValues, Runtim
 
 fn parse_output_format(value: &str) -> Result<OutputFormat, RuntimeError> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "human" => Ok(OutputFormat::Human),
+        "terminal" => Ok(OutputFormat::Terminal),
         "json" => Ok(OutputFormat::Json),
         "ndjson" => Ok(OutputFormat::Ndjson),
         other => Err(RuntimeError::Config(format!(
-            "{ENV_CLI_OUTPUT_FORMAT} must be `human`, `json`, or `ndjson`, got `{other}`"
+            "{ENV_CLI_OUTPUT_FORMAT} must be `terminal`, `json`, or `ndjson`, got `{other}`"
         ))),
     }
 }
@@ -2015,12 +2015,12 @@ mod tests {
     #[test]
     fn flags_override_environment_values() {
         let args = RuntimeInvocationArgs {
-            output_format: Some(RuntimeOutputFormatArg::Human),
+            output_format: Some(RuntimeOutputFormatArg::Terminal),
             verbose: true,
             dry_run: true,
             no_color: true,
             log_filter: Some("debug".to_owned()),
-            log_stdout: true,
+            log_stdout: false,
             identity_path: Some(PathBuf::from("custom-identity.json")),
             signer: Some("local".to_owned()),
             publish_transport: Some("direct_nostr_relay".to_owned()),
@@ -2032,7 +2032,10 @@ mod tests {
             ..runtime_args()
         };
         let env = MapEnvironment::new(BTreeMap::from([
-            ("RADROOTS_CLI_OUTPUT_FORMAT".to_owned(), "human".to_owned()),
+            (
+                "RADROOTS_CLI_OUTPUT_FORMAT".to_owned(),
+                "terminal".to_owned(),
+            ),
             ("RADROOTS_CLI_LOGGING_FILTER".to_owned(), "trace".to_owned()),
             ("RADROOTS_CLI_LOGGING_STDOUT".to_owned(), "false".to_owned()),
             (
@@ -2068,7 +2071,7 @@ mod tests {
         assert_eq!(
             resolved.output,
             OutputConfig {
-                format: OutputFormat::Human,
+                format: OutputFormat::Terminal,
                 verbosity: Verbosity::Verbose,
                 color: false,
                 dry_run: true,
@@ -2117,7 +2120,7 @@ mod tests {
             }
         );
         assert_eq!(resolved.logging.filter, "debug");
-        assert!(resolved.logging.stdout);
+        assert!(!resolved.logging.stdout);
         assert_eq!(
             resolved.identity.path,
             PathBuf::from("custom-identity.json")
@@ -2330,7 +2333,7 @@ mod tests {
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("resolve runtime config");
 
-        assert_eq!(resolved.output.format, OutputFormat::Human);
+        assert_eq!(resolved.output.format, OutputFormat::Terminal);
         assert_eq!(resolved.logging.filter, DEFAULT_LOG_FILTER);
         assert!(!resolved.logging.stdout);
         assert_eq!(resolved.account.selector, None);
@@ -2490,8 +2493,21 @@ path = "identity/from-toml.json"
     }
 
     #[test]
-    fn machine_output_rejects_stdout_logging_flags() {
+    fn output_rejects_stdout_logging_flags() {
         let env = MapEnvironment::new(BTreeMap::new());
+
+        let terminal_args = RuntimeInvocationArgs {
+            output_format: Some(RuntimeOutputFormatArg::Terminal),
+            log_stdout: true,
+            ..runtime_args()
+        };
+        let error =
+            RuntimeConfig::resolve_with_env_file(&terminal_args, &env, &EnvFileValues::default())
+                .expect_err("terminal stdout logging should fail");
+        let message = error.to_string();
+        assert!(message.contains("stdout logging"));
+        assert!(message.contains("terminal output"));
+        assert!(message.contains("--no-log-stdout"));
 
         let json_args = RuntimeInvocationArgs {
             json: true,
@@ -2520,7 +2536,17 @@ path = "identity/from-toml.json"
     }
 
     #[test]
-    fn machine_output_rejects_stdout_logging_environment() {
+    fn output_rejects_stdout_logging_environment() {
+        let terminal_args = runtime_args();
+        let env = MapEnvironment::new(BTreeMap::from([(
+            "RADROOTS_CLI_LOGGING_STDOUT".to_owned(),
+            "true".to_owned(),
+        )]));
+        let error =
+            RuntimeConfig::resolve_with_env_file(&terminal_args, &env, &EnvFileValues::default())
+                .expect_err("terminal stdout logging from env should fail");
+        assert!(error.to_string().contains("terminal output"));
+
         let json_args = RuntimeInvocationArgs {
             json: true,
             ..runtime_args()
@@ -2548,7 +2574,7 @@ path = "identity/from-toml.json"
     }
 
     #[test]
-    fn no_log_stdout_overrides_environment_for_machine_output() {
+    fn no_log_stdout_overrides_environment_for_output() {
         let args = RuntimeInvocationArgs {
             json: true,
             no_log_stdout: true,
@@ -2560,7 +2586,7 @@ path = "identity/from-toml.json"
         )]));
 
         let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
-            .expect("resolve machine output with stdout logging disabled");
+            .expect("resolve output with stdout logging disabled");
         assert_eq!(resolved.output.format, OutputFormat::Json);
         assert!(!resolved.logging.stdout);
     }
@@ -2729,12 +2755,12 @@ RADROOTS_CLI_HYF_EXECUTABLE=bin/hyfd
         let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([
             ("RADROOTS_CLI_LOGGING_FILTER".to_owned(), "info".to_owned()),
-            ("RADROOTS_CLI_LOGGING_STDOUT".to_owned(), "true".to_owned()),
+            ("RADROOTS_CLI_LOGGING_STDOUT".to_owned(), "false".to_owned()),
         ]));
         let env_file = parse_env_file_values(
             r#"
 RADROOTS_CLI_LOGGING_FILTER=debug
-RADROOTS_CLI_LOGGING_STDOUT=false
+RADROOTS_CLI_LOGGING_STDOUT=true
 "#,
             Path::new(".env.test"),
         )
@@ -2742,9 +2768,9 @@ RADROOTS_CLI_LOGGING_STDOUT=false
 
         let resolved =
             RuntimeConfig::resolve_with_env_file(&args, &env, &env_file).expect("resolve config");
-        assert_eq!(resolved.output.format, OutputFormat::Human);
+        assert_eq!(resolved.output.format, OutputFormat::Terminal);
         assert_eq!(resolved.logging.filter, "info");
-        assert!(resolved.logging.stdout);
+        assert!(!resolved.logging.stdout);
     }
 
     #[test]
@@ -3555,7 +3581,7 @@ RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT=.local/radroots/dev
     #[test]
     fn duplicate_env_file_variable_fails() {
         let error = parse_env_file_values(
-            "RADROOTS_CLI_OUTPUT_FORMAT=json\nRADROOTS_CLI_OUTPUT_FORMAT=human\n",
+            "RADROOTS_CLI_OUTPUT_FORMAT=json\nRADROOTS_CLI_OUTPUT_FORMAT=terminal\n",
             Path::new(".env.test"),
         )
         .expect_err("duplicate env variable should fail");

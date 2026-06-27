@@ -21,7 +21,7 @@ impl EnvelopeContext {
             request_id: request_id.into(),
             correlation_id: None,
             idempotency_key: None,
-            output_format: OutputFormat::Human,
+            output_format: OutputFormat::Terminal,
             dry_run,
             actor: None,
         }
@@ -363,7 +363,7 @@ pub enum OutputStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputFormat {
-    Human,
+    Terminal,
     Json,
     Ndjson,
 }
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(value["operation_id"], "listing.publish");
         assert_eq!(value["kind"], "listing.publish");
         assert_eq!(value["status"], "ok");
-        assert_eq!(value["output_format"], "human");
+        assert_eq!(value["output_format"], "terminal");
         assert_eq!(value["request_id"], "req_test");
         assert_eq!(value["correlation_id"], "corr_test");
         assert_eq!(value["idempotency_key"], "idem_test");
@@ -712,7 +712,7 @@ mod tests {
         let frames = envelope.to_ndjson_frames();
 
         assert_eq!(frames[0].payload["status"], "error");
-        assert_eq!(frames[0].payload["output_format"], "human");
+        assert_eq!(frames[0].payload["output_format"], "terminal");
         assert_eq!(frames[1].payload["status"], "error");
         assert_eq!(frames[1].payload["reason_code"], "not_implemented");
         assert_eq!(frames[1].payload["resource"]["kind"], "trade");

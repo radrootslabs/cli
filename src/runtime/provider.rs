@@ -273,7 +273,7 @@ mod tests {
     fn sample_config(bindings: Vec<CapabilityBindingConfig>, hyf_enabled: bool) -> RuntimeConfig {
         RuntimeConfig {
             output: OutputConfig {
-                format: OutputFormat::Human,
+                format: OutputFormat::Terminal,
                 verbosity: Verbosity::Normal,
                 color: true,
                 dry_run: false,

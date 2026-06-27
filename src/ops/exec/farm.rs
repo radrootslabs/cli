@@ -843,7 +843,7 @@ mod tests {
         let secrets = root.join("secrets");
         RuntimeConfig {
             output: OutputConfig {
-                format: OutputFormat::Human,
+                format: OutputFormat::Terminal,
                 verbosity: Verbosity::Normal,
                 color: true,
                 dry_run: false,

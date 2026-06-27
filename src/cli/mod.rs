@@ -37,7 +37,7 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum TargetOutputFormat {
-    Human,
+    Terminal,
     Json,
     Ndjson,
 }
@@ -67,8 +67,8 @@ impl TargetPublishTransport {
     disable_help_subcommand = true
 )]
 pub struct TargetCliArgs {
-    #[arg(long = "format", global = true, value_enum, default_value = "human")]
-    pub format: TargetOutputFormat,
+    #[arg(long = "format", global = true, value_enum)]
+    pub format: Option<TargetOutputFormat>,
     #[arg(long = "account-id", global = true)]
     pub account_id: Option<String>,
     #[arg(long = "relay", global = true)]
@@ -373,7 +373,7 @@ mod tests {
         ])
         .expect("target args parse");
 
-        assert_eq!(parsed.format, TargetOutputFormat::Ndjson);
+        assert_eq!(parsed.format, Some(TargetOutputFormat::Ndjson));
         assert_eq!(parsed.account_id.as_deref(), Some("acct_test"));
         assert_eq!(
             parsed.relay,

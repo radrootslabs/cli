@@ -4,7 +4,7 @@ use crate::runtime::config::OutputFormat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeOutputFormatArg {
-    Human,
+    Terminal,
     Json,
     Ndjson,
 }
@@ -12,7 +12,7 @@ pub enum RuntimeOutputFormatArg {
 impl RuntimeOutputFormatArg {
     pub fn as_output_format(self) -> OutputFormat {
         match self {
-            Self::Human => OutputFormat::Human,
+            Self::Terminal => OutputFormat::Terminal,
             Self::Json => OutputFormat::Json,
             Self::Ndjson => OutputFormat::Ndjson,
         }

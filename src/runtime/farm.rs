@@ -247,8 +247,8 @@ pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView,
         return Ok(FarmSetView {
             state: "unconfigured".to_owned(),
             source: FARM_CONFIG_SOURCE.to_owned(),
-            field: human_field_name(args.field).to_owned(),
-            value: human_field_value(args.field, args.value.join(" ").trim()).to_owned(),
+            field: terminal_field_name(args.field).to_owned(),
+            value: terminal_field_value(args.field, args.value.join(" ").trim()).to_owned(),
             config: None,
             reason: Some(format!("no farm draft found at {}", path.display())),
             actions: vec!["radroots farm create".to_owned()],
@@ -281,8 +281,8 @@ pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView,
     Ok(FarmSetView {
         state: "updated".to_owned(),
         source: FARM_CONFIG_SOURCE.to_owned(),
-        field: human_field_name(args.field).to_owned(),
-        value: human_field_value(args.field, field_value.as_str()).to_owned(),
+        field: terminal_field_name(args.field).to_owned(),
+        value: terminal_field_value(args.field, field_value.as_str()).to_owned(),
         config: Some(summary_view(
             resolved.scope,
             written_path.display().to_string(),
@@ -305,8 +305,8 @@ pub fn set_preflight(
         return Ok(FarmSetView {
             state: "unconfigured".to_owned(),
             source: FARM_CONFIG_SOURCE.to_owned(),
-            field: human_field_name(args.field).to_owned(),
-            value: human_field_value(args.field, args.value.join(" ").trim()).to_owned(),
+            field: terminal_field_name(args.field).to_owned(),
+            value: terminal_field_value(args.field, args.value.join(" ").trim()).to_owned(),
             config: None,
             reason: Some(format!("no farm draft found at {}", path.display())),
             actions: vec!["radroots farm create".to_owned()],
@@ -332,8 +332,8 @@ pub fn set_preflight(
     Ok(FarmSetView {
         state: "dry_run".to_owned(),
         source: FARM_CONFIG_SOURCE.to_owned(),
-        field: human_field_name(args.field).to_owned(),
-        value: human_field_value(args.field, field_value.as_str()).to_owned(),
+        field: terminal_field_name(args.field).to_owned(),
+        value: terminal_field_value(args.field, field_value.as_str()).to_owned(),
         config: Some(summary_view(
             resolved.scope,
             path.display().to_string(),
@@ -1854,7 +1854,7 @@ fn push_action(actions: &mut Vec<String>, action: &str) {
     }
 }
 
-fn human_field_name(field: FarmFieldArg) -> &'static str {
+fn terminal_field_name(field: FarmFieldArg) -> &'static str {
     match field {
         FarmFieldArg::Name => "Name",
         FarmFieldArg::DisplayName => "Display name",
@@ -1871,9 +1871,9 @@ fn human_field_name(field: FarmFieldArg) -> &'static str {
     }
 }
 
-fn human_field_value(field: FarmFieldArg, value: &str) -> String {
+fn terminal_field_value(field: FarmFieldArg, value: &str) -> String {
     match field {
-        FarmFieldArg::Delivery => humanize_delivery_method(value),
+        FarmFieldArg::Delivery => display_delivery_method(value),
         _ => value.to_owned(),
     }
 }
@@ -2178,7 +2178,7 @@ fn resolved_delivery_method(document: &FarmConfigDocument) -> Option<String> {
     non_empty(document.listing_defaults.delivery_method.as_str())
 }
 
-fn humanize_delivery_method(value: &str) -> String {
+fn display_delivery_method(value: &str) -> String {
     value
         .split('_')
         .filter(|segment| !segment.is_empty())

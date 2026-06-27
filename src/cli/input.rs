@@ -5,8 +5,8 @@ use serde_json::Value;
 
 pub fn runtime_invocation_args_from_target(args: &TargetCliArgs) -> RuntimeInvocationArgs {
     RuntimeInvocationArgs {
-        output_format: Some(match args.format {
-            TargetOutputFormat::Human => RuntimeOutputFormatArg::Human,
+        output_format: args.format.map(|format| match format {
+            TargetOutputFormat::Terminal => RuntimeOutputFormatArg::Terminal,
             TargetOutputFormat::Json => RuntimeOutputFormatArg::Json,
             TargetOutputFormat::Ndjson => RuntimeOutputFormatArg::Ndjson,
         }),
