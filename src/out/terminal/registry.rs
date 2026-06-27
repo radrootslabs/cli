@@ -66,7 +66,9 @@ pub fn terminal_renderer_registry() -> TerminalRendererRegistry {
     let registry = crate::out::terminal::renderers::store::register(registry);
     let registry = crate::out::terminal::renderers::sync::register(registry);
     let registry = crate::out::terminal::renderers::farm::register(registry);
-    crate::out::terminal::renderers::listing::register(registry)
+    let registry = crate::out::terminal::renderers::listing::register(registry);
+    let registry = crate::out::terminal::renderers::market::register(registry);
+    crate::out::terminal::renderers::basket::register(registry)
 }
 
 #[cfg(test)]
@@ -102,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_covers_core_and_seller_operations() {
+    fn registry_covers_core_seller_and_buyer_operations() {
         let registry = terminal_renderer_registry();
         let expected = [
             "workspace.init",
@@ -150,6 +152,19 @@ mod tests {
             "listing.rebind",
             "listing.publish",
             "listing.archive",
+            "market.refresh",
+            "market.product.search",
+            "market.listing.get",
+            "basket.create",
+            "basket.get",
+            "basket.list",
+            "basket.item.add",
+            "basket.item.update",
+            "basket.item.remove",
+            "basket.adjustment.add",
+            "basket.adjustment.remove",
+            "basket.validate",
+            "basket.quote.create",
         ];
 
         assert_eq!(registry.len(), expected.len());
