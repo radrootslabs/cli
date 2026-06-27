@@ -31,7 +31,6 @@ use crate::out::terminal::registry::terminal_renderer_registry;
 use crate::out::terminal::renderer::{
     TerminalColorPolicy, TerminalRenderContext, TerminalVerbosity, render_terminal_document,
 };
-use crate::out::terminal::renderers::common::generic_terminal_document;
 use crate::registry::{NetworkRequirement, network_requirement, requires_local_signer_mode};
 use crate::runtime::config::{
     OutputFormat as RuntimeOutputFormat, RuntimeConfig, SignerBackend, Verbosity,
@@ -638,8 +637,13 @@ fn render_terminal_envelope(
     let registry = terminal_renderer_registry();
     let document = registry
         .get(envelope.operation_id.as_str())
-        .map(|renderer| renderer.render(envelope, cx))
-        .unwrap_or_else(|| generic_terminal_document(envelope));
+        .ok_or_else(|| {
+            runtime::RuntimeError::Config(format!(
+                "missing terminal renderer for {}",
+                envelope.operation_id
+            ))
+        })?
+        .render(envelope, cx);
     let rendered = render_terminal_document(&document, cx);
     if envelope.errors.is_empty() {
         let stdout = std::io::stdout();

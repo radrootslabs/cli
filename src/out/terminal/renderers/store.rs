@@ -21,7 +21,7 @@ static STORE_RENDERER: StoreRenderer = StoreRenderer;
 impl TerminalOperationRenderer for StoreRenderer {
     fn render(&self, envelope: &OutputEnvelope, _cx: &TerminalRenderContext) -> TerminalDocument {
         if !envelope.errors.is_empty() {
-            return common::generic_terminal_document(envelope);
+            return common::base_terminal_document(envelope);
         }
         let result = common::result(envelope);
         let mut document =

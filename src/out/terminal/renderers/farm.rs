@@ -30,7 +30,7 @@ static FARM_RENDERER: FarmRenderer = FarmRenderer;
 impl TerminalOperationRenderer for FarmRenderer {
     fn render(&self, envelope: &OutputEnvelope, _cx: &TerminalRenderContext) -> TerminalDocument {
         if !envelope.errors.is_empty() {
-            return common::generic_terminal_document(envelope);
+            return common::base_terminal_document(envelope);
         }
         let result = common::display_source(envelope);
         match envelope.operation_id.as_str() {

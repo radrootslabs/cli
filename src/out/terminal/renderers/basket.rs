@@ -29,7 +29,7 @@ static BASKET_RENDERER: BasketRenderer = BasketRenderer;
 impl TerminalOperationRenderer for BasketRenderer {
     fn render(&self, envelope: &OutputEnvelope, _cx: &TerminalRenderContext) -> TerminalDocument {
         if !envelope.errors.is_empty() {
-            return common::generic_terminal_document(envelope);
+            return common::base_terminal_document(envelope);
         }
         let result = common::display_source(envelope);
         match envelope.operation_id.as_str() {

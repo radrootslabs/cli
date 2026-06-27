@@ -20,7 +20,7 @@ static SYNC_RENDERER: SyncRenderer = SyncRenderer;
 impl TerminalOperationRenderer for SyncRenderer {
     fn render(&self, envelope: &OutputEnvelope, _cx: &TerminalRenderContext) -> TerminalDocument {
         if !envelope.errors.is_empty() {
-            return common::generic_terminal_document(envelope);
+            return common::base_terminal_document(envelope);
         }
         let result = common::display_source(envelope);
         let mut document =

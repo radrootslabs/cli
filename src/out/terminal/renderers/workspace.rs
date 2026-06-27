@@ -18,7 +18,7 @@ static WORKSPACE_RENDERER: WorkspaceRenderer = WorkspaceRenderer;
 impl TerminalOperationRenderer for WorkspaceRenderer {
     fn render(&self, envelope: &OutputEnvelope, _cx: &TerminalRenderContext) -> TerminalDocument {
         if !envelope.errors.is_empty() {
-            return common::generic_terminal_document(envelope);
+            return common::base_terminal_document(envelope);
         }
         let result = common::result(envelope);
         let mut document = common::document_with_title(

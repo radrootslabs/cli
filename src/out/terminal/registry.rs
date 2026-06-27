@@ -29,12 +29,13 @@ impl TerminalRendererRegistry {
         operation_id: &'static str,
         renderer: &'static dyn TerminalOperationRenderer,
     ) -> Self {
-        if !self.contains(operation_id) {
-            self.entries.push(TerminalRendererEntry {
-                operation_id,
-                renderer,
-            });
+        if self.contains(operation_id) {
+            panic!("duplicate terminal renderer registration for {operation_id}");
         }
+        self.entries.push(TerminalRendererEntry {
+            operation_id,
+            renderer,
+        });
         self
     }
 
@@ -53,6 +54,10 @@ impl TerminalRendererRegistry {
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn operation_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.entries.iter().map(|entry| entry.operation_id)
     }
 }
 
@@ -75,7 +80,10 @@ pub fn terminal_renderer_registry() -> TerminalRendererRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use crate::out::terminal::layout::{TerminalDocument, TerminalHeader, TerminalSymbol};
+    use crate::registry::OPERATION_REGISTRY;
 
     use super::*;
 
@@ -94,10 +102,8 @@ mod tests {
     static TEST_RENDERER: TestRenderer = TestRenderer;
 
     #[test]
-    fn registers_unique_operation_renderers() {
-        let registry = TerminalRendererRegistry::new()
-            .register("workspace.get", &TEST_RENDERER)
-            .register("workspace.get", &TEST_RENDERER);
+    fn registers_operation_renderers() {
+        let registry = TerminalRendererRegistry::new().register("workspace.get", &TEST_RENDERER);
 
         assert!(registry.contains("workspace.get"));
         assert_eq!(registry.len(), 1);
@@ -106,88 +112,25 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "duplicate terminal renderer registration for workspace.get")]
+    fn duplicate_operation_renderer_registration_fails() {
+        let _registry = TerminalRendererRegistry::new()
+            .register("workspace.get", &TEST_RENDERER)
+            .register("workspace.get", &TEST_RENDERER);
+    }
+
+    #[test]
     fn registry_covers_registered_operations() {
         let registry = terminal_renderer_registry();
-        let expected = [
-            "workspace.init",
-            "workspace.get",
-            "health.status.get",
-            "health.check.run",
-            "config.get",
-            "account.create",
-            "account.import",
-            "account.attach_secret",
-            "account.get",
-            "account.list",
-            "account.remove",
-            "account.selection.get",
-            "account.selection.update",
-            "account.selection.clear",
-            "signer.status.get",
-            "relay.list",
-            "store.init",
-            "store.status.get",
-            "store.export",
-            "store.backup.create",
-            "store.backup.restore",
-            "sync.status.get",
-            "sync.pull",
-            "sync.push",
-            "sync.watch",
-            "farm.create",
-            "farm.get",
-            "farm.rebind",
-            "farm.profile.update",
-            "farm.location.set",
-            "farm.location.get",
-            "farm.location.clear",
-            "farm.fulfillment.update",
-            "farm.readiness.check",
-            "farm.publish",
-            "listing.create",
-            "listing.get",
-            "listing.list",
-            "listing.app.list",
-            "listing.app.export",
-            "listing.update",
-            "listing.validate",
-            "listing.rebind",
-            "listing.publish",
-            "listing.archive",
-            "market.refresh",
-            "market.product.search",
-            "market.listing.get",
-            "basket.create",
-            "basket.get",
-            "basket.list",
-            "basket.item.add",
-            "basket.item.update",
-            "basket.item.remove",
-            "basket.adjustment.add",
-            "basket.adjustment.remove",
-            "basket.validate",
-            "basket.quote.create",
-            "trade.submit",
-            "trade.get",
-            "trade.list",
-            "trade.app.list",
-            "trade.app.export",
-            "trade.rebind",
-            "trade.accept",
-            "trade.decline",
-            "trade.cancel",
-            "trade.revision.propose",
-            "trade.revision.accept",
-            "trade.revision.decline",
-            "trade.status.get",
-            "trade.event.list",
-            "trade.event.watch",
-            "validation.receipt.get",
-            "validation.receipt.list",
-            "validation.receipt.verify",
-        ];
+        let expected = OPERATION_REGISTRY
+            .iter()
+            .map(|operation| operation.operation_id)
+            .collect::<BTreeSet<_>>();
+        let actual = registry.operation_ids().collect::<BTreeSet<_>>();
 
-        assert_eq!(registry.len(), expected.len());
+        assert_eq!(registry.len(), OPERATION_REGISTRY.len());
+        assert_eq!(actual, expected);
+        assert_eq!(registry.len(), 76);
         for operation_id in expected {
             assert!(
                 registry.contains(operation_id),

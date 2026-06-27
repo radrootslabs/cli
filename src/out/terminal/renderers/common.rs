@@ -10,7 +10,7 @@ use crate::out::terminal::layout::{
 use crate::out::terminal::tables::{TerminalTable, TerminalTableColumn, TerminalTableRow};
 use crate::out::terminal::values::{proof_summary, string_path, transport_label};
 
-pub(crate) fn generic_terminal_document(envelope: &OutputEnvelope) -> TerminalDocument {
+pub(crate) fn base_terminal_document(envelope: &OutputEnvelope) -> TerminalDocument {
     let display = terminal_display_source(envelope);
     let mut document = if envelope.errors.is_empty() {
         let status = terminal_envelope_status(envelope);
@@ -40,7 +40,7 @@ pub(crate) fn document_with_title(
     envelope: &OutputEnvelope,
     title: impl Into<String>,
 ) -> TerminalDocument {
-    let mut document = generic_terminal_document(envelope);
+    let mut document = base_terminal_document(envelope);
     document.header.title = title.into();
     document
 }
@@ -50,7 +50,7 @@ pub(crate) fn document_with_status_title(
     title_prefix: &str,
 ) -> TerminalDocument {
     let status = terminal_envelope_status(envelope);
-    let mut document = generic_terminal_document(envelope);
+    let mut document = base_terminal_document(envelope);
     document.header.symbol = terminal_status_symbol(status, envelope.dry_run);
     document.header.title = format!("{title_prefix} {}", terminal_status_label(status));
     document

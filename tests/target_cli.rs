@@ -2816,6 +2816,37 @@ fn explicit_terminal_output_is_accepted() {
 }
 
 #[test]
+fn terminal_global_presentation_flags_are_deterministic() {
+    for args in [
+        &["workspace", "get"][..],
+        &["--quiet", "workspace", "get"][..],
+        &["--no-color", "workspace", "get"][..],
+    ] {
+        let output = radroots().args(args).output().expect("run terminal flag");
+
+        assert!(output.status.success(), "{args:?}");
+        assert!(output.stderr.is_empty(), "{args:?}");
+        let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+        assert!(stdout.starts_with("✓ Workspace ready\n"), "{args:?}");
+        assert!(!stdout.contains("\u{1b}["), "{args:?}");
+    }
+
+    for args in [
+        &["--verbose", "workspace", "get"][..],
+        &["--trace", "workspace", "get"][..],
+    ] {
+        let output = radroots().args(args).output().expect("run terminal flag");
+
+        assert!(output.status.success(), "{args:?}");
+        assert!(output.stderr.is_empty(), "{args:?}");
+        let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
+        assert!(stdout.contains("Reference\n"), "{args:?}");
+        assert!(stdout.contains("Request"), "{args:?}");
+        assert!(!stdout.contains("\u{1b}["), "{args:?}");
+    }
+}
+
+#[test]
 fn human_output_format_is_rejected() {
     let output = radroots()
         .args(["--format", "human", "workspace", "get"])
