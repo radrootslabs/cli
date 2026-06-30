@@ -1378,7 +1378,7 @@ pub fn status(
 ) -> Result<OrderStatusView, CliSdkAdapterError> {
     let request = TradeStatusRequest::parse(args.key.as_str())?;
     let session = CliSdkSession::connect(config)?;
-    let receipt = session.block_on(session.sdk().trades().status_client().status(request))?;
+    let receipt = session.block_on(session.sdk().trades().status(request))?;
     Ok(sdk_order_status_view(receipt))
 }
 
@@ -1594,7 +1594,6 @@ fn trade_status_for_locator(
         session
             .sdk()
             .trades()
-            .status_client()
             .status(TradeStatusRequest::new(locator)),
     )?)
 }
@@ -1825,7 +1824,7 @@ fn sdk_order_status_from_relay_receipt(
     }
 
     let request = TradeStatusRequest::parse(order_id)?;
-    let receipt = session.block_on(session.sdk().trades().status_client().status(request))?;
+    let receipt = session.block_on(session.sdk().trades().status(request))?;
     let mut view = sdk_order_status_view(receipt);
     view.actor_context_source = actor_context_source.to_owned();
     view.target_relays = target_relays;

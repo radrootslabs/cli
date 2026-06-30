@@ -935,10 +935,7 @@ mod tests {
             path: "src/runtime/order.rs",
             start: "pub fn status(\n    config: &RuntimeConfig",
             end: "fn sdk_order_status_from_relay_receipt(",
-            required_tokens: &[
-                "TradeStatusRequest::parse",
-                "session.sdk().trades().status_client().status",
-            ],
+            required_tokens: &["TradeStatusRequest::parse", "session.sdk().trades().status"],
         },
         MigratedCliPathGuard {
             label: "order SDK status adapter",
