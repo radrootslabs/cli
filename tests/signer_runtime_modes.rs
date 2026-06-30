@@ -2349,14 +2349,15 @@ fn local_seller_publish_commands_attempt_configured_relay() {
     assert!(!order_output.status.success());
     assert_eq!(order_value["operation_id"], "trade.submit");
     assert_eq!(order_value["result"], serde_json::Value::Null);
-    assert_eq!(order_value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(order_value["errors"][0]["code"], "invalid_relay_url");
+    assert_eq!(order_value["errors"][0]["detail"]["class"], "configuration");
     assert_eq!(
-        order_value["errors"][0]["detail"]["issues"][0]["field"],
-        "trade.listing_addr"
+        order_value["errors"][0]["detail"]["operation_id"],
+        "trade.submit"
     );
     assert_contains(
-        &order_value["errors"][0]["detail"]["issues"][0]["message"],
-        "local market freshness",
+        &order_value["errors"][0]["message"],
+        "loopback IPv4 address",
     );
     assert_no_removed_command_reference(&order_value, &["trade", "submit"]);
     assert_no_daemon_runtime_reference(&order_value, &["trade", "submit"]);

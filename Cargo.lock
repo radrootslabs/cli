@@ -3945,7 +3945,6 @@ dependencies = [
  "radroots_publish_proxy_protocol",
  "radroots_relay_transport",
  "radroots_runtime_paths",
- "radroots_sp1_guest_trade",
  "radroots_trade",
  "reqwest",
  "serde",

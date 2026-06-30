@@ -193,7 +193,7 @@ impl OperationService<TradeAcceptRequest> for TradeOperationService<'_> {
             config.output.dry_run = true;
         }
         let view = crate::runtime::order::decide(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         decision_result::<TradeAcceptResult>(request.operation_id(), &view)
     }
@@ -236,7 +236,7 @@ impl OperationService<TradeDeclineRequest> for TradeOperationService<'_> {
             config.output.dry_run = true;
         }
         let view = crate::runtime::order::decide(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         decision_result::<TradeDeclineResult>(request.operation_id(), &view)
     }
@@ -278,7 +278,7 @@ impl OperationService<TradeCancelRequest> for TradeOperationService<'_> {
             config.output.dry_run = true;
         }
         let view = crate::runtime::order::cancel(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         cancellation_result::<TradeCancelResult>(request.operation_id(), &view)
     }
@@ -327,7 +327,7 @@ impl OperationService<TradeRevisionProposeRequest> for TradeOperationService<'_>
             config.output.dry_run = true;
         }
         let view = crate::runtime::order::revision_propose(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         revision_proposal_result::<TradeRevisionProposeResult>(request.operation_id(), &view)
     }
@@ -362,7 +362,7 @@ impl OperationService<TradeRevisionAcceptRequest> for TradeOperationService<'_> 
             config.output.dry_run = true;
         }
         let view = crate::runtime::order::revision_decide(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         revision_decision_result::<TradeRevisionAcceptResult>(request.operation_id(), &view)
     }
@@ -406,7 +406,7 @@ impl OperationService<TradeRevisionDeclineRequest> for TradeOperationService<'_>
             config.output.dry_run = true;
         }
         let view = crate::runtime::order::revision_decide(&config, &args).map_err(|error| {
-            OperationAdapterError::runtime_failure(request.operation_id(), error)
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         revision_decision_result::<TradeRevisionDeclineResult>(request.operation_id(), &view)
     }
@@ -535,6 +535,7 @@ fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
     json!({
         "state": &view.state,
         "trade_id": &view.order_id,
+        "locator": &view.locator,
         "listing_addr": &view.listing_addr,
         "listing_event_id": &view.listing_event_id,
         "request_event_id": &view.request_event_id,
@@ -621,6 +622,7 @@ fn order_cancellation_error_detail(view: &OrderCancellationView) -> Value {
     json!({
         "state": &view.state,
         "trade_id": &view.order_id,
+        "locator": &view.locator,
         "listing_addr": &view.listing_addr,
         "request_event_id": &view.request_event_id,
         "decision_event_id": &view.decision_event_id,
@@ -711,6 +713,7 @@ fn order_revision_proposal_error_detail(view: &OrderRevisionProposalView) -> Val
     json!({
         "state": &view.state,
         "trade_id": &view.order_id,
+        "locator": &view.locator,
         "revision_id": &view.revision_id,
         "listing_addr": &view.listing_addr,
         "request_event_id": &view.request_event_id,
@@ -806,6 +809,7 @@ fn order_revision_decision_error_detail(view: &OrderRevisionDecisionView) -> Val
     json!({
         "state": &view.state,
         "trade_id": &view.order_id,
+        "locator": &view.locator,
         "revision_id": &view.revision_id,
         "decision": &view.decision,
         "listing_addr": &view.listing_addr,
@@ -885,6 +889,7 @@ fn order_status_error_detail(view: &OrderStatusView) -> Value {
     json!({
         "state": &view.state,
         "trade_id": &view.order_id,
+        "locator": &view.locator,
         "request_event_id": &view.request_event_id,
         "decision_event_id": &view.decision_event_id,
         "agreement_event_id": &view.agreement_event_id,
@@ -1082,6 +1087,7 @@ fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
         "state": &view.state,
         "source": &view.source,
         "trade_id": &view.order_id,
+        "locator": &view.locator,
         "file": &view.file,
         "listing_lookup": &view.listing_lookup,
         "listing_addr": &view.listing_addr,
@@ -1846,6 +1852,13 @@ mod tests {
             state: "already_decided".to_owned(),
             source: "test".to_owned(),
             order_id: "ord_test".to_owned(),
+            locator: crate::view::runtime::OrderTradeLocatorView {
+                trade_id: "ord_test".to_owned(),
+                root_event_id: Some("r".repeat(64)),
+                listing_addr: Some("30402:seller:listing".to_owned()),
+                buyer_pubkey: Some("b".repeat(64)),
+                seller_pubkey: Some("s".repeat(64)),
+            },
             listing_addr: Some("30402:seller:listing".to_owned()),
             buyer_pubkey: Some("b".repeat(64)),
             seller_pubkey: Some("s".repeat(64)),

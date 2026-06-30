@@ -199,7 +199,7 @@ pub const TRADE_STATUS_GET: OperationSpec = operation!(
     "trade_status_get",
     "TradeStatusGetRequest",
     "TradeStatusGetResult",
-    "Get reducer-derived trade status.",
+    "Get SDK-projected trade status.",
     Any,
     false,
     None,

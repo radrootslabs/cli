@@ -1741,11 +1741,25 @@ impl OrderAppRecordExportView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OrderTradeLocatorView {
+    pub trade_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listing_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buyer_pubkey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seller_pubkey: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct OrderSubmitView {
     pub state: String,
     pub source: String,
     #[serde(rename = "trade_id")]
     pub order_id: String,
+    pub locator: OrderTradeLocatorView,
     pub file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_lookup: Option<String>,
@@ -1859,6 +1873,7 @@ pub struct OrderDecisionView {
     pub source: String,
     #[serde(rename = "trade_id")]
     pub order_id: String,
+    pub locator: OrderTradeLocatorView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1927,6 +1942,7 @@ pub struct OrderCancellationView {
     pub source: String,
     #[serde(rename = "trade_id")]
     pub order_id: String,
+    pub locator: OrderTradeLocatorView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1996,6 +2012,7 @@ pub struct OrderRevisionProposalView {
     pub source: String,
     #[serde(rename = "trade_id")]
     pub order_id: String,
+    pub locator: OrderTradeLocatorView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2070,6 +2087,7 @@ pub struct OrderRevisionDecisionView {
     pub source: String,
     #[serde(rename = "trade_id")]
     pub order_id: String,
+    pub locator: OrderTradeLocatorView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2147,6 +2165,7 @@ pub struct OrderStatusView {
     pub source: String,
     #[serde(rename = "trade_id")]
     pub order_id: String,
+    pub locator: OrderTradeLocatorView,
     pub actor_context_source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_event_id: Option<String>,

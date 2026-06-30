@@ -386,6 +386,30 @@ fn trade_event_watch_document(envelope: &OutputEnvelope, result: &Value) -> Term
 fn push_trade_identity_fields(document: &mut TerminalDocument, result: &Value) {
     common::push_path_field(document, "State", result, &["state"]);
     common::push_path_field(document, "Trade", result, &["trade_id"]);
+    common::push_path_field(
+        document,
+        "Locator root",
+        result,
+        &["locator", "root_event_id"],
+    );
+    common::push_path_field(
+        document,
+        "Locator listing",
+        result,
+        &["locator", "listing_addr"],
+    );
+    common::push_path_field(
+        document,
+        "Locator buyer",
+        result,
+        &["locator", "buyer_pubkey"],
+    );
+    common::push_path_field(
+        document,
+        "Locator seller",
+        result,
+        &["locator", "seller_pubkey"],
+    );
     common::push_path_field(document, "Lookup", result, &["lookup"]);
     common::push_path_field(document, "Listing", result, &["listing_addr"]);
     common::push_path_field(document, "Listing", result, &["listing_lookup"]);

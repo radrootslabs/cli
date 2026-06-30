@@ -1,18 +1,18 @@
 use radroots_events::ids::RadrootsEventId;
 use radroots_sdk::{
-    OrderStatusEligibility, OrderStatusEvidenceSummary, OrderStatusKind, OrderStatusNextActionKind,
-    OrderStatusReceipt, SdkOrderStatusIssue,
+    SdkTradeStatusIssue, TradeStatusEligibility, TradeStatusEvidenceSummary, TradeStatusKind,
+    TradeStatusNextActionKind, TradeStatusReceipt,
 };
 
 use crate::view::runtime::{
     OrderIssueView, OrderStatusEligibilityView, OrderStatusEvidenceSummaryView,
     OrderStatusLifecycleCancellationView, OrderStatusLifecycleView, OrderStatusSdkReceiptView,
-    OrderStatusView,
+    OrderStatusView, OrderTradeLocatorView,
 };
 
 use super::{ORDER_ACTOR_CONTEXT_SDK_LOCAL, ORDER_STATUS_SDK_SOURCE};
 
-pub(super) fn sdk_order_status_view(receipt: OrderStatusReceipt) -> OrderStatusView {
+pub(super) fn sdk_order_status_view(receipt: TradeStatusReceipt) -> OrderStatusView {
     let state = sdk_order_status_state(receipt.status).to_owned();
     let reducer_issues = receipt
         .issues
@@ -27,6 +27,7 @@ pub(super) fn sdk_order_status_view(receipt: OrderStatusReceipt) -> OrderStatusV
         state,
         source: ORDER_STATUS_SDK_SOURCE.to_owned(),
         order_id: receipt.order_id.to_string(),
+        locator: sdk_trade_locator_view(&receipt),
         actor_context_source: ORDER_ACTOR_CONTEXT_SDK_LOCAL.to_owned(),
         request_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
         decision_event_id: sdk_event_id_string(receipt.decision_event_id.as_ref()),
@@ -53,7 +54,33 @@ pub(super) fn sdk_order_status_view(receipt: OrderStatusReceipt) -> OrderStatusV
     }
 }
 
-fn sdk_order_status_receipt_view(receipt: &OrderStatusReceipt) -> OrderStatusSdkReceiptView {
+fn sdk_trade_locator_view(receipt: &TradeStatusReceipt) -> OrderTradeLocatorView {
+    OrderTradeLocatorView {
+        trade_id: receipt.locator.trade_id.as_str().to_owned(),
+        root_event_id: receipt
+            .locator
+            .root_event_id
+            .as_ref()
+            .map(ToString::to_string),
+        listing_addr: receipt
+            .locator
+            .listing_addr
+            .as_ref()
+            .map(ToString::to_string),
+        buyer_pubkey: receipt
+            .locator
+            .buyer_pubkey
+            .as_ref()
+            .map(ToString::to_string),
+        seller_pubkey: receipt
+            .locator
+            .seller_pubkey
+            .as_ref()
+            .map(ToString::to_string),
+    }
+}
+
+fn sdk_order_status_receipt_view(receipt: &TradeStatusReceipt) -> OrderStatusSdkReceiptView {
     OrderStatusSdkReceiptView {
         next_action: sdk_status_next_action(receipt.next_action).to_owned(),
         evidence: sdk_status_evidence_view(&receipt.evidence),
@@ -62,7 +89,7 @@ fn sdk_order_status_receipt_view(receipt: &OrderStatusReceipt) -> OrderStatusSdk
 }
 
 fn sdk_status_evidence_view(
-    evidence: &OrderStatusEvidenceSummary,
+    evidence: &TradeStatusEvidenceSummary,
 ) -> OrderStatusEvidenceSummaryView {
     OrderStatusEvidenceSummaryView {
         event_count: evidence.event_count,
@@ -76,7 +103,7 @@ fn sdk_status_evidence_view(
     }
 }
 
-fn sdk_status_eligibility_view(eligibility: &OrderStatusEligibility) -> OrderStatusEligibilityView {
+fn sdk_status_eligibility_view(eligibility: &TradeStatusEligibility) -> OrderStatusEligibilityView {
     OrderStatusEligibilityView {
         can_decide: eligibility.can_decide,
         can_propose_revision: eligibility.can_propose_revision,
@@ -85,48 +112,52 @@ fn sdk_status_eligibility_view(eligibility: &OrderStatusEligibility) -> OrderSta
     }
 }
 
-fn sdk_status_next_action(kind: OrderStatusNextActionKind) -> &'static str {
+fn sdk_status_next_action(kind: TradeStatusNextActionKind) -> &'static str {
     match kind {
-        OrderStatusNextActionKind::NoLocalOrder => "no_local_order",
-        OrderStatusNextActionKind::InspectEvidenceIssues => "inspect_evidence_issues",
-        OrderStatusNextActionKind::AwaitSellerDecision => "await_seller_decision",
-        OrderStatusNextActionKind::DecideRevision => "decide_revision",
-        OrderStatusNextActionKind::AwaitRhiValidation => "await_rhi_validation",
-        OrderStatusNextActionKind::Terminal => "terminal",
+        TradeStatusNextActionKind::NoLocalOrder => "no_local_order",
+        TradeStatusNextActionKind::InspectEvidenceIssues => "inspect_evidence_issues",
+        TradeStatusNextActionKind::AwaitSellerDecision => "await_seller_decision",
+        TradeStatusNextActionKind::DecideRevision => "decide_revision",
+        TradeStatusNextActionKind::AwaitRhiValidation => "await_rhi_validation",
+        TradeStatusNextActionKind::Terminal => "terminal",
         _ => "unknown",
     }
 }
 
-fn sdk_order_status_state(status: OrderStatusKind) -> &'static str {
+fn sdk_order_status_state(status: TradeStatusKind) -> &'static str {
     match status {
-        OrderStatusKind::Missing => "missing",
-        OrderStatusKind::Requested => "requested",
-        OrderStatusKind::RevisionProposed => "revision_proposed",
-        OrderStatusKind::AgreedPendingRhi => "pending_rhi",
-        OrderStatusKind::Committed => "committed",
-        OrderStatusKind::Declined => "declined",
-        OrderStatusKind::Cancelled => "cancelled",
-        OrderStatusKind::Invalid => "invalid",
+        TradeStatusKind::Missing => "missing",
+        TradeStatusKind::Ambiguous => "ambiguous",
+        TradeStatusKind::Requested => "requested",
+        TradeStatusKind::RevisionProposed => "revision_proposed",
+        TradeStatusKind::AgreedPendingRhi => "pending_rhi",
+        TradeStatusKind::Committed => "committed",
+        TradeStatusKind::Declined => "declined",
+        TradeStatusKind::Cancelled => "cancelled",
+        TradeStatusKind::Invalid => "invalid",
         _ => "unknown",
     }
 }
 
-fn sdk_order_status_reason(status: OrderStatusKind, order_id: &str) -> Option<String> {
+fn sdk_order_status_reason(status: TradeStatusKind, order_id: &str) -> Option<String> {
     match status {
-        OrderStatusKind::Missing => Some(format!("no local SDK trade events matched `{order_id}`")),
-        OrderStatusKind::Invalid => Some(format!(
+        TradeStatusKind::Missing => Some(format!("no local SDK trade events matched `{order_id}`")),
+        TradeStatusKind::Ambiguous => Some(format!(
+            "local SDK trade events for `{order_id}` matched multiple roots"
+        )),
+        TradeStatusKind::Invalid => Some(format!(
             "local SDK trade events for `{order_id}` failed reducer validation"
         )),
         _ => None,
     }
 }
 
-fn sdk_order_status_agreement_event_id(receipt: &OrderStatusReceipt) -> Option<String> {
+fn sdk_order_status_agreement_event_id(receipt: &TradeStatusReceipt) -> Option<String> {
     sdk_event_id_string(receipt.agreement_event_id.as_ref())
 }
 
 fn sdk_order_status_lifecycle_view(
-    receipt: &OrderStatusReceipt,
+    receipt: &TradeStatusReceipt,
     issues: &[OrderIssueView],
 ) -> OrderStatusLifecycleView {
     let cancellation = receipt.cancellation_event_id.as_ref().map(|event_id| {
@@ -148,21 +179,22 @@ fn sdk_order_status_lifecycle_view(
     }
 }
 
-fn sdk_order_status_lifecycle_phase(receipt: &OrderStatusReceipt) -> &'static str {
+fn sdk_order_status_lifecycle_phase(receipt: &TradeStatusReceipt) -> &'static str {
     match receipt.status {
-        OrderStatusKind::Missing => "missing",
-        OrderStatusKind::Requested => "requested",
-        OrderStatusKind::RevisionProposed => "revision_proposed",
-        OrderStatusKind::AgreedPendingRhi => "pending_rhi",
-        OrderStatusKind::Committed => "committed",
-        OrderStatusKind::Declined => "declined",
-        OrderStatusKind::Cancelled => "cancelled",
-        OrderStatusKind::Invalid => "invalid",
+        TradeStatusKind::Missing => "missing",
+        TradeStatusKind::Ambiguous => "ambiguous",
+        TradeStatusKind::Requested => "requested",
+        TradeStatusKind::RevisionProposed => "revision_proposed",
+        TradeStatusKind::AgreedPendingRhi => "pending_rhi",
+        TradeStatusKind::Committed => "committed",
+        TradeStatusKind::Declined => "declined",
+        TradeStatusKind::Cancelled => "cancelled",
+        TradeStatusKind::Invalid => "invalid",
         _ => "unknown",
     }
 }
 
-fn sdk_order_status_issue_view(issue: &SdkOrderStatusIssue) -> OrderIssueView {
+fn sdk_order_status_issue_view(issue: &SdkTradeStatusIssue) -> OrderIssueView {
     let code = issue.code();
     OrderIssueView {
         code: code.clone(),

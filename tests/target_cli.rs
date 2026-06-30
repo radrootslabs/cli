@@ -3841,7 +3841,7 @@ fn order_status_get_invalid_order_id_uses_sdk_error_contract() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "trade.status.get");
     assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "invalid_order_id");
+    assert_eq!(value["errors"][0]["code"], "invalid_trade_id");
     assert_eq!(value["errors"][0]["exit_code"], 2);
     assert_eq!(value["errors"][0]["detail"]["class"], "request");
     assert_eq!(value["errors"][0]["detail"]["retryable"], false);
@@ -5261,10 +5261,7 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
     assert_eq!(submit["result"]["state"], "dry_run");
     assert_eq!(submit["result"]["source"], "SDK trade submit · local key");
     assert_eq!(submit["result"]["event_kind"], 3422);
-    assert_eq!(
-        submit["result"]["target_relays"][0],
-        ORDERABLE_LISTING_RELAY
-    );
+    assert!(submit["result"]["target_relays"].is_null());
     assert_eq!(
         submit["result"]["event_id"]
             .as_str()
@@ -6872,10 +6869,7 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(submit["result"]["state"], "dry_run");
     assert_eq!(submit["result"]["source"], "SDK trade submit · local key");
     assert_eq!(submit["result"]["event_kind"], 3422);
-    assert_eq!(
-        submit["result"]["target_relays"][0],
-        ORDERABLE_LISTING_RELAY
-    );
+    assert!(submit["result"]["target_relays"].is_null());
     assert_eq!(
         submit["result"]["event_id"]
             .as_str()
@@ -6896,26 +6890,26 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
         order_id,
     ]);
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3), "{unavailable_submit}");
+    assert_eq!(output.status.code(), Some(2), "{unavailable_submit}");
     assert_eq!(unavailable_submit["operation_id"], "trade.submit");
     assert_eq!(unavailable_submit["result"], Value::Null);
     assert_eq!(
         unavailable_submit["errors"][0]["code"],
-        "operation_unavailable"
+        "empty_target_relays"
     );
     assert_eq!(
         unavailable_submit["errors"][0]["detail"]["class"],
-        "operation"
+        "configuration"
     );
     assert_eq!(
-        unavailable_submit["errors"][0]["detail"]["state"],
-        "unavailable"
+        unavailable_submit["errors"][0]["detail"]["detail"]["operation"],
+        "sdk relay target set"
     );
     assert!(
         unavailable_submit["errors"][0]["message"]
             .as_str()
             .expect("message")
-            .contains("SDK relay publish")
+            .contains("empty target relays")
     );
     assert_no_removed_command_reference(&unavailable_submit, &["trade", "submit"]);
     assert_no_daemon_runtime_reference(&unavailable_submit, &["trade", "submit"]);
@@ -7461,7 +7455,7 @@ fn order_cancel_uses_bound_buyer_after_default_account_drift() {
         buyer_secret_file.to_string_lossy().as_ref(),
         "--default",
     ]);
-    let listing_event_id = seed_orderable_listing(&sandbox, LISTING_ADDR);
+    seed_orderable_listing(&sandbox, LISTING_ADDR);
     sandbox.json_success(&["--format", "json", "basket", "create", "bound_cancel"]);
     sandbox.json_success(&[
         "--format",
@@ -7488,15 +7482,6 @@ fn order_cancel_uses_bound_buyer_after_default_account_drift() {
     let order_id = quote["result"]["quote"]["trade_id"]
         .as_str()
         .expect("order id");
-    let economics: RadrootsOrderEconomics =
-        serde_json::from_value(quote["result"]["quote"]["economics"].clone())
-            .expect("quote economics");
-    let event = signed_order_request_event_for_quote(
-        &buyer,
-        order_id,
-        listing_event_id.as_str(),
-        economics,
-    );
     let drift_account = sandbox.json_success(&["--format", "json", "account", "create"]);
     let drift_account_id = drift_account["result"]["account"]["id"]
         .as_str()
@@ -7509,26 +7494,26 @@ fn order_cancel_uses_bound_buyer_after_default_account_drift() {
         "update",
         drift_account_id,
     ]);
-    let relay = RelayFetchServer::with_events(vec![event]);
-
-    let cancel = sandbox.json_success(&[
+    let (cancel_output, cancel) = sandbox.json_output(&[
         "--format",
         "json",
         "--dry-run",
-        "--relay",
-        relay.endpoint(),
         "trade",
         "cancel",
         order_id,
         "--reason",
         "changed plans",
     ]);
-    relay.join();
 
+    assert!(!cancel_output.status.success());
     assert_eq!(cancel["operation_id"], "trade.cancel");
-    assert_eq!(cancel["result"]["state"], "dry_run");
-    assert_eq!(cancel["result"]["buyer_pubkey"], buyer.public_key_hex());
-    assert_eq!(cancel["result"]["signer_mode"], "local");
+    assert_eq!(cancel["result"], Value::Null);
+    assert_eq!(cancel["errors"][0]["code"], "invalid_request");
+    assert_eq!(cancel["errors"][0]["detail"]["class"], "request");
+    assert_contains(
+        &cancel["errors"][0]["message"],
+        "requires a locally projected trade",
+    );
 }
 
 #[test]
@@ -7593,7 +7578,7 @@ fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft()
 }
 
 #[test]
-fn order_submit_requires_local_replica_freshness_before_signing() {
+fn order_submit_non_dry_run_uses_sdk_relay_validation_without_replica_freshness_gate() {
     let sandbox = RadrootsCliSandbox::new();
     let order_id = create_ready_order(&sandbox, "freshness_missing_db");
     fs::remove_file(sandbox.replica_db_path()).expect("remove replica db");
@@ -7611,29 +7596,20 @@ fn order_submit_requires_local_replica_freshness_before_signing() {
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.status.code(), Some(2));
     assert_eq!(value["operation_id"], "trade.submit");
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["state"], "unconfigured");
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["field"],
-        "trade.listing_addr"
-    );
-    assert!(
-        value["errors"][0]["message"]
-            .as_str()
-            .expect("message")
-            .contains("run `radroots store init` and `radroots market refresh`")
-    );
+    assert_eq!(value["errors"][0]["code"], "invalid_relay_url");
+    assert_eq!(value["errors"][0]["detail"]["class"], "configuration");
+    assert_contains(&value["errors"][0]["message"], "loopback IPv4 address");
 }
 
 #[test]
-fn order_submit_dry_run_requires_local_replica_freshness() {
+fn order_submit_dry_run_does_not_require_local_replica_freshness() {
     let sandbox = RadrootsCliSandbox::new();
     let order_id = create_ready_order(&sandbox, "dry_freshness_missing_db");
     fs::remove_file(sandbox.replica_db_path()).expect("remove replica db");
 
-    let (output, value) = sandbox.json_output(&[
+    let value = sandbox.json_success(&[
         "--format",
         "json",
         "--dry-run",
@@ -7642,20 +7618,14 @@ fn order_submit_dry_run_requires_local_replica_freshness() {
         order_id.as_str(),
     ]);
 
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
     assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["dry_run"], true);
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["state"], "unconfigured");
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["field"],
-        "trade.listing_addr"
-    );
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(value["result"]["source"], "SDK trade submit · local key");
 }
 
 #[test]
-fn order_submit_rejects_missing_or_archived_local_listing_before_publish() {
+fn order_submit_non_dry_run_uses_sdk_relay_validation_without_listing_state_gate() {
     let sandbox = RadrootsCliSandbox::new();
     let order_id = create_ready_order(&sandbox, "freshness_missing_listing");
     remove_orderable_listing(&sandbox, LISTING_ADDR);
@@ -7673,23 +7643,15 @@ fn order_submit_rejects_missing_or_archived_local_listing_before_publish() {
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.status.code(), Some(2));
     assert_eq!(value["operation_id"], "trade.submit");
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["field"],
-        "trade.listing_addr"
-    );
-    assert!(
-        value["errors"][0]["message"]
-            .as_str()
-            .expect("message")
-            .contains("listing is not active")
-    );
+    assert_eq!(value["errors"][0]["code"], "invalid_relay_url");
+    assert_eq!(value["errors"][0]["detail"]["class"], "configuration");
+    assert_contains(&value["errors"][0]["message"], "loopback IPv4 address");
 }
 
 #[test]
-fn order_submit_rejects_superseded_local_listing_event_before_publish() {
+fn order_submit_non_dry_run_uses_sdk_relay_validation_without_listing_event_gate() {
     let sandbox = RadrootsCliSandbox::new();
     let order_id = create_ready_order(&sandbox, "freshness_superseded_listing");
     let replacement_event_id = "3".repeat(64);
@@ -7708,23 +7670,15 @@ fn order_submit_rejects_superseded_local_listing_event_before_publish() {
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.status.code(), Some(2));
     assert_eq!(value["operation_id"], "trade.submit");
-    assert_eq!(value["errors"][0]["code"], "operation_unavailable");
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["field"],
-        "trade.listing_event_id"
-    );
-    assert!(
-        value["errors"][0]["detail"]["issues"][0]["message"]
-            .as_str()
-            .expect("issue message")
-            .contains(replacement_event_id.as_str())
-    );
+    assert_eq!(value["errors"][0]["code"], "invalid_relay_url");
+    assert_eq!(value["errors"][0]["detail"]["class"], "configuration");
+    assert_contains(&value["errors"][0]["message"], "loopback IPv4 address");
 }
 
 #[test]
-fn order_submit_rejects_over_available_quantity_before_publish() {
+fn order_submit_non_dry_run_uses_sdk_relay_validation_without_quantity_gate() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     seed_orderable_listing(&sandbox, LISTING_ADDR);
@@ -7768,25 +7722,17 @@ fn order_submit_rejects_over_available_quantity_before_publish() {
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(10));
+    assert_eq!(output.status.code(), Some(2));
     assert_eq!(value["operation_id"], "trade.submit");
-    assert_eq!(value["errors"][0]["code"], "validation_failed");
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["code"],
-        "order_quantity_exceeds_available"
-    );
-    assert!(
-        value["errors"][0]["detail"]["issues"][0]["message"]
-            .as_str()
-            .expect("issue message")
-            .contains("available quantity 5")
-    );
+    assert_eq!(value["errors"][0]["code"], "invalid_relay_url");
+    assert_eq!(value["errors"][0]["detail"]["class"], "configuration");
+    assert_contains(&value["errors"][0]["message"], "loopback IPv4 address");
     assert_no_removed_command_reference(&value, &["trade", "submit"]);
     assert_no_daemon_runtime_reference(&value, &["trade", "submit"]);
 }
 
 #[test]
-fn order_submit_rejects_unknown_local_listing_bin_before_publish() {
+fn order_submit_non_dry_run_uses_sdk_relay_validation_without_bin_gate() {
     let sandbox = RadrootsCliSandbox::new();
     let order_id = create_ready_order(&sandbox, "unknown_bin");
     rewrite_order_bin(&sandbox, order_id.as_str(), "unknown-bin");
@@ -7804,23 +7750,11 @@ fn order_submit_rejects_unknown_local_listing_bin_before_publish() {
     ]);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(10));
+    assert_eq!(output.status.code(), Some(2));
     assert_eq!(value["operation_id"], "trade.submit");
-    assert_eq!(value["errors"][0]["code"], "validation_failed");
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["code"],
-        "order_bin_unknown"
-    );
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["field"],
-        "order.items[0].bin_id"
-    );
-    assert!(
-        value["errors"][0]["detail"]["issues"][0]["message"]
-            .as_str()
-            .expect("issue message")
-            .contains("expected primary bin `bin-1`")
-    );
+    assert_eq!(value["errors"][0]["code"], "invalid_relay_url");
+    assert_eq!(value["errors"][0]["detail"]["class"], "configuration");
+    assert_contains(&value["errors"][0]["message"], "loopback IPv4 address");
     assert_no_removed_command_reference(&value, &["trade", "submit"]);
     assert_no_daemon_runtime_reference(&value, &["trade", "submit"]);
 }
@@ -8019,12 +7953,12 @@ fn basket_quote_rejects_invalid_verified_primary_bin_before_order_write() {
 }
 
 #[test]
-fn order_submit_rejects_stale_invalid_verified_primary_bin_before_relay_preflight() {
+fn order_submit_dry_run_does_not_use_local_primary_bin_preflight() {
     let sandbox = RadrootsCliSandbox::new();
     let order_id = create_ready_order(&sandbox, "stale_invalid_bin");
     update_orderable_listing_primary_bin_id(&sandbox, LISTING_ADDR, Some("missing-bin"));
 
-    let (output, value) = sandbox.json_output(&[
+    let value = sandbox.json_success(&[
         "--format",
         "json",
         "--dry-run",
@@ -8033,25 +7967,16 @@ fn order_submit_rejects_stale_invalid_verified_primary_bin_before_relay_prefligh
         &order_id,
     ]);
 
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(10));
     assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["dry_run"], true);
-    assert_eq!(value["errors"][0]["code"], "validation_failed");
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["code"],
-        "listing_primary_bin_invalid"
-    );
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["field"],
-        "inventory.primary_bin_id"
-    );
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(value["result"]["source"], "SDK trade submit · local key");
     assert_no_removed_command_reference(&value, &["trade", "submit", "--dry-run"]);
     assert_no_daemon_runtime_reference(&value, &["trade", "submit", "--dry-run"]);
 }
 
 #[test]
-fn order_submit_dry_run_rejects_over_available_quantity_before_relay_preflight() {
+fn order_submit_dry_run_does_not_use_local_quantity_preflight() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     seed_orderable_listing(&sandbox, LISTING_ADDR);
@@ -8082,18 +8007,13 @@ fn order_submit_dry_run_rejects_over_available_quantity_before_relay_preflight()
         .as_str()
         .expect("order id");
 
-    let (output, value) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
+    let value =
+        sandbox.json_success(&["--format", "json", "--dry-run", "trade", "submit", order_id]);
 
-    assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(10));
     assert_eq!(value["operation_id"], "trade.submit");
     assert_eq!(value["dry_run"], true);
-    assert_eq!(value["errors"][0]["code"], "validation_failed");
-    assert_eq!(
-        value["errors"][0]["detail"]["issues"][0]["code"],
-        "order_quantity_exceeds_available"
-    );
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(value["result"]["source"], "SDK trade submit · local key");
 }
 
 #[test]
@@ -8147,10 +8067,7 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     assert_eq!(dry_run["result"]["state"], "dry_run");
     assert_eq!(dry_run["result"]["source"], "SDK trade submit · local key");
     assert_eq!(dry_run["result"]["event_kind"], 3422);
-    assert_eq!(
-        dry_run["result"]["target_relays"][0],
-        ORDERABLE_LISTING_RELAY
-    );
+    assert!(dry_run["result"]["target_relays"].is_null());
     assert_no_daemon_runtime_reference(&dry_run, &["trade", "submit", "--dry-run"]);
 
     let second = sandbox.json_success(&["--format", "json", "account", "create"]);
