@@ -931,10 +931,30 @@ mod tests {
             required_tokens: &["session.sdk().sync().push_outbox", "PushOutboxRequest::new"],
         },
         MigratedCliPathGuard {
-            label: "order status",
+            label: "order public status",
             path: "src/runtime/order.rs",
             start: "pub fn status(\n    config: &RuntimeConfig",
-            end: "fn sdk_order_status_from_relay_receipt(",
+            end: "fn decide_trade_via_sdk(",
+            required_tokens: &["TradeStatusRequest::parse", "session.sdk().trades().status"],
+        },
+        MigratedCliPathGuard {
+            label: "order locator status helper",
+            path: "src/runtime/order.rs",
+            start: "fn trade_status_for_locator(",
+            end: "fn inventory_commitments_from_status(",
+            required_tokens: &[
+                "TradeStatusRequest::new(locator)",
+                "session.block_on(",
+                ".sdk()",
+                ".trades()",
+                ".status(TradeStatusRequest::new(locator))",
+            ],
+        },
+        MigratedCliPathGuard {
+            label: "order relay refresh status",
+            path: "src/runtime/order.rs",
+            start: "fn sdk_order_status_from_relay_receipt(",
+            end: "enum OrderStatusRecord",
             required_tokens: &["TradeStatusRequest::parse", "session.sdk().trades().status"],
         },
         MigratedCliPathGuard {
@@ -1058,6 +1078,17 @@ mod tests {
         "build_job_feedback_tags",
         "KIND_TRADE_TRANSITION_PROOF",
         "KIND_JOB_FEEDBACK",
+        "status_client(",
+        "TradeStatusClient",
+        "TradeValidationClient",
+    ];
+
+    const REMOVED_SDK_ROOT_TRADE_ALIAS_NAMES: &[&str] = &[
+        "trade_buyer",
+        "trade_seller",
+        "trade_status",
+        "trade_resync",
+        "trade_validation",
     ];
 
     #[test]
@@ -1254,6 +1285,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn migrated_path_root_alias_scanner_preserves_status_helpers() {
+        assert!(
+            root_trade_alias_findings(
+                "allowed",
+                "fn trade_status_for_locator() { RadrootsSdkError::trade_status_limit_invalid(0, 1, 100); }",
+            )
+            .is_empty()
+        );
+
+        let findings = root_trade_alias_findings(
+            "forbidden",
+            "sdk.trade_status (request); RadrootsClient::trade_resync(&sdk);",
+        );
+
+        for alias in ["trade_status", "trade_resync"] {
+            assert!(
+                findings.iter().any(|finding| finding.contains(alias)),
+                "migrated path root alias scanner must reject `{alias}`"
+            );
+        }
+    }
+
     fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(dir).expect("read dir") {
             let path = entry.expect("entry").path();
@@ -1353,6 +1407,61 @@ mod tests {
                 "{label} contains disallowed migrated-path token `{token}`"
             );
         }
+
+        let findings = root_trade_alias_findings(label, source);
+        assert!(
+            findings.is_empty(),
+            "{label} contains removed SDK root trade aliases:\n{}",
+            findings.join("\n")
+        );
+    }
+
+    fn root_trade_alias_findings(label: &str, source: &str) -> Vec<String> {
+        let mut findings = Vec::new();
+
+        for alias in REMOVED_SDK_ROOT_TRADE_ALIAS_NAMES {
+            for (index, _) in source.match_indices(alias) {
+                let before = source[..index].chars().next_back();
+                let after_index = index + alias.len();
+                let after = source[after_index..].chars().next();
+
+                if before.is_some_and(is_rust_identifier_character)
+                    || after.is_some_and(is_rust_identifier_character)
+                {
+                    continue;
+                }
+
+                if source[after_index..]
+                    .chars()
+                    .find(|character| !character.is_whitespace())
+                    != Some('(')
+                {
+                    continue;
+                }
+
+                let prefix = source[..index].trim_end();
+                if prefix.ends_with('.') || prefix.ends_with("::") {
+                    findings.push(format!(
+                        "{label}:{} uses removed SDK root trade alias `{alias}`",
+                        line_number(source, index)
+                    ));
+                }
+            }
+        }
+
+        findings
+    }
+
+    fn is_rust_identifier_character(character: char) -> bool {
+        character == '_' || character.is_ascii_alphanumeric()
+    }
+
+    fn line_number(source: &str, index: usize) -> usize {
+        source[..index]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1
     }
 
     fn sample_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {
