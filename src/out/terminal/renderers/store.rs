@@ -31,9 +31,9 @@ impl TerminalOperationRenderer for StoreRenderer {
         common::push_path_field(&mut document, "Storage", result, &["sdk_storage"]);
         common::push_path_field(
             &mut document,
-            "Legacy",
+            "Derived",
             result,
-            &["legacy_replica", "state"],
+            &["derived_projection", "state"],
         );
         common::push_count_field(
             &mut document,

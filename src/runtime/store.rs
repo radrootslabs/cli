@@ -20,12 +20,12 @@ use crate::runtime::config::RuntimeConfig;
 use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_runtime, sdk_storage_root};
 use crate::runtime::sync::ensure_sync_run_table;
 use crate::view::runtime::{
-    LocalBackupView, LocalExportView, LocalInitView, LocalLegacyReplicaStatusView,
+    LocalBackupView, LocalDerivedProjectionStatusView, LocalExportView, LocalInitView,
     LocalReplicaCountsView, LocalReplicaSyncView, LocalRestoreView, LocalStatusView,
     SdkEventStoreStatusView, SdkIntegrityView, SdkOutboxStatusView, SdkSqliteStatusView,
 };
 
-const LEGACY_REPLICA_SOURCE: &str = "legacy local replica · derived/migration source";
+const DERIVED_PROJECTION_SOURCE: &str = "local derived projection cache";
 const SDK_CANONICAL_SOURCE: &str = "SDK canonical event store and outbox";
 const SDK_CANONICAL_STORE: &str = "sdk";
 const SDK_BACKUP_KIND: &str = "sdk_canonical";
@@ -47,7 +47,7 @@ pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
         } else {
             "initialized".to_owned()
         },
-        source: LEGACY_REPLICA_SOURCE.to_owned(),
+        source: DERIVED_PROJECTION_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "ready".to_owned(),
         path: config.local.replica_db_path.display().to_string(),
@@ -64,7 +64,7 @@ pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeEr
         let manifest = export_manifest(&executor)?;
         return Ok(LocalInitView {
             state: "ready".to_owned(),
-            source: LEGACY_REPLICA_SOURCE.to_owned(),
+            source: DERIVED_PROJECTION_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
             replica_db: "ready".to_owned(),
             path: config.local.replica_db_path.display().to_string(),
@@ -75,7 +75,7 @@ pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeEr
 
     Ok(LocalInitView {
         state: "dry_run".to_owned(),
-        source: LEGACY_REPLICA_SOURCE.to_owned(),
+        source: DERIVED_PROJECTION_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "missing".to_owned(),
         path: config.local.replica_db_path.display().to_string(),
@@ -87,7 +87,7 @@ pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeEr
 pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterError> {
     let sdk_root = sdk_storage_root(config);
     let sdk_existed_before_open = sdk_storage_files_exist(sdk_root.as_path());
-    let legacy_replica = legacy_replica_status(config)?;
+    let derived_projection = derived_projection_status(config)?;
     let session = CliSdkSession::connect(config)?;
     let receipt = session.block_on(session.sdk().storage_status(StorageStatusRequest::new()))?;
     let integrity = session.block_on(session.sdk().integrity(IntegrityRequest::new()))?;
@@ -97,17 +97,17 @@ pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterEr
         sdk_existed_before_open,
         receipt,
         integrity,
-        legacy_replica,
+        derived_projection,
     ))
 }
 
-fn legacy_replica_status(
+fn derived_projection_status(
     config: &RuntimeConfig,
-) -> Result<LocalLegacyReplicaStatusView, RuntimeError> {
+) -> Result<LocalDerivedProjectionStatusView, RuntimeError> {
     if !config.local.replica_db_path.exists() {
-        return Ok(LocalLegacyReplicaStatusView {
+        return Ok(LocalDerivedProjectionStatusView {
             state: "unconfigured".to_owned(),
-            source: LEGACY_REPLICA_SOURCE.to_owned(),
+            source: DERIVED_PROJECTION_SOURCE.to_owned(),
             replica_db: "missing".to_owned(),
             path: config.local.replica_db_path.display().to_string(),
             replica_db_version: String::new(),
@@ -134,9 +134,9 @@ fn legacy_replica_status(
     let manifest = export_manifest(&executor)?;
     let sync = radroots_replica_sync_status(&executor)?;
 
-    Ok(LocalLegacyReplicaStatusView {
+    Ok(LocalDerivedProjectionStatusView {
         state: "ready".to_owned(),
-        source: LEGACY_REPLICA_SOURCE.to_owned(),
+        source: DERIVED_PROJECTION_SOURCE.to_owned(),
         replica_db: "ready".to_owned(),
         path: config.local.replica_db_path.display().to_string(),
         replica_db_version: manifest.replica_db_version.clone(),
@@ -218,7 +218,7 @@ pub fn export(
     if !config.local.replica_db_path.exists() {
         return Ok(LocalExportView {
             state: "unconfigured".to_owned(),
-            source: LEGACY_REPLICA_SOURCE.to_owned(),
+            source: DERIVED_PROJECTION_SOURCE.to_owned(),
             format: format.as_str().to_owned(),
             file: output.display().to_string(),
             records: 0,
@@ -239,7 +239,7 @@ pub fn export(
         LocalExportFormatArg::Json => {
             let export = json!({
                 "kind": "local_export_manifest_v1",
-                "source": LEGACY_REPLICA_SOURCE,
+                "source": DERIVED_PROJECTION_SOURCE,
                 "replica_db_version": manifest.replica_db_version,
                 "backup_format_version": manifest.backup_format_version,
                 "export_version": manifest.export_version,
@@ -258,7 +258,7 @@ pub fn export(
             lines.push(
                 json!({
                     "kind": "local_export_manifest",
-                    "source": LEGACY_REPLICA_SOURCE,
+                    "source": DERIVED_PROJECTION_SOURCE,
                     "replica_db_version": manifest.replica_db_version,
                     "backup_format_version": manifest.backup_format_version,
                     "export_version": manifest.export_version,
@@ -291,7 +291,7 @@ pub fn export(
 
     Ok(LocalExportView {
         state: "exported".to_owned(),
-        source: LEGACY_REPLICA_SOURCE.to_owned(),
+        source: DERIVED_PROJECTION_SOURCE.to_owned(),
         format: format.as_str().to_owned(),
         file: output.display().to_string(),
         records,
@@ -347,7 +347,7 @@ fn sdk_status_view(
     sdk_existed_before_open: bool,
     receipt: StorageStatusReceipt,
     integrity: IntegrityReceipt,
-    legacy_replica: LocalLegacyReplicaStatusView,
+    derived_projection: LocalDerivedProjectionStatusView,
 ) -> LocalStatusView {
     let event_store_path = receipt
         .paths
@@ -371,7 +371,7 @@ fn sdk_status_view(
         event_store: sdk_event_store_status_view(receipt.event_store, event_store_path),
         outbox: sdk_outbox_status_view(receipt.outbox, outbox_path),
         integrity: sdk_integrity_view(integrity),
-        legacy_replica,
+        derived_projection,
         reason,
         actions,
     }
@@ -477,7 +477,7 @@ fn ensure_safe_sdk_backup_destination(
     ];
     if forbidden_paths.iter().any(|forbidden| output == *forbidden) {
         return Err(RuntimeError::Config(format!(
-            "backup destination {} would overwrite canonical or legacy store data",
+            "backup destination {} would overwrite canonical or derived projection store data",
             output.display()
         )));
     }

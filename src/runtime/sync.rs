@@ -307,7 +307,7 @@ where
         relay_count: config.relay.urls.len(),
         publish_policy: config.relay.publish_policy.as_str().to_owned(),
         freshness,
-        queue: legacy_sync_queue(queue.expected_count, queue.pending_count),
+        queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
         target_relays: receipt.target_relays,
         connected_relays: receipt.connected_relays,
         acknowledged_relays: Vec::new(),
@@ -414,7 +414,7 @@ fn sdk_sync_status_view(config: &RuntimeConfig, receipt: SyncStatusReceipt) -> S
         state: "ready".to_owned(),
         source: SDK_SYNC_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
-        replica_db: "legacy_derived_not_checked".to_owned(),
+        replica_db: "derived_projection_not_checked".to_owned(),
         relay_count,
         publish_policy: config.relay.publish_policy.as_str().to_owned(),
         freshness: sdk_sync_freshness(&receipt),
@@ -513,7 +513,7 @@ fn sdk_push_action_view(
         state: state.to_owned(),
         source: SDK_PUSH_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
-        replica_db: "legacy_derived_not_checked".to_owned(),
+        replica_db: "derived_projection_not_checked".to_owned(),
         relay_count: config.relay.urls.len(),
         publish_policy: config.relay.publish_policy.as_str().to_owned(),
         freshness,
@@ -608,7 +608,7 @@ fn sdk_sync_queue(receipt: &SyncStatusReceipt) -> SyncQueueView {
     }
 }
 
-fn legacy_sync_queue(expected_count: usize, pending_count: usize) -> SyncQueueView {
+fn derived_projection_sync_queue(expected_count: usize, pending_count: usize) -> SyncQueueView {
     SyncQueueView {
         expected_count,
         pending_count,
@@ -730,7 +730,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
             relay_count: config.relay.urls.len(),
             publish_policy: config.relay.publish_policy.as_str().to_owned(),
             freshness: missing_freshness(),
-            queue: legacy_sync_queue(0, 0),
+            queue: derived_projection_sync_queue(0, 0),
             reason: Some("local replica database is not initialized".to_owned()),
             actions: vec!["radroots store init".to_owned()],
         });
@@ -755,7 +755,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
             relay_count,
             publish_policy,
             freshness,
-            queue: legacy_sync_queue(queue.expected_count, queue.pending_count),
+            queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
             reason: Some("no relays are configured for this operator session".to_owned()),
             actions,
         });
@@ -774,7 +774,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
         relay_count,
         publish_policy,
         freshness,
-        queue: legacy_sync_queue(queue.expected_count, queue.pending_count),
+        queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
         reason: None,
         actions,
     })
@@ -1514,7 +1514,7 @@ mod tests {
 
         assert_eq!(view.state, "ready");
         assert_eq!(view.source, "SDK canonical event store and outbox");
-        assert_eq!(view.replica_db, "legacy_derived_not_checked");
+        assert_eq!(view.replica_db, "derived_projection_not_checked");
         assert_eq!(view.relay_count, 2);
         assert_eq!(view.queue.total_count, Some(0));
         assert_eq!(view.queue.pending_count, 0);
@@ -1586,7 +1586,7 @@ mod tests {
 
         assert_eq!(view.state, "dry_run");
         assert_eq!(view.source, "SDK outbox push");
-        assert_eq!(view.replica_db, "legacy_derived_not_checked");
+        assert_eq!(view.replica_db, "derived_projection_not_checked");
         assert_eq!(view.target_relays, vec!["wss://relay.example.com"]);
         assert_eq!(view.publishable_count, Some(1));
         assert_eq!(view.published_count, Some(0));

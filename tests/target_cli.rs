@@ -51,7 +51,7 @@ use support::{
 
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
-const LEGACY_SYNC_PUSH_FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
+const DERIVED_PROJECTION_SYNC_PUSH_FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
 
 fn test_order_id(value: &str) -> RadrootsOrderId {
     value.parse().expect("valid order id")
@@ -618,7 +618,7 @@ fn read_relay_req_subscription_id(websocket: &mut tungstenite::WebSocket<TcpStre
     }
 }
 
-fn seed_legacy_replica_sync_farm(sandbox: &RadrootsCliSandbox, d_tag: &str, pubkey: &str) {
+fn seed_derived_projection_sync_farm(sandbox: &RadrootsCliSandbox, d_tag: &str, pubkey: &str) {
     let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
     migrations::run_all_up(&executor).expect("replica migrations");
     farm::create(
@@ -637,7 +637,7 @@ fn seed_legacy_replica_sync_farm(sandbox: &RadrootsCliSandbox, d_tag: &str, pubk
             location_country: None,
         },
     )
-    .expect("seed legacy replica sync farm");
+    .expect("seed derived projection sync farm");
 }
 
 fn seed_app_farm_record(
@@ -3949,30 +3949,34 @@ fn store_backup_and_restore_use_sdk_canonical_store() {
         true
     );
     assert_eq!(status["result"]["outbox"]["store"]["integrity_ok"], true);
-    assert_eq!(status["result"]["legacy_replica"]["state"], "unconfigured");
     assert_eq!(
-        status["result"]["legacy_replica"]["source"],
-        "legacy local replica · derived/migration source"
+        status["result"]["derived_projection"]["state"],
+        "unconfigured"
+    );
+    assert_eq!(
+        status["result"]["derived_projection"]["source"],
+        "local derived projection cache"
     );
     assert!(sdk_root.join("event_store.sqlite").exists());
     assert!(sdk_root.join("outbox.sqlite").exists());
 
-    let legacy = sandbox.json_success(&["--format", "json", "store", "init"]);
-    assert_eq!(legacy["operation_id"], "store.init");
+    let derived_projection_init = sandbox.json_success(&["--format", "json", "store", "init"]);
+    assert_eq!(derived_projection_init["operation_id"], "store.init");
 
-    let status_after_legacy = sandbox.json_success(&["--format", "json", "store", "status", "get"]);
+    let status_after_projection =
+        sandbox.json_success(&["--format", "json", "store", "status", "get"]);
 
     assert_eq!(
-        status_after_legacy["result"]["source"],
+        status_after_projection["result"]["source"],
         "SDK canonical event store and outbox"
     );
     assert_eq!(
-        status_after_legacy["result"]["legacy_replica"]["state"],
+        status_after_projection["result"]["derived_projection"]["state"],
         "ready"
     );
     assert_eq!(
-        status_after_legacy["result"]["legacy_replica"]["source"],
-        "legacy local replica · derived/migration source"
+        status_after_projection["result"]["derived_projection"]["source"],
+        "local derived projection cache"
     );
 
     let dry_run =
@@ -6019,7 +6023,10 @@ fn sync_push_sdk_outbox_failure_reports_network_unavailable() {
         status["result"]["source"],
         "SDK canonical event store and outbox"
     );
-    assert_eq!(status["result"]["replica_db"], "legacy_derived_not_checked");
+    assert_eq!(
+        status["result"]["replica_db"],
+        "derived_projection_not_checked"
+    );
     assert_eq!(status["result"]["queue"]["pending_count"], 1);
     assert_eq!(status["result"]["queue"]["ready_signed_count"], 1);
 
@@ -6042,7 +6049,7 @@ fn sync_push_sdk_outbox_failure_reports_network_unavailable() {
     assert_eq!(value["errors"][0]["detail"]["source"], "SDK outbox push");
     assert_eq!(
         value["errors"][0]["detail"]["replica_db"],
-        "legacy_derived_not_checked"
+        "derived_projection_not_checked"
     );
     assert_eq!(value["errors"][0]["detail"]["target_relays"][0], relay);
     assert_eq!(
@@ -6065,7 +6072,7 @@ fn sync_push_sdk_outbox_failure_reports_network_unavailable() {
 }
 
 #[test]
-fn sync_push_ignores_legacy_replica_pending_queue_for_sdk_canonical_push() {
+fn sync_push_ignores_derived_projection_pending_queue_for_sdk_canonical_push() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     sandbox.json_success(&["--format", "json", "store", "init"]);
@@ -6073,11 +6080,15 @@ fn sync_push_ignores_legacy_replica_pending_queue_for_sdk_canonical_push() {
     let selected_pubkey = signer["result"]["local"]["public_identity"]["public_key_hex"]
         .as_str()
         .expect("selected public key");
-    seed_legacy_replica_sync_farm(&sandbox, LEGACY_SYNC_PUSH_FARM_D_TAG, selected_pubkey);
+    seed_derived_projection_sync_farm(
+        &sandbox,
+        DERIVED_PROJECTION_SYNC_PUSH_FARM_D_TAG,
+        selected_pubkey,
+    );
     let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
-    let legacy_batch =
-        radroots_replica_pending_publish_batch(&executor).expect("legacy pending batch");
-    assert!(legacy_batch.pending_count > 0);
+    let derived_projection_batch = radroots_replica_pending_publish_batch(&executor)
+        .expect("derived projection pending batch");
+    assert!(derived_projection_batch.pending_count > 0);
 
     let value = sandbox.json_success(&[
         "--format",
@@ -6093,7 +6104,10 @@ fn sync_push_ignores_legacy_replica_pending_queue_for_sdk_canonical_push() {
     assert_eq!(value["operation_id"], "sync.push");
     assert_eq!(value["result"]["state"], "ready");
     assert_eq!(value["result"]["source"], "SDK outbox push");
-    assert_eq!(value["result"]["replica_db"], "legacy_derived_not_checked");
+    assert_eq!(
+        value["result"]["replica_db"],
+        "derived_projection_not_checked"
+    );
     assert_eq!(value["result"]["queue"]["pending_count"], 0);
     assert_eq!(value["result"]["queue"]["total_count"], 0);
     assert_eq!(value["result"]["publishable_count"], 0);
@@ -6134,7 +6148,7 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(sync_push["result"]["source"], "SDK outbox push");
     assert_eq!(
         sync_push["result"]["replica_db"],
-        "legacy_derived_not_checked"
+        "derived_projection_not_checked"
     );
     assert_eq!(sync_push["result"]["queue"]["pending_count"], 0);
     assert_eq!(sync_push["result"]["queue"]["total_count"], 0);
@@ -6176,7 +6190,7 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(sync_push_ready["result"]["source"], "SDK outbox push");
     assert_eq!(
         sync_push_ready["result"]["replica_db"],
-        "legacy_derived_not_checked"
+        "derived_projection_not_checked"
     );
     assert_eq!(
         sync_push_ready["result"]["target_relays"][0],

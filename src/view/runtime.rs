@@ -611,7 +611,7 @@ pub struct LocalStatusView {
     pub event_store: SdkEventStoreStatusView,
     pub outbox: SdkOutboxStatusView,
     pub integrity: SdkIntegrityView,
-    pub legacy_replica: LocalLegacyReplicaStatusView,
+    pub derived_projection: LocalDerivedProjectionStatusView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -680,7 +680,7 @@ pub struct SdkIntegrityView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct LocalLegacyReplicaStatusView {
+pub struct LocalDerivedProjectionStatusView {
     pub state: String,
     pub source: String,
     pub replica_db: String,

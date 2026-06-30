@@ -285,7 +285,10 @@ mod tests {
             envelope.result["source"],
             "SDK canonical event store and outbox"
         );
-        assert_eq!(envelope.result["replica_db"], "legacy_derived_not_checked");
+        assert_eq!(
+            envelope.result["replica_db"],
+            "derived_projection_not_checked"
+        );
         assert_eq!(envelope.result["queue"]["pending_count"], 0);
         assert_eq!(envelope.result["queue"]["total_count"], 0);
         assert_eq!(envelope.result["actions"][0], "radroots sync pull");

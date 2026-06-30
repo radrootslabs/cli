@@ -703,7 +703,7 @@ mod tests {
         lifecycle: &'static str,
     }
 
-    struct LegacyDirectRelayConsumer {
+    struct DirectRelayConsumerException {
         path: &'static str,
         required_tokens: &'static [&'static str],
         owner: &'static str,
@@ -780,7 +780,7 @@ mod tests {
             section: "dependencies",
             name: "radroots_nostr_connect",
             owner: "sdk-myc-nip46-transport",
-            reason: "CLI Myc signer target parsing and NIP-46 relay transport bridge for SDK signing",
+            reason: "CLI Myc signer target parsing and NIP-46 relay transport wiring for SDK signing",
             lifecycle: "retain while CLI owns signer backend wiring",
         },
         DirectRrRsDependency {
@@ -800,23 +800,23 @@ mod tests {
         DirectRrRsDependency {
             section: "dependencies",
             name: "radroots_replica_db",
-            owner: "legacy-replica-and-market-projection",
-            reason: "legacy derived replica status, export, market reads, sync pull, basket lookup, and trade draft preflight",
-            lifecycle: "transitional until those derived projection surfaces migrate",
+            owner: "derived-projection-and-market-reads",
+            reason: "derived projection status, export, market reads, sync pull, basket lookup, and trade draft preflight",
+            lifecycle: "retain until those derived projection surfaces move behind SDK APIs",
         },
         DirectRrRsDependency {
             section: "dependencies",
             name: "radroots_replica_db_schema",
-            owner: "legacy-replica-and-market-projection",
-            reason: "typed query filters for legacy market, basket, and order lookup projections",
-            lifecycle: "transitional until those derived projection surfaces migrate",
+            owner: "derived-projection-and-market-reads",
+            reason: "typed query filters for market, basket, and order lookup projections",
+            lifecycle: "retain until those derived projection surfaces move behind SDK APIs",
         },
         DirectRrRsDependency {
             section: "dependencies",
             name: "radroots_replica_sync",
-            owner: "legacy-sync-pull-and-derived-replica",
-            reason: "legacy relay ingest, sync pull, market refresh, and derived replica state reporting",
-            lifecycle: "transitional until relay ingest and projection repair move behind SDK APIs",
+            owner: "sync-pull-and-derived-projection",
+            reason: "relay ingest, sync pull, market refresh, and derived projection state reporting",
+            lifecycle: "retain until relay ingest and projection repair move behind SDK APIs",
         },
         DirectRrRsDependency {
             section: "dependencies",
@@ -856,8 +856,8 @@ mod tests {
         DirectRrRsDependency {
             section: "dependencies",
             name: "radroots_sql_core",
-            owner: "legacy-replica-and-local-events",
-            reason: "SQLite executor for legacy derived replica and shared local-events storage",
+            owner: "derived-projection-and-local-events",
+            reason: "SQLite executor for derived projection and shared local-events storage",
             lifecycle: "transitional until those storage surfaces move behind SDK or shared runtime APIs",
         },
         DirectRrRsDependency {
@@ -869,22 +869,22 @@ mod tests {
         },
     ];
 
-    const LEGACY_DIRECT_RELAY_CONSUMERS: &[LegacyDirectRelayConsumer] = &[
-        LegacyDirectRelayConsumer {
+    const DIRECT_RELAY_CONSUMER_EXCEPTIONS: &[DirectRelayConsumerException] = &[
+        DirectRelayConsumerException {
             path: "src/runtime/order.rs",
             required_tokens: &["pub fn event_list(", "fetch_events_from_relays"],
             owner: "non-migrated-trade-event-and-derived-projection-reads",
             reason: "event listing, draft checks, and derived projection maintenance still use direct relay reads outside migrated trade mutation paths",
             lifecycle: "retain only for non-migrated read/projection surfaces",
         },
-        LegacyDirectRelayConsumer {
+        DirectRelayConsumerException {
             path: "src/runtime/sync.rs",
             required_tokens: &["fetch_events_from_relays", "pull_with_fetcher"],
             owner: "sync.pull-and-market-refresh",
-            reason: "non-migrated relay ingest into the legacy derived replica",
+            reason: "relay ingest into the derived projection cache",
             lifecycle: "retain until relay ingest and derived projection repair migrate to SDK APIs",
         },
-        LegacyDirectRelayConsumer {
+        DirectRelayConsumerException {
             path: "src/runtime/validation_receipt.rs",
             required_tokens: &["fetch_events_from_relays", "DirectRelayFetchReceipt"],
             owner: "validation.receipt.relay-reads",
@@ -999,7 +999,7 @@ mod tests {
             label: "store status",
             path: "src/runtime/store.rs",
             start: "pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterError>",
-            end: "fn legacy_replica_status(",
+            end: "fn derived_projection_status(",
             required_tokens: &[
                 "session.sdk()",
                 "storage_status(StorageStatusRequest::new())",
@@ -1048,6 +1048,19 @@ mod tests {
         "SqliteExecutor::open(&config.local.replica_db_path)",
         "outbox_idempotency_digest",
         "canonical_target_relays",
+        "radroots_sdk::protocol::order",
+        "build_order_request_draft",
+        "build_order_decision_draft",
+        "build_order_revision_proposal_draft",
+        "build_order_revision_decision_draft",
+        "build_order_cancellation_draft",
+        "parse_order_root_tag",
+        "parse_order_prev_tag",
+        "build_transition_proof_request_tags",
+        "build_transition_proof_result_tags",
+        "build_job_feedback_tags",
+        "KIND_TRADE_TRANSITION_PROOF",
+        "KIND_JOB_FEEDBACK",
     ];
 
     #[test]
@@ -1209,20 +1222,20 @@ mod tests {
     }
 
     #[test]
-    fn legacy_direct_relay_consumers_are_explicitly_allowlisted() {
-        let actual = legacy_direct_relay_consumer_paths();
-        let expected = LEGACY_DIRECT_RELAY_CONSUMERS
+    fn direct_relay_consumer_exceptions_are_explicit() {
+        let actual = direct_relay_consumer_exception_paths();
+        let expected = DIRECT_RELAY_CONSUMER_EXCEPTIONS
             .iter()
             .map(|consumer| consumer.path.to_owned())
             .collect::<BTreeSet<_>>();
 
         assert_eq!(actual, expected);
-        for consumer in LEGACY_DIRECT_RELAY_CONSUMERS {
+        for consumer in DIRECT_RELAY_CONSUMER_EXCEPTIONS {
             let source = crate_source(consumer.path);
             for token in consumer.required_tokens {
                 assert!(
                     source.contains(token),
-                    "{} does not contain legacy direct-relay token `{token}`",
+                    "{} does not contain direct-relay exception token `{token}`",
                     consumer.path
                 );
             }
@@ -1233,7 +1246,7 @@ mod tests {
     }
 
     #[test]
-    fn migrated_cli_paths_are_guarded_against_direct_relay_and_legacy_canonical_use() {
+    fn migrated_cli_paths_are_guarded_against_workflow_bypasses() {
         for guard in MIGRATED_CLI_PATH_GUARDS {
             let source = crate_source(guard.path);
             assert_migrated_path(
@@ -1281,7 +1294,7 @@ mod tests {
         format!("{}:{}", dependency.section, dependency.name)
     }
 
-    fn legacy_direct_relay_consumer_paths() -> BTreeSet<String> {
+    fn direct_relay_consumer_exception_paths() -> BTreeSet<String> {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = Vec::new();
         collect_rs_files(manifest_dir.join("src/runtime").as_path(), &mut files);

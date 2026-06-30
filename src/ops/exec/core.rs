@@ -166,7 +166,7 @@ impl OperationService<HealthCheckRunRequest> for CoreOperationService<'_> {
                     "event_store": store.event_store,
                     "outbox": store.outbox,
                     "integrity": store.integrity,
-                    "legacy_replica": store.legacy_replica,
+                    "derived_projection": store.derived_projection,
                     "reason": store.reason,
                 },
                 "account": {
@@ -1287,10 +1287,13 @@ mod tests {
         assert_eq!(envelope.result["canonical_store"], "sdk");
         assert_eq!(envelope.result["sdk_storage"], "directory");
         assert_eq!(
-            envelope.result["legacy_replica"]["source"],
-            "legacy local replica · derived/migration source"
+            envelope.result["derived_projection"]["source"],
+            "local derived projection cache"
         );
-        assert_eq!(envelope.result["legacy_replica"]["state"], "unconfigured");
+        assert_eq!(
+            envelope.result["derived_projection"]["state"],
+            "unconfigured"
+        );
         assert_eq!(
             envelope.result["event_store"]["store"]["integrity_ok"],
             true
