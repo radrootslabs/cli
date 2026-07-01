@@ -318,11 +318,9 @@ mod tests {
                 store_path: PathBuf::from("/tmp/store.json"),
                 secrets_dir: PathBuf::from("/tmp/secrets"),
                 secret_backend: RadrootsSecretBackend::EncryptedFile,
-                secret_fallback: None,
             },
             account_secret_contract: AccountSecretContractConfig {
                 default_backend: "host_vault".into(),
-                default_fallback: Some("encrypted_file".into()),
                 allowed_backends: vec!["host_vault".into(), "encrypted_file".into()],
                 host_vault_policy: Some("desktop".into()),
                 uses_protected_store: true,

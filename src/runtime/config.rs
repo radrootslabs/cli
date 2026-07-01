@@ -31,7 +31,6 @@ const DEFAULT_HYF_EXECUTABLE: &str = "hyfd";
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:7070";
 const CLI_HOST_VAULT_POLICY: &str = "desktop";
 const CLI_DEFAULT_SECRET_BACKEND: &str = "host_vault";
-const CLI_DEFAULT_SECRET_FALLBACK: &str = "encrypted_file";
 const CLI_ALLOWED_SHARED_SECRET_BACKENDS: &[&str] = &["host_vault", "encrypted_file"];
 const CLI_USES_PROTECTED_STORE: bool = true;
 const ENV_CLI_FILE_PATH: &str = "RADROOTS_CLI_ENV_FILE";
@@ -41,7 +40,6 @@ const ENV_CLI_LOG_DIR: &str = "RADROOTS_CLI_LOGGING_OUTPUT_DIR";
 const ENV_CLI_LOG_STDOUT: &str = "RADROOTS_CLI_LOGGING_STDOUT";
 const ENV_CLI_ACCOUNT_SELECTOR: &str = "RADROOTS_CLI_ACCOUNT_SELECTOR";
 const ENV_CLI_ACCOUNT_SECRET_BACKEND: &str = "RADROOTS_CLI_ACCOUNT_SECRET_BACKEND";
-const ENV_CLI_ACCOUNT_SECRET_FALLBACK: &str = "RADROOTS_CLI_ACCOUNT_SECRET_FALLBACK";
 const ENV_CLI_IDENTITY_PATH: &str = "RADROOTS_CLI_IDENTITY_PATH";
 const ENV_CLI_SIGNER_BACKEND: &str = "RADROOTS_CLI_SIGNER_BACKEND";
 const ENV_CLI_PUBLISH_TRANSPORT: &str = "RADROOTS_CLI_PUBLISH_TRANSPORT";
@@ -64,7 +62,6 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_CLI_PATHS_REPO_LOCAL_ROOT,
     ENV_CLI_ACCOUNT_SELECTOR,
     ENV_CLI_ACCOUNT_SECRET_BACKEND,
-    ENV_CLI_ACCOUNT_SECRET_FALLBACK,
     ENV_CLI_IDENTITY_PATH,
     ENV_CLI_SIGNER_BACKEND,
     ENV_CLI_PUBLISH_TRANSPORT,
@@ -150,13 +147,11 @@ pub struct AccountConfig {
     pub store_path: PathBuf,
     pub secrets_dir: PathBuf,
     pub secret_backend: RadrootsSecretBackend,
-    pub secret_fallback: Option<RadrootsSecretBackend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountSecretContractConfig {
     pub default_backend: String,
-    pub default_fallback: Option<String>,
     pub allowed_backends: Vec<String>,
     pub host_vault_policy: Option<String>,
     pub uses_protected_store: bool,
@@ -461,7 +456,6 @@ struct AccountFileConfig {
 #[serde(default, deny_unknown_fields)]
 struct AccountSecretFileConfig {
     backend: Option<String>,
-    fallback: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -622,16 +616,6 @@ impl RuntimeConfig {
         .unwrap_or(RadrootsSecretBackend::HostVault(
             RadrootsHostVaultPolicy::desktop(),
         ));
-        let account_secret_fallback = resolve_account_secret_fallback(
-            env,
-            env_file,
-            app_config.as_ref(),
-            workspace_config.as_ref(),
-        )?
-        .unwrap_or(match account_secret_backend {
-            RadrootsSecretBackend::HostVault(_) => Some(RadrootsSecretBackend::EncryptedFile),
-            _ => None,
-        });
         let output = OutputConfig {
             format: resolve_output_format(
                 args,
@@ -700,11 +684,9 @@ impl RuntimeConfig {
                     .join(DEFAULT_SHARED_ACCOUNTS_STORE_FILE),
                 secrets_dir: paths.shared_accounts_secrets_root.clone(),
                 secret_backend: account_secret_backend,
-                secret_fallback: account_secret_fallback,
             },
             account_secret_contract: AccountSecretContractConfig {
                 default_backend: CLI_DEFAULT_SECRET_BACKEND.to_owned(),
-                default_fallback: Some(CLI_DEFAULT_SECRET_FALLBACK.to_owned()),
                 allowed_backends: CLI_ALLOWED_SHARED_SECRET_BACKENDS
                     .iter()
                     .map(|value| (*value).to_owned())
@@ -1839,51 +1821,6 @@ fn resolve_account_secret_backend(
         .transpose()
 }
 
-fn resolve_account_secret_fallback(
-    env: &dyn Environment,
-    env_file: &EnvFileValues,
-    user_config: Option<&CliConfigFile>,
-    workspace_config: Option<&CliConfigFile>,
-) -> Result<Option<Option<RadrootsSecretBackend>>, RuntimeError> {
-    if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_ACCOUNT_SECRET_FALLBACK]) {
-        return parse_account_secret_fallback(key.as_str(), value.as_str()).map(Some);
-    }
-
-    if let Some(value) = user_config
-        .and_then(|config| config.account.as_ref())
-        .and_then(|account| account.secret.as_ref())
-        .and_then(|secret| secret.fallback.as_deref())
-    {
-        return parse_account_secret_fallback("user config [account.secret].fallback", value)
-            .map(Some);
-    }
-
-    workspace_config
-        .and_then(|config| config.account.as_ref())
-        .and_then(|account| account.secret.as_ref())
-        .and_then(|secret| secret.fallback.as_deref())
-        .map(|value| {
-            parse_account_secret_fallback("workspace config [account.secret].fallback", value)
-        })
-        .transpose()
-}
-
-fn parse_account_secret_fallback(
-    key: &str,
-    value: &str,
-) -> Result<Option<RadrootsSecretBackend>, RuntimeError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "none" => Ok(None),
-        "host_vault" => Ok(Some(RadrootsSecretBackend::HostVault(
-            RadrootsHostVaultPolicy::desktop(),
-        ))),
-        "encrypted_file" => Ok(Some(RadrootsSecretBackend::EncryptedFile)),
-        other => Err(RuntimeError::Config(format!(
-            "{key} must be `host_vault`, `encrypted_file`, or `none`, got `{other}`"
-        ))),
-    }
-}
-
 fn parse_account_secret_backend(
     key: &str,
     value: &str,
@@ -2130,14 +2067,12 @@ mod tests {
                 secret_backend: RadrootsSecretBackend::HostVault(
                     RadrootsHostVaultPolicy::desktop(),
                 ),
-                secret_fallback: Some(RadrootsSecretBackend::EncryptedFile),
             }
         );
         assert_eq!(
             resolved.account_secret_contract,
             AccountSecretContractConfig {
                 default_backend: "host_vault".to_owned(),
-                default_fallback: Some("encrypted_file".to_owned()),
                 allowed_backends: vec!["host_vault".to_owned(), "encrypted_file".to_owned(),],
                 host_vault_policy: Some("desktop".to_owned()),
                 uses_protected_store: true,
@@ -2247,10 +2182,6 @@ mod tests {
             resolved.account.secret_backend,
             RadrootsSecretBackend::HostVault(RadrootsHostVaultPolicy::desktop())
         );
-        assert_eq!(
-            resolved.account.secret_fallback,
-            Some(RadrootsSecretBackend::EncryptedFile)
-        );
         assert_eq!(resolved.identity.path, PathBuf::from("state/identity.json"));
         assert_eq!(resolved.signer.backend, SignerBackend::Myc);
         assert_eq!(
@@ -2289,10 +2220,6 @@ mod tests {
             (
                 "RADROOTS_ACCOUNT_SECRET_BACKEND".to_owned(),
                 "encrypted_file".to_owned(),
-            ),
-            (
-                "RADROOTS_ACCOUNT_SECRET_FALLBACK".to_owned(),
-                "none".to_owned(),
             ),
             (
                 "RADROOTS_IDENTITY_PATH".to_owned(),
@@ -2335,10 +2262,6 @@ mod tests {
         assert_eq!(
             resolved.account.secret_backend,
             RadrootsSecretBackend::HostVault(RadrootsHostVaultPolicy::desktop())
-        );
-        assert_eq!(
-            resolved.account.secret_fallback,
-            Some(RadrootsSecretBackend::EncryptedFile)
         );
         assert_eq!(resolved.signer.backend, SignerBackend::Local);
         assert_eq!(
@@ -2384,7 +2307,6 @@ selector = "acct_from_toml"
 
 [account.secret]
 backend = "encrypted_file"
-fallback = "none"
 
 [identity]
 path = "identity/from-toml.json"
@@ -2409,7 +2331,6 @@ path = "identity/from-toml.json"
             resolved.account.secret_backend,
             RadrootsSecretBackend::EncryptedFile
         );
-        assert_eq!(resolved.account.secret_fallback, None);
         assert_eq!(
             resolved.identity.path,
             PathBuf::from("identity/from-toml.json")

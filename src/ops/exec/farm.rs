@@ -286,22 +286,6 @@ fn profile_field(
     }
 }
 
-fn location_field(
-    request: &OperationRequest<impl OperationRequestPayload + OperationRequestData>,
-) -> Result<FarmFieldArg, OperationAdapterError> {
-    match string_input(request, "field").as_deref() {
-        Some("location") | None => Ok(FarmFieldArg::Location),
-        Some("city") => Ok(FarmFieldArg::City),
-        Some("region") => Ok(FarmFieldArg::Region),
-        Some("country") => Ok(FarmFieldArg::Country),
-        Some("geohash") => Ok(FarmFieldArg::Geohash),
-        Some(other) => Err(invalid_input(
-            request.operation_id(),
-            format!("location field `{other}` is not supported"),
-        )),
-    }
-}
-
 fn serialized_operation_result<R, T>(value: &T) -> Result<OperationResult<R>, OperationAdapterError>
 where
     R: OperationResultData,
@@ -888,11 +872,9 @@ mod tests {
                 store_path: data.join("shared/accounts/store.json"),
                 secrets_dir: secrets.join("shared/accounts"),
                 secret_backend: RadrootsSecretBackend::EncryptedFile,
-                secret_fallback: None,
             },
             account_secret_contract: AccountSecretContractConfig {
                 default_backend: "host_vault".into(),
-                default_fallback: Some("encrypted_file".into()),
                 allowed_backends: vec!["host_vault".into(), "encrypted_file".into()],
                 host_vault_policy: Some("desktop".into()),
                 uses_protected_store: true,

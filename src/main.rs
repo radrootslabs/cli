@@ -1,46 +1,40 @@
 #![forbid(unsafe_code)]
 
-mod cli;
-mod ops;
-mod out;
-mod registry;
-mod runtime;
-mod view;
-
 use std::io::Write;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
+use radroots_cli::{ops, registry, runtime};
 use serde_json::json;
 
-use crate::cli::input::runtime_invocation_args_from_target;
-use crate::cli::{TargetCliArgs, TargetOutputFormat};
-use crate::ops::exec::{
+use radroots_cli::cli::input::runtime_invocation_args_from_target;
+use radroots_cli::cli::{TargetCliArgs, TargetOutputFormat};
+use radroots_cli::ops::exec::{
     BasketOperationService, CoreOperationService, FarmOperationService, ListingOperationService,
     MarketOperationService, RuntimeOperationService, TradeOperationService,
     ValidationOperationService,
 };
-use crate::ops::{
+use radroots_cli::ops::{
     OperationAdapter, OperationAdapterError, OperationNetworkMode, OperationOutputFormat,
     OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
     TargetOperationRequest,
 };
-use crate::out::envelope::{CliExitCode, EnvelopeContext, OutputEnvelope, OutputError};
-use crate::out::terminal::errors::terminal_error_document;
-use crate::out::terminal::registry::TerminalRendererRegistryError;
-use crate::out::terminal::registry::terminal_renderer_registry;
-use crate::out::terminal::renderer::{
+use radroots_cli::out::envelope::{CliExitCode, EnvelopeContext, OutputEnvelope, OutputError};
+use radroots_cli::out::terminal::errors::terminal_error_document;
+use radroots_cli::out::terminal::registry::TerminalRendererRegistryError;
+use radroots_cli::out::terminal::registry::terminal_renderer_registry;
+use radroots_cli::out::terminal::renderer::{
     TerminalRenderContext, TerminalVerbosity, render_terminal_document,
 };
-use crate::registry::{
+use radroots_cli::registry::{
     NetworkRequirement, OPERATION_REGISTRY, network_requirement, requires_local_signer_mode,
 };
-use crate::runtime::config::{
+use radroots_cli::runtime::config::{
     OutputFormat as RuntimeOutputFormat, RuntimeConfig, SignerBackend, Verbosity,
 };
-use crate::runtime::logging::initialize_logging;
+use radroots_cli::runtime::logging::initialize_logging;
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -708,10 +702,10 @@ fn operation_config_error(error: OperationAdapterError) -> runtime::RuntimeError
 mod tests {
     use serde_json::Value;
 
-    use crate::out::envelope::{EnvelopeContext, OutputEnvelope, OutputStatus};
-    use crate::out::terminal::errors::terminal_error_document;
-    use crate::out::terminal::registry::TerminalRendererRegistry;
-    use crate::out::terminal::renderer::{TerminalRenderContext, render_terminal_document};
+    use radroots_cli::out::envelope::{EnvelopeContext, OutputEnvelope, OutputStatus};
+    use radroots_cli::out::terminal::errors::terminal_error_document;
+    use radroots_cli::out::terminal::registry::TerminalRendererRegistry;
+    use radroots_cli::out::terminal::renderer::{TerminalRenderContext, render_terminal_document};
 
     use super::*;
 

@@ -59,7 +59,6 @@ fn local_signer_status_reports_ready_after_account_create() {
     assert_eq!(status["result"]["local"]["availability"], "secret_backed");
     assert_eq!(status["result"]["local"]["secret_backed"], true);
     assert_eq!(status["result"]["local"]["backend"], "encrypted_file");
-    assert_eq!(status["result"]["local"]["used_fallback"], false);
     assert_eq!(status["result"]["binding"]["state"], "disabled");
 }
 
@@ -446,7 +445,6 @@ fn account_attach_secret_reports_structured_validation_failures() {
     let mut unavailable_command = sandbox.command();
     unavailable_command
         .env("RADROOTS_CLI_ACCOUNT_SECRET_BACKEND", "host_vault")
-        .env("RADROOTS_CLI_ACCOUNT_SECRET_FALLBACK", "none")
         .env("RADROOTS_CLI_ACCOUNT_HOST_VAULT_AVAILABLE", "false")
         .args([
             "--format",

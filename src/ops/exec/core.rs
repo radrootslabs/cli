@@ -296,7 +296,6 @@ impl OperationService<AccountCreateRequest> for CoreOperationService<'_> {
                 "secret_backend": {
                     "state": secret_backend.state,
                     "active_backend": secret_backend.active_backend,
-                    "used_fallback": secret_backend.used_fallback,
                 },
             }));
         }
@@ -378,7 +377,6 @@ impl OperationService<AccountAttachSecretRequest> for CoreOperationService<'_> {
                 "secret_backend": {
                     "state": secret_backend.state,
                     "active_backend": secret_backend.active_backend,
-                    "used_fallback": secret_backend.used_fallback,
                 },
                 "account": account_summary_view(&account),
             }));
@@ -400,7 +398,6 @@ impl OperationService<AccountAttachSecretRequest> for CoreOperationService<'_> {
             "secret_backend": {
                 "state": secret_backend.state,
                 "active_backend": secret_backend.active_backend,
-                "used_fallback": secret_backend.used_fallback,
             },
             "account": account_summary_view(&account),
         }))
@@ -1432,11 +1429,9 @@ mod tests {
                 store_path: data.join("shared/accounts/store.json"),
                 secrets_dir: secrets.join("shared/accounts"),
                 secret_backend: RadrootsSecretBackend::EncryptedFile,
-                secret_fallback: None,
             },
             account_secret_contract: AccountSecretContractConfig {
                 default_backend: "host_vault".into(),
-                default_fallback: Some("encrypted_file".into()),
                 allowed_backends: vec!["host_vault".into(), "encrypted_file".into()],
                 host_vault_policy: Some("desktop".into()),
                 uses_protected_store: true,

@@ -667,7 +667,7 @@ fn account_failure_output(
     message: String,
     exit_code: CliExitCode,
     detail_json: Option<&str>,
-    fallback: impl FnOnce() -> OperationAdapterError,
+    default_error: impl FnOnce() -> OperationAdapterError,
 ) -> OperationAdapterError {
     match detail_json {
         Some(detail_json) => OperationAdapterError::DetailedFailure {
@@ -678,7 +678,7 @@ fn account_failure_output(
             exit_code,
             detail_json: detail_json.to_owned(),
         },
-        None => fallback(),
+        None => default_error(),
     }
 }
 

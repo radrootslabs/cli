@@ -161,7 +161,6 @@ struct AccountRuntimeFacts {
 pub struct AccountSecretBackendStatus {
     pub state: String,
     pub active_backend: Option<String>,
-    pub used_fallback: bool,
     pub reason: Option<String>,
 }
 
@@ -577,19 +576,16 @@ pub fn secret_backend_status(config: &RuntimeConfig) -> AccountSecretBackendStat
         Ok(resolved) => AccountSecretBackendStatus {
             state: "ready".to_owned(),
             active_backend: Some(resolved.backend.kind().to_string()),
-            used_fallback: resolved.used_fallback,
             reason: None,
         },
         Err(SecretBackendResolutionError::Unavailable(reason)) => AccountSecretBackendStatus {
             state: "unavailable".to_owned(),
             active_backend: None,
-            used_fallback: false,
             reason: Some(reason),
         },
         Err(SecretBackendResolutionError::Invalid(reason)) => AccountSecretBackendStatus {
             state: "error".to_owned(),
             active_backend: None,
-            used_fallback: false,
             reason: Some(reason),
         },
     }
@@ -783,14 +779,13 @@ fn resolve_secret_backend(
         availability,
     )
     .map_err(|error| match error {
-        RadrootsSecretVaultError::BackendUnavailable { .. }
-        | RadrootsSecretVaultError::FallbackUnavailable { .. } => {
+        RadrootsSecretVaultError::BackendUnavailable { .. } => {
             SecretBackendResolutionError::Unavailable(format!("account secret backend: {error}"))
         }
-        RadrootsSecretVaultError::FallbackDisallowed { .. }
-        | RadrootsSecretVaultError::HostVaultPolicyUnsupported { .. } => {
+        RadrootsSecretVaultError::HostVaultPolicyUnsupported { .. } => {
             SecretBackendResolutionError::Invalid(format!("account secret backend: {error}"))
         }
+        error => SecretBackendResolutionError::Invalid(format!("account secret backend: {error}")),
     })
 }
 
@@ -827,7 +822,7 @@ fn secret_vault_for_backend(
 fn account_secret_backend_selection(config: &RuntimeConfig) -> RadrootsSecretBackendSelection {
     RadrootsSecretBackendSelection {
         primary: config.account.secret_backend,
-        fallback: config.account.secret_fallback,
+        fallback: None,
     }
 }
 

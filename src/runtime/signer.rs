@@ -123,7 +123,6 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
     let backend = secret_backend
         .active_backend
         .unwrap_or_else(|| "unknown".to_owned());
-    let used_fallback = secret_backend.used_fallback;
 
     match crate::runtime::account::resolved_account_signing_status(config) {
         Ok(RadrootsNostrAccountStatus::Ready { account }) => {
@@ -155,7 +154,6 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                     availability: local_availability(local.availability).to_owned(),
                     secret_backed: local.is_secret_backed(),
                     backend: backend.clone(),
-                    used_fallback,
                 }),
                 myc: None,
             }
@@ -182,7 +180,6 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                     .to_owned(),
                     secret_backed: false,
                     backend: backend.clone(),
-                    used_fallback,
                 }),
                 myc: None,
             }

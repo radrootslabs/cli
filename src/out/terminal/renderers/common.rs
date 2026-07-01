@@ -64,10 +64,6 @@ pub(crate) fn display_source(envelope: &OutputEnvelope) -> &Value {
     terminal_display_source(envelope)
 }
 
-pub(crate) fn state(value: &Value) -> Option<&str> {
-    terminal_state(value)
-}
-
 pub(crate) fn status_label(status: &str) -> String {
     terminal_status_label(status)
 }

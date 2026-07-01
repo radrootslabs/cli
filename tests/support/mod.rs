@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -155,9 +153,27 @@ impl RadrootsCliSandbox {
         command.env("RADROOTS_CLI_PATHS_PROFILE", "repo_local");
         command.env("RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT", self.root.path());
         command.env("RADROOTS_CLI_ACCOUNT_SECRET_BACKEND", "encrypted_file");
-        command.env("RADROOTS_CLI_ACCOUNT_SECRET_FALLBACK", "none");
     }
 }
+
+const _: () = {
+    let _ = ndjson_from_stdout as fn(&Output) -> Vec<Value>;
+    let _ = RadrootsCliSandbox::write_workspace_config as fn(&RadrootsCliSandbox, &str) -> PathBuf;
+    let _ = RadrootsCliSandbox::replica_db_path as fn(&RadrootsCliSandbox) -> PathBuf;
+    let _ =
+        RadrootsCliSandbox::local_event_records as fn(&RadrootsCliSandbox) -> Vec<LocalEventRecord>;
+    #[cfg(unix)]
+    let _ = RadrootsCliSandbox::write_fake_myc as fn(&RadrootsCliSandbox, &str, &str) -> PathBuf;
+    let _ = assert_hex_len as fn(&Value, usize);
+    let _ = remove_orderable_listing as fn(&RadrootsCliSandbox, &str);
+    let _ = update_orderable_listing_available_amount as fn(&RadrootsCliSandbox, &str, i64);
+    let _ = update_orderable_listing_primary_bin_id as fn(&RadrootsCliSandbox, &str, Option<&str>);
+    let _ = duplicate_orderable_listing_row as fn(&RadrootsCliSandbox, &str);
+    let _ = replace_latest_listing_event_id as fn(&RadrootsCliSandbox, &str, &str);
+    let _ = store_test_session_secret as fn(&RadrootsCliSandbox, &str, &str);
+    let _ = make_listing_publishable_with_seller as fn(&Path, &str, &str);
+    let _ = shell_single_quoted as fn(&str) -> String;
+};
 
 pub fn assert_no_removed_command_reference(value: &Value, args: &[&str]) {
     let raw = serde_json::to_string(value).expect("json value");

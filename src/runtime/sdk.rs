@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::fs;
 use std::future::Future;
 use std::path::PathBuf;
@@ -944,13 +942,6 @@ mod tests {
             ],
         },
         MigratedCliPathGuard {
-            label: "order relay refresh status",
-            path: "src/runtime/order.rs",
-            start: "fn sdk_order_status_from_relay_receipt(",
-            end: "enum OrderStatusRecord",
-            required_tokens: &["TradeStatusRequest::parse", "session.sdk().trades().status"],
-        },
-        MigratedCliPathGuard {
             label: "order SDK status adapter",
             path: "src/runtime/order/sdk_status.rs",
             start: "pub(super) fn sdk_order_status_view(",
@@ -1370,7 +1361,7 @@ mod tests {
         let multiline = concat!(
             "fn production() {}\n",
             "#[cfg(test)]\n",
-            "#[allow(dead_code)]\n",
+            "#[doc(hidden)]\n",
             "mod tests {\n",
             "    fn test_only() { let _ = TradeValidationClient; }\n",
             "    const BRACE: &str = \"}\";\n",
@@ -1863,11 +1854,9 @@ mod tests {
                 store_path: data.join("shared/accounts/store.json"),
                 secrets_dir: secrets.join("shared/accounts"),
                 secret_backend: RadrootsSecretBackend::EncryptedFile,
-                secret_fallback: None,
             },
             account_secret_contract: AccountSecretContractConfig {
                 default_backend: "host_vault".to_owned(),
-                default_fallback: Some("encrypted_file".to_owned()),
                 allowed_backends: vec!["host_vault".to_owned(), "encrypted_file".to_owned()],
                 host_vault_policy: Some("desktop".to_owned()),
                 uses_protected_store: true,

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::process::ExitCode;
 
 use radroots_events::farm::RadrootsFarm;
@@ -267,19 +265,14 @@ pub struct AccountRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountSecretRuntimeView {
     pub contract_default_backend: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub contract_default_fallback: Option<String>,
     pub allowed_backends: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_vault_policy: Option<String>,
     pub uses_protected_store: bool,
     pub configured_primary: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub configured_fallback: Option<String>,
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_backend: Option<String>,
-    pub used_fallback: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -3603,7 +3596,6 @@ pub struct LocalSignerStatusView {
     pub availability: String,
     pub secret_backed: bool,
     pub backend: String,
-    pub used_fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
