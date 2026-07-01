@@ -1091,6 +1091,12 @@ mod tests {
         "trade_validation",
     ];
 
+    const REMOVED_SDK_STATUS_SURFACE_TOKENS: &[&str] = &[
+        "status_client(",
+        "TradeStatusClient",
+        "TradeValidationClient",
+    ];
+
     #[test]
     fn maps_runtime_config_to_sdk_builder_inputs() {
         let root = tempdir().expect("tempdir");
@@ -1308,6 +1314,80 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cli_production_sources_reject_removed_sdk_status_surfaces_repo_wide() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        collect_rs_files(manifest_dir.join("src").as_path(), &mut files);
+        files.sort();
+
+        let findings = files
+            .iter()
+            .flat_map(|file| {
+                let source = fs::read_to_string(file).expect("read cli source");
+                let relative_path = relative_source_path(manifest_dir, file.as_path());
+                let production_source = production_source_without_tests(&source);
+                let mut findings =
+                    removed_sdk_status_surface_findings(&relative_path, production_source.as_str());
+                findings.extend(root_trade_alias_findings(
+                    &relative_path,
+                    production_source.as_str(),
+                ));
+                findings
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            findings.is_empty(),
+            "CLI production sources contain removed SDK surfaces:\n{}",
+            findings.join("\n")
+        );
+    }
+
+    #[test]
+    fn cli_production_source_scanner_strips_test_modules() {
+        let inline = concat!(
+            "fn production() {}\n",
+            "#[cfg(test)] mod tests { fn test_only() { sdk.status_client(); } }\n",
+        );
+        let multiline = concat!(
+            "fn production() {}\n",
+            "#[cfg(test)]\n",
+            "#[allow(dead_code)]\n",
+            "mod tests {\n",
+            "    fn test_only() { let _ = TradeValidationClient; }\n",
+            "    const BRACE: &str = \"}\";\n",
+            "}\n",
+        );
+
+        for source in [inline, multiline] {
+            let production_source = production_source_without_tests(source);
+            assert!(
+                removed_sdk_status_surface_findings("fixture.rs", production_source.as_str())
+                    .is_empty()
+            );
+            assert!(root_trade_alias_findings("fixture.rs", production_source.as_str()).is_empty());
+        }
+    }
+
+    #[test]
+    fn repo_wide_removed_surface_scanner_reports_production_violations() {
+        let source = "fn production() { sdk.status_client(); RadrootsClient::trade_resync(&sdk); }";
+        let status_findings = removed_sdk_status_surface_findings("fixture.rs", source);
+        let alias_findings = root_trade_alias_findings("fixture.rs", source);
+
+        assert!(
+            status_findings
+                .iter()
+                .any(|finding| finding.contains("status_client("))
+        );
+        assert!(
+            alias_findings
+                .iter()
+                .any(|finding| finding.contains("trade_resync"))
+        );
+    }
+
     fn collect_rs_files(dir: &Path, files: &mut Vec<PathBuf>) {
         for entry in fs::read_dir(dir).expect("read dir") {
             let path = entry.expect("entry").path();
@@ -1450,6 +1530,256 @@ mod tests {
         }
 
         findings
+    }
+
+    fn removed_sdk_status_surface_findings(label: &str, source: &str) -> Vec<String> {
+        REMOVED_SDK_STATUS_SURFACE_TOKENS
+            .iter()
+            .flat_map(|token| {
+                source.match_indices(token).map(move |(index, _)| {
+                    format!(
+                        "{label}:{} uses removed SDK surface `{token}`",
+                        line_number(source, index)
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn production_source_without_tests(source: &str) -> String {
+        let mut production_source = String::with_capacity(source.len());
+        let mut cursor = 0;
+
+        while let Some((attribute_start, attribute_end)) = find_cfg_test_attribute(source, cursor) {
+            let Some(module_end) = find_cfg_test_module_end(source, attribute_end) else {
+                production_source.push_str(&source[cursor..attribute_end]);
+                cursor = attribute_end;
+                continue;
+            };
+
+            production_source.push_str(&source[cursor..attribute_start]);
+            for character in source[attribute_start..module_end].chars() {
+                if character == '\n' {
+                    production_source.push('\n');
+                }
+            }
+            cursor = module_end;
+        }
+
+        production_source.push_str(&source[cursor..]);
+        production_source
+    }
+
+    fn find_cfg_test_attribute(source: &str, start: usize) -> Option<(usize, usize)> {
+        let mut cursor = start;
+        while let Some(relative_start) = source[cursor..].find("#[") {
+            let attribute_start = cursor + relative_start;
+            let content_start = attribute_start + 2;
+            let content_end = source[content_start..]
+                .find(']')
+                .map(|relative_end| content_start + relative_end)?;
+            let normalized = source[content_start..content_end]
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>();
+            let attribute_end = content_end + 1;
+            if normalized == "cfg(test)" {
+                return Some((attribute_start, attribute_end));
+            }
+            cursor = attribute_end;
+        }
+        None
+    }
+
+    fn find_cfg_test_module_end(source: &str, attribute_end: usize) -> Option<usize> {
+        let mut cursor = skip_rust_whitespace(source, attribute_end);
+        while source[cursor..].starts_with("#[") {
+            let attribute_end = source[cursor..].find(']').map(|end| cursor + end + 1)?;
+            cursor = skip_rust_whitespace(source, attribute_end);
+        }
+
+        cursor = skip_optional_visibility(source, cursor);
+        if !starts_with_rust_keyword(source, cursor, "mod") {
+            return None;
+        }
+        cursor = skip_rust_whitespace(source, cursor + "mod".len());
+        cursor = skip_rust_identifier(source, cursor)?;
+        cursor = skip_rust_whitespace(source, cursor);
+
+        if source[cursor..].starts_with(';') {
+            return Some(cursor + 1);
+        }
+        if !source[cursor..].starts_with('{') {
+            return None;
+        }
+
+        find_matching_rust_brace(source, cursor).or(Some(source.len()))
+    }
+
+    fn skip_optional_visibility(source: &str, cursor: usize) -> usize {
+        if !starts_with_rust_keyword(source, cursor, "pub") {
+            return cursor;
+        }
+
+        let mut cursor = skip_rust_whitespace(source, cursor + "pub".len());
+        if source[cursor..].starts_with('(') {
+            cursor = skip_balanced_parentheses(source, cursor).unwrap_or(cursor);
+            cursor = skip_rust_whitespace(source, cursor);
+        }
+        cursor
+    }
+
+    fn skip_balanced_parentheses(source: &str, open_index: usize) -> Option<usize> {
+        let mut depth = 0usize;
+        for (relative_index, character) in source[open_index..].char_indices() {
+            match character {
+                '(' => depth += 1,
+                ')' => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        return Some(open_index + relative_index + character.len_utf8());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn skip_rust_whitespace(source: &str, mut cursor: usize) -> usize {
+        while cursor < source.len() {
+            let Some(character) = source[cursor..].chars().next() else {
+                return cursor;
+            };
+            if !character.is_whitespace() {
+                return cursor;
+            }
+            cursor += character.len_utf8();
+        }
+        cursor
+    }
+
+    fn skip_rust_identifier(source: &str, cursor: usize) -> Option<usize> {
+        let mut end = cursor;
+        let mut chars = source[cursor..].char_indices();
+        let (_, first) = chars.next()?;
+        if first != '_' && !first.is_ascii_alphabetic() {
+            return None;
+        }
+        end += first.len_utf8();
+        for (relative_index, character) in chars {
+            if character != '_' && !character.is_ascii_alphanumeric() {
+                return Some(cursor + relative_index);
+            }
+            end = cursor + relative_index + character.len_utf8();
+        }
+        Some(end)
+    }
+
+    fn starts_with_rust_keyword(source: &str, cursor: usize, keyword: &str) -> bool {
+        source[cursor..].starts_with(keyword)
+            && source[cursor + keyword.len()..]
+                .chars()
+                .next()
+                .is_none_or(|character| !is_rust_identifier_character(character))
+    }
+
+    fn find_matching_rust_brace(source: &str, open_index: usize) -> Option<usize> {
+        let bytes = source.as_bytes();
+        let mut cursor = open_index;
+        let mut depth = 0usize;
+
+        while cursor < bytes.len() {
+            match bytes[cursor] {
+                b'{' => {
+                    depth += 1;
+                    cursor += 1;
+                }
+                b'}' => {
+                    depth = depth.checked_sub(1)?;
+                    cursor += 1;
+                    if depth == 0 {
+                        return Some(cursor);
+                    }
+                }
+                b'"' => cursor = skip_quoted_rust_literal(source, cursor, b'"')?,
+                b'\''
+                    if bytes
+                        .get(cursor + 1)
+                        .is_none_or(|byte| !byte.is_ascii_alphabetic() && *byte != b'_') =>
+                {
+                    cursor = skip_quoted_rust_literal(source, cursor, b'\'')?
+                }
+                b'/' if bytes.get(cursor + 1) == Some(&b'/') => {
+                    cursor = source[cursor..]
+                        .find('\n')
+                        .map_or(source.len(), |newline| cursor + newline + 1);
+                }
+                b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
+                    cursor = source[cursor + 2..]
+                        .find("*/")
+                        .map(|end| cursor + 2 + end + 2)?;
+                }
+                b'r' => {
+                    cursor = skip_raw_rust_string(source, cursor).unwrap_or(cursor + 1);
+                }
+                _ => cursor += 1,
+            }
+        }
+
+        None
+    }
+
+    fn skip_quoted_rust_literal(source: &str, start: usize, delimiter: u8) -> Option<usize> {
+        let bytes = source.as_bytes();
+        let mut cursor = start + 1;
+        let mut escaped = false;
+        while cursor < bytes.len() {
+            let byte = bytes[cursor];
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == delimiter {
+                return Some(cursor + 1);
+            }
+            cursor += 1;
+        }
+        None
+    }
+
+    fn skip_raw_rust_string(source: &str, start: usize) -> Option<usize> {
+        let bytes = source.as_bytes();
+        let mut cursor = start + 1;
+        let mut hashes = 0usize;
+
+        while bytes.get(cursor) == Some(&b'#') {
+            hashes += 1;
+            cursor += 1;
+        }
+
+        if bytes.get(cursor) != Some(&b'"') {
+            return None;
+        }
+        cursor += 1;
+
+        while cursor < bytes.len() {
+            if bytes[cursor] == b'"' {
+                let mut matched = true;
+                for offset in 0..hashes {
+                    if bytes.get(cursor + 1 + offset) != Some(&b'#') {
+                        matched = false;
+                        break;
+                    }
+                }
+                if matched {
+                    return Some(cursor + 1 + hashes);
+                }
+            }
+            cursor += 1;
+        }
+
+        None
     }
 
     fn is_rust_identifier_character(character: char) -> bool {
