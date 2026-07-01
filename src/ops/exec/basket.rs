@@ -1507,7 +1507,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         seed_current_listing(&config);
-        account::create_or_migrate_default_account(&config).expect("create buyer account");
+        account::create_default_account(&config).expect("create buyer account");
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_quote");
         add_listing_item(&service, "basket_quote");
@@ -1561,7 +1561,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         seed_current_listing(&config);
-        account::create_or_migrate_default_account(&config).expect("create buyer account");
+        account::create_default_account(&config).expect("create buyer account");
         let service = OperationAdapter::new(BasketOperationService::new(&config));
         create_basket(&service, "basket_dry_run");
         add_listing_item(&service, "basket_dry_run");

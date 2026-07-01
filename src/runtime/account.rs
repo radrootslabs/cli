@@ -164,15 +164,8 @@ pub struct AccountSecretBackendStatus {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccountCreateMode {
-    Created,
-    Migrated,
-}
-
 #[derive(Debug, Clone)]
 pub struct AccountCreateResult {
-    pub mode: AccountCreateMode,
     pub account: AccountRecordView,
 }
 
@@ -226,22 +219,9 @@ pub struct AccountSigningIdentity {
     pub identity: RadrootsIdentity,
 }
 
-pub fn create_or_migrate_default_account(
-    config: &RuntimeConfig,
-) -> Result<AccountCreateResult, RuntimeError> {
+pub fn create_default_account(config: &RuntimeConfig) -> Result<AccountCreateResult, RuntimeError> {
     let manager = account_manager(config)?;
-    let existing = manager.list_accounts()?;
-    let (mode, created_account_id) = if existing.is_empty() && config.identity.path.exists() {
-        (
-            AccountCreateMode::Migrated,
-            manager.migrate_legacy_identity_file(&config.identity.path, None, false)?,
-        )
-    } else {
-        (
-            AccountCreateMode::Created,
-            manager.generate_identity(None, false)?,
-        )
-    };
+    let created_account_id = manager.generate_identity(None, false)?;
 
     let snapshot = snapshot(config)?;
     let account = snapshot_account(
@@ -250,7 +230,7 @@ pub fn create_or_migrate_default_account(
         "created account missing after account create",
     )?;
 
-    Ok(AccountCreateResult { mode, account })
+    Ok(AccountCreateResult { account })
 }
 
 pub fn import_public_identity(

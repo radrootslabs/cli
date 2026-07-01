@@ -22,11 +22,10 @@ use crate::out::envelope::OutputWarning;
 use crate::runtime::RuntimeError;
 use crate::runtime::account::{
     AccountResolution, AccountRuntimeFailure, account_resolution_view, account_summary_view,
-    attach_identity_secret, clear_default_account, create_or_migrate_default_account,
-    import_public_identity, preview_account_removal, preview_identity_secret_attachment,
-    preview_public_identity_import, remove_account, resolve_account_resolution,
-    resolve_account_selector, secret_backend_status, select_account, snapshot,
-    unresolved_account_reason,
+    attach_identity_secret, clear_default_account, create_default_account, import_public_identity,
+    preview_account_removal, preview_identity_secret_attachment, preview_public_identity_import,
+    remove_account, resolve_account_resolution, resolve_account_selector, secret_backend_status,
+    select_account, snapshot, unresolved_account_reason,
 };
 use crate::runtime::config::{PublishTransport, RuntimeConfig, SignerBackend};
 use crate::runtime::logging::LoggingState;
@@ -300,12 +299,9 @@ impl OperationService<AccountCreateRequest> for CoreOperationService<'_> {
             }));
         }
 
-        let result = map_runtime(create_or_migrate_default_account(self.config))?;
+        let result = map_runtime(create_default_account(self.config))?;
         json_operation_result::<AccountCreateResult>(json!({
-            "state": match result.mode {
-                crate::runtime::account::AccountCreateMode::Created => "created",
-                crate::runtime::account::AccountCreateMode::Migrated => "migrated",
-            },
+            "state": "created",
             "account": account_summary_view(&result.account),
         }))
     }
@@ -1207,6 +1203,7 @@ fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
 
 #[cfg(test)]
 mod tests {
+    use radroots_identity::RadrootsIdentity;
     use radroots_secret_vault::RadrootsSecretBackend;
     use serde_json::{Map, Value};
     use std::path::{Path, PathBuf};
@@ -1327,6 +1324,37 @@ mod tests {
         assert_eq!(list_envelope.operation_id, "account.list");
         assert_eq!(list_envelope.result["count"], 1);
         assert_eq!(list_envelope.result["accounts"][0]["is_default"], true);
+    }
+
+    #[test]
+    fn account_create_ignores_configured_identity_path() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path());
+        let configured_identity = RadrootsIdentity::generate();
+        std::fs::create_dir_all(config.identity.path.parent().expect("identity parent"))
+            .expect("identity parent dir");
+        configured_identity
+            .save_json(&config.identity.path)
+            .expect("identity file");
+        let logging = LoggingState {
+            initialized: false,
+            current_file: None,
+        };
+        let service = OperationAdapter::new(CoreOperationService::new(&config, &logging));
+        let create =
+            OperationRequest::new(OperationContext::default(), AccountCreateRequest::default())
+                .expect("account create request");
+        let create_result = service.execute(create).expect("account create result");
+        let create_envelope = create_result
+            .to_envelope(OperationContext::default().envelope_context("req_create"))
+            .expect("account create envelope");
+        let configured_identity_id = configured_identity.id().to_string();
+
+        assert_eq!(create_envelope.result["state"], "created");
+        assert_ne!(
+            create_envelope.result["account"]["id"].as_str(),
+            Some(configured_identity_id.as_str())
+        );
     }
 
     #[test]

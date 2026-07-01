@@ -1140,7 +1140,7 @@ mod tests {
     fn materializes_local_account_signer_for_sdk_workflows() {
         let root = tempdir().expect("tempdir");
         let config = sample_config(root.path(), Vec::new());
-        let account = account::create_or_migrate_default_account(&config).expect("create account");
+        let account = account::create_default_account(&config).expect("create account");
 
         let signer = CliSdkLocalSigner::from_runtime_config(&config).expect("sdk signer");
 
@@ -1323,6 +1323,46 @@ mod tests {
             "CLI production sources contain dead-code suppressions:\n{}",
             findings.join("\n")
         );
+    }
+
+    #[test]
+    fn cli_account_create_sources_reject_implicit_identity_ingestion() {
+        let account_source = rust_code_without_non_code(
+            "src/runtime/account.rs",
+            crate_source("src/runtime/account.rs").as_str(),
+        )
+        .expect("account source classification");
+        let core_source = rust_code_without_non_code(
+            "src/ops/exec/core.rs",
+            crate_source("src/ops/exec/core.rs").as_str(),
+        )
+        .expect("core source classification");
+
+        let removed_create_helper = ["create_or_", "migrate_default_account"].concat();
+        let removed_create_mode = ["Account", "Create", "Mode"].concat();
+        let removed_import_helper = ["migrate", "_legacy", "_identity", "_file"].concat();
+        let removed_identity_probe = ["config.identity.path", ".exists()"].concat();
+        for token in [
+            removed_create_helper.as_str(),
+            removed_create_mode.as_str(),
+            removed_import_helper.as_str(),
+            removed_identity_probe.as_str(),
+        ] {
+            assert!(
+                !account_source.contains(token),
+                "CLI account runtime must not contain implicit account-create identity-ingestion token `{token}`"
+            );
+        }
+        let removed_migrated_output = ["\"", "migr", "ated", "\""].concat();
+        for token in [
+            removed_create_mode.as_str(),
+            removed_migrated_output.as_str(),
+        ] {
+            assert!(
+                !core_source.contains(token),
+                "CLI account create output must not contain removed account-create token `{token}`"
+            );
+        }
     }
 
     #[test]
