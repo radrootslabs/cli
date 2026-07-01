@@ -3630,6 +3630,7 @@ dependencies = [
  "radroots_nostr_connect",
  "radroots_nostr_signer",
  "radroots_protected_store",
+ "radroots_relay_transport",
  "radroots_replica_db",
  "radroots_replica_db_schema",
  "radroots_replica_sync",
@@ -3851,6 +3852,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
  "url",
 ]
 

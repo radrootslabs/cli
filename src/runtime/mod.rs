@@ -1,6 +1,5 @@
 pub mod account;
 pub mod config;
-pub mod direct_relay;
 pub mod farm;
 pub mod farm_config;
 pub mod find;

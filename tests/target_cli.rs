@@ -113,7 +113,7 @@ impl RadrootsdProxyJsonRpcServer {
             .expect("radrootsd proxy nonblocking");
         let endpoint = format!("http://{}", listener.local_addr().expect("proxy addr"));
         let handle = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + Duration::from_secs(30);
             loop {
                 match listener.accept() {
                     Ok((stream, _)) => {

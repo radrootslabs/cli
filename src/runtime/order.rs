@@ -39,6 +39,9 @@ use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
     radroots_nostr_kind,
 };
+use radroots_relay_transport::{
+    RadrootsRelayFetchFailure, RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError,
+};
 use radroots_replica_db::{
     ReplicaSql, ReplicaTradeProductSummaryRow, nostr_event_head, trade_product,
 };
@@ -72,14 +75,13 @@ use crate::cli::global::{
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::direct_relay::{
-    DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, fetch_events_from_relays,
-};
 use crate::runtime::local_events::{
     get_shared_record, list_shared_records_before, list_shared_records_latest,
     shared_local_events_db_path,
 };
-use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession};
+use crate::runtime::sdk::{
+    CliSdkAdapterError, CliSdkSession, fetch_relay_events_via_shared_transport,
+};
 use crate::runtime::sync::{RelayIngestScope, relay_provenance_relays_for_scope};
 use crate::view::runtime::{
     OrderAppRecordExportView, OrderAppRecordListView, OrderAppRecordSummaryView,
@@ -99,7 +101,7 @@ const ORDER_DECISION_SOURCE: &str = "SDK trade decision · local key";
 const ORDER_REVISION_PROPOSAL_SOURCE: &str = "SDK trade revision proposal · local key";
 const ORDER_REVISION_DECISION_SOURCE: &str = "SDK trade revision decision · local key";
 const ORDER_CANCELLATION_SOURCE: &str = "SDK trade cancellation · local key";
-const ORDER_EVENT_LIST_SOURCE: &str = "direct Nostr relay fetch · selected seller identity";
+const ORDER_EVENT_LIST_SOURCE: &str = "shared relay transport fetch · selected seller identity";
 const ORDER_STATUS_SDK_SOURCE: &str = "SDK local trade projection";
 const ORDER_EVENT_LIST_RELAY_ACTION: &str =
     "radroots --relay wss://relay.example.com trade event list";
@@ -1184,23 +1186,18 @@ pub fn event_list(
     };
     let seller_pubkey = actor_context.seller_pubkey;
     let filter = order_request_filter(seller_pubkey.as_str(), order_id)?;
-    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
-        Ok(receipt) => receipt,
-        Err(DirectRelayFetchError::Connect {
-            reason,
-            target_relays,
-            failed_relays,
-        }) => {
-            return Ok(order_event_list_unavailable(
-                seller_pubkey,
-                actor_context.source,
-                reason,
-                target_relays,
-                failed_relays,
-            ));
-        }
-        Err(error) => return Err(RuntimeError::Network(error.to_string())),
-    };
+    let receipt =
+        fetch_relay_events_via_shared_transport(&config.relay.urls, now_unix_ms(), 1_000, filter)
+            .map_err(order_relay_fetch_error)?;
+    if receipt.connected_relays.is_empty() && !receipt.failed_relays.is_empty() {
+        return Ok(order_event_list_unavailable(
+            seller_pubkey,
+            actor_context.source,
+            relay_fetch_failure_reason(&receipt.failed_relays),
+            receipt.target_relays,
+            receipt.failed_relays,
+        ));
+    }
 
     Ok(order_event_list_from_receipt(
         seller_pubkey,
@@ -1804,7 +1801,7 @@ fn order_event_list_unavailable(
     actor_context_source: &'static str,
     reason: String,
     target_relays: Vec<String>,
-    failed_relays: Vec<DirectRelayFailure>,
+    failed_relays: Vec<RadrootsRelayFetchFailure>,
 ) -> OrderEventListView {
     OrderEventListView {
         state: "unavailable".to_owned(),
@@ -1818,7 +1815,7 @@ fn order_event_list_unavailable(
         decoded_count: 0,
         skipped_count: 0,
         count: 0,
-        reason: Some(format!("direct relay connection failed: {reason}")),
+        reason: Some(format!("relay transport fetch failed: {reason}")),
         orders: Vec::new(),
         actions: Vec::new(),
     }
@@ -1828,13 +1825,14 @@ fn order_event_list_from_receipt(
     seller_pubkey: String,
     order_id: Option<&str>,
     actor_context_source: &'static str,
-    receipt: DirectRelayFetchReceipt,
+    receipt: RadrootsRelayFetchedEventsReceipt,
 ) -> OrderEventListView {
-    let DirectRelayFetchReceipt {
+    let RadrootsRelayFetchedEventsReceipt {
         target_relays,
         connected_relays,
         failed_relays,
         events,
+        ..
     } = receipt;
     let fetched_count = events.len();
     let mut skipped_count = 0usize;
@@ -1842,7 +1840,7 @@ fn order_event_list_from_receipt(
     let mut orders = Vec::new();
 
     for event in events {
-        match order_event_list_entry_from_event(&event, seller_pubkey.as_str()) {
+        match order_event_list_entry_from_event(&event.event, seller_pubkey.as_str()) {
             Ok(entry) => {
                 decoded_count += 1;
                 if order_id.is_none_or(|order_id| entry.id == order_id) {
@@ -4523,13 +4521,14 @@ fn order_rebind_existing_request_check(
         loaded.document.order.seller_pubkey.as_str(),
         Some(loaded.document.order.order_id.as_str()),
     )?;
-    let receipt = fetch_events_from_relays(&config.relay.urls, filter)
-        .map_err(|error| RuntimeError::Network(error.to_string()))?;
+    let receipt =
+        fetch_relay_events_via_shared_transport(&config.relay.urls, now_unix_ms(), 1_000, filter)
+            .map_err(order_relay_fetch_error)?;
     let mut event_ids = receipt
         .events
         .iter()
-        .filter_map(|event| {
-            order_submit_request_from_event(event, loaded)
+        .filter_map(|fetched| {
+            order_submit_request_from_event(&fetched.event, loaded)
                 .ok()
                 .map(|request| request.request_event_id)
         })
@@ -5238,11 +5237,26 @@ fn order_buyer_failure_detail(
     detail
 }
 
-fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
+fn order_relay_fetch_error(error: RadrootsRelayTransportError) -> RuntimeError {
+    RuntimeError::Network(error.to_string())
+}
+
+fn relay_fetch_failure_reason(failed_relays: &[RadrootsRelayFetchFailure]) -> String {
+    if failed_relays.is_empty() {
+        return "no relay acknowledged the fetch".to_owned();
+    }
+    failed_relays
+        .iter()
+        .map(|failure| format!("{}: {}", failure.relay_url, failure.reason))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn relay_failures(failures: Vec<RadrootsRelayFetchFailure>) -> Vec<RelayFailureView> {
     failures
         .into_iter()
         .map(|failure| RelayFailureView {
-            relay: failure.relay,
+            relay: failure.relay_url,
             reason: failure.reason,
         })
         .collect()
@@ -5428,6 +5442,13 @@ fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_secs())
+        .unwrap_or_default()
+}
+
+fn now_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| i64::try_from(value.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or_default()
 }
 

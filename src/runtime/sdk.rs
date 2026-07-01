@@ -15,6 +15,10 @@ use radroots_nostr_connect::prelude::{
     RADROOTS_NOSTR_CONNECT_RPC_KIND, RadrootsNostrConnectBunkerUri,
     RadrootsNostrConnectClientTarget, RadrootsNostrConnectError, RadrootsNostrConnectUri,
 };
+use radroots_relay_transport::{
+    RadrootsNostrClientFetchAdapter, RadrootsRelayFetchRequest, RadrootsRelayFetchedEventsReceipt,
+    RadrootsRelayTransportError, fetch_relay_events_blocking,
+};
 use radroots_sdk::{
     RadrootsClient, RadrootsClientBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
     RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
@@ -37,6 +41,7 @@ use crate::runtime::config::{
 
 const SDK_STORAGE_DIR_NAME: &str = "sdk";
 const RADROOTSD_PROXY_SECRET_SERVICE: &str = "org.radroots.cli.radrootsd-proxy";
+const CLI_RELAY_FETCH_TIMEOUT_MS: u64 = 10_000;
 pub(crate) const MYC_NIP46_SESSION_SECRET_SERVICE: &str = "org.radroots.cli.myc-nip46-session";
 
 #[derive(Debug, thiserror::Error)]
@@ -588,6 +593,18 @@ pub(crate) fn sdk_runtime() -> Result<Runtime, RuntimeError> {
         })
 }
 
+pub(crate) fn fetch_relay_events_via_shared_transport(
+    relay_urls: &[String],
+    observed_at_ms: i64,
+    max_events: usize,
+    filter: RadrootsNostrFilter,
+) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError> {
+    let request = RadrootsRelayFetchRequest::fetch(observed_at_ms, max_events, [filter])?
+        .with_relay_urls(relay_urls.iter().cloned())
+        .with_timeout_ms(CLI_RELAY_FETCH_TIMEOUT_MS);
+    fetch_relay_events_blocking(&RadrootsNostrClientFetchAdapter, request)
+}
+
 fn memory_builder(config: &CliSdkConfig) -> RadrootsClientBuilder {
     config.relay_urls.iter().fold(
         RadrootsClient::builder()
@@ -699,14 +716,6 @@ mod tests {
         lifecycle: &'static str,
     }
 
-    struct DirectRelayConsumerException {
-        path: &'static str,
-        required_tokens: &'static [&'static str],
-        owner: &'static str,
-        reason: &'static str,
-        lifecycle: &'static str,
-    }
-
     struct MigratedCliPathGuard {
         label: &'static str,
         path: &'static str,
@@ -768,9 +777,16 @@ mod tests {
         DirectRrRsDependency {
             section: "dependencies",
             name: "radroots_nostr",
-            owner: "non-migrated-direct-relay-workflows",
-            reason: "direct relay fetch/publish and event conversion for active non-migrated commands",
-            lifecycle: "retain until direct relay command families migrate or are retired",
+            owner: "cli-signer-and-event-runtime",
+            reason: "remote signer relay transport, account event conversion, and direct publish command transport",
+            lifecycle: "retain while CLI owns signer transport and direct publish selection",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
+            name: "radroots_relay_transport",
+            owner: "cli-shared-relay-read-boundary",
+            reason: "shared fail-closed relay fetch receipts for trade event list, sync pull, and market refresh",
+            lifecycle: "retain until those read surfaces are fully SDK-owned",
         },
         DirectRrRsDependency {
             section: "dependencies",
@@ -865,21 +881,12 @@ mod tests {
         },
     ];
 
-    const DIRECT_RELAY_CONSUMER_EXCEPTIONS: &[DirectRelayConsumerException] = &[
-        DirectRelayConsumerException {
-            path: "src/runtime/order.rs",
-            required_tokens: &["pub fn event_list(", "fetch_events_from_relays"],
-            owner: "non-migrated-trade-event-and-derived-projection-reads",
-            reason: "event listing, draft checks, and derived projection maintenance still use direct relay reads outside migrated trade mutation paths",
-            lifecycle: "retain only for non-migrated read/projection surfaces",
-        },
-        DirectRelayConsumerException {
-            path: "src/runtime/sync.rs",
-            required_tokens: &["fetch_events_from_relays", "pull_with_fetcher"],
-            owner: "sync.pull-and-market-refresh",
-            reason: "relay ingest into the derived projection cache",
-            lifecycle: "retain until relay ingest and derived projection repair migrate to SDK APIs",
-        },
+    const DIRECT_RELAY_FETCH_DISALLOWED_TOKENS: &[&str] = &[
+        "pub mod direct_relay",
+        "use crate::runtime::direct_relay",
+        "fetch_events_from_relays",
+        "fetch_events_from_relays_with_timeout",
+        ".fetch_events(",
     ];
 
     const MIGRATED_CLI_PATH_GUARDS: &[MigratedCliPathGuard] = &[
@@ -1262,27 +1269,31 @@ mod tests {
     }
 
     #[test]
-    fn direct_relay_consumer_exceptions_are_explicit() {
-        let actual = direct_relay_consumer_exception_paths();
-        let expected = DIRECT_RELAY_CONSUMER_EXCEPTIONS
-            .iter()
-            .map(|consumer| consumer.path.to_owned())
-            .collect::<BTreeSet<_>>();
+    fn cli_production_sources_reject_direct_relay_fetch_helpers() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        collect_rs_files(manifest_dir.join("src").as_path(), &mut files);
+        files.sort();
 
-        assert_eq!(actual, expected);
-        for consumer in DIRECT_RELAY_CONSUMER_EXCEPTIONS {
-            let source = crate_source(consumer.path);
-            for token in consumer.required_tokens {
-                assert!(
-                    source.contains(token),
-                    "{} does not contain direct-relay exception token `{token}`",
-                    consumer.path
-                );
-            }
-            assert!(!consumer.owner.trim().is_empty());
-            assert!(!consumer.reason.trim().is_empty());
-            assert!(!consumer.lifecycle.trim().is_empty());
-        }
+        let findings = files
+            .iter()
+            .flat_map(|file| {
+                let source = fs::read_to_string(file).expect("read cli source");
+                let relative_path = relative_source_path(manifest_dir, file.as_path());
+                match production_source_without_tests(&relative_path, &source) {
+                    Ok(production_source) => {
+                        direct_relay_fetch_findings(&relative_path, production_source.as_str())
+                    }
+                    Err(error) => vec![error],
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            findings.is_empty(),
+            "CLI production sources contain direct relay fetch helpers:\n{}",
+            findings.join("\n")
+        );
     }
 
     #[test]
@@ -1516,27 +1527,6 @@ mod tests {
         format!("{}:{}", dependency.section, dependency.name)
     }
 
-    fn direct_relay_consumer_exception_paths() -> BTreeSet<String> {
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut files = Vec::new();
-        collect_rs_files(manifest_dir.join("src/runtime").as_path(), &mut files);
-        files
-            .into_iter()
-            .filter(|file| {
-                !matches!(
-                    file.file_name().and_then(|name| name.to_str()),
-                    Some("direct_relay.rs" | "sdk.rs")
-                )
-            })
-            .filter_map(|file| {
-                let source = fs::read_to_string(&file).expect("read runtime source");
-                source
-                    .contains("use crate::runtime::direct_relay")
-                    .then(|| relative_source_path(manifest_dir, file.as_path()))
-            })
-            .collect()
-    }
-
     fn relative_source_path(root: &Path, path: &Path) -> String {
         path.strip_prefix(root)
             .expect("source path under manifest root")
@@ -1633,6 +1623,20 @@ mod tests {
                 source.match_indices(token).map(move |(index, _)| {
                     format!(
                         "{label}:{} uses removed SDK surface `{token}`",
+                        line_number(source, index)
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn direct_relay_fetch_findings(label: &str, source: &str) -> Vec<String> {
+        DIRECT_RELAY_FETCH_DISALLOWED_TOKENS
+            .iter()
+            .flat_map(|token| {
+                source.match_indices(token).map(move |(index, _)| {
+                    format!(
+                        "{label}:{} uses direct relay fetch token `{token}`",
                         line_number(source, index)
                     )
                 })

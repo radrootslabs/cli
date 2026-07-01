@@ -11,6 +11,9 @@ use radroots_events::kinds::{
 use radroots_nostr::prelude::{
     RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_event_from_nostr, radroots_nostr_kind,
 };
+use radroots_relay_transport::{
+    RadrootsRelayFetchFailure, RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError,
+};
 use radroots_replica_db::{ReplicaSql, migrations};
 use radroots_replica_sync::{
     RadrootsReplicaEventsError, RadrootsReplicaIngestOutcome, radroots_replica_ingest_event,
@@ -27,10 +30,10 @@ use serde_json::json;
 use crate::cli::global::SyncWatchArgs;
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::direct_relay::{
-    DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, fetch_events_from_relays,
+use crate::runtime::sdk::{
+    CliSdkAdapterError, CliSdkSession, fetch_relay_events_via_shared_transport,
+    sdk_relay_url_policy,
 };
-use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_relay_url_policy};
 use crate::view::runtime::{
     RelayFailureView, SyncActionView, SyncFreshnessView, SyncQueueView, SyncRunFreshnessView,
     SyncStatusView, SyncWatchFrameView, SyncWatchView,
@@ -44,7 +47,7 @@ const SYNC_PULL_ACTION: &str = "radroots sync pull";
 const SYNC_PUSH_ACTION: &str = "radroots sync push";
 const SYNC_READY_ACTION: &str = "radroots market product search eggs";
 const MARKET_READY_ACTION: &str = "radroots market product search eggs";
-const INGEST_SOURCE: &str = "direct Nostr relay fetch · local replica ingest";
+const INGEST_SOURCE: &str = "shared relay transport fetch · local replica ingest";
 const RELAY_FETCH_LIMIT: usize = 1_000;
 const RELAY_FETCH_MAX_PAGES: usize = 5;
 const MARKET_FRESHNESS_STALE_AFTER_SECONDS: u64 = 15 * 60;
@@ -130,11 +133,11 @@ pub fn status(config: &RuntimeConfig) -> Result<SyncStatusView, CliSdkAdapterErr
 }
 
 pub fn pull(config: &RuntimeConfig) -> Result<SyncActionView, RuntimeError> {
-    pull_with_fetcher(config, fetch_events_from_relays_windowed)
+    pull_with_fetcher(config, shared_relay_transport_fetch_windowed)
 }
 
 pub fn market_refresh(config: &RuntimeConfig) -> Result<SyncActionView, RuntimeError> {
-    market_refresh_with_fetcher(config, fetch_events_from_relays_windowed)
+    market_refresh_with_fetcher(config, shared_relay_transport_fetch_windowed)
 }
 
 fn pull_with_fetcher<F>(config: &RuntimeConfig, fetcher: F) -> Result<SyncActionView, RuntimeError>
@@ -142,7 +145,7 @@ where
     F: FnOnce(
         &[String],
         RadrootsNostrFilter,
-    ) -> Result<DirectRelayFetchReceipt, DirectRelayFetchError>,
+    ) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError>,
 {
     relay_ingest(config, RelayIngestScope::SyncPull, fetcher)
 }
@@ -155,25 +158,30 @@ where
     F: FnOnce(
         &[String],
         RadrootsNostrFilter,
-    ) -> Result<DirectRelayFetchReceipt, DirectRelayFetchError>,
+    ) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError>,
 {
     relay_ingest(config, RelayIngestScope::MarketRefresh, fetcher)
 }
 
-fn fetch_events_from_relays_windowed(
+fn shared_relay_transport_fetch_windowed(
     relay_urls: &[String],
     base_filter: RadrootsNostrFilter,
-) -> Result<DirectRelayFetchReceipt, DirectRelayFetchError> {
+) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError> {
     let mut next_filter = base_filter.clone();
-    let mut merged: Option<DirectRelayFetchReceipt> = None;
+    let mut merged: Option<RadrootsRelayFetchedEventsReceipt> = None;
 
     for _ in 0..RELAY_FETCH_MAX_PAGES {
-        let receipt = fetch_events_from_relays(relay_urls, next_filter)?;
+        let receipt = fetch_relay_events_via_shared_transport(
+            relay_urls,
+            unix_now_ms(),
+            RELAY_FETCH_LIMIT,
+            next_filter,
+        )?;
         let page_len = receipt.events.len();
         let oldest_created_at = receipt
             .events
             .iter()
-            .map(|event| event.created_at.as_secs())
+            .map(|event| event.event.created_at.as_secs())
             .min();
         merge_fetch_receipt(&mut merged, receipt);
         if page_len < RELAY_FETCH_LIMIT {
@@ -191,7 +199,7 @@ fn fetch_events_from_relays_windowed(
             .limit(RELAY_FETCH_LIMIT);
     }
 
-    merged.ok_or(DirectRelayFetchError::MissingRelays)
+    merged.ok_or(RadrootsRelayTransportError::EmptyTargetSet)
 }
 
 fn relay_ingest<F>(
@@ -203,7 +211,7 @@ where
     F: FnOnce(
         &[String],
         RadrootsNostrFilter,
-    ) -> Result<DirectRelayFetchReceipt, DirectRelayFetchError>,
+    ) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError>,
 {
     let snapshot = inspect_sync(config)?;
     if snapshot.state == "unconfigured" {
@@ -229,14 +237,11 @@ where
 
     let started_at = unix_now();
     let receipt = match fetcher(&config.relay.urls, scope.filter()) {
-        Ok(receipt) => receipt,
-        Err(DirectRelayFetchError::Connect {
-            reason,
-            target_relays,
-            failed_relays,
-        }) => {
-            let failed_relays = relay_failures(failed_relays);
-            let failure_reason = format!("direct relay connection failed: {reason}");
+        Ok(receipt) if receipt.connected_relays.is_empty() && !receipt.failed_relays.is_empty() => {
+            let target_relays = receipt.target_relays;
+            let failed_relays = relay_failures(receipt.failed_relays);
+            let reason = relay_failure_reason(&failed_relays);
+            let failure_reason = format!("relay transport fetch failed: {reason}");
             let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
             migrations::run_all_up(&executor)?;
             record_sync_run(
@@ -259,6 +264,7 @@ where
             view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
             return Ok(view);
         }
+        Ok(receipt) => receipt,
         Err(error) => {
             let failure_reason = error.to_string();
             let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
@@ -1100,7 +1106,7 @@ fn sync_record_from_failure(
 fn sync_record_from_ingest(
     scope: RelayIngestScope,
     relays: &[String],
-    receipt: &DirectRelayFetchReceipt,
+    receipt: &RadrootsRelayFetchedEventsReceipt,
     ingest: &RelayIngestCounts,
     started_at: u64,
 ) -> Result<SyncRunRecord, RuntimeError> {
@@ -1305,7 +1311,7 @@ impl RelayIngestScope {
 
 fn ingest_events(
     executor: &SqliteExecutor,
-    receipt: &DirectRelayFetchReceipt,
+    receipt: &RadrootsRelayFetchedEventsReceipt,
     scope: RelayIngestScope,
 ) -> Result<RelayIngestCounts, RuntimeError> {
     let mut counts = RelayIngestCounts {
@@ -1314,11 +1320,11 @@ fn ingest_events(
     };
 
     for event in &receipt.events {
-        if !scope.supports_kind(event_kind(event)) {
+        if !scope.supports_kind(event_kind(&event.event)) {
             counts.unsupported_count += 1;
             continue;
         }
-        let event = radroots_event_from_nostr(event);
+        let event = radroots_event_from_nostr(&event.event);
         match radroots_replica_ingest_event(executor, &event) {
             Ok(RadrootsReplicaIngestOutcome::Applied) => counts.ingested_count += 1,
             Ok(RadrootsReplicaIngestOutcome::Skipped) => counts.skipped_count += 1,
@@ -1339,19 +1345,19 @@ fn event_kind(event: &radroots_nostr::prelude::RadrootsNostrEvent) -> u32 {
     u32::from(event.kind.as_u16())
 }
 
-fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
+fn relay_failures(failures: Vec<RadrootsRelayFetchFailure>) -> Vec<RelayFailureView> {
     failures
         .into_iter()
         .map(|failure| RelayFailureView {
-            relay: failure.relay,
+            relay: failure.relay_url,
             reason: failure.reason,
         })
         .collect()
 }
 
 fn merge_fetch_receipt(
-    target: &mut Option<DirectRelayFetchReceipt>,
-    receipt: DirectRelayFetchReceipt,
+    target: &mut Option<RadrootsRelayFetchedEventsReceipt>,
+    receipt: RadrootsRelayFetchedEventsReceipt,
 ) {
     match target {
         Some(target) => {
@@ -1364,12 +1370,20 @@ fn merge_fetch_receipt(
                 if !target
                     .failed_relays
                     .iter()
-                    .any(|existing| existing.relay == failure.relay)
+                    .any(|existing| existing.relay_url == failure.relay_url)
                 {
                     target.failed_relays.push(failure);
                 }
             }
             target.events.extend(receipt.events);
+            target.event_receipts.extend(receipt.event_receipts);
+            target.malformed_count += receipt.malformed_count;
+            target.out_of_filter_count += receipt.out_of_filter_count;
+            target.skipped_over_limit_count += receipt.skipped_over_limit_count;
+            target.eose_count += receipt.eose_count;
+            target.closed_count += receipt.closed_count;
+            target.notice_count += receipt.notice_count;
+            target.relay_outcomes.extend(receipt.relay_outcomes);
         }
         None => *target = Some(receipt),
     }
@@ -1387,6 +1401,13 @@ fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn unix_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or(0)
 }
 
@@ -1420,6 +1441,10 @@ mod tests {
     use radroots_nostr::prelude::{
         RadrootsNostrEvent, RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_nostr_build_event,
     };
+    use radroots_relay_transport::{
+        RadrootsRelayFetchFailure, RadrootsRelayFetchedEvent, RadrootsRelayFetchedEventsReceipt,
+        RadrootsRelayTransportError,
+    };
     use radroots_sdk::{
         PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
         PushOutboxRelayOutcomeKind, PushOutboxRelayReceipt, SyncEventStoreStatus, SyncOutboxStatus,
@@ -1429,8 +1454,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, RelayIngestScope,
-        freshness_for_scope, market_refresh_with_fetcher, pull_with_fetcher,
+        RelayIngestScope, freshness_for_scope, market_refresh_with_fetcher, pull_with_fetcher,
         relay_provenance_relays_for_scope, sdk_push_dry_run_view, sdk_push_view,
         sdk_sync_status_view,
     };
@@ -1926,15 +1950,14 @@ mod tests {
         let seller = identity(13);
 
         let view = pull_with_fetcher(&config, |relays, _| {
-            Ok(DirectRelayFetchReceipt {
-                target_relays: relays.to_vec(),
-                connected_relays: vec![relays[0].clone()],
-                failed_relays: vec![DirectRelayFailure {
-                    relay: relays[1].clone(),
+            Ok(relay_fetch_receipt_with_failed(
+                relays,
+                vec![listing_event(&seller)],
+                vec![RadrootsRelayFetchFailure {
+                    relay_url: relays[1].clone(),
                     reason: "connection refused".to_owned(),
                 }],
-                events: vec![listing_event(&seller)],
-            })
+            ))
         })
         .expect("sync pull partial relay fetch");
 
@@ -2054,14 +2077,53 @@ mod tests {
     ) -> impl FnOnce(
         &[String],
         RadrootsNostrFilter,
-    ) -> Result<DirectRelayFetchReceipt, DirectRelayFetchError> {
-        move |relays, _| {
-            Ok(DirectRelayFetchReceipt {
-                target_relays: relays.to_vec(),
-                connected_relays: relays.to_vec(),
-                failed_relays: Vec::new(),
-                events,
+    ) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError> {
+        move |relays, _| Ok(relay_fetch_receipt(relays, events))
+    }
+
+    fn relay_fetch_receipt(
+        relays: &[String],
+        events: Vec<RadrootsNostrEvent>,
+    ) -> RadrootsRelayFetchedEventsReceipt {
+        relay_fetch_receipt_with_failed(relays, events, Vec::new())
+    }
+
+    fn relay_fetch_receipt_with_failed(
+        relays: &[String],
+        events: Vec<RadrootsNostrEvent>,
+        failed_relays: Vec<RadrootsRelayFetchFailure>,
+    ) -> RadrootsRelayFetchedEventsReceipt {
+        let connected_relays = relays
+            .iter()
+            .filter(|relay| {
+                failed_relays
+                    .iter()
+                    .all(|failure| failure.relay_url.as_str() != relay.as_str())
             })
+            .cloned()
+            .collect::<Vec<_>>();
+        let closed_count = failed_relays.len();
+        RadrootsRelayFetchedEventsReceipt {
+            target_relays: relays.to_vec(),
+            connected_relays: connected_relays.clone(),
+            failed_relays,
+            events: events
+                .into_iter()
+                .map(|event| RadrootsRelayFetchedEvent {
+                    relay_url: connected_relays.first().cloned().unwrap_or_default(),
+                    event,
+                    raw_json: String::new(),
+                    observed_at_ms: 0,
+                })
+                .collect(),
+            event_receipts: Vec::new(),
+            malformed_count: 0,
+            out_of_filter_count: 0,
+            skipped_over_limit_count: 0,
+            eose_count: connected_relays.len(),
+            closed_count,
+            notice_count: 0,
+            relay_outcomes: Vec::new(),
         }
     }
 

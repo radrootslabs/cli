@@ -2362,7 +2362,7 @@ fn local_seller_publish_commands_attempt_configured_relay() {
 }
 
 #[test]
-fn local_order_event_list_attempts_configured_direct_relay() {
+fn local_order_event_list_attempts_configured_shared_relay_transport() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let relay = "ws://127.0.0.1:9";
@@ -2372,7 +2372,7 @@ fn local_order_event_list_attempts_configured_direct_relay() {
     ]);
 
     assert!(!output.status.success());
-    assert_direct_relay_connection_failure(&value, "trade.event.list", &["trade", "event", "list"]);
+    assert_relay_transport_fetch_failure(&value, "trade.event.list", &["trade", "event", "list"]);
     assert_eq!(value["errors"][0]["detail"]["state"], "unavailable");
     assert_eq!(value["errors"][0]["detail"]["target_relays"][0], relay);
     assert_eq!(
@@ -2715,7 +2715,7 @@ fn configure_myc_mode(sandbox: &RadrootsCliSandbox, executable: &Path) {
     ));
 }
 
-fn assert_direct_relay_connection_failure(
+fn assert_relay_transport_fetch_failure(
     value: &serde_json::Value,
     operation_id: &str,
     args: &[&str],
@@ -2727,7 +2727,7 @@ fn assert_direct_relay_connection_failure(
     assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "direct relay connection failed",
+        "relay transport fetch failed",
     );
     assert_no_removed_command_reference(value, args);
     assert_no_daemon_runtime_reference(value, args);
