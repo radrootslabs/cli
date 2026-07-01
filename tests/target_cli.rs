@@ -1866,7 +1866,7 @@ signer_session_ref = "session_test"
 }
 
 #[test]
-fn radrootsd_proxy_listing_publish_update_and_archive_dry_run_without_direct_relays() {
+fn radrootsd_proxy_listing_publish_update_and_archive_dry_run_without_direct_publish_relays() {
     for operation in ["publish", "update", "archive"] {
         let sandbox = RadrootsCliSandbox::new();
         sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -2045,7 +2045,7 @@ token_file = "{}"
 }
 
 #[test]
-fn direct_relay_listing_publish_uses_myc_nip46_sdk_signer() {
+fn direct_publish_listing_uses_myc_nip46_sdk_signer() {
     let sandbox = RadrootsCliSandbox::new();
     let user_identity = identity_secret(90);
     let client_identity = identity_secret(91);
@@ -2289,7 +2289,7 @@ token_file = "{}"
 }
 
 #[test]
-fn listing_update_publish_attempts_direct_relay_with_approval() {
+fn listing_update_publish_attempts_direct_publish_with_approval() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let farm = sandbox.json_success(&[
@@ -3364,7 +3364,7 @@ fn offline_allows_supported_external_dry_run() {
 }
 
 #[test]
-fn offline_listing_publish_enqueues_sdk_outbox_without_direct_relay_push() {
+fn offline_listing_publish_enqueues_sdk_outbox_without_direct_publish_push() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let farm = sandbox.json_success(&[
