@@ -1297,6 +1297,35 @@ mod tests {
     }
 
     #[test]
+    fn cli_production_sources_reject_dead_code_suppressions() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        collect_rs_files(manifest_dir.join("src").as_path(), &mut files);
+        files.sort();
+
+        let findings = files
+            .iter()
+            .flat_map(|file| {
+                let source = fs::read_to_string(file).expect("read cli source");
+                let relative_path = relative_source_path(manifest_dir, file.as_path());
+                match production_source_without_tests(&relative_path, &source) {
+                    Ok(production_source) => production_source
+                        .contains("allow(dead_code)")
+                        .then(|| vec![format!("{relative_path}: production dead-code suppression")])
+                        .unwrap_or_default(),
+                    Err(error) => vec![error],
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            findings.is_empty(),
+            "CLI production sources contain dead-code suppressions:\n{}",
+            findings.join("\n")
+        );
+    }
+
+    #[test]
     fn migrated_cli_paths_are_guarded_against_workflow_bypasses() {
         for guard in MIGRATED_CLI_PATH_GUARDS {
             let source = crate_source(guard.path);
