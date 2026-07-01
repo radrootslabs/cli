@@ -1318,7 +1318,6 @@ mod tests {
     use radroots_events::ids::RadrootsListingAddress;
     use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
     use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
-    use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_sql_core::{SqlExecutor, SqliteExecutor};
     use serde_json::{Map, Value, json};
@@ -1334,10 +1333,9 @@ mod tests {
     use crate::runtime::account;
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
-        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
-        SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
+        PublishConfig, PublishTransport, PublishTransportSource, RelayConfig, RelayConfigSource,
+        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
 
     const LISTING_ADDR: &str = "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
@@ -1884,9 +1882,6 @@ mod tests {
                 shared_accounts_data_root: data.join("shared/accounts"),
                 shared_accounts_secrets_root: secrets.join("shared/accounts"),
                 default_identity_path: secrets.join("shared/identities/default.json"),
-            },
-            migration: MigrationConfig {
-                report: RadrootsMigrationReport::empty(),
             },
             logging: LoggingConfig {
                 filter: "info".into(),

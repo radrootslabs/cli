@@ -586,11 +586,9 @@ fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-
-    use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
     use serde_json::{Map, Value, json};
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
     use super::FarmOperationService;
@@ -601,10 +599,9 @@ mod tests {
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
-        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
-        SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
+        PublishConfig, PublishTransport, PublishTransportSource, RelayConfig, RelayConfigSource,
+        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::view::runtime::{
         FarmPrivateExactLocationView, FarmPrivateLocationCandidateView, FarmPrivateLocationView,
@@ -858,9 +855,6 @@ mod tests {
                 shared_accounts_data_root: data.join("shared/accounts"),
                 shared_accounts_secrets_root: secrets.join("shared/accounts"),
                 default_identity_path: secrets.join("shared/identities/default.json"),
-            },
-            migration: MigrationConfig {
-                report: RadrootsMigrationReport::empty(),
             },
             logging: LoggingConfig {
                 filter: "info".into(),

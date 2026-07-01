@@ -249,10 +249,8 @@ fn hyf_executable(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use radroots_runtime_paths::RadrootsMigrationReport;
     use radroots_secret_vault::RadrootsSecretBackend;
+    use std::path::PathBuf;
 
     use super::{
         ProviderProvenance, resolve_actor_write_plane_target, resolve_capability_providers,
@@ -261,10 +259,10 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
         CapabilityBindingSource, CapabilityBindingTargetKind, HyfConfig, IdentityConfig,
-        InteractionConfig, LocalConfig, LoggingConfig, MigrationConfig, MycConfig, OutputConfig,
-        OutputFormat, PathsConfig, PublishConfig, PublishTransport, PublishTransportSource,
-        RelayConfig, RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig,
-        SignerBackend, SignerConfig, Verbosity,
+        InteractionConfig, LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat,
+        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
+        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
+        SignerConfig, Verbosity,
     };
     use crate::view::runtime::{
         PublishProviderRuntimeView, PublishRelayRuntimeView, PublishRuntimeView,
@@ -304,9 +302,6 @@ mod tests {
                 shared_accounts_data_root: PathBuf::from("/tmp/shared/accounts"),
                 shared_accounts_secrets_root: PathBuf::from("/tmp/shared/accounts-secrets"),
                 default_identity_path: PathBuf::from("/tmp/default-identity.json"),
-            },
-            migration: MigrationConfig {
-                report: RadrootsMigrationReport::empty(),
             },
             logging: LoggingConfig {
                 filter: "info".into(),
