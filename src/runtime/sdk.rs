@@ -601,7 +601,7 @@ pub(crate) fn fetch_relay_events_via_shared_transport(
 ) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError> {
     let request = RadrootsRelayFetchRequest::fetch(observed_at_ms, max_events, [filter])?
         .with_relay_urls(relay_urls.iter().cloned())
-        .with_timeout_ms(CLI_RELAY_FETCH_TIMEOUT_MS);
+        .with_timeout_ms(CLI_RELAY_FETCH_TIMEOUT_MS)?;
     fetch_relay_events_blocking(&RadrootsNostrClientFetchAdapter, request)
 }
 
