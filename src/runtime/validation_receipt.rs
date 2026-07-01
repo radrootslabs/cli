@@ -10,6 +10,7 @@ use radroots_sdk::{
 use radroots_sp1_host_trade::RadrootsSp1TradeHostError;
 use radroots_sp1_host_trade::verify_order_acceptance_validation_receipt_inline_sp1_proof;
 use radroots_trade::validation_receipt::{
+    RadrootsTradeCommitmentConfidence, RadrootsTradeValidationAuthority,
     RadrootsTradeValidationReceipt, RadrootsValidationReceiptProofSystem,
     RadrootsValidationReceiptResult, RadrootsValidationReceiptType,
 };
@@ -128,6 +129,9 @@ pub struct ValidationReceiptProofVerificationView {
     pub state: String,
     pub verifier: String,
     pub proof_system: String,
+    pub validation_authority: Option<String>,
+    pub commitment_confidence: Option<String>,
+    pub production_verification: bool,
     pub public_values_hash_binding: String,
     pub proof_metadata_binding: String,
     pub cryptographic_proof_required: bool,
@@ -147,6 +151,8 @@ pub struct ValidationReceiptProofVerificationView {
 pub struct ValidationReceiptWorkerEvidenceView {
     pub result_event_id: String,
     pub author: String,
+    pub validation_authority: Option<String>,
+    pub commitment_confidence: Option<String>,
     pub status: String,
     pub prover_backend: String,
     pub proof_mode: String,
@@ -175,6 +181,9 @@ pub struct ValidationReceiptSummaryView {
     pub result: String,
     pub proof_system: String,
     pub proof_verification_state: String,
+    pub validation_authority: Option<String>,
+    pub commitment_confidence: Option<String>,
+    pub production_verification: bool,
     pub event_set_root: String,
     pub reducer_output_root: String,
     pub public_values_hash: String,
@@ -390,7 +399,8 @@ fn inspected_event_view(
             !proof_state_is_invalid(proof_verification.state.as_str())
         }
         ValidationReceiptCommandIntent::Verify => {
-            proof_state_is_verification_success(proof_verification.state.as_str())
+            proof_verification.production_verification
+                && proof_state_is_verification_success(proof_verification.state.as_str())
         }
     };
     if !accepted {
@@ -724,6 +734,167 @@ fn tags_view(tags: &TradeValidationReceiptTags) -> ValidationReceiptTagsView {
     }
 }
 
+struct ValidationReceiptTrustSummary {
+    state: &'static str,
+    validation_authority: Option<String>,
+    commitment_confidence: Option<String>,
+    production_verification: bool,
+    reason_code: Option<&'static str>,
+    reason: Option<&'static str>,
+}
+
+fn local_only_trust_summary() -> ValidationReceiptTrustSummary {
+    ValidationReceiptTrustSummary {
+        state: "local_only_deterministic_receipt",
+        validation_authority: Some(
+            RadrootsTradeValidationAuthority::DevDeterministicOnly
+                .as_str()
+                .to_owned(),
+        ),
+        commitment_confidence: Some(
+            RadrootsTradeCommitmentConfidence::LocalOnly
+                .as_str()
+                .to_owned(),
+        ),
+        production_verification: false,
+        reason_code: None,
+        reason: None,
+    }
+}
+
+fn sp1_execute_checked_trust_summary() -> ValidationReceiptTrustSummary {
+    ValidationReceiptTrustSummary {
+        state: "sp1_execute_checked",
+        validation_authority: None,
+        commitment_confidence: None,
+        production_verification: false,
+        reason_code: Some("validation_receipt_trust_metadata_missing"),
+        reason: Some(
+            "trusted worker evidence reports SP1 execution but omits validation authority or commitment confidence",
+        ),
+    }
+}
+
+fn missing_trust_metadata_summary() -> ValidationReceiptTrustSummary {
+    ValidationReceiptTrustSummary {
+        state: "worker_evidence_trust_metadata_missing",
+        validation_authority: None,
+        commitment_confidence: None,
+        production_verification: false,
+        reason_code: Some("validation_receipt_trust_metadata_missing"),
+        reason: Some("trusted worker evidence omits validation authority or commitment confidence"),
+    }
+}
+
+fn mismatched_trust_metadata_summary() -> ValidationReceiptTrustSummary {
+    ValidationReceiptTrustSummary {
+        state: "worker_evidence_trust_metadata_mismatch",
+        validation_authority: None,
+        commitment_confidence: None,
+        production_verification: false,
+        reason_code: Some("validation_receipt_trust_metadata_mismatch"),
+        reason: Some(
+            "trusted worker evidence validation authority does not match commitment confidence",
+        ),
+    }
+}
+
+fn invalid_worker_evidence_summary() -> ValidationReceiptTrustSummary {
+    ValidationReceiptTrustSummary {
+        state: "validation_receipt_worker_evidence_invalid",
+        validation_authority: None,
+        commitment_confidence: Some(
+            RadrootsTradeCommitmentConfidence::Invalid
+                .as_str()
+                .to_owned(),
+        ),
+        production_verification: false,
+        reason_code: Some("validation_receipt_worker_evidence_invalid"),
+        reason: Some("trusted worker evidence marks the validation receipt invalid"),
+    }
+}
+
+fn trusted_worker_summary(
+    state: &'static str,
+    authority: &str,
+    confidence: &str,
+    production_verification: bool,
+) -> ValidationReceiptTrustSummary {
+    ValidationReceiptTrustSummary {
+        state,
+        validation_authority: Some(authority.to_owned()),
+        commitment_confidence: Some(confidence.to_owned()),
+        production_verification,
+        reason_code: None,
+        reason: None,
+    }
+}
+
+fn none_proof_trust_summary(
+    worker_evidence: &ValidationReceiptWorkerEvidenceSelection,
+) -> ValidationReceiptTrustSummary {
+    let Some(evidence) = worker_evidence.trusted.as_ref() else {
+        return local_only_trust_summary();
+    };
+    let authority = evidence.validation_authority.as_deref();
+    let confidence = evidence.commitment_confidence.as_deref();
+    if authority.is_none() && confidence.is_none() {
+        return if evidence.sp1_execute_checked {
+            sp1_execute_checked_trust_summary()
+        } else {
+            local_only_trust_summary()
+        };
+    }
+    let (Some(authority), Some(confidence)) = (authority, confidence) else {
+        return missing_trust_metadata_summary();
+    };
+    match (authority, confidence) {
+        ("dev_deterministic_only", "local_only") => local_only_trust_summary(),
+        ("trusted_rhi_service_key", "pending_rhi") => {
+            trusted_worker_summary("pending_rhi_validation", authority, confidence, false)
+        }
+        ("trusted_rhi_service_key", "committed_by_trusted_service") => {
+            trusted_worker_summary("trusted_service_validated", authority, confidence, true)
+        }
+        ("cryptographic_proof_verified", "committed_by_cryptographic_proof") => {
+            trusted_worker_summary("cryptographic_proof_verified", authority, confidence, true)
+        }
+        ("trusted_service_and_proof_verified", "committed_by_trusted_service_and_proof") => {
+            trusted_worker_summary(
+                "trusted_service_and_proof_verified",
+                authority,
+                confidence,
+                true,
+            )
+        }
+        (_, "invalid") => invalid_worker_evidence_summary(),
+        _ => mismatched_trust_metadata_summary(),
+    }
+}
+
+fn verified_sp1_trust_summary(
+    worker_evidence: &ValidationReceiptWorkerEvidenceSelection,
+) -> ValidationReceiptTrustSummary {
+    if let Some(evidence) = worker_evidence.trusted.as_ref()
+        && evidence.validation_authority.as_deref() == Some("trusted_service_and_proof_verified")
+        && evidence.commitment_confidence.as_deref()
+            == Some("committed_by_trusted_service_and_proof")
+    {
+        return trusted_worker_summary(
+            "trusted_service_and_proof_verified",
+            "trusted_service_and_proof_verified",
+            "committed_by_trusted_service_and_proof",
+            true,
+        );
+    }
+    trusted_worker_summary(
+        "sp1_inline_proof_verified",
+        "cryptographic_proof_verified",
+        "committed_by_cryptographic_proof",
+        true,
+    )
+}
+
 fn proof_verification_view_for_receipt(
     receipt: &RadrootsTradeValidationReceipt,
     worker_evidence: ValidationReceiptWorkerEvidenceSelection,
@@ -731,19 +902,14 @@ fn proof_verification_view_for_receipt(
     let proof = &receipt.proof;
     let cryptographic_proof_required = proof.system != RadrootsValidationReceiptProofSystem::None;
     if proof.system == RadrootsValidationReceiptProofSystem::None {
-        let state = if worker_evidence
-            .trusted
-            .as_ref()
-            .is_some_and(|evidence| evidence.sp1_execute_checked)
-        {
-            "sp1_execute_checked"
-        } else {
-            "deterministic_receipt_verified"
-        };
+        let trust = none_proof_trust_summary(&worker_evidence);
         return ValidationReceiptProofVerificationView {
-            state: state.to_owned(),
+            state: trust.state.to_owned(),
             verifier: "radroots_cli_validation_receipt_v1".to_owned(),
             proof_system: proof.system.as_str().to_owned(),
+            validation_authority: trust.validation_authority,
+            commitment_confidence: trust.commitment_confidence,
+            production_verification: trust.production_verification,
             public_values_hash_binding: "verified".to_owned(),
             proof_metadata_binding: "not_required".to_owned(),
             cryptographic_proof_required,
@@ -755,8 +921,8 @@ fn proof_verification_view_for_receipt(
             inline_proof_present: proof.inline_proof_base64.is_some(),
             worker_evidence: worker_evidence.trusted,
             untrusted_worker_evidence: worker_evidence.untrusted,
-            reason_code: None,
-            reason: None,
+            reason_code: trust.reason_code.map(str::to_owned),
+            reason: trust.reason.map(str::to_owned),
         };
     }
     if proof.proof_reference.is_some() {
@@ -794,24 +960,30 @@ fn proof_verification_view_for_receipt(
     }
 
     match verify_inline_sp1_receipt(receipt) {
-        Ok(()) => ValidationReceiptProofVerificationView {
-            state: "sp1_inline_proof_verified".to_owned(),
-            verifier: "radroots_cli_validation_receipt_v1".to_owned(),
-            proof_system: proof.system.as_str().to_owned(),
-            public_values_hash_binding: "verified".to_owned(),
-            proof_metadata_binding: "verified".to_owned(),
-            cryptographic_proof_required,
-            cryptographic_proof_verified: true,
-            mode: proof.mode.clone(),
-            program_hash: proof.program_hash.clone(),
-            verifying_key_hash: proof.verifying_key_hash.clone(),
-            proof_reference: proof.proof_reference.clone(),
-            inline_proof_present: proof.inline_proof_base64.is_some(),
-            worker_evidence: worker_evidence.trusted,
-            untrusted_worker_evidence: worker_evidence.untrusted,
-            reason_code: None,
-            reason: None,
-        },
+        Ok(()) => {
+            let trust = verified_sp1_trust_summary(&worker_evidence);
+            ValidationReceiptProofVerificationView {
+                state: trust.state.to_owned(),
+                verifier: "radroots_cli_validation_receipt_v1".to_owned(),
+                proof_system: proof.system.as_str().to_owned(),
+                validation_authority: trust.validation_authority,
+                commitment_confidence: trust.commitment_confidence,
+                production_verification: trust.production_verification,
+                public_values_hash_binding: "verified".to_owned(),
+                proof_metadata_binding: "verified".to_owned(),
+                cryptographic_proof_required,
+                cryptographic_proof_verified: true,
+                mode: proof.mode.clone(),
+                program_hash: proof.program_hash.clone(),
+                verifying_key_hash: proof.verifying_key_hash.clone(),
+                proof_reference: proof.proof_reference.clone(),
+                inline_proof_present: proof.inline_proof_base64.is_some(),
+                worker_evidence: worker_evidence.trusted,
+                untrusted_worker_evidence: worker_evidence.untrusted,
+                reason_code: trust.reason_code.map(str::to_owned),
+                reason: trust.reason.map(str::to_owned),
+            }
+        }
         Err(error) => {
             let mapped = proof_state_from_sp1_error(&error);
             let reason = error.to_string();
@@ -842,6 +1014,9 @@ fn sp1_unverified_proof_view(
         state: state.to_owned(),
         verifier: "radroots_cli_validation_receipt_v1".to_owned(),
         proof_system: proof.system.as_str().to_owned(),
+        validation_authority: None,
+        commitment_confidence: None,
+        production_verification: false,
         public_values_hash_binding: public_values_hash_binding.to_owned(),
         proof_metadata_binding: proof_metadata_binding.to_owned(),
         cryptographic_proof_required: proof.system != RadrootsValidationReceiptProofSystem::None,
@@ -987,13 +1162,18 @@ fn proof_state_is_invalid(state: &str) -> bool {
             | "sp1_program_hash_mismatch"
             | "sp1_verifying_key_hash_mismatch"
             | "sp1_proof_invalid"
+            | "validation_receipt_worker_evidence_invalid"
+            | "worker_evidence_trust_metadata_mismatch"
     )
 }
 
 fn proof_state_is_verification_success(state: &str) -> bool {
     matches!(
         state,
-        "deterministic_receipt_verified" | "sp1_execute_checked" | "sp1_inline_proof_verified"
+        "trusted_service_validated"
+            | "cryptographic_proof_verified"
+            | "trusted_service_and_proof_verified"
+            | "sp1_inline_proof_verified"
     )
 }
 
@@ -1024,6 +1204,12 @@ fn worker_evidence_view(
     ValidationReceiptWorkerEvidenceView {
         result_event_id: evidence.result_event_id.as_str().to_owned(),
         author: evidence.author.as_str().to_owned(),
+        validation_authority: evidence
+            .validation_authority
+            .map(|authority| authority.as_str().to_owned()),
+        commitment_confidence: evidence
+            .commitment_confidence
+            .map(|confidence| confidence.as_str().to_owned()),
         status: evidence.status,
         prover_backend: evidence.prover_backend,
         proof_mode: evidence.proof_mode,
@@ -1085,6 +1271,9 @@ fn summary_view(
         result: receipt_result_label(receipt.result).to_owned(),
         proof_system: receipt.proof.system.as_str().to_owned(),
         proof_verification_state: proof_verification.state.clone(),
+        validation_authority: proof_verification.validation_authority.clone(),
+        commitment_confidence: proof_verification.commitment_confidence.clone(),
+        production_verification: proof_verification.production_verification,
         event_set_root: receipt.event_set_root.clone(),
         reducer_output_root: receipt.new_state_root.clone(),
         public_values_hash: receipt.public_values_hash.clone(),
@@ -1106,8 +1295,8 @@ fn receipt_result_label(value: RadrootsValidationReceiptResult) -> &'static str 
 mod tests {
     use super::{
         ValidationReceiptWorkerEvidenceSelection, ValidationReceiptWorkerEvidenceView,
-        proof_state_from_sp1_error, proof_state_is_invalid, proof_verification_view_for_receipt,
-        validation_receipt_invalid_reason_code,
+        proof_state_from_sp1_error, proof_state_is_invalid, proof_state_is_verification_success,
+        proof_verification_view_for_receipt, validation_receipt_invalid_reason_code,
     };
     use radroots_sp1_host_trade::RadrootsSp1TradeHostError;
     use radroots_trade::validation_receipt::{
@@ -1173,14 +1362,45 @@ mod tests {
         })
     }
 
+    fn worker_evidence(
+        validation_authority: Option<&str>,
+        commitment_confidence: Option<&str>,
+        sp1_execute_checked: bool,
+    ) -> ValidationReceiptWorkerEvidenceView {
+        ValidationReceiptWorkerEvidenceView {
+            result_event_id: "result-1".to_owned(),
+            author: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            validation_authority: validation_authority.map(str::to_owned),
+            commitment_confidence: commitment_confidence.map(str::to_owned),
+            status: "succeeded".to_owned(),
+            prover_backend: "local_execute".to_owned(),
+            proof_mode: "none".to_owned(),
+            proof_system: "none".to_owned(),
+            proof_generated: false,
+            sp1_execute_checked,
+            sp1_execute_public_values_hash: sp1_execute_checked.then(|| {
+                "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned()
+            }),
+            cryptographic_proof_verified: false,
+            public_values_hash:
+                "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
+        }
+    }
+
     #[test]
-    fn none_receipts_report_deterministic_verification_without_crypto_claim() {
+    fn none_receipts_report_local_only_without_crypto_claim() {
         let view = proof_verification_view_for_receipt(
             &deterministic_receipt(),
             ValidationReceiptWorkerEvidenceSelection::default(),
         );
 
-        assert_eq!(view.state, "deterministic_receipt_verified");
+        assert_eq!(view.state, "local_only_deterministic_receipt");
+        assert_eq!(
+            view.validation_authority.as_deref(),
+            Some("dev_deterministic_only")
+        );
+        assert_eq!(view.commitment_confidence.as_deref(), Some("local_only"));
+        assert!(!view.production_verification);
         assert!(!view.cryptographic_proof_required);
         assert!(!view.cryptographic_proof_verified);
     }
@@ -1190,32 +1410,65 @@ mod tests {
         let view = proof_verification_view_for_receipt(
             &deterministic_receipt(),
             ValidationReceiptWorkerEvidenceSelection {
-                trusted: Some(ValidationReceiptWorkerEvidenceView {
-                    result_event_id: "result-1".to_owned(),
-                    author: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-                    status: "succeeded".to_owned(),
-                    prover_backend: "local_execute".to_owned(),
-                    proof_mode: "none".to_owned(),
-                    proof_system: "none".to_owned(),
-                    proof_generated: false,
-                    sp1_execute_checked: true,
-                    sp1_execute_public_values_hash: Some(
-                        "0x5555555555555555555555555555555555555555555555555555555555555555"
-                            .to_owned(),
-                    ),
-                    cryptographic_proof_verified: false,
-                    public_values_hash:
-                        "0x5555555555555555555555555555555555555555555555555555555555555555"
-                            .to_owned(),
-                }),
+                trusted: Some(worker_evidence(None, None, true)),
                 untrusted: None,
             },
         );
 
         assert_eq!(view.state, "sp1_execute_checked");
+        assert_eq!(
+            view.reason_code.as_deref(),
+            Some("validation_receipt_trust_metadata_missing")
+        );
+        assert!(!view.production_verification);
         assert!(!view.cryptographic_proof_required);
         assert!(!view.cryptographic_proof_verified);
+    }
+
+    #[test]
+    fn none_receipts_surface_trusted_service_confidence_as_production_verification() {
+        let view = proof_verification_view_for_receipt(
+            &deterministic_receipt(),
+            ValidationReceiptWorkerEvidenceSelection {
+                trusted: Some(worker_evidence(
+                    Some("trusted_rhi_service_key"),
+                    Some("committed_by_trusted_service"),
+                    false,
+                )),
+                untrusted: None,
+            },
+        );
+
+        assert_eq!(view.state, "trusted_service_validated");
+        assert_eq!(
+            view.validation_authority.as_deref(),
+            Some("trusted_rhi_service_key")
+        );
+        assert_eq!(
+            view.commitment_confidence.as_deref(),
+            Some("committed_by_trusted_service")
+        );
+        assert!(view.production_verification);
+        assert!(proof_state_is_verification_success(view.state.as_str()));
+    }
+
+    #[test]
+    fn invalid_worker_evidence_marks_receipt_invalid() {
+        let view = proof_verification_view_for_receipt(
+            &deterministic_receipt(),
+            ValidationReceiptWorkerEvidenceSelection {
+                trusted: Some(worker_evidence(
+                    Some("trusted_rhi_service_key"),
+                    Some("invalid"),
+                    false,
+                )),
+                untrusted: None,
+            },
+        );
+
+        assert_eq!(view.state, "validation_receipt_worker_evidence_invalid");
+        assert!(proof_state_is_invalid(view.state.as_str()));
+        assert!(!view.production_verification);
     }
 
     #[test]
@@ -1224,31 +1477,35 @@ mod tests {
             &deterministic_receipt(),
             ValidationReceiptWorkerEvidenceSelection {
                 trusted: None,
-                untrusted: Some(ValidationReceiptWorkerEvidenceView {
-                    result_event_id: "result-1".to_owned(),
-                    author: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_owned(),
-                    status: "succeeded".to_owned(),
-                    prover_backend: "local_execute".to_owned(),
-                    proof_mode: "none".to_owned(),
-                    proof_system: "none".to_owned(),
-                    proof_generated: false,
-                    sp1_execute_checked: true,
-                    sp1_execute_public_values_hash: Some(
-                        "0x5555555555555555555555555555555555555555555555555555555555555555"
-                            .to_owned(),
-                    ),
-                    cryptographic_proof_verified: false,
-                    public_values_hash:
-                        "0x5555555555555555555555555555555555555555555555555555555555555555"
-                            .to_owned(),
-                }),
+                untrusted: Some(worker_evidence(
+                    Some("trusted_rhi_service_key"),
+                    Some("committed_by_trusted_service"),
+                    true,
+                )),
             },
         );
 
-        assert_eq!(view.state, "deterministic_receipt_verified");
+        assert_eq!(view.state, "local_only_deterministic_receipt");
+        assert!(!view.production_verification);
         assert!(view.worker_evidence.is_none());
         assert!(view.untrusted_worker_evidence.is_some());
+    }
+
+    #[test]
+    fn production_verification_success_excludes_local_only_and_sp1_execute_checked() {
+        assert!(!proof_state_is_verification_success(
+            "local_only_deterministic_receipt"
+        ));
+        assert!(!proof_state_is_verification_success("sp1_execute_checked"));
+        assert!(proof_state_is_verification_success(
+            "trusted_service_validated"
+        ));
+        assert!(proof_state_is_verification_success(
+            "sp1_inline_proof_verified"
+        ));
+        assert!(proof_state_is_verification_success(
+            "trusted_service_and_proof_verified"
+        ));
     }
 
     #[test]

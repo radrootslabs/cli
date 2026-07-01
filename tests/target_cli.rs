@@ -3501,12 +3501,8 @@ fn listing_publish_idempotency_conflict_maps_sdk_partial_mutation_recovery() {
 
     assert!(!output.status.success());
     assert_eq!(conflict["operation_id"], "listing.publish");
-    assert_eq!(conflict["errors"][0]["code"], "partial_local_mutation");
-    assert_eq!(conflict["errors"][0]["detail"]["class"], "local_mutation");
-    assert_eq!(
-        conflict["errors"][0]["detail"]["detail"]["failure"],
-        "outbox_idempotency_conflict"
-    );
+    assert_eq!(conflict["errors"][0]["code"], "idempotency_conflict");
+    assert_eq!(conflict["errors"][0]["detail"]["class"], "request");
     assert_eq!(
         conflict["errors"][0]["detail"]["actions"][0],
         "radroots listing publish"

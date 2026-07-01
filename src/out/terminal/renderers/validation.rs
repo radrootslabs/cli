@@ -97,6 +97,8 @@ fn push_proof_fields(document: &mut TerminalDocument, result: &Value) {
     };
     common::push_field(document, "Proof", proof_state_label(proof));
     common::push_path_field(document, "Proof system", proof, &["proof_system"]);
+    common::push_path_field(document, "Authority", proof, &["validation_authority"]);
+    common::push_path_field(document, "Confidence", proof, &["commitment_confidence"]);
     common::push_bool_field(
         document,
         "Cryptographic proof",
@@ -171,6 +173,25 @@ fn push_relay_field(document: &mut TerminalDocument, result: &Value) {
 }
 
 fn proof_state_label(proof: &Value) -> String {
+    match common::string(proof, &["state"]).as_deref() {
+        Some("local_only_deterministic_receipt") => return "local-only deterministic".to_owned(),
+        Some("pending_rhi_validation") => return "pending RHI".to_owned(),
+        Some("trusted_service_validated") => return "trusted service".to_owned(),
+        Some("trusted_service_and_proof_verified") => return "trusted service + proof".to_owned(),
+        Some("sp1_inline_proof_verified") => return "cryptographic proof".to_owned(),
+        Some("cryptographic_proof_verified") => return "cryptographic proof".to_owned(),
+        Some("sp1_execute_checked") => return "SP1 execute checked".to_owned(),
+        Some("worker_evidence_trust_metadata_missing") => {
+            return "trust metadata missing".to_owned();
+        }
+        Some("worker_evidence_trust_metadata_mismatch") => {
+            return "trust metadata mismatch".to_owned();
+        }
+        Some("validation_receipt_worker_evidence_invalid") => {
+            return "worker evidence invalid".to_owned();
+        }
+        _ => {}
+    }
     if common::bool_path(proof, &["cryptographic_proof_verified"]) == Some(true) {
         return "verified".to_owned();
     }
@@ -182,8 +203,16 @@ fn proof_state_label(proof: &Value) -> String {
 
 fn proof_summary_from_summary(receipt: &Value) -> String {
     match common::string(receipt, &["proof_verification_state"]).as_deref() {
-        Some("deterministic_receipt_verified") => "not required".to_owned(),
-        Some("sp1_execute_checked") => "not required".to_owned(),
+        Some("local_only_deterministic_receipt") => "local-only".to_owned(),
+        Some("pending_rhi_validation") => "pending RHI".to_owned(),
+        Some("trusted_service_validated") => "trusted service".to_owned(),
+        Some("trusted_service_and_proof_verified") => "trusted+proof".to_owned(),
+        Some("sp1_inline_proof_verified") => "proof verified".to_owned(),
+        Some("cryptographic_proof_verified") => "proof verified".to_owned(),
+        Some("sp1_execute_checked") => "execute checked".to_owned(),
+        Some("worker_evidence_trust_metadata_missing") => "trust missing".to_owned(),
+        Some("worker_evidence_trust_metadata_mismatch") => "trust mismatch".to_owned(),
+        Some("validation_receipt_worker_evidence_invalid") => "invalid".to_owned(),
         Some(_) => "available".to_owned(),
         None => String::new(),
     }
@@ -259,5 +288,72 @@ mod tests {
 
         assert!(rendered.contains("Proof                unverified"));
         assert!(!rendered.contains("Proof                verified"));
+    }
+
+    #[test]
+    fn proof_output_renders_local_only_trust_state() {
+        let envelope = success_envelope(
+            "validation.receipt.verify",
+            json!({
+                "state": "invalid",
+                "receipt_event_id": "receipt_test",
+                "order_id": "trade_test",
+                "validation_state": "invalid",
+                "proof_verification": {
+                    "state": "local_only_deterministic_receipt",
+                    "proof_system": "none",
+                    "validation_authority": "dev_deterministic_only",
+                    "commitment_confidence": "local_only",
+                    "production_verification": false,
+                    "cryptographic_proof_required": false,
+                    "cryptographic_proof_verified": false,
+                    "verifier": "radroots_cli_validation_receipt_v1"
+                },
+                "actions": []
+            }),
+        );
+        let document = VALIDATION_RENDERER.render(&envelope, &TerminalRenderContext::default());
+        let rendered = render_terminal_document(&document, &TerminalRenderContext::default());
+
+        assert!(rendered.contains("Proof                local-only deterministic"));
+        assert!(rendered.contains("Authority            dev_deterministic_only"));
+        assert!(rendered.contains("Confidence           local_only"));
+        assert!(!rendered.contains("Proof                verified"));
+    }
+
+    #[test]
+    fn receipt_list_summarizes_trust_state() {
+        let envelope = success_envelope(
+            "validation.receipt.list",
+            json!({
+                "state": "listed",
+                "order_id": "trade_test",
+                "count": 2,
+                "valid_count": 2,
+                "invalid_count": 0,
+                "receipts": [
+                    {
+                        "receipt_event_id": "receipt_local",
+                        "result": "valid",
+                        "proof_verification_state": "local_only_deterministic_receipt",
+                        "receipt_type": "trade_transition"
+                    },
+                    {
+                        "receipt_event_id": "receipt_trusted",
+                        "result": "valid",
+                        "proof_verification_state": "trusted_service_validated",
+                        "receipt_type": "trade_transition"
+                    }
+                ],
+                "invalid_receipts": [],
+                "actions": []
+            }),
+        );
+        let document = VALIDATION_RENDERER.render(&envelope, &TerminalRenderContext::default());
+        let rendered = render_terminal_document(&document, &TerminalRenderContext::default());
+
+        assert!(rendered.contains("local-only"));
+        assert!(rendered.contains("trusted service"));
+        assert!(!rendered.contains("not required"));
     }
 }
