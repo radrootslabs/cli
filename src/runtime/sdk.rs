@@ -884,13 +884,6 @@ mod tests {
             reason: "relay ingest into the derived projection cache",
             lifecycle: "retain until relay ingest and derived projection repair migrate to SDK APIs",
         },
-        DirectRelayConsumerException {
-            path: "src/runtime/validation_receipt.rs",
-            required_tokens: &["fetch_events_from_relays", "DirectRelayFetchReceipt"],
-            owner: "validation.receipt.relay-reads",
-            reason: "non-migrated validation receipt relay inspection",
-            lifecycle: "retain until validation receipt inspection migrates to SDK APIs",
-        },
     ];
 
     const MIGRATED_CLI_PATH_GUARDS: &[MigratedCliPathGuard] = &[
@@ -967,6 +960,30 @@ mod tests {
                 "OrderStatusView",
                 "OrderStatusLifecycleView",
                 "OrderStatusSdkReceiptView",
+            ],
+        },
+        MigratedCliPathGuard {
+            label: "validation receipt SDK list",
+            path: "src/runtime/validation_receipt.rs",
+            start: "pub fn list(",
+            end: "fn inspect_event(",
+            required_tokens: &[
+                "TradeValidationReceiptListRequest::parse",
+                ".validation_receipts()",
+                ".list(request)",
+            ],
+        },
+        MigratedCliPathGuard {
+            label: "validation receipt SDK inspection",
+            path: "src/runtime/validation_receipt.rs",
+            start: "fn inspect_event(",
+            end: "fn inspection_from_sdk_receipt(",
+            required_tokens: &[
+                "TradeValidationReceiptInspectRequest::parse",
+                "TradeValidationReceiptVerifyRequest::parse",
+                ".validation_receipts()",
+                ".inspect(request)",
+                ".verify(request)",
             ],
         },
         MigratedCliPathGuard {

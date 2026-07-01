@@ -1,28 +1,23 @@
-use std::collections::{BTreeMap, BTreeSet};
-
-use radroots_events::kinds::{KIND_TRADE_TRANSITION_PROOF_RESULT, KIND_TRADE_VALIDATION_RECEIPT};
-use radroots_nostr::prelude::{
-    RadrootsNostrEvent, RadrootsNostrEventId, RadrootsNostrFilter, RadrootsNostrKind,
-    radroots_event_from_nostr, radroots_nostr_filter_tag,
+use radroots_sdk::{
+    RadrootsSdkError, TradeValidationReceiptEvent, TradeValidationReceiptInspectReceipt,
+    TradeValidationReceiptInspectRequest, TradeValidationReceiptInvalidCandidate,
+    TradeValidationReceiptListReceipt, TradeValidationReceiptListRequest,
+    TradeValidationReceiptRelayOutcomeKind, TradeValidationReceiptRelayOutcomeReceipt,
+    TradeValidationReceiptTags, TradeValidationReceiptVerifyRequest,
+    TradeValidationReceiptWorkerEvidence,
+    TradeValidationReceiptWorkerEvidenceSelection as SdkWorkerEvidenceSelection,
 };
+use radroots_sp1_host_trade::RadrootsSp1TradeHostError;
 use radroots_sp1_host_trade::verify_order_acceptance_validation_receipt_inline_sp1_proof;
-use radroots_sp1_host_trade::{
-    RadrootsSp1TradeHostError, RadrootsSp1TradeProofMode, RadrootsSp1TradeProverBackend,
-    RadrootsSp1TradeWorkerResultPayload, RadrootsSp1TradeWorkerResultStatus,
-    RadrootsSp1TradeWorkerRole,
-};
 use radroots_trade::validation_receipt::{
-    RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
-    RadrootsValidationReceiptExpectedBinding, RadrootsValidationReceiptProofSystem,
-    RadrootsValidationReceiptResult, RadrootsValidationReceiptTags, RadrootsValidationReceiptType,
-    verify_validation_receipt_event,
+    RadrootsTradeValidationReceipt, RadrootsValidationReceiptProofSystem,
+    RadrootsValidationReceiptResult, RadrootsValidationReceiptType,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::direct_relay::{
-    DirectRelayFailure, DirectRelayFetchError, DirectRelayFetchReceipt, fetch_events_from_relays,
-};
+use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession};
 use crate::view::runtime::{CommandDisposition, RelayFailureView};
 
 #[derive(Debug, Clone)]
@@ -51,6 +46,7 @@ pub struct ValidationReceiptInspectionView {
     pub failed_relays: Vec<RelayFailureView>,
     pub reason_code: Option<String>,
     pub reason: Option<String>,
+    pub sdk_error: Option<Value>,
     pub actions: Vec<String>,
 }
 
@@ -81,6 +77,7 @@ pub struct ValidationReceiptListView {
     pub failed_relays: Vec<RelayFailureView>,
     pub reason_code: Option<String>,
     pub reason: Option<String>,
+    pub sdk_error: Option<Value>,
     pub actions: Vec<String>,
 }
 
@@ -198,66 +195,6 @@ enum ValidationReceiptCommandIntent {
     Verify,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawValidationReceiptWorkerResultPayload {
-    cryptographic_proof_verified: bool,
-    decision_event_id: Option<String>,
-    event_set_root: Option<String>,
-    listing_event_id: Option<String>,
-    order_id: Option<String>,
-    proof_generated: bool,
-    proof_mode: String,
-    proof_system: String,
-    public_values_hash: String,
-    prover_backend: String,
-    receipt_kind: Option<u32>,
-    receipt_event_id: String,
-    reducer_output_root: Option<String>,
-    request_event_id: Option<String>,
-    sp1_execute_checked: bool,
-    sp1_execute_public_values_hash: Option<String>,
-    status: String,
-    worker_role: Option<String>,
-}
-
-impl RawValidationReceiptWorkerResultPayload {
-    fn typed(&self) -> Option<RadrootsSp1TradeWorkerResultPayload> {
-        Some(RadrootsSp1TradeWorkerResultPayload {
-            cryptographic_proof_verified: self.cryptographic_proof_verified,
-            decision_event_id: self.decision_event_id.clone(),
-            event_set_root: self.event_set_root.clone(),
-            listing_event_id: self.listing_event_id.clone(),
-            order_id: self.order_id.clone(),
-            proof_generated: self.proof_generated,
-            proof_mode: RadrootsSp1TradeProofMode::from_label(self.proof_mode.as_str())?,
-            proof_system: RadrootsValidationReceiptProofSystem::from_label(
-                self.proof_system.as_str(),
-            )?,
-            public_values_hash: self.public_values_hash.clone(),
-            prover_backend: RadrootsSp1TradeProverBackend::from_label(
-                self.prover_backend.as_str(),
-            )?,
-            receipt_event_id: self.receipt_event_id.clone(),
-            receipt_kind: self.receipt_kind,
-            reducer_output_root: self.reducer_output_root.clone(),
-            request_event_id: self.request_event_id.clone(),
-            sp1_execute_checked: self.sp1_execute_checked,
-            sp1_execute_public_values_hash: self.sp1_execute_public_values_hash.clone(),
-            status: match self.status.as_str() {
-                "succeeded" => RadrootsSp1TradeWorkerResultStatus::Succeeded,
-                _ => return None,
-            },
-            worker_role: match self.worker_role.as_deref() {
-                Some("non_authoritative_prover") => {
-                    Some(RadrootsSp1TradeWorkerRole::NonAuthoritativeProver)
-                }
-                Some(_) => return None,
-                None => None,
-            },
-        })
-    }
-}
-
 pub fn get(
     config: &RuntimeConfig,
     args: &ValidationReceiptEventArgs,
@@ -291,15 +228,24 @@ pub fn list(config: &RuntimeConfig, args: &ValidationReceiptListArgs) -> Validat
             "validation receipt list requires non-empty `order_id`",
         );
     }
-    let filter = match validation_receipt_order_filter(order_id) {
-        Ok(filter) => filter,
-        Err(reason) => return invalid_list_view(order_id.to_owned(), "invalid_order_id", reason),
+    let request = match TradeValidationReceiptListRequest::parse(order_id).and_then(|request| {
+        request.try_with_trusted_worker_pubkeys(
+            config.rhi.trusted_worker_pubkeys.iter().map(String::as_str),
+        )
+    }) {
+        Ok(request) => request,
+        Err(error) => {
+            return list_sdk_error_view(order_id, CliSdkAdapterError::Sdk(error));
+        }
     };
-    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
-        Ok(receipt) => receipt,
-        Err(error) => return list_fetch_error_view(order_id, error),
+    let session = match CliSdkSession::connect(config) {
+        Ok(session) => session,
+        Err(error) => return list_sdk_error_view(order_id, error),
     };
-    list_from_fetch_receipt(config, order_id, receipt)
+    match session.block_on(session.sdk().trades().validation_receipts().list(request)) {
+        Ok(receipt) => list_from_sdk_receipt(receipt),
+        Err(error) => list_sdk_error_view(order_id, CliSdkAdapterError::Sdk(error)),
+    }
 }
 
 fn inspect_event(
@@ -316,47 +262,82 @@ fn inspect_event(
             "validation receipt command requires non-empty `receipt_event_id`",
         );
     }
-    let event_id = match RadrootsNostrEventId::parse(receipt_event_id) {
-        Ok(event_id) => event_id,
-        Err(error) => {
-            return invalid_inspection_view(
-                Some(receipt_event_id.to_owned()),
-                "invalid_receipt_event_id",
-                format!("invalid validation receipt event id `{receipt_event_id}`: {error}"),
-            );
+    let trusted_worker_pubkeys = config.rhi.trusted_worker_pubkeys.iter().map(String::as_str);
+    let session = match CliSdkSession::connect(config) {
+        Ok(session) => session,
+        Err(error) => return inspection_sdk_error_view(receipt_event_id, error),
+    };
+    match intent {
+        ValidationReceiptCommandIntent::Inspect => {
+            let request = match TradeValidationReceiptInspectRequest::parse(receipt_event_id)
+                .and_then(|request| request.try_with_trusted_worker_pubkeys(trusted_worker_pubkeys))
+            {
+                Ok(request) => request,
+                Err(error) => {
+                    return inspection_sdk_error_view(
+                        receipt_event_id,
+                        CliSdkAdapterError::Sdk(error),
+                    );
+                }
+            };
+            match session.block_on(
+                session
+                    .sdk()
+                    .trades()
+                    .validation_receipts()
+                    .inspect(request),
+            ) {
+                Ok(receipt) => {
+                    inspection_from_sdk_receipt(receipt_event_id, success_state, intent, receipt)
+                }
+                Err(error) => {
+                    inspection_sdk_error_view(receipt_event_id, CliSdkAdapterError::Sdk(error))
+                }
+            }
         }
-    };
-    let filter = RadrootsNostrFilter::new().id(event_id);
-    let receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
-        Ok(receipt) => receipt,
-        Err(error) => return inspection_fetch_error_view(receipt_event_id, error),
-    };
-    inspection_from_fetch_receipt(config, receipt_event_id, success_state, intent, receipt)
+        ValidationReceiptCommandIntent::Verify => {
+            let request = match TradeValidationReceiptVerifyRequest::parse(receipt_event_id)
+                .and_then(|request| request.try_with_trusted_worker_pubkeys(trusted_worker_pubkeys))
+            {
+                Ok(request) => request,
+                Err(error) => {
+                    return inspection_sdk_error_view(
+                        receipt_event_id,
+                        CliSdkAdapterError::Sdk(error),
+                    );
+                }
+            };
+            match session.block_on(session.sdk().trades().validation_receipts().verify(request)) {
+                Ok(receipt) => {
+                    inspection_from_sdk_receipt(receipt_event_id, success_state, intent, receipt)
+                }
+                Err(error) => {
+                    inspection_sdk_error_view(receipt_event_id, CliSdkAdapterError::Sdk(error))
+                }
+            }
+        }
+    }
 }
 
-fn validation_receipt_order_filter(order_id: &str) -> Result<RadrootsNostrFilter, String> {
-    let filter = RadrootsNostrFilter::new().kind(RadrootsNostrKind::Custom(
-        KIND_TRADE_VALIDATION_RECEIPT as u16,
-    ));
-    radroots_nostr_filter_tag(filter, "d", vec![order_id.to_owned()])
-        .map_err(|error| format!("build validation receipt order filter: {error}"))
-}
-
-fn inspection_from_fetch_receipt(
-    config: &RuntimeConfig,
+fn inspection_from_sdk_receipt(
     receipt_event_id: &str,
     success_state: &str,
     intent: ValidationReceiptCommandIntent,
-    fetch_receipt: DirectRelayFetchReceipt,
+    sdk_receipt: TradeValidationReceiptInspectReceipt,
 ) -> ValidationReceiptInspectionView {
-    let DirectRelayFetchReceipt {
-        target_relays,
-        connected_relays,
-        failed_relays,
-        mut events,
-    } = fetch_receipt;
-    events.sort_by_key(|event| event.created_at.as_secs());
-    let Some(event) = events.into_iter().next() else {
+    let target_relays = sdk_receipt.relay_targets;
+    let connected_relays = connected_relays(&sdk_receipt.relay_evidence.relays);
+    let failed_relays = sdk_relay_failures(&sdk_receipt.relay_evidence.relays);
+    let reason_code = (!failed_relays.is_empty()).then_some("relay_fetch_partial".to_owned());
+    if let Some(invalid) = sdk_receipt.invalid_receipt {
+        return invalid_inspected_event_view(
+            invalid,
+            target_relays,
+            connected_relays,
+            failed_relays,
+        );
+    }
+    let Some(receipt) = sdk_receipt.receipt else {
         return ValidationReceiptInspectionView {
             state: "missing".to_owned(),
             resource: Some(validation_receipt_resource(receipt_event_id)),
@@ -369,181 +350,136 @@ fn inspection_from_fetch_receipt(
             event: None,
             target_relays,
             connected_relays,
-            failed_relays: relay_failures(failed_relays),
+            failed_relays,
             reason_code: Some("validation_receipt_not_found".to_owned()),
             reason: Some(format!(
                 "validation receipt event `{receipt_event_id}` was not found on configured relays"
             )),
+            sdk_error: None,
             actions: Vec::new(),
         };
     };
     inspected_event_view(
-        config,
+        receipt,
         success_state,
         intent,
-        event,
         target_relays,
         connected_relays,
         failed_relays,
+        reason_code,
     )
 }
 
 fn inspected_event_view(
-    config: &RuntimeConfig,
+    sdk_receipt: TradeValidationReceiptEvent,
     success_state: &str,
     intent: ValidationReceiptCommandIntent,
-    event: RadrootsNostrEvent,
     target_relays: Vec<String>,
     connected_relays: Vec<String>,
-    failed_relays: Vec<DirectRelayFailure>,
+    failed_relays: Vec<RelayFailureView>,
+    relay_reason_code: Option<String>,
 ) -> ValidationReceiptInspectionView {
-    let converted = radroots_event_from_nostr(&event);
-    match verify_validation_receipt_event(
-        &converted,
-        RadrootsValidationReceiptExpectedBinding::default(),
-    ) {
-        Ok(verified) => {
-            let event_id = converted.id.clone();
-            let order_id = verified.tags.order_id.clone();
-            let proof_verification =
-                proof_verification_view(config, &event_id, &verified.receipt, &verified.tags);
-            let reason_code =
-                (!failed_relays.is_empty()).then_some("relay_fetch_partial".to_owned());
-            let accepted = match intent {
-                ValidationReceiptCommandIntent::Inspect => {
-                    !proof_state_is_invalid(proof_verification.state.as_str())
-                }
-                ValidationReceiptCommandIntent::Verify => {
-                    proof_state_is_verification_success(proof_verification.state.as_str())
-                }
-            };
-            if !accepted {
-                return ValidationReceiptInspectionView {
-                    state: "invalid".to_owned(),
-                    resource: Some(validation_receipt_resource(&event_id)),
-                    receipt_event_id: Some(event_id),
-                    order_id: Some(order_id),
-                    validation_state: "invalid".to_owned(),
-                    proof_verification: Some(proof_verification.clone()),
-                    receipt: Some(verified.receipt),
-                    receipt_tags: Some(tags_view(&verified.tags)),
-                    event: Some(event_view(converted)),
-                    target_relays,
-                    connected_relays,
-                    failed_relays: relay_failures(failed_relays),
-                    reason_code: proof_verification.reason_code.clone(),
-                    reason: proof_verification.reason.clone(),
-                    actions: Vec::new(),
-                };
-            }
-            ValidationReceiptInspectionView {
-                state: success_state.to_owned(),
-                resource: Some(validation_receipt_resource(&event_id)),
-                receipt_event_id: Some(event_id),
-                order_id: Some(order_id),
-                validation_state: "valid".to_owned(),
-                proof_verification: Some(proof_verification),
-                receipt: Some(verified.receipt),
-                receipt_tags: Some(tags_view(&verified.tags)),
-                event: Some(event_view(converted)),
-                target_relays,
-                connected_relays,
-                failed_relays: relay_failures(failed_relays),
-                reason_code,
-                reason: None,
-                actions: Vec::new(),
-            }
+    let event_id = sdk_receipt.event.id.clone();
+    let order_id = sdk_receipt.tags.order_id.clone();
+    let proof_verification = proof_verification_view_for_receipt(
+        &sdk_receipt.receipt,
+        sdk_worker_evidence_selection(sdk_receipt.worker_evidence),
+    );
+    let accepted = match intent {
+        ValidationReceiptCommandIntent::Inspect => {
+            !proof_state_is_invalid(proof_verification.state.as_str())
         }
-        Err(error) => {
-            let reason_code = validation_receipt_invalid_reason_code(&error);
-            let proof_verification = invalid_proof_verification_view(&error);
-            ValidationReceiptInspectionView {
-                state: "invalid".to_owned(),
-                resource: Some(validation_receipt_resource(&converted.id)),
-                receipt_event_id: Some(converted.id.clone()),
-                order_id: None,
-                validation_state: "invalid".to_owned(),
-                proof_verification,
-                receipt: None,
-                receipt_tags: None,
-                event: Some(event_view(converted)),
-                target_relays,
-                connected_relays,
-                failed_relays: relay_failures(failed_relays),
-                reason_code: Some(reason_code.to_owned()),
-                reason: Some(error.to_string()),
-                actions: Vec::new(),
-            }
+        ValidationReceiptCommandIntent::Verify => {
+            proof_state_is_verification_success(proof_verification.state.as_str())
         }
+    };
+    if !accepted {
+        return ValidationReceiptInspectionView {
+            state: "invalid".to_owned(),
+            resource: Some(validation_receipt_resource(&event_id)),
+            receipt_event_id: Some(event_id),
+            order_id: Some(order_id),
+            validation_state: "invalid".to_owned(),
+            proof_verification: Some(proof_verification.clone()),
+            receipt: Some(sdk_receipt.receipt),
+            receipt_tags: Some(tags_view(&sdk_receipt.tags)),
+            event: Some(event_view(sdk_receipt.event)),
+            target_relays,
+            connected_relays,
+            failed_relays,
+            reason_code: proof_verification.reason_code.clone(),
+            reason: proof_verification.reason.clone(),
+            sdk_error: None,
+            actions: Vec::new(),
+        };
     }
-}
-
-fn list_from_fetch_receipt(
-    config: &RuntimeConfig,
-    order_id: &str,
-    fetch_receipt: DirectRelayFetchReceipt,
-) -> ValidationReceiptListView {
-    let DirectRelayFetchReceipt {
+    ValidationReceiptInspectionView {
+        state: success_state.to_owned(),
+        resource: Some(validation_receipt_resource(&event_id)),
+        receipt_event_id: Some(event_id),
+        order_id: Some(order_id),
+        validation_state: "valid".to_owned(),
+        proof_verification: Some(proof_verification),
+        receipt: Some(sdk_receipt.receipt),
+        receipt_tags: Some(tags_view(&sdk_receipt.tags)),
+        event: Some(event_view(sdk_receipt.event)),
         target_relays,
         connected_relays,
         failed_relays,
-        mut events,
-    } = fetch_receipt;
-    events.sort_by(|left, right| {
-        left.created_at
-            .as_secs()
-            .cmp(&right.created_at.as_secs())
-            .then_with(|| left.id.to_hex().cmp(&right.id.to_hex()))
-    });
-    let mut verified_receipts = Vec::new();
-    let mut invalid_receipts = Vec::new();
-
-    for event in events {
-        let converted = radroots_event_from_nostr(&event);
-        match verify_validation_receipt_event(
-            &converted,
-            RadrootsValidationReceiptExpectedBinding {
-                order_id: Some(order_id),
-                ..RadrootsValidationReceiptExpectedBinding::default()
-            },
-        ) {
-            Ok(verified) => {
-                verified_receipts.push((converted, verified.receipt, verified.tags));
-            }
-            Err(error) => {
-                let reason_code = validation_receipt_invalid_reason_code(&error);
-                invalid_receipts.push(ValidationReceiptInvalidCandidateView {
-                    receipt_event_id: converted.id,
-                    kind: converted.kind,
-                    reason_code: reason_code.to_owned(),
-                    reason: error.to_string(),
-                    proof_verification: invalid_proof_verification_view(&error),
-                });
-            }
-        }
+        reason_code: relay_reason_code,
+        reason: None,
+        sdk_error: None,
+        actions: Vec::new(),
     }
+}
 
-    let evidence_bindings = verified_receipts
-        .iter()
-        .map(|(event, receipt, tags)| WorkerEvidenceReceiptBinding {
-            receipt_event_id: event.id.as_str(),
-            receipt,
-            tags,
-        })
+fn invalid_inspected_event_view(
+    invalid: TradeValidationReceiptInvalidCandidate,
+    target_relays: Vec<String>,
+    connected_relays: Vec<String>,
+    failed_relays: Vec<RelayFailureView>,
+) -> ValidationReceiptInspectionView {
+    ValidationReceiptInspectionView {
+        state: "invalid".to_owned(),
+        resource: Some(validation_receipt_resource(&invalid.event.id)),
+        receipt_event_id: Some(invalid.event.id.clone()),
+        order_id: None,
+        validation_state: "invalid".to_owned(),
+        proof_verification: None,
+        receipt: None,
+        receipt_tags: None,
+        event: Some(event_view(invalid.event)),
+        target_relays,
+        connected_relays,
+        failed_relays,
+        reason_code: Some(invalid.reason_code),
+        reason: Some(invalid.reason),
+        sdk_error: None,
+        actions: Vec::new(),
+    }
+}
+
+fn list_from_sdk_receipt(
+    sdk_receipt: TradeValidationReceiptListReceipt,
+) -> ValidationReceiptListView {
+    let target_relays = sdk_receipt.relay_targets;
+    let connected_relays = connected_relays(&sdk_receipt.relay_evidence.relays);
+    let failed_relays = sdk_relay_failures(&sdk_receipt.relay_evidence.relays);
+    let mut invalid_receipts = sdk_receipt
+        .invalid_receipts
+        .into_iter()
+        .map(invalid_candidate_view)
         .collect::<Vec<_>>();
-    let mut worker_evidence = worker_evidence_for_receipts(config, &evidence_bindings);
     let mut receipts = Vec::new();
-    for (event, receipt, tags) in verified_receipts {
+    for sdk_event in sdk_receipt.receipts {
         let proof_verification = proof_verification_view_for_receipt(
-            &receipt,
-            worker_evidence
-                .remove(event.id.as_str())
-                .unwrap_or_default(),
+            &sdk_event.receipt,
+            sdk_worker_evidence_selection(sdk_event.worker_evidence),
         );
         if proof_state_is_invalid(proof_verification.state.as_str()) {
             invalid_receipts.push(ValidationReceiptInvalidCandidateView {
-                receipt_event_id: event.id,
-                kind: event.kind,
+                receipt_event_id: sdk_event.event.id,
+                kind: sdk_event.event.kind,
                 reason_code: proof_verification
                     .reason_code
                     .clone()
@@ -554,11 +490,15 @@ fn list_from_fetch_receipt(
                 proof_verification: Some(proof_verification),
             });
         } else {
-            receipts.push(summary_view(&event, &receipt, &tags, &proof_verification));
+            receipts.push(summary_view(
+                &sdk_event.event,
+                &sdk_event.receipt,
+                &sdk_event.tags,
+                &proof_verification,
+            ));
         }
     }
 
-    let failed_relays = relay_failures(failed_relays);
     let valid_count = receipts.len();
     let invalid_count = invalid_receipts.len();
     let state = if valid_count > 0 && invalid_count > 0 {
@@ -589,7 +529,7 @@ fn list_from_fetch_receipt(
 
     ValidationReceiptListView {
         state: state.to_owned(),
-        order_id: order_id.to_owned(),
+        order_id: sdk_receipt.order_id.as_str().to_owned(),
         count: valid_count + invalid_count,
         valid_count,
         invalid_count,
@@ -600,18 +540,18 @@ fn list_from_fetch_receipt(
         failed_relays,
         reason_code,
         reason,
+        sdk_error: None,
         actions: Vec::new(),
     }
 }
 
-fn inspection_fetch_error_view(
+fn inspection_sdk_error_view(
     receipt_event_id: &str,
-    error: DirectRelayFetchError,
+    error: CliSdkAdapterError,
 ) -> ValidationReceiptInspectionView {
-    let (state, reason_code, reason, target_relays, connected_relays, failed_relays, actions) =
-        fetch_error_parts(error);
+    let mapped = validation_receipt_sdk_error_parts(error);
     ValidationReceiptInspectionView {
-        state,
+        state: mapped.state,
         resource: Some(validation_receipt_resource(receipt_event_id)),
         receipt_event_id: Some(receipt_event_id.to_owned()),
         order_id: None,
@@ -620,105 +560,86 @@ fn inspection_fetch_error_view(
         receipt: None,
         receipt_tags: None,
         event: None,
-        target_relays,
-        connected_relays,
-        failed_relays,
-        reason_code: Some(reason_code),
-        reason: Some(reason),
-        actions,
+        target_relays: Vec::new(),
+        connected_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        reason_code: Some(mapped.reason_code),
+        reason: Some(mapped.reason),
+        sdk_error: mapped.sdk_error,
+        actions: mapped.actions,
     }
 }
 
-fn list_fetch_error_view(
-    order_id: &str,
-    error: DirectRelayFetchError,
-) -> ValidationReceiptListView {
-    let (state, reason_code, reason, target_relays, connected_relays, failed_relays, actions) =
-        fetch_error_parts(error);
+fn list_sdk_error_view(order_id: &str, error: CliSdkAdapterError) -> ValidationReceiptListView {
+    let mapped = validation_receipt_sdk_error_parts(error);
     ValidationReceiptListView {
-        state,
+        state: mapped.state,
         order_id: order_id.to_owned(),
         count: 0,
         valid_count: 0,
         invalid_count: 0,
         receipts: Vec::new(),
         invalid_receipts: Vec::new(),
-        target_relays,
-        connected_relays,
-        failed_relays,
-        reason_code: Some(reason_code),
-        reason: Some(reason),
-        actions,
+        target_relays: Vec::new(),
+        connected_relays: Vec::new(),
+        failed_relays: Vec::new(),
+        reason_code: Some(mapped.reason_code),
+        reason: Some(mapped.reason),
+        sdk_error: mapped.sdk_error,
+        actions: mapped.actions,
     }
 }
 
-fn fetch_error_parts(
-    error: DirectRelayFetchError,
-) -> (
-    String,
-    String,
-    String,
-    Vec<String>,
-    Vec<String>,
-    Vec<RelayFailureView>,
-    Vec<String>,
-) {
+struct ValidationReceiptSdkErrorParts {
+    state: String,
+    reason_code: String,
+    reason: String,
+    sdk_error: Option<Value>,
+    actions: Vec<String>,
+}
+
+fn validation_receipt_sdk_error_parts(error: CliSdkAdapterError) -> ValidationReceiptSdkErrorParts {
     match error {
-        DirectRelayFetchError::MissingRelays => (
-            "unconfigured".to_owned(),
-            "relay_unconfigured".to_owned(),
-            "validation receipt commands require at least one configured relay".to_owned(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            vec![
+        CliSdkAdapterError::Sdk(error) => sdk_error_parts(error),
+        CliSdkAdapterError::Runtime(error) => ValidationReceiptSdkErrorParts {
+            state: "network_unavailable".to_owned(),
+            reason_code: "sdk_runtime_failed".to_owned(),
+            reason: error.to_string(),
+            sdk_error: None,
+            actions: Vec::new(),
+        },
+    }
+}
+
+fn sdk_error_parts(error: RadrootsSdkError) -> ValidationReceiptSdkErrorParts {
+    let state = match error.code() {
+        "empty_target_relays" => "unconfigured",
+        _ => match error.class() {
+            radroots_sdk::RadrootsSdkErrorClass::Configuration
+            | radroots_sdk::RadrootsSdkErrorClass::Unsupported => "unconfigured",
+            radroots_sdk::RadrootsSdkErrorClass::Request => "invalid",
+            radroots_sdk::RadrootsSdkErrorClass::Transport
+            | radroots_sdk::RadrootsSdkErrorClass::Storage
+            | radroots_sdk::RadrootsSdkErrorClass::Clock
+            | radroots_sdk::RadrootsSdkErrorClass::Authorization
+            | radroots_sdk::RadrootsSdkErrorClass::LocalMutation => "network_unavailable",
+            _ => "network_unavailable",
+        },
+    };
+    let actions = if error.code() == "empty_target_relays" {
+        vec![
                 "radroots --relay wss://relay.example.com validation receipt list --trade-id <trade-id>"
                     .to_owned(),
-            ],
-        ),
-        DirectRelayFetchError::Connect {
-            reason,
-            target_relays,
-            failed_relays,
-        } => (
-            "network_unavailable".to_owned(),
-            "relay_fetch_failed".to_owned(),
-            reason,
-            target_relays,
-            Vec::new(),
-            relay_failures(failed_relays),
-            Vec::new(),
-        ),
-        DirectRelayFetchError::RelayConfig { relay, source } => (
-            "network_unavailable".to_owned(),
-            "relay_config_failed".to_owned(),
-            format!("failed to configure relay `{relay}` for validation receipt fetch: {source}"),
-            vec![relay.clone()],
-            Vec::new(),
-            vec![RelayFailureView {
-                relay,
-                reason: source.to_string(),
-            }],
-            Vec::new(),
-        ),
-        DirectRelayFetchError::Fetch(source) => (
-            "network_unavailable".to_owned(),
-            "relay_fetch_failed".to_owned(),
-            source.to_string(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ),
-        DirectRelayFetchError::Runtime(reason) => (
-            "network_unavailable".to_owned(),
-            "relay_fetch_runtime_failed".to_owned(),
-            reason,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ),
+        ]
+    } else {
+        Vec::new()
+    };
+    ValidationReceiptSdkErrorParts {
+        state: state.to_owned(),
+        reason_code: error.code().to_owned(),
+        reason: error.to_string(),
+        sdk_error: Some(error.detail_json()),
+        actions,
     }
 }
 
@@ -742,6 +663,7 @@ fn invalid_inspection_view(
         failed_relays: Vec::new(),
         reason_code: Some(reason_code.to_owned()),
         reason: Some(reason.into()),
+        sdk_error: None,
         actions: Vec::new(),
     }
 }
@@ -764,6 +686,7 @@ fn invalid_list_view(
         failed_relays: Vec::new(),
         reason_code: Some(reason_code.to_owned()),
         reason: Some(reason.into()),
+        sdk_error: None,
         actions: Vec::new(),
     }
 }
@@ -787,28 +710,18 @@ fn event_view(event: radroots_events::RadrootsNostrEvent) -> ValidationReceiptEv
     }
 }
 
-fn tags_view(tags: &RadrootsValidationReceiptTags) -> ValidationReceiptTagsView {
+fn tags_view(tags: &TradeValidationReceiptTags) -> ValidationReceiptTagsView {
     ValidationReceiptTagsView {
         order_id: tags.order_id.clone(),
         event_set_root: tags.event_set_root.clone(),
         listing_event_id: tags.listing_event_id.clone(),
         reducer_output_root: tags.reducer_output_root.clone(),
         public_values_hash: tags.public_values_hash.clone(),
-        proof_system: tags.proof_system.as_str().to_owned(),
-        receipt_type: receipt_type_label(tags.receipt_type).to_owned(),
+        proof_system: tags.proof_system.clone(),
+        receipt_type: tags.receipt_type.clone(),
         root_event_id: tags.root_event_id.clone(),
         target_event_id: tags.target_event_id.clone(),
     }
-}
-
-fn proof_verification_view(
-    config: &RuntimeConfig,
-    receipt_event_id: &str,
-    receipt: &RadrootsTradeValidationReceipt,
-    tags: &RadrootsValidationReceiptTags,
-) -> ValidationReceiptProofVerificationView {
-    let worker_evidence = worker_evidence_for_receipt(config, receipt_event_id, receipt, tags);
-    proof_verification_view_for_receipt(receipt, worker_evidence)
 }
 
 fn proof_verification_view_for_receipt(
@@ -945,7 +858,10 @@ fn sp1_unverified_proof_view(
     }
 }
 
-fn validation_receipt_invalid_reason_code(error: &RadrootsValidationReceiptError) -> &'static str {
+#[cfg(test)]
+fn validation_receipt_invalid_reason_code(
+    error: &radroots_trade::validation_receipt::RadrootsValidationReceiptError,
+) -> &'static str {
     use radroots_trade::validation_receipt::RadrootsValidationReceiptError;
 
     match error {
@@ -976,67 +892,6 @@ fn validation_receipt_invalid_reason_code(error: &RadrootsValidationReceiptError
         }
         _ => "validation_receipt_invalid",
     }
-}
-
-fn invalid_proof_verification_view(
-    error: &RadrootsValidationReceiptError,
-) -> Option<ValidationReceiptProofVerificationView> {
-    let reason_code = validation_receipt_invalid_reason_code(error);
-    let (state, public_values_hash_binding, proof_metadata_binding) = match error {
-        RadrootsValidationReceiptError::InvalidProofMetadata("proof.material")
-        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.material_missing") => (
-            "sp1_proof_material_missing",
-            "unverified",
-            "missing_proof_material",
-        ),
-        RadrootsValidationReceiptError::InvalidProofMetadata("proof.material_conflict") => (
-            "sp1_proof_material_conflict",
-            "unverified",
-            "conflicting_proof_material",
-        ),
-        RadrootsValidationReceiptError::InvalidProofMetadata("proof.inline_proof_base64")
-        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.proof_reference")
-        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.mode")
-        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.program_hash")
-        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.verifying_key_hash")
-        | RadrootsValidationReceiptError::InvalidProofMetadata("proof.system")
-        | RadrootsValidationReceiptError::TagMismatch("proof_system")
-        | RadrootsValidationReceiptError::ExpectedBindingMismatch("proof_system") => {
-            ("sp1_proof_invalid", "unverified", "invalid")
-        }
-        RadrootsValidationReceiptError::TagMismatch("public_values_hash")
-        | RadrootsValidationReceiptError::ExpectedBindingMismatch("public_values_hash") => (
-            "sp1_public_values_mismatch",
-            "mismatch",
-            "metadata_consistent",
-        ),
-        RadrootsValidationReceiptError::ExpectedBindingMismatch("program_hash") => {
-            ("sp1_program_hash_mismatch", "unverified", "mismatch")
-        }
-        RadrootsValidationReceiptError::ExpectedBindingMismatch("verifying_key_hash") => {
-            ("sp1_verifying_key_hash_mismatch", "unverified", "mismatch")
-        }
-        _ => return None,
-    };
-
-    Some(ValidationReceiptProofVerificationView {
-        state: state.to_owned(),
-        verifier: "radroots_cli_validation_receipt_v1".to_owned(),
-        proof_system: "unknown".to_owned(),
-        public_values_hash_binding: public_values_hash_binding.to_owned(),
-        proof_metadata_binding: proof_metadata_binding.to_owned(),
-        cryptographic_proof_required: true,
-        cryptographic_proof_verified: false,
-        mode: None,
-        program_hash: None,
-        verifying_key_hash: None,
-        proof_reference: None,
-        inline_proof_present: false,
-        worker_evidence: None,
-        untrusted_worker_evidence: None,
-        reason_code: Some(reason_code.to_owned()),
-        reason: Some(error.to_string()),
-    })
 }
 
 struct MappedSp1ProofError {
@@ -1142,167 +997,82 @@ fn proof_state_is_verification_success(state: &str) -> bool {
     )
 }
 
-fn validation_receipt_worker_result_filter(
-    receipt_event_ids: Vec<String>,
-) -> Result<RadrootsNostrFilter, String> {
-    let filter = RadrootsNostrFilter::new().kind(RadrootsNostrKind::Custom(
-        KIND_TRADE_TRANSITION_PROOF_RESULT as u16,
-    ));
-    radroots_nostr_filter_tag(filter, "e", receipt_event_ids)
-        .map_err(|error| format!("build validation receipt worker result filter: {error}"))
+fn invalid_candidate_view(
+    candidate: TradeValidationReceiptInvalidCandidate,
+) -> ValidationReceiptInvalidCandidateView {
+    ValidationReceiptInvalidCandidateView {
+        receipt_event_id: candidate.event.id,
+        kind: candidate.event.kind,
+        reason_code: candidate.reason_code,
+        reason: candidate.reason,
+        proof_verification: None,
+    }
 }
 
-struct WorkerEvidenceReceiptBinding<'a> {
-    receipt_event_id: &'a str,
-    receipt: &'a RadrootsTradeValidationReceipt,
-    tags: &'a RadrootsValidationReceiptTags,
-}
-
-fn worker_evidence_for_receipt(
-    config: &RuntimeConfig,
-    receipt_event_id: &str,
-    receipt: &RadrootsTradeValidationReceipt,
-    tags: &RadrootsValidationReceiptTags,
+fn sdk_worker_evidence_selection(
+    selection: SdkWorkerEvidenceSelection,
 ) -> ValidationReceiptWorkerEvidenceSelection {
-    let bindings = [WorkerEvidenceReceiptBinding {
-        receipt_event_id,
-        receipt,
-        tags,
-    }];
-    worker_evidence_for_receipts(config, &bindings)
-        .remove(receipt_event_id)
-        .unwrap_or_default()
+    ValidationReceiptWorkerEvidenceSelection {
+        trusted: selection.trusted.map(worker_evidence_view),
+        untrusted: selection.untrusted.map(worker_evidence_view),
+    }
 }
 
-fn worker_evidence_for_receipts(
-    config: &RuntimeConfig,
-    bindings: &[WorkerEvidenceReceiptBinding<'_>],
-) -> BTreeMap<String, ValidationReceiptWorkerEvidenceSelection> {
-    if config.rhi.trusted_worker_pubkeys.is_empty() || bindings.is_empty() {
-        return BTreeMap::new();
+fn worker_evidence_view(
+    evidence: TradeValidationReceiptWorkerEvidence,
+) -> ValidationReceiptWorkerEvidenceView {
+    ValidationReceiptWorkerEvidenceView {
+        result_event_id: evidence.result_event_id.as_str().to_owned(),
+        author: evidence.author.as_str().to_owned(),
+        status: evidence.status,
+        prover_backend: evidence.prover_backend,
+        proof_mode: evidence.proof_mode,
+        proof_system: evidence.proof_system,
+        proof_generated: evidence.proof_generated,
+        sp1_execute_checked: evidence.sp1_execute_checked,
+        sp1_execute_public_values_hash: evidence.sp1_execute_public_values_hash,
+        cryptographic_proof_verified: evidence.cryptographic_proof_verified,
+        public_values_hash: evidence.public_values_hash,
     }
-    let receipt_event_ids = bindings
-        .iter()
-        .map(|binding| binding.receipt_event_id.to_owned())
-        .collect::<Vec<_>>();
-    let filter = match validation_receipt_worker_result_filter(receipt_event_ids) {
-        Ok(filter) => filter,
-        Err(_) => return BTreeMap::new(),
-    };
-    let fetch_receipt = match fetch_events_from_relays(&config.relay.urls, filter) {
-        Ok(fetch_receipt) => fetch_receipt,
-        Err(_) => return BTreeMap::new(),
-    };
-    let binding_by_receipt_id = bindings
-        .iter()
-        .map(|binding| (binding.receipt_event_id, binding))
-        .collect::<BTreeMap<_, _>>();
-    let trusted_pubkeys = config
-        .rhi
-        .trusted_worker_pubkeys
-        .iter()
-        .map(|pubkey| pubkey.to_ascii_lowercase())
-        .collect::<BTreeSet<_>>();
-    let mut by_receipt =
-        BTreeMap::<String, Vec<(u64, String, bool, ValidationReceiptWorkerEvidenceView)>>::new();
+}
 
-    for event in fetch_receipt.events {
-        let payload =
-            match serde_json::from_str::<RawValidationReceiptWorkerResultPayload>(&event.content) {
-                Ok(payload) => payload,
-                Err(_) => continue,
-            };
-        let Some(binding) = binding_by_receipt_id.get(payload.receipt_event_id.as_str()) else {
-            continue;
-        };
-        let converted = radroots_event_from_nostr(&event);
-        let author = converted.author.to_ascii_lowercase();
-        let trusted_author = trusted_pubkeys.contains(author.as_str());
-        let typed_payload = payload.typed();
-        let bound = typed_payload
-            .as_ref()
-            .is_some_and(|payload| worker_payload_binds_receipt(payload, binding));
-        let trusted = trusted_author && bound;
-        let receipt_event_id = payload.receipt_event_id.clone();
-        let result_event_id = event.id.to_hex();
-        let view = ValidationReceiptWorkerEvidenceView {
-            result_event_id: result_event_id.clone(),
-            author,
-            status: payload.status,
-            prover_backend: payload.prover_backend,
-            proof_mode: payload.proof_mode,
-            proof_system: payload.proof_system,
-            proof_generated: payload.proof_generated,
-            sp1_execute_checked: payload.sp1_execute_checked,
-            sp1_execute_public_values_hash: payload.sp1_execute_public_values_hash,
-            cryptographic_proof_verified: payload.cryptographic_proof_verified,
-            public_values_hash: payload.public_values_hash,
-        };
-        by_receipt.entry(receipt_event_id).or_default().push((
-            event.created_at.as_secs(),
-            result_event_id,
-            trusted,
-            view,
-        ));
-    }
+fn connected_relays(relays: &[TradeValidationReceiptRelayOutcomeReceipt]) -> Vec<String> {
+    relays
+        .iter()
+        .filter(|relay| relay.outcome_kind == TradeValidationReceiptRelayOutcomeKind::Eose)
+        .map(|relay| relay.relay_url.clone())
+        .collect()
+}
 
-    by_receipt
-        .into_iter()
-        .map(|(receipt_event_id, mut candidates)| {
-            candidates.sort_by(|left, right| {
-                left.0
-                    .cmp(&right.0)
-                    .then_with(|| left.1.cmp(&right.1))
-                    .then_with(|| left.2.cmp(&right.2))
-            });
-            let mut selection = ValidationReceiptWorkerEvidenceSelection::default();
-            for (_, _, trusted, view) in candidates.into_iter().rev() {
-                if trusted && selection.trusted.is_none() {
-                    selection.trusted = Some(view);
-                } else if !trusted && selection.untrusted.is_none() {
-                    selection.untrusted = Some(view);
-                }
-                if selection.trusted.is_some() && selection.untrusted.is_some() {
-                    break;
-                }
-            }
-            (receipt_event_id, selection)
+fn sdk_relay_failures(
+    relays: &[TradeValidationReceiptRelayOutcomeReceipt],
+) -> Vec<RelayFailureView> {
+    relays
+        .iter()
+        .filter(|relay| relay.outcome_kind != TradeValidationReceiptRelayOutcomeKind::Eose)
+        .map(|relay| RelayFailureView {
+            relay: relay.relay_url.clone(),
+            reason: relay
+                .message
+                .clone()
+                .unwrap_or_else(|| sdk_relay_outcome_kind(relay.outcome_kind).to_owned()),
         })
         .collect()
 }
 
-fn worker_payload_binds_receipt(
-    payload: &RadrootsSp1TradeWorkerResultPayload,
-    binding: &WorkerEvidenceReceiptBinding<'_>,
-) -> bool {
-    let receipt = binding.receipt;
-    let tags = binding.tags;
-    payload.status == RadrootsSp1TradeWorkerResultStatus::Succeeded
-        && payload.worker_role == Some(RadrootsSp1TradeWorkerRole::NonAuthoritativeProver)
-        && payload.receipt_kind == Some(KIND_TRADE_VALIDATION_RECEIPT)
-        && payload.receipt_event_id == binding.receipt_event_id
-        && payload.order_id.as_deref() == Some(tags.order_id.as_str())
-        && payload.listing_event_id.as_deref() == Some(tags.listing_event_id.as_str())
-        && payload.event_set_root.as_deref() == Some(tags.event_set_root.as_str())
-        && payload.reducer_output_root.as_deref() == Some(tags.reducer_output_root.as_str())
-        && payload.request_event_id.as_deref() == Some(tags.root_event_id.as_str())
-        && payload.decision_event_id.as_deref() == Some(tags.target_event_id.as_str())
-        && payload.public_values_hash == receipt.public_values_hash
-        && payload.proof_system == receipt.proof.system
-        && payload.proof_mode.mode_label().unwrap_or("none")
-            == receipt.proof.mode.as_deref().unwrap_or("none")
-        && payload.proof_generated
-            == (receipt.proof.system != RadrootsValidationReceiptProofSystem::None)
-        && payload.cryptographic_proof_verified == payload.proof_generated
-        && payload.sp1_execute_checked
-        && payload.sp1_execute_public_values_hash.as_deref()
-            == Some(receipt.public_values_hash.as_str())
+fn sdk_relay_outcome_kind(kind: TradeValidationReceiptRelayOutcomeKind) -> &'static str {
+    match kind {
+        TradeValidationReceiptRelayOutcomeKind::Eose => "eose",
+        TradeValidationReceiptRelayOutcomeKind::Closed => "closed",
+        TradeValidationReceiptRelayOutcomeKind::Notice => "notice",
+        _ => "unknown",
+    }
 }
 
 fn summary_view(
     event: &radroots_events::RadrootsNostrEvent,
     receipt: &RadrootsTradeValidationReceipt,
-    tags: &RadrootsValidationReceiptTags,
+    tags: &TradeValidationReceiptTags,
     proof_verification: &ValidationReceiptProofVerificationView,
 ) -> ValidationReceiptSummaryView {
     ValidationReceiptSummaryView {
@@ -1332,32 +1102,19 @@ fn receipt_result_label(value: RadrootsValidationReceiptResult) -> &'static str 
     }
 }
 
-fn relay_failures(failures: Vec<DirectRelayFailure>) -> Vec<RelayFailureView> {
-    failures
-        .into_iter()
-        .map(|failure| RelayFailureView {
-            relay: failure.relay,
-            reason: failure.reason,
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        RawValidationReceiptWorkerResultPayload, ValidationReceiptWorkerEvidenceSelection,
-        ValidationReceiptWorkerEvidenceView, WorkerEvidenceReceiptBinding,
+        ValidationReceiptWorkerEvidenceSelection, ValidationReceiptWorkerEvidenceView,
         proof_state_from_sp1_error, proof_state_is_invalid, proof_verification_view_for_receipt,
-        validation_receipt_invalid_reason_code, worker_payload_binds_receipt,
+        validation_receipt_invalid_reason_code,
     };
-    use radroots_events::kinds::KIND_TRADE_VALIDATION_RECEIPT;
     use radroots_sp1_host_trade::RadrootsSp1TradeHostError;
     use radroots_trade::validation_receipt::{
         RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
         RadrootsValidationReceiptProof, RadrootsValidationReceiptProofSystem,
         RadrootsValidationReceiptResult, RadrootsValidationReceiptStatement,
-        RadrootsValidationReceiptTags, RadrootsValidationReceiptType, VALIDATION_RECEIPT_DOMAIN,
-        VALIDATION_RECEIPT_VERSION,
+        RadrootsValidationReceiptType, VALIDATION_RECEIPT_DOMAIN, VALIDATION_RECEIPT_VERSION,
     };
 
     fn sp1_proof_with_material() -> RadrootsValidationReceiptProof {
@@ -1414,109 +1171,6 @@ mod tests {
             system: RadrootsValidationReceiptProofSystem::None,
             verifying_key_hash: None,
         })
-    }
-
-    fn receipt_tags() -> RadrootsValidationReceiptTags {
-        RadrootsValidationReceiptTags {
-            event_set_root: "0x2222222222222222222222222222222222222222222222222222222222222222"
-                .to_owned(),
-            listing_event_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                .to_owned(),
-            order_id: "order-1".to_owned(),
-            proof_system: RadrootsValidationReceiptProofSystem::None,
-            public_values_hash:
-                "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
-            receipt_type: RadrootsValidationReceiptType::TradeTransition,
-            reducer_output_root:
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-            root_event_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                .to_owned(),
-            target_event_id: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-                .to_owned(),
-        }
-    }
-
-    fn worker_result_payload(listing_event_id: &str) -> RawValidationReceiptWorkerResultPayload {
-        RawValidationReceiptWorkerResultPayload {
-            cryptographic_proof_verified: false,
-            decision_event_id: Some(
-                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
-            ),
-            event_set_root: Some(
-                "0x2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
-            ),
-            listing_event_id: Some(listing_event_id.to_owned()),
-            order_id: Some("order-1".to_owned()),
-            proof_generated: false,
-            proof_mode: "none".to_owned(),
-            proof_system: "none".to_owned(),
-            public_values_hash:
-                "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
-            prover_backend: "local_execute".to_owned(),
-            receipt_kind: Some(KIND_TRADE_VALIDATION_RECEIPT),
-            receipt_event_id: "receipt-1".to_owned(),
-            reducer_output_root: Some(
-                "0x3333333333333333333333333333333333333333333333333333333333333333".to_owned(),
-            ),
-            request_event_id: Some(
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
-            ),
-            sp1_execute_checked: true,
-            sp1_execute_public_values_hash: Some(
-                "0x5555555555555555555555555555555555555555555555555555555555555555".to_owned(),
-            ),
-            status: "succeeded".to_owned(),
-            worker_role: Some("non_authoritative_prover".to_owned()),
-        }
-    }
-
-    #[test]
-    fn worker_evidence_binds_distinct_listing_request_and_decision_ids() {
-        let receipt = deterministic_receipt();
-        let tags = receipt_tags();
-        let binding = WorkerEvidenceReceiptBinding {
-            receipt_event_id: "receipt-1",
-            receipt: &receipt,
-            tags: &tags,
-        };
-
-        assert!(worker_payload_binds_receipt(
-            &worker_result_payload(
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            )
-            .typed()
-            .expect("typed payload"),
-            &binding
-        ));
-    }
-
-    #[test]
-    fn worker_evidence_rejects_listing_id_mismatch() {
-        let receipt = deterministic_receipt();
-        let tags = receipt_tags();
-        let binding = WorkerEvidenceReceiptBinding {
-            receipt_event_id: "receipt-1",
-            receipt: &receipt,
-            tags: &tags,
-        };
-
-        assert!(!worker_payload_binds_receipt(
-            &worker_result_payload(
-                "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-            )
-            .typed()
-            .expect("typed payload"),
-            &binding
-        ));
-    }
-
-    #[test]
-    fn worker_evidence_unknown_typed_values_are_not_trusted() {
-        let mut payload = worker_result_payload(
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        );
-        payload.prover_backend = "future_backend".to_owned();
-        assert!(payload.typed().is_none());
     }
 
     #[test]
