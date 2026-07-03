@@ -1110,6 +1110,14 @@ mod tests {
         "TradeValidationClient",
     ];
 
+    mod removed_surface_fixtures {
+        pub const ACCOUNT_CREATE_MODE: &str = "AccountCreateMode";
+        pub const CONFIG_IDENTITY_PATH_EXISTS: &str = "config.identity.path.exists()";
+        pub const CREATE_OR_MIGRATE_DEFAULT_ACCOUNT: &str = "create_or_migrate_default_account";
+        pub const MIGRATED_OUTPUT_JSON: &str = "\"migrated\"";
+        pub const MIGRATE_LEGACY_IDENTITY_FILE: &str = "migrate_legacy_identity_file";
+    }
+
     #[test]
     fn maps_runtime_config_to_sdk_builder_inputs() {
         let root = tempdir().expect("tempdir");
@@ -1338,25 +1346,20 @@ mod tests {
         )
         .expect("core source classification");
 
-        let removed_create_helper = ["create_or_", "migrate_default_account"].concat();
-        let removed_create_mode = ["Account", "Create", "Mode"].concat();
-        let removed_import_helper = ["migrate", "_legacy", "_identity", "_file"].concat();
-        let removed_identity_probe = ["config.identity.path", ".exists()"].concat();
         for token in [
-            removed_create_helper.as_str(),
-            removed_create_mode.as_str(),
-            removed_import_helper.as_str(),
-            removed_identity_probe.as_str(),
+            removed_surface_fixtures::CREATE_OR_MIGRATE_DEFAULT_ACCOUNT,
+            removed_surface_fixtures::ACCOUNT_CREATE_MODE,
+            removed_surface_fixtures::MIGRATE_LEGACY_IDENTITY_FILE,
+            removed_surface_fixtures::CONFIG_IDENTITY_PATH_EXISTS,
         ] {
             assert!(
                 !account_source.contains(token),
                 "CLI account runtime must not contain implicit account-create identity-ingestion token `{token}`"
             );
         }
-        let removed_migrated_output = ["\"", "migr", "ated", "\""].concat();
         for token in [
-            removed_create_mode.as_str(),
-            removed_migrated_output.as_str(),
+            removed_surface_fixtures::ACCOUNT_CREATE_MODE,
+            removed_surface_fixtures::MIGRATED_OUTPUT_JSON,
         ] {
             assert!(
                 !core_source.contains(token),
