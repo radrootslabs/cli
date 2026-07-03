@@ -765,7 +765,6 @@ fn resolve_secret_backend(
         RadrootsSecretVaultError::HostVaultPolicyUnsupported { .. } => {
             SecretBackendResolutionError::Invalid(format!("account secret backend: {error}"))
         }
-        error => SecretBackendResolutionError::Invalid(format!("account secret backend: {error}")),
     })
 }
 
@@ -802,7 +801,6 @@ fn secret_vault_for_backend(
 fn account_secret_backend_selection(config: &RuntimeConfig) -> RadrootsSecretBackendSelection {
     RadrootsSecretBackendSelection {
         primary: config.account.secret_backend,
-        fallback: None,
     }
 }
 
