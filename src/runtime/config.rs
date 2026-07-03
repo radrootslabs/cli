@@ -3503,15 +3503,36 @@ RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT=.local/radroots/dev
     }
 
     #[test]
-    fn env_output_accepts_ndjson() {
+    fn runtime_config_output_format_accepts_current_contract_values_and_rejects_human() {
+        for (value, expected) in [
+            ("terminal", OutputFormat::Terminal),
+            ("json", OutputFormat::Json),
+            ("ndjson", OutputFormat::Ndjson),
+        ] {
+            let args = runtime_args();
+            let env = MapEnvironment::new(BTreeMap::from([(
+                "RADROOTS_CLI_OUTPUT_FORMAT".to_owned(),
+                value.to_owned(),
+            )]));
+
+            let resolved =
+                RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+                    .expect("resolve runtime config");
+            assert_eq!(resolved.output.format, expected);
+        }
+
         let args = runtime_args();
         let env = MapEnvironment::new(BTreeMap::from([(
             "RADROOTS_CLI_OUTPUT_FORMAT".to_owned(),
-            "ndjson".to_owned(),
+            "human".to_owned(),
         )]));
-
-        let resolved = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
-            .expect("resolve runtime config");
-        assert_eq!(resolved.output.format, OutputFormat::Ndjson);
+        let error = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
+            .expect_err("human output format must stay removed");
+        let message = error.to_string();
+        assert!(message.contains("RADROOTS_CLI_OUTPUT_FORMAT"));
+        assert!(message.contains("terminal"));
+        assert!(message.contains("json"));
+        assert!(message.contains("ndjson"));
+        assert!(message.contains("human"));
     }
 }
