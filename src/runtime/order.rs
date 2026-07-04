@@ -1295,7 +1295,9 @@ pub fn status(
     config: &RuntimeConfig,
     args: &TradeStatusArgs,
 ) -> Result<OrderStatusView, CliSdkAdapterError> {
-    let request = TradeStatusRequest::parse(args.key.as_str())?;
+    let request = TradeStatusRequest::parse(args.key.as_str())?.try_with_trusted_rhi_pubkeys(
+        config.rhi.trusted_worker_pubkeys.iter().map(String::as_str),
+    )?;
     let session = CliSdkSession::connect(config)?;
     let receipt = session.block_on(session.sdk().trades().status(request))?;
     Ok(sdk_order_status_view(receipt))
@@ -1309,7 +1311,7 @@ fn decide_trade_via_sdk(
     let actor = sdk_trade_actor(seller, RadrootsActorRole::Seller, args.decision.command())?;
     let session = connect_sdk_for_trade_actor(config, seller, "trade decision")?;
     let locator = trade_locator_from_key(args.key.as_str())?;
-    let status = trade_status_for_locator(&session, locator.clone())?;
+    let status = trade_status_for_locator(config, &session, locator.clone())?;
     let status_view = sdk_order_status_view(status.clone());
     let publish_mode = trade_publish_mode(config);
     let ack_policy = trade_ack_policy(publish_mode)?;
@@ -1372,7 +1374,7 @@ fn propose_revision_via_sdk(
     let actor = sdk_trade_actor(seller, RadrootsActorRole::Seller, "revision propose")?;
     let session = connect_sdk_for_trade_actor(config, seller, "trade revision propose")?;
     let locator = trade_locator_from_key(args.key.as_str())?;
-    let status = trade_status_for_locator(&session, locator.clone())?;
+    let status = trade_status_for_locator(config, &session, locator.clone())?;
     let status_view = sdk_order_status_view(status);
     let revision = revision_request_parts_from_status(args, &status_view)?;
     let publish_mode = trade_publish_mode(config);
@@ -1419,7 +1421,7 @@ fn decide_revision_via_sdk(
     let actor = sdk_trade_actor(&account, RadrootsActorRole::Buyer, "revision decision")?;
     let session = connect_sdk_for_trade_actor(config, &account, "trade revision decision")?;
     let locator = trade_locator_from_key(args.key.as_str())?;
-    let status = trade_status_for_locator(&session, locator.clone())?;
+    let status = trade_status_for_locator(config, &session, locator.clone())?;
     let status_view = sdk_order_status_view(status);
     let revision_id = protocol_revision_id(args.revision_id.trim(), "revision_id")?;
     let decision = match args.decision {
@@ -1484,7 +1486,7 @@ fn cancel_trade_via_sdk(
     let actor = sdk_trade_actor(&account, RadrootsActorRole::Buyer, "cancel")?;
     let session = connect_sdk_for_trade_actor(config, &account, "trade cancel")?;
     let locator = trade_locator_from_key(args.key.as_str())?;
-    let status = trade_status_for_locator(&session, locator.clone())?;
+    let status = trade_status_for_locator(config, &session, locator.clone())?;
     let status_view = sdk_order_status_view(status);
     let publish_mode = trade_publish_mode(config);
     let ack_policy = trade_ack_policy(publish_mode)?;
@@ -1511,12 +1513,16 @@ fn cancel_trade_via_sdk(
 }
 
 fn trade_status_for_locator(
+    config: &RuntimeConfig,
     session: &CliSdkSession,
     locator: RadrootsTradeLocator,
 ) -> Result<TradeStatusReceipt, CliSdkAdapterError> {
-    Ok(session.block_on(session.sdk().trades().status(
-        TradeStatusRequest::new(locator).with_source(SdkTradeStatusSource::ResyncThenLocal),
-    ))?)
+    let request = TradeStatusRequest::new(locator)
+        .with_source(SdkTradeStatusSource::ResyncThenLocal)
+        .try_with_trusted_rhi_pubkeys(
+            config.rhi.trusted_worker_pubkeys.iter().map(String::as_str),
+        )?;
+    Ok(session.block_on(session.sdk().trades().status(request))?)
 }
 
 fn inventory_commitments_from_status(

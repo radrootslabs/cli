@@ -1,13 +1,13 @@
 use radroots_events::ids::RadrootsEventId;
 use radroots_sdk::{
     SdkTradeStatusIssue, TradeStatusEligibility, TradeStatusEvidenceSummary, TradeStatusKind,
-    TradeStatusNextActionKind, TradeStatusReceipt,
+    TradeStatusNextActionKind, TradeStatusReceipt, TradeValidationTrustDecision,
 };
 
 use crate::view::runtime::{
     OrderIssueView, OrderStatusEligibilityView, OrderStatusEvidenceSummaryView,
     OrderStatusLifecycleCancellationView, OrderStatusLifecycleView, OrderStatusSdkReceiptView,
-    OrderStatusView, OrderTradeLocatorView,
+    OrderStatusValidationTrustView, OrderStatusView, OrderTradeLocatorView,
 };
 
 use super::{ORDER_ACTOR_CONTEXT_SDK_LOCAL, ORDER_STATUS_SDK_SOURCE};
@@ -85,6 +85,10 @@ fn sdk_order_status_receipt_view(receipt: &TradeStatusReceipt) -> OrderStatusSdk
         next_action: sdk_status_next_action(receipt.next_action).to_owned(),
         evidence: sdk_status_evidence_view(&receipt.evidence),
         eligibility: sdk_status_eligibility_view(&receipt.eligibility),
+        validation_trust: receipt
+            .validation_trust
+            .as_ref()
+            .map(sdk_status_validation_trust_view),
     }
 }
 
@@ -97,9 +101,37 @@ fn sdk_status_evidence_view(
         has_request: evidence.has_request,
         has_decision: evidence.has_decision,
         has_agreement: evidence.has_agreement,
+        has_validation_receipt: evidence.has_validation_receipt,
         has_pending_revision: evidence.has_pending_revision,
         has_cancellation: evidence.has_cancellation,
         has_issues: evidence.has_issues,
+    }
+}
+
+fn sdk_status_validation_trust_view(
+    decision: &TradeValidationTrustDecision,
+) -> OrderStatusValidationTrustView {
+    OrderStatusValidationTrustView {
+        state: decision.state.as_str().to_owned(),
+        trusted_rhi_pubkey_count: decision.trusted_rhi_pubkey_count,
+        allow_deterministic_none: decision.allow_deterministic_none,
+        require_cryptographic_proof: decision.require_cryptographic_proof,
+        receipt_event_id: decision.receipt_event_id.as_ref().map(ToString::to_string),
+        receipt_author: decision.receipt_author.as_ref().map(ToString::to_string),
+        result_event_id: decision.result_event_id.as_ref().map(ToString::to_string),
+        result_author: decision.result_author.as_ref().map(ToString::to_string),
+        proof_system: decision.proof_system.clone(),
+        validation_authority: decision
+            .validation_authority
+            .map(|authority| authority.as_str().to_owned()),
+        commitment_confidence: decision
+            .commitment_confidence
+            .map(|confidence| confidence.as_str().to_owned()),
+        cryptographic_proof_required: decision.cryptographic_proof_required,
+        cryptographic_proof_verified: decision.cryptographic_proof_verified,
+        production_committed: decision.production_committed,
+        reason_code: decision.reason_code.clone(),
+        reason: decision.reason.clone(),
     }
 }
 

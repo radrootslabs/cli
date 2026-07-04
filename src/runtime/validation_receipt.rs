@@ -854,7 +854,7 @@ fn none_proof_trust_summary(
             trusted_worker_summary("pending_rhi_validation", authority, confidence, false)
         }
         ("trusted_rhi_service_key", "committed_by_trusted_service") => {
-            trusted_worker_summary("trusted_service_validated", authority, confidence, true)
+            trusted_worker_summary("trusted_service_validated", authority, confidence, false)
         }
         ("cryptographic_proof_verified", "committed_by_cryptographic_proof") => {
             trusted_worker_summary("cryptographic_proof_verified", authority, confidence, true)
@@ -1426,7 +1426,7 @@ mod tests {
     }
 
     #[test]
-    fn none_receipts_surface_trusted_service_confidence_as_production_verification() {
+    fn none_receipts_surface_trusted_service_confidence_without_production_verification() {
         let view = proof_verification_view_for_receipt(
             &deterministic_receipt(),
             ValidationReceiptWorkerEvidenceSelection {
@@ -1448,7 +1448,7 @@ mod tests {
             view.commitment_confidence.as_deref(),
             Some("committed_by_trusted_service")
         );
-        assert!(view.production_verification);
+        assert!(!view.production_verification);
         assert!(proof_state_is_verification_success(view.state.as_str()));
     }
 
@@ -1492,7 +1492,7 @@ mod tests {
     }
 
     #[test]
-    fn production_verification_success_excludes_local_only_and_sp1_execute_checked() {
+    fn validation_success_labels_exclude_local_only_and_sp1_execute_checked() {
         assert!(!proof_state_is_verification_success(
             "local_only_deterministic_receipt"
         ));

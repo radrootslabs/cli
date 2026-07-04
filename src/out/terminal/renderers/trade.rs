@@ -320,6 +320,24 @@ fn trade_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalD
         result,
         &["lifecycle", "terminal"],
     );
+    common::push_path_field(
+        &mut document,
+        "Validation trust",
+        result,
+        &["sdk_receipt", "validation_trust", "state"],
+    );
+    common::push_bool_field(
+        &mut document,
+        "Production committed",
+        result,
+        &["sdk_receipt", "validation_trust", "production_committed"],
+    );
+    common::push_path_field(
+        &mut document,
+        "Trust reason",
+        result,
+        &["sdk_receipt", "validation_trust", "reason_code"],
+    );
     common::push_path_field(&mut document, "Revision", result, &["revision", "state"]);
     push_relay_field(&mut document, result);
     push_inventory_section(&mut document, result);

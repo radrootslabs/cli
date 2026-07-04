@@ -931,7 +931,12 @@ mod tests {
             path: "src/runtime/order.rs",
             start: "pub fn status(\n    config: &RuntimeConfig",
             end: "fn decide_trade_via_sdk(",
-            required_tokens: &["TradeStatusRequest::parse", "session.sdk().trades().status"],
+            required_tokens: &[
+                "TradeStatusRequest::parse",
+                ".try_with_trusted_rhi_pubkeys(",
+                "config.rhi.trusted_worker_pubkeys",
+                "session.sdk().trades().status",
+            ],
         },
         MigratedCliPathGuard {
             label: "order locator status helper",
@@ -945,6 +950,8 @@ mod tests {
                 ".sdk()",
                 ".trades()",
                 ".with_source(SdkTradeStatusSource::ResyncThenLocal)",
+                ".try_with_trusted_rhi_pubkeys(",
+                "config.rhi.trusted_worker_pubkeys",
             ],
         },
         MigratedCliPathGuard {
@@ -957,6 +964,9 @@ mod tests {
                 "OrderStatusView",
                 "OrderStatusLifecycleView",
                 "OrderStatusSdkReceiptView",
+                "TradeValidationTrustDecision",
+                "validation_trust",
+                "has_validation_receipt",
             ],
         },
         MigratedCliPathGuard {

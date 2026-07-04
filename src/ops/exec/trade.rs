@@ -908,6 +908,7 @@ fn order_status_error_detail(view: &OrderStatusView) -> Value {
         "revision": &view.revision,
         "inventory": &view.inventory,
         "lifecycle": &view.lifecycle,
+        "sdk_receipt": &view.sdk_receipt,
         "reducer_issues": &view.reducer_issues,
         "target_relays": &view.target_relays,
         "connected_relays": &view.connected_relays,

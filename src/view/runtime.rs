@@ -2189,6 +2189,37 @@ pub struct OrderStatusSdkReceiptView {
     pub next_action: String,
     pub evidence: OrderStatusEvidenceSummaryView,
     pub eligibility: OrderStatusEligibilityView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation_trust: Option<OrderStatusValidationTrustView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderStatusValidationTrustView {
+    pub state: String,
+    pub trusted_rhi_pubkey_count: usize,
+    pub allow_deterministic_none: bool,
+    pub require_cryptographic_proof: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_system: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation_authority: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commitment_confidence: Option<String>,
+    pub cryptographic_proof_required: bool,
+    pub cryptographic_proof_verified: bool,
+    pub production_committed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2198,6 +2229,7 @@ pub struct OrderStatusEvidenceSummaryView {
     pub has_request: bool,
     pub has_decision: bool,
     pub has_agreement: bool,
+    pub has_validation_receipt: bool,
     pub has_pending_revision: bool,
     pub has_cancellation: bool,
     pub has_issues: bool,
