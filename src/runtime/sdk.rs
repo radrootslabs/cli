@@ -940,10 +940,11 @@ mod tests {
             end: "fn inventory_commitments_from_status(",
             required_tokens: &[
                 "TradeStatusRequest::new(locator)",
+                "SdkTradeStatusSource::ResyncThenLocal",
                 "session.block_on(",
                 ".sdk()",
                 ".trades()",
-                ".status(TradeStatusRequest::new(locator))",
+                ".with_source(SdkTradeStatusSource::ResyncThenLocal)",
             ],
         },
         MigratedCliPathGuard {
@@ -1003,6 +1004,7 @@ mod tests {
                 "decide_trade_via_sdk",
                 "TradeAcceptRequest::new",
                 "TradeDeclineRequest::new",
+                "TradeEvidenceMode::ResyncBeforeMutation",
                 "session.sdk().trades().seller().accept_trade",
                 "session.sdk().trades().seller().decline_trade",
             ],
@@ -1019,6 +1021,7 @@ mod tests {
                 "TradeRevisionProposalRequest::new",
                 "TradeRevisionDecisionRequest::new",
                 "TradeCancelRequest::new",
+                "TradeEvidenceMode::ResyncBeforeMutation",
                 "session.sdk().trades().seller().propose_revision",
                 "session.sdk().trades().buyer().accept_revision",
                 "session.sdk().trades().buyer().decline_revision",

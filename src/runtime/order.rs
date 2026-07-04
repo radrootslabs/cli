@@ -54,12 +54,13 @@ use radroots_replica_db_schema::trade_product::{
 use radroots_sdk::{
     AckPolicy, PrivacyPreflightConfirmation, ProductSensitivityField, PublishMode,
     PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt, PushOutboxRelayOutcomeKind,
-    RelayResolutionPolicy, SdkMutationState, TradeAcceptRequest, TradeCancelRequest,
-    TradeCancellationPlan, TradeCancellationReceipt, TradeDecisionPlan, TradeDecisionReceipt,
-    TradeDeclineRequest, TradeMutationOutcome, TradeProposeRequest, TradeRevisionDecisionPlan,
-    TradeRevisionDecisionReceipt, TradeRevisionDecisionRequest, TradeRevisionProposalPlan,
-    TradeRevisionProposalReceipt, TradeRevisionProposalRequest, TradeStatusReceipt,
-    TradeStatusRequest, TradeSubmitPlan, TradeSubmitReceipt, TradeWorkflowEnqueueReceipt,
+    RelayResolutionPolicy, SdkMutationState, SdkTradeStatusSource, TradeAcceptRequest,
+    TradeCancelRequest, TradeCancellationPlan, TradeCancellationReceipt, TradeDecisionPlan,
+    TradeDecisionReceipt, TradeDeclineRequest, TradeEvidenceMode, TradeMutationOutcome,
+    TradeProposeRequest, TradeRevisionDecisionPlan, TradeRevisionDecisionReceipt,
+    TradeRevisionDecisionRequest, TradeRevisionProposalPlan, TradeRevisionProposalReceipt,
+    TradeRevisionProposalRequest, TradeStatusReceipt, TradeStatusRequest, TradeSubmitPlan,
+    TradeSubmitReceipt, TradeWorkflowEnqueueReceipt,
 };
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::identity::RadrootsTradeLocator;
@@ -1322,6 +1323,7 @@ fn decide_trade_via_sdk(
                 trade_relay_resolution_policy(),
                 publish_mode,
                 ack_policy,
+                TradeEvidenceMode::ResyncBeforeMutation,
             )
             .with_privacy_confirmation(trade_privacy_confirmation());
             if let Some(idempotency_key) = args.idempotency_key.as_deref() {
@@ -1345,6 +1347,7 @@ fn decide_trade_via_sdk(
                 trade_relay_resolution_policy(),
                 publish_mode,
                 ack_policy,
+                TradeEvidenceMode::ResyncBeforeMutation,
             )
             .with_privacy_confirmation(trade_privacy_confirmation());
             if let Some(idempotency_key) = args.idempotency_key.as_deref() {
@@ -1384,6 +1387,7 @@ fn propose_revision_via_sdk(
         trade_relay_resolution_policy(),
         publish_mode,
         ack_policy,
+        TradeEvidenceMode::ResyncBeforeMutation,
     )
     .with_privacy_confirmation(trade_privacy_confirmation());
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
@@ -1444,6 +1448,7 @@ fn decide_revision_via_sdk(
         trade_relay_resolution_policy(),
         publish_mode,
         ack_policy,
+        TradeEvidenceMode::ResyncBeforeMutation,
     )
     .with_privacy_confirmation(trade_privacy_confirmation());
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
@@ -1490,6 +1495,7 @@ fn cancel_trade_via_sdk(
         trade_relay_resolution_policy(),
         publish_mode,
         ack_policy,
+        TradeEvidenceMode::ResyncBeforeMutation,
     )
     .with_privacy_confirmation(trade_privacy_confirmation());
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
@@ -1508,12 +1514,9 @@ fn trade_status_for_locator(
     session: &CliSdkSession,
     locator: RadrootsTradeLocator,
 ) -> Result<TradeStatusReceipt, CliSdkAdapterError> {
-    Ok(session.block_on(
-        session
-            .sdk()
-            .trades()
-            .status(TradeStatusRequest::new(locator)),
-    )?)
+    Ok(session.block_on(session.sdk().trades().status(
+        TradeStatusRequest::new(locator).with_source(SdkTradeStatusSource::ResyncThenLocal),
+    ))?)
 }
 
 fn inventory_commitments_from_status(
