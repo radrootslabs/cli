@@ -638,6 +638,7 @@ mod tests {
             "ord_test",
             "--reason",
             "changed plans",
+            "--confirm-public-note",
         ])
         .expect("target args parse");
 
@@ -650,6 +651,7 @@ mod tests {
         };
         assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
         assert_eq!(args.reason.as_deref(), Some("changed plans"));
+        assert!(args.confirm_public_note);
     }
 
     #[test]
@@ -676,6 +678,7 @@ mod tests {
             "USD",
             "--adjustment-reason",
             "packing change",
+            "--confirm-public-note",
         ])
         .expect("target args parse");
 
@@ -695,6 +698,7 @@ mod tests {
         assert_eq!(args.bin_count, Some(3));
         assert_eq!(args.adjustment_id.as_deref(), Some("adj_revision"));
         assert_eq!(args.adjustment_effect.as_deref(), Some("increase"));
+        assert!(args.confirm_public_note);
     }
 
     #[test]
@@ -733,6 +737,7 @@ mod tests {
             "rev_test",
             "--reason",
             "keep original trade",
+            "--confirm-public-note",
         ])
         .expect("target args parse");
 
@@ -749,6 +754,7 @@ mod tests {
         assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
         assert_eq!(args.revision_id.as_deref(), Some("rev_test"));
         assert_eq!(args.reason.as_deref(), Some("keep original trade"));
+        assert!(args.confirm_public_note);
     }
 
     #[test]

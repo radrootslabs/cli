@@ -26,6 +26,8 @@ pub enum TradeCommand {
 #[derive(Debug, Clone, Args)]
 pub struct TradeSubmitArgs {
     pub trade_id: Option<String>,
+    #[arg(long)]
+    pub confirm_public_note: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -63,6 +65,8 @@ pub struct TradeDeclineArgs {
     pub trade_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
+    #[arg(long)]
+    pub confirm_public_note: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -70,6 +74,8 @@ pub struct TradeCancelArgs {
     pub trade_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
+    #[arg(long)]
+    pub confirm_public_note: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -90,6 +96,8 @@ pub struct TradeRevisionProposeArgs {
     pub trade_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
+    #[arg(long)]
+    pub confirm_public_note: bool,
     #[arg(long)]
     pub bin_id: Option<String>,
     #[arg(long)]
@@ -120,6 +128,8 @@ pub struct TradeRevisionDeclineArgs {
     pub revision_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
+    #[arg(long)]
+    pub confirm_public_note: bool,
 }
 
 #[derive(Debug, Clone, Args)]

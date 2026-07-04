@@ -61,6 +61,7 @@ impl OperationService<TradeSubmitRequest> for TradeOperationService<'_> {
                 .idempotency_key
                 .clone()
                 .or_else(|| string_input(&request, "idempotency_key")),
+            confirm_public_note: bool_input(&request, "confirm_public_note").unwrap_or(false),
         };
         let mut config = self.config.clone();
         if request.context.dry_run {
@@ -187,6 +188,7 @@ impl OperationService<TradeAcceptRequest> for TradeOperationService<'_> {
                 .idempotency_key
                 .clone()
                 .or_else(|| string_input(&request, "idempotency_key")),
+            confirm_public_note: false,
         };
         let mut config = self.config.clone();
         if request.context.dry_run {
@@ -230,6 +232,7 @@ impl OperationService<TradeDeclineRequest> for TradeOperationService<'_> {
                 .idempotency_key
                 .clone()
                 .or_else(|| string_input(&request, "idempotency_key")),
+            confirm_public_note: bool_input(&request, "confirm_public_note").unwrap_or(false),
         };
         let mut config = self.config.clone();
         if request.context.dry_run {
@@ -272,6 +275,7 @@ impl OperationService<TradeCancelRequest> for TradeOperationService<'_> {
                 .idempotency_key
                 .clone()
                 .or_else(|| string_input(&request, "idempotency_key")),
+            confirm_public_note: bool_input(&request, "confirm_public_note").unwrap_or(false),
         };
         let mut config = self.config.clone();
         if request.context.dry_run {
@@ -309,6 +313,7 @@ impl OperationService<TradeRevisionProposeRequest> for TradeOperationService<'_>
         let args = TradeRevisionProposeArgs {
             key: required_trade_key(&request)?,
             reason,
+            confirm_public_note: bool_input(&request, "confirm_public_note").unwrap_or(false),
             bin_id: string_input(&request, "bin_id"),
             bin_count: u32_input(&request, "bin_count"),
             adjustment_id: string_input(&request, "adjustment_id"),
@@ -350,6 +355,7 @@ impl OperationService<TradeRevisionAcceptRequest> for TradeOperationService<'_> 
                 .idempotency_key
                 .clone()
                 .or_else(|| string_input(&request, "idempotency_key")),
+            confirm_public_note: false,
         };
         if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
@@ -394,6 +400,7 @@ impl OperationService<TradeRevisionDeclineRequest> for TradeOperationService<'_>
                 .idempotency_key
                 .clone()
                 .or_else(|| string_input(&request, "idempotency_key")),
+            confirm_public_note: bool_input(&request, "confirm_public_note").unwrap_or(false),
         };
         if request.context.requires_approval_token() {
             return Err(OperationAdapterError::approval_required(
@@ -1222,6 +1229,13 @@ where
         .get(key)
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
+}
+
+fn bool_input<P>(request: &OperationRequest<P>, key: &str) -> Option<bool>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    request.payload.input().get(key).and_then(Value::as_bool)
 }
 
 fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {

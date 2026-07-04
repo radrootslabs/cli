@@ -177,8 +177,13 @@ fn trade_relay_resolution_policy() -> RelayResolutionPolicy {
     RelayResolutionPolicy::configured_relays()
 }
 
-fn trade_privacy_confirmation() -> PrivacyPreflightConfirmation {
-    PrivacyPreflightConfirmation::new().confirm(ProductSensitivityField::PublicButSensitiveNotes)
+fn trade_privacy_confirmation(confirm_public_note: bool) -> PrivacyPreflightConfirmation {
+    if confirm_public_note {
+        PrivacyPreflightConfirmation::new()
+            .confirm(ProductSensitivityField::PublicButSensitiveNotes)
+    } else {
+        PrivacyPreflightConfirmation::new()
+    }
 }
 
 fn sdk_trade_actor(
@@ -988,12 +993,7 @@ pub fn submit(
     }
 
     let account = validate_bound_order_buyer_account(config, &loaded)?;
-    let payload = canonical_order_request_payload_from_loaded(
-        &loaded,
-        account.record.public_identity.public_key_hex.as_str(),
-    )?;
-
-    propose_trade_via_sdk(config, &loaded, args, &account, payload)
+    propose_trade_via_sdk(config, &loaded, args, &account)
 }
 
 pub fn rebind(
@@ -1325,7 +1325,7 @@ fn decide_trade_via_sdk(
                 ack_policy,
                 TradeEvidenceMode::ResyncBeforeMutation,
             )
-            .with_privacy_confirmation(trade_privacy_confirmation());
+            .with_privacy_confirmation(trade_privacy_confirmation(false));
             if let Some(idempotency_key) = args.idempotency_key.as_deref() {
                 request = request.try_with_idempotency_key(idempotency_key)?;
             }
@@ -1349,7 +1349,7 @@ fn decide_trade_via_sdk(
                 ack_policy,
                 TradeEvidenceMode::ResyncBeforeMutation,
             )
-            .with_privacy_confirmation(trade_privacy_confirmation());
+            .with_privacy_confirmation(trade_privacy_confirmation(args.confirm_public_note));
             if let Some(idempotency_key) = args.idempotency_key.as_deref() {
                 request = request.try_with_idempotency_key(idempotency_key)?;
             }
@@ -1389,7 +1389,7 @@ fn propose_revision_via_sdk(
         ack_policy,
         TradeEvidenceMode::ResyncBeforeMutation,
     )
-    .with_privacy_confirmation(trade_privacy_confirmation());
+    .with_privacy_confirmation(trade_privacy_confirmation(args.confirm_public_note));
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }
@@ -1450,7 +1450,7 @@ fn decide_revision_via_sdk(
         ack_policy,
         TradeEvidenceMode::ResyncBeforeMutation,
     )
-    .with_privacy_confirmation(trade_privacy_confirmation());
+    .with_privacy_confirmation(trade_privacy_confirmation(args.confirm_public_note));
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }
@@ -1497,7 +1497,7 @@ fn cancel_trade_via_sdk(
         ack_policy,
         TradeEvidenceMode::ResyncBeforeMutation,
     )
-    .with_privacy_confirmation(trade_privacy_confirmation());
+    .with_privacy_confirmation(trade_privacy_confirmation(args.confirm_public_note));
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }
@@ -4885,20 +4885,42 @@ fn propose_trade_via_sdk(
     loaded: &LoadedOrderDraft,
     args: &TradeSubmitArgs,
     account: &account::AccountRecordView,
-    payload: RadrootsOrderRequest,
 ) -> Result<OrderSubmitView, CliSdkAdapterError> {
     let actor = sdk_trade_actor(account, RadrootsActorRole::Buyer, "propose")?;
     let publish_mode = trade_publish_mode(config);
     let ack_policy = trade_ack_policy(publish_mode)?;
+    let economics =
+        loaded.document.order.economics.clone().ok_or_else(|| {
+            RuntimeError::Config("trade draft is missing quote economics".to_owned())
+        })?;
+    let items = loaded
+        .document
+        .order
+        .items
+        .iter()
+        .map(|item| {
+            Ok(RadrootsOrderItem {
+                bin_id: protocol_inventory_bin_id(item.bin_id.as_str(), "order item bin_id")?,
+                bin_count: item.bin_count,
+            })
+        })
+        .collect::<Result<Vec<_>, RuntimeError>>()?;
     let mut request = TradeProposeRequest::new(
         actor,
         order_submit_listing_event_ptr(loaded)?,
-        payload,
+        protocol_order_id(loaded.document.order.order_id.as_str(), "order_id")?,
+        protocol_listing_addr(loaded.document.order.listing_addr.as_str(), "listing_addr")?,
+        protocol_pubkey(
+            loaded.document.order.seller_pubkey.as_str(),
+            "seller_pubkey",
+        )?,
+        items,
+        economics,
         trade_relay_resolution_policy(),
         publish_mode,
         ack_policy,
     )
-    .with_privacy_confirmation(trade_privacy_confirmation());
+    .with_privacy_confirmation(trade_privacy_confirmation(args.confirm_public_note));
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }

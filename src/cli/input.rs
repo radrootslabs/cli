@@ -248,6 +248,7 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
         TargetCommand::Trade(args) => match &args.command {
             TradeCommand::Submit(args) => {
                 insert_string(&mut input, "trade_id", &args.trade_id);
+                insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
             }
             TradeCommand::Get(args) => insert_string(&mut input, "trade_id", &args.trade_id),
             TradeCommand::App(args) => match &args.command {
@@ -265,15 +266,18 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
             TradeCommand::Decline(args) => {
                 insert_string(&mut input, "trade_id", &args.trade_id);
                 insert_string(&mut input, "reason", &args.reason);
+                insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
             }
             TradeCommand::Cancel(args) => {
                 insert_string(&mut input, "trade_id", &args.trade_id);
                 insert_string(&mut input, "reason", &args.reason);
+                insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
             }
             TradeCommand::Revision(revision) => match &revision.command {
                 TradeRevisionCommand::Propose(args) => {
                     insert_string(&mut input, "trade_id", &args.trade_id);
                     insert_string(&mut input, "reason", &args.reason);
+                    insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
                     insert_string(&mut input, "bin_id", &args.bin_id);
                     if let Some(bin_count) = args.bin_count {
                         input.insert(
@@ -295,6 +299,7 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                     insert_string(&mut input, "trade_id", &args.trade_id);
                     insert_string(&mut input, "revision_id", &args.revision_id);
                     insert_string(&mut input, "reason", &args.reason);
+                    insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
                 }
             },
             TradeCommand::Status(status) => match &status.command {
@@ -350,6 +355,12 @@ fn insert_string_array(input: &mut OperationData, key: &str, values: &[String]) 
 fn insert_number(input: &mut OperationData, key: &str, value: f64) {
     if let Some(number) = serde_json::Number::from_f64(value) {
         input.insert(key.to_owned(), Value::Number(number));
+    }
+}
+
+fn insert_bool(input: &mut OperationData, key: &str, value: bool) {
+    if value {
+        input.insert(key.to_owned(), Value::Bool(true));
     }
 }
 

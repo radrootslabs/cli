@@ -237,6 +237,7 @@ pub struct OrderDraftAdjustmentArgs {
 pub struct TradeSubmitArgs {
     pub key: String,
     pub idempotency_key: Option<String>,
+    pub confirm_public_note: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -279,6 +280,7 @@ pub struct TradeDecisionArgs {
     pub decision: TradeDecisionArg,
     pub reason: Option<String>,
     pub idempotency_key: Option<String>,
+    pub confirm_public_note: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -286,12 +288,14 @@ pub struct TradeCancelArgs {
     pub key: String,
     pub reason: String,
     pub idempotency_key: Option<String>,
+    pub confirm_public_note: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct TradeRevisionProposeArgs {
     pub key: String,
     pub reason: String,
+    pub confirm_public_note: bool,
     pub bin_id: Option<String>,
     pub bin_count: Option<u32>,
     pub adjustment_id: Option<String>,
@@ -331,6 +335,7 @@ pub struct TradeRevisionDecisionArgs {
     pub decision: TradeRevisionDecisionArg,
     pub reason: Option<String>,
     pub idempotency_key: Option<String>,
+    pub confirm_public_note: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -991,6 +991,10 @@ mod tests {
             required_tokens: &[
                 "propose_trade_via_sdk",
                 "TradeProposeRequest::new",
+                "protocol_order_id",
+                "protocol_listing_addr",
+                "protocol_pubkey",
+                "args.confirm_public_note",
                 "session.sdk().trades().buyer().propose_trade",
                 "trade_publish_mode(config)",
             ],

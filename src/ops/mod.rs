@@ -302,6 +302,7 @@ mod tests {
             "USD",
             "--adjustment-reason",
             "weather delay",
+            "--confirm-public-note",
         ])
         .expect("target args parse");
         let request =
@@ -374,6 +375,14 @@ mod tests {
                 .and_then(Value::as_str),
             Some("weather delay")
         );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("confirm_public_note")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
 
         let revision_accept = TargetCliArgs::try_parse_from([
             "radroots",
@@ -418,6 +427,7 @@ mod tests {
             "rev_test",
             "--reason",
             "keep original order",
+            "--confirm-public-note",
         ])
         .expect("target args parse");
         let request =
@@ -446,6 +456,14 @@ mod tests {
             request.payload.input.get("reason").and_then(Value::as_str),
             Some("keep original order")
         );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("confirm_public_note")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
 
         let cancel = TargetCliArgs::try_parse_from([
             "radroots",
@@ -454,6 +472,7 @@ mod tests {
             "ord_test",
             "--reason",
             "changed plans",
+            "--confirm-public-note",
         ])
         .expect("target args parse");
         let request = TargetOperationRequest::from_target_args(&cancel).expect("operation request");
@@ -472,6 +491,14 @@ mod tests {
         assert_eq!(
             request.payload.input.get("reason").and_then(Value::as_str),
             Some("changed plans")
+        );
+        assert_eq!(
+            request
+                .payload
+                .input
+                .get("confirm_public_note")
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 
