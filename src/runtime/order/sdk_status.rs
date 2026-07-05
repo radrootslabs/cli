@@ -1,13 +1,18 @@
 use radroots_events::ids::RadrootsEventId;
+#[cfg(test)]
+use radroots_events::ids::RadrootsOrderId;
 use radroots_sdk::{
-    SdkTradeStatusIssue, TradeStatusEligibility, TradeStatusEvidenceSummary, TradeStatusKind,
-    TradeStatusNextActionKind, TradeStatusReceipt, TradeValidationTrustDecision,
+    SdkTradeStatusIssue, TradeStatusAmbiguityCandidate, TradeStatusEligibility,
+    TradeStatusEvidenceSummary, TradeStatusKind, TradeStatusNextActionKind, TradeStatusReceipt,
+    TradeStatusRequest, TradeValidationTrustDecision,
 };
+use radroots_trade::identity::RadrootsTradeLocator;
 
 use crate::view::runtime::{
-    OrderIssueView, OrderStatusEligibilityView, OrderStatusEvidenceSummaryView,
-    OrderStatusLifecycleCancellationView, OrderStatusLifecycleView, OrderStatusSdkReceiptView,
-    OrderStatusValidationTrustView, OrderStatusView, OrderTradeLocatorView,
+    OrderIssueView, OrderStatusAmbiguityCandidateView, OrderStatusEligibilityView,
+    OrderStatusEvidenceSummaryView, OrderStatusLifecycleCancellationView, OrderStatusLifecycleView,
+    OrderStatusSdkReceiptView, OrderStatusValidationTrustView, OrderStatusView,
+    OrderTradeLocatorView,
 };
 
 use super::{ORDER_ACTOR_CONTEXT_SDK_LOCAL, ORDER_STATUS_SDK_SOURCE};
@@ -22,12 +27,21 @@ pub(super) fn sdk_order_status_view(receipt: TradeStatusReceipt) -> OrderStatusV
     let reason = sdk_order_status_reason(receipt.status, receipt.order_id.as_str());
     let lifecycle = sdk_order_status_lifecycle_view(&receipt, reducer_issues.as_slice());
     let sdk_receipt = Some(sdk_order_status_receipt_view(&receipt));
+    let ambiguity_candidates = receipt
+        .ambiguity_candidates
+        .iter()
+        .map(sdk_status_ambiguity_candidate_view)
+        .collect::<Vec<_>>();
+    let actions = ambiguity_candidates
+        .iter()
+        .map(|candidate| candidate.status_command.clone())
+        .collect::<Vec<_>>();
 
     OrderStatusView {
         state,
         source: ORDER_STATUS_SDK_SOURCE.to_owned(),
         order_id: receipt.order_id.to_string(),
-        locator: sdk_trade_locator_view(&receipt),
+        locator: sdk_trade_locator_view(&receipt.locator),
         actor_context_source: ORDER_ACTOR_CONTEXT_SDK_LOCAL.to_owned(),
         request_event_id: sdk_event_id_string(receipt.request_event_id.as_ref()),
         decision_event_id: sdk_event_id_string(receipt.decision_event_id.as_ref()),
@@ -42,6 +56,7 @@ pub(super) fn sdk_order_status_view(receipt: TradeStatusReceipt) -> OrderStatusV
         inventory: None,
         lifecycle: Some(lifecycle),
         sdk_receipt,
+        ambiguity_candidates,
         reducer_issues,
         target_relays: Vec::new(),
         connected_relays: Vec::new(),
@@ -50,33 +65,28 @@ pub(super) fn sdk_order_status_view(receipt: TradeStatusReceipt) -> OrderStatusV
         decoded_count: receipt.event_count,
         skipped_count: 0,
         reason,
-        actions: Vec::new(),
+        actions,
     }
 }
 
-fn sdk_trade_locator_view(receipt: &TradeStatusReceipt) -> OrderTradeLocatorView {
+fn sdk_trade_locator_view(locator: &RadrootsTradeLocator) -> OrderTradeLocatorView {
     OrderTradeLocatorView {
-        trade_id: receipt.locator.trade_id.as_str().to_owned(),
-        root_event_id: receipt
-            .locator
-            .root_event_id
-            .as_ref()
-            .map(ToString::to_string),
-        listing_addr: receipt
-            .locator
-            .listing_addr
-            .as_ref()
-            .map(ToString::to_string),
-        buyer_pubkey: receipt
-            .locator
-            .buyer_pubkey
-            .as_ref()
-            .map(ToString::to_string),
-        seller_pubkey: receipt
-            .locator
-            .seller_pubkey
-            .as_ref()
-            .map(ToString::to_string),
+        trade_id: locator.trade_id.as_str().to_owned(),
+        root_event_id: locator.root_event_id.as_ref().map(ToString::to_string),
+        listing_addr: locator.listing_addr.as_ref().map(ToString::to_string),
+        buyer_pubkey: locator.buyer_pubkey.as_ref().map(ToString::to_string),
+        seller_pubkey: locator.seller_pubkey.as_ref().map(ToString::to_string),
+    }
+}
+
+fn sdk_status_ambiguity_candidate_view(
+    candidate: &TradeStatusAmbiguityCandidate,
+) -> OrderStatusAmbiguityCandidateView {
+    let status_selector = TradeStatusRequest::locator_selector(&candidate.locator);
+    OrderStatusAmbiguityCandidateView {
+        locator: sdk_trade_locator_view(&candidate.locator),
+        status_command: format!("radroots trade status get {status_selector}"),
+        status_selector,
     }
 }
 
@@ -242,4 +252,84 @@ fn sdk_order_status_issue_view(issue: &SdkTradeStatusIssue) -> OrderIssueView {
 
 fn sdk_event_id_string(event_id: Option<&RadrootsEventId>) -> Option<String> {
     event_id.map(RadrootsEventId::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn sdk_order_status_view_exposes_ambiguity_candidates() {
+        let order_id = RadrootsOrderId::parse("order-1").expect("order id");
+        let root_event_id = RadrootsEventId::parse(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("root event id");
+        let receipt = TradeStatusReceipt {
+            locator: RadrootsTradeLocator::from_order_id(order_id.clone()),
+            order_id,
+            root_event_id: None,
+            ambiguity_candidates: vec![TradeStatusAmbiguityCandidate {
+                locator: RadrootsTradeLocator::from_order_id(
+                    RadrootsOrderId::parse("order-1").expect("candidate order id"),
+                )
+                .with_root_event_id(root_event_id.clone()),
+            }],
+            source: radroots_sdk::SdkTradeStatusSource::LocalOnly,
+            found: false,
+            event_count: 2,
+            limit_applied: 500,
+            status: TradeStatusKind::Ambiguous,
+            lifecycle_terminal: false,
+            listing_addr: None,
+            buyer_pubkey: None,
+            seller_pubkey: None,
+            economics: None,
+            evidence: TradeStatusEvidenceSummary {
+                event_count: 2,
+                limit_applied: 500,
+                has_request: true,
+                has_decision: false,
+                has_agreement: false,
+                has_validation_receipt: false,
+                has_pending_revision: false,
+                has_cancellation: false,
+                has_issues: false,
+            },
+            validation_trust: None,
+            online_evidence: None,
+            eligibility: TradeStatusEligibility {
+                can_decide: false,
+                can_propose_revision: false,
+                can_decide_revision: false,
+                can_cancel: false,
+            },
+            next_action: TradeStatusNextActionKind::InspectEvidenceIssues,
+            event_ids: vec![root_event_id.clone()],
+            request_event_id: None,
+            decision_event_id: None,
+            agreement_event_id: None,
+            rhi_receipt_event_id: None,
+            pending_revision_event_id: None,
+            cancellation_event_id: None,
+            last_event_id: None,
+            issues: Vec::new(),
+        };
+
+        let view_json = serde_json::to_value(sdk_order_status_view(receipt)).expect("view json");
+
+        assert_eq!(
+            view_json["ambiguity_candidates"][0]["status_selector"],
+            json!(format!("order-1@{}", root_event_id.as_str()))
+        );
+        assert_eq!(
+            view_json["actions"][0],
+            json!(format!(
+                "radroots trade status get order-1@{}",
+                root_event_id.as_str()
+            ))
+        );
+    }
 }

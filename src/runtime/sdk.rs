@@ -967,6 +967,9 @@ mod tests {
                 "TradeValidationTrustDecision",
                 "validation_trust",
                 "has_validation_receipt",
+                "ambiguity_candidates",
+                "TradeStatusAmbiguityCandidate",
+                "TradeStatusRequest::locator_selector",
             ],
         },
         MigratedCliPathGuard {
@@ -1085,6 +1088,7 @@ mod tests {
 
     const MIGRATED_PATH_DISALLOWED_TOKENS: &[&str] = &[
         "fetch_events_from_relays",
+        "fetch_relay_events_via_shared_transport",
         "publish_parts_with_identity",
         "publish_via_direct_relay",
         "mutate_via_direct_relay",

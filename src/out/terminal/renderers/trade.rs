@@ -341,6 +341,7 @@ fn trade_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalD
     common::push_path_field(&mut document, "Revision", result, &["revision", "state"]);
     push_relay_field(&mut document, result);
     push_inventory_section(&mut document, result);
+    push_ambiguity_candidates_section(&mut document, result);
     push_issue_sections(&mut document, result);
     push_nested_issues_section(
         &mut document,
@@ -350,6 +351,33 @@ fn trade_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalD
     );
     push_nested_issues_section(&mut document, "Reducer issues", result, &["reducer_issues"]);
     document
+}
+
+fn push_ambiguity_candidates_section(document: &mut TerminalDocument, result: &Value) {
+    let rows = common::array(result, &["ambiguity_candidates"])
+        .into_iter()
+        .flatten()
+        .map(|candidate| {
+            TerminalTableRow::new(vec![
+                common::string(candidate, &["status_selector"]).unwrap_or_default(),
+                common::string(candidate, &["locator", "root_event_id"]).unwrap_or_default(),
+                common::string(candidate, &["status_command"]).unwrap_or_default(),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return;
+    }
+    document.sections.push(common::table_section(
+        "Ambiguity candidates",
+        vec![
+            TerminalTableColumn::new("Selector", 8, 32),
+            TerminalTableColumn::new("Root", 4, 22),
+            TerminalTableColumn::new("Command", 7, 48),
+        ],
+        rows,
+        "No ambiguity candidates",
+    ));
 }
 
 fn trade_event_list_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {

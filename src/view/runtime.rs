@@ -1726,6 +1726,13 @@ pub struct OrderTradeLocatorView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OrderStatusAmbiguityCandidateView {
+    pub locator: OrderTradeLocatorView,
+    pub status_selector: String,
+    pub status_command: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct OrderSubmitView {
     pub state: String,
     pub source: String,
@@ -2164,6 +2171,8 @@ pub struct OrderStatusView {
     pub lifecycle: Option<OrderStatusLifecycleView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sdk_receipt: Option<OrderStatusSdkReceiptView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ambiguity_candidates: Vec<OrderStatusAmbiguityCandidateView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reducer_issues: Vec<OrderIssueView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
