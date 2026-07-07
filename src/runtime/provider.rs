@@ -389,22 +389,25 @@ mod tests {
 
     #[test]
     fn write_plane_provider_tracks_nostr_transport_publish() {
-        let config = sample_config(Vec::new(), false);
+        let mut config = sample_config(Vec::new(), false);
+        config.transport = crate::runtime::config::TransportConfig::from_nostr_relay_urls(vec![
+            "wss://relay.example.com".to_owned(),
+        ]);
         let publish = publish_view(
             &config,
-            "unconfigured",
-            Some("Nostr transport profile requires a configured Nostr relay"),
+            "ready",
+            Some("Nostr relay transport is configured for delivery"),
         );
         let view = resolve_write_plane_provider(&config, &publish);
         assert_eq!(view.provider_runtime_id, "nostr");
         assert_eq!(view.binding_model, "nostr_transport");
-        assert_eq!(view.state, "unconfigured");
+        assert_eq!(view.state, "ready");
         assert_eq!(
             view.provenance,
             ProviderProvenance::TransportProfile.as_str()
         );
         assert!(view.target.is_none());
-        assert!(view.detail.contains("configured Nostr relay"));
+        assert!(view.detail.contains("configured for delivery"));
     }
 
     #[test]

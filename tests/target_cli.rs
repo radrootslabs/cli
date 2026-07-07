@@ -1376,6 +1376,38 @@ fn mesh_status_reports_reticulum_preview_unusable_state_without_fallback() {
     );
 }
 
+#[test]
+fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        !manifest_dir.join("src/cli/relay.rs").exists(),
+        "removed relay command module must not be reintroduced"
+    );
+
+    for relative_path in [
+        "src/runtime/transport.rs",
+        "src/runtime/sdk.rs",
+        "src/runtime/sync.rs",
+        "src/cli/transport.rs",
+    ] {
+        let source = fs::read_to_string(manifest_dir.join(relative_path)).expect("read source");
+        for forbidden in [
+            "radrootsd.publish_proxy.v1",
+            "publish.relays.resolve",
+            "\"publish.event\"",
+            "transport_kinds",
+            "allowed_relay_policy",
+            "relay_policy",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{relative_path} must not contain removed transport surface `{forbidden}`"
+            );
+        }
+    }
+}
+
 fn help_lists(stdout: &str, command: &str) -> bool {
     stdout.lines().any(|line| {
         let line = line.trim_start();
