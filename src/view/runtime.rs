@@ -634,6 +634,8 @@ pub struct SdkOutboxStatusView {
     pub retryable_events: i64,
     pub terminal_events: i64,
     pub failed_terminal_events: i64,
+    pub preview_unavailable_events: i64,
+    pub deferred_until_implemented_events: i64,
     pub ready_signed_events: i64,
     pub publishing_events: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3159,6 +3161,10 @@ pub struct SyncQueueView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_terminal_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_unavailable_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deferred_until_implemented_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ready_signed_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publishing_count: Option<usize>,
@@ -3297,6 +3303,8 @@ pub struct TransportOutboxStatusView {
     pub pending_count: i64,
     pub retryable_count: i64,
     pub terminal_count: i64,
+    pub preview_unavailable_count: i64,
+    pub deferred_until_implemented_count: i64,
     pub ready_signed_count: i64,
     pub publishing_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -614,6 +614,10 @@ fn sdk_sync_queue(receipt: &SyncStatusReceipt) -> SyncQueueView {
         retryable_count: Some(usize_from_i64(receipt.outbox.retryable_events)),
         terminal_count: Some(usize_from_i64(receipt.outbox.terminal_events)),
         failed_terminal_count: Some(usize_from_i64(receipt.outbox.failed_terminal_events)),
+        preview_unavailable_count: Some(usize_from_i64(receipt.outbox.preview_unavailable_events)),
+        deferred_until_implemented_count: Some(usize_from_i64(
+            receipt.outbox.deferred_until_implemented_events,
+        )),
         ready_signed_count: Some(usize_from_i64(receipt.outbox.ready_signed_events)),
         publishing_count: Some(usize_from_i64(receipt.outbox.publishing_events)),
         last_attempt_at_ms: receipt.outbox.last_attempt_at_ms,
@@ -629,6 +633,8 @@ fn derived_projection_sync_queue(expected_count: usize, pending_count: usize) ->
         retryable_count: None,
         terminal_count: None,
         failed_terminal_count: None,
+        preview_unavailable_count: None,
+        deferred_until_implemented_count: None,
         ready_signed_count: None,
         publishing_count: None,
         last_attempt_at_ms: None,
@@ -1540,6 +1546,8 @@ mod tests {
                 0,
                 0,
                 0,
+                0,
+                0,
                 None,
                 None,
                 &["wss://relay-a.example.com", "wss://relay-b.example.com"],
@@ -1554,6 +1562,8 @@ mod tests {
         assert_eq!(view.queue.pending_count, 0);
         assert_eq!(view.queue.retryable_count, Some(0));
         assert_eq!(view.queue.terminal_count, Some(0));
+        assert_eq!(view.queue.preview_unavailable_count, Some(0));
+        assert_eq!(view.queue.deferred_until_implemented_count, Some(0));
         assert_eq!(view.queue.ready_signed_count, Some(0));
         assert_eq!(view.actions, vec!["radroots sync pull"]);
     }
@@ -1572,6 +1582,8 @@ mod tests {
                 1,
                 2,
                 1,
+                0,
+                0,
                 1,
                 0,
                 Some(1_700_000_010_000),
@@ -1586,6 +1598,8 @@ mod tests {
         assert_eq!(view.queue.retryable_count, Some(1));
         assert_eq!(view.queue.terminal_count, Some(2));
         assert_eq!(view.queue.failed_terminal_count, Some(1));
+        assert_eq!(view.queue.preview_unavailable_count, Some(0));
+        assert_eq!(view.queue.deferred_until_implemented_count, Some(0));
         assert_eq!(view.queue.ready_signed_count, Some(1));
         assert_eq!(view.queue.last_attempt_at_ms, Some(1_700_000_010_000));
         assert_eq!(
@@ -1607,6 +1621,8 @@ mod tests {
                 1,
                 1,
                 1,
+                0,
+                0,
                 0,
                 0,
                 0,
@@ -1645,7 +1661,7 @@ mod tests {
         let view = sdk_push_view(
             &config,
             PushOutboxReceipt::default(),
-            sdk_status_receipt(0, 0, 0, 0, 0, 0, 0, 0, None, None, &[]),
+            sdk_status_receipt(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, &[]),
         );
 
         assert_eq!(view.state, "ready");
@@ -1704,6 +1720,8 @@ mod tests {
                 0,
                 0,
                 0,
+                0,
+                0,
                 Some(1_700_000_020_000),
                 Some("auth-required: login".to_owned()),
                 &["wss://relay-a.example.com", "wss://relay-b.example.com"],
@@ -1749,6 +1767,8 @@ mod tests {
         retryable_events: i64,
         terminal_events: i64,
         failed_terminal_events: i64,
+        preview_unavailable_events: i64,
+        deferred_until_implemented_events: i64,
         ready_signed_events: i64,
         publishing_events: i64,
         last_attempt_at_ms: Option<i64>,
@@ -1771,6 +1791,8 @@ mod tests {
                 retryable_events,
                 terminal_events,
                 failed_terminal_events,
+                preview_unavailable_events,
+                deferred_until_implemented_events,
                 ready_signed_events,
                 publishing_events,
                 last_attempt_at_ms,

@@ -110,6 +110,8 @@ pub fn outbox_status(
         pending_count: receipt.outbox.pending_events,
         retryable_count: receipt.outbox.retryable_events,
         terminal_count: receipt.outbox.terminal_events,
+        preview_unavailable_count: receipt.outbox.preview_unavailable_events,
+        deferred_until_implemented_count: receipt.outbox.deferred_until_implemented_events,
         ready_signed_count: receipt.outbox.ready_signed_events,
         publishing_count: receipt.outbox.publishing_events,
         last_attempt_at_ms: receipt.outbox.last_attempt_at_ms,

@@ -430,6 +430,8 @@ fn sdk_outbox_status_view(
         retryable_events: status.retryable_events,
         terminal_events: status.terminal_events,
         failed_terminal_events: status.failed_terminal_events,
+        preview_unavailable_events: status.preview_unavailable_events,
+        deferred_until_implemented_events: status.deferred_until_implemented_events,
         ready_signed_events: status.ready_signed_events,
         publishing_events: status.publishing_events,
         last_attempt_at_ms: status.last_attempt_at_ms,
