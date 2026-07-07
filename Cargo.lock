@@ -3835,13 +3835,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "radroots_publish_proxy_protocol"
-version = "0.1.0-alpha.2"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "radroots_replica_db"
 version = "0.1.0-alpha.2"
 dependencies = [
@@ -3929,11 +3922,11 @@ dependencies = [
  "radroots_nostr_connect",
  "radroots_nostr_signer",
  "radroots_outbox",
- "radroots_publish_proxy_protocol",
  "radroots_runtime_paths",
  "radroots_trade",
  "radroots_transport",
  "radroots_transport_nostr",
+ "radroots_transport_publish_protocol",
  "radroots_transport_reticulum",
  "reqwest",
  "serde",
@@ -4030,6 +4023,13 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "radroots_transport_publish_protocol"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

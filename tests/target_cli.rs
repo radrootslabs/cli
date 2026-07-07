@@ -519,23 +519,15 @@ fn handle_proxy_connection(mut stream: TcpStream, expected_token: Option<&str>) 
     }
     let request: Value = serde_json::from_str(body.as_str()).expect("proxy json");
     assert_eq!(request["jsonrpc"], "2.0");
-    assert_eq!(request["method"], "publish.event");
+    assert_eq!(request["method"], "transport.publish.event");
     let event = &request["params"]["event"];
-    let relays = request["params"]["relays"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let relay_results = relays
-        .iter()
-        .map(|relay| {
-            json!({
-                "relay_url": relay,
-                "source": "request",
-                "attempted": true,
-                "outcome_kind": "accepted"
-            })
-        })
-        .collect::<Vec<_>>();
+    let target_result = json!({
+        "transport_kind": "nostr",
+        "endpoint_uri": "wss://daemon-resolved.radroots.test",
+        "source": "daemon_default",
+        "attempted": true,
+        "outcome_kind": "accepted"
+    });
     let response = json!({
         "jsonrpc": "2.0",
         "id": request["id"],
@@ -549,15 +541,15 @@ fn handle_proxy_connection(mut stream: TcpStream, expected_token: Option<&str>) 
                 "event_id": event["id"],
                 "pubkey": event["pubkey"],
                 "event_kind": event["kind"],
-                "relay_policy": request["params"]["relay_policy"],
+                "target_policy": request["params"]["target_policy"],
                 "delivery_policy": request["params"]["delivery_policy"],
-                "relay_count": relay_results.len(),
-                "acknowledged_count": relay_results.len(),
+                "target_count": 1,
+                "acknowledged_count": 1,
                 "retryable_count": 0,
                 "terminal_count": 0,
                 "requested_at_ms": 1_700_000_000_000_i64,
                 "completed_at_ms": 1_700_000_000_001_i64,
-                "relays": relay_results
+                "targets": [target_result]
             }
         }
     });
@@ -1853,7 +1845,7 @@ fn proxy_listing_publish_update_and_archive_dry_run_without_direct_publish_relay
 #[test]
 fn proxy_listing_publish_non_dry_run_uses_local_jsonrpc_server() {
     let sandbox = RadrootsCliSandbox::new();
-    let proxy = ProxyJsonRpcServer::once(None);
+    let proxy = ProxyJsonRpcServer::once(Some("proxy_test_token"));
     let token_file = proxy_token_file(&sandbox);
     sandbox.write_app_config(
         format!(
@@ -1930,9 +1922,9 @@ token_file = "{}"
         value["result"]["event_id"]
     );
     assert_eq!(
-        request["params"]["relays"]
+        request["params"]["target_policy"]["relay_urls"]
             .as_array()
-            .expect("relays")
+            .expect("relay urls")
             .len(),
         0
     );
@@ -2105,7 +2097,7 @@ fn proxy_listing_publish_uses_myc_nip46_sdk_signer() {
         user_keys,
         Nip46RelayFinish::SignResponse,
     );
-    let proxy = ProxyJsonRpcServer::once(None);
+    let proxy = ProxyJsonRpcServer::once(Some("proxy_test_token"));
     let token_file = proxy_token_file(&sandbox);
     let public_identity_file =
         write_public_identity_profile(&sandbox, "myc-proxy-user", &user_public);

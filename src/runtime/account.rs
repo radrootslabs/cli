@@ -775,6 +775,13 @@ fn secret_backend_resolution_error(error: SecretBackendResolutionError) -> Runti
     }
 }
 
+pub(crate) fn account_secret_vault(
+    config: &RuntimeConfig,
+) -> Result<Arc<dyn RadrootsSecretVault>, RuntimeError> {
+    let resolved = resolve_secret_backend(config).map_err(secret_backend_resolution_error)?;
+    secret_vault_for_backend(config, resolved.backend, HOST_VAULT_SERVICE_NAME)
+}
+
 fn secret_vault_for_backend(
     config: &RuntimeConfig,
     backend: RadrootsSecretBackend,

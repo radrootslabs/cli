@@ -1,3 +1,4 @@
+use std::fs;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -644,10 +645,62 @@ fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, Run
                 ReticulumPreviewProfile::preview_unavailable().with_behavior(behavior),
             ))
         }
-        TransportProfileKind::Proxy => Ok(TransportProfile::proxy(ProxyProfile::new(
-            config.transport.proxy.url.clone(),
-        ))),
+        TransportProfileKind::Proxy => {
+            let mut profile = ProxyProfile::new(config.transport.proxy.url.clone());
+            if let Some(token) = proxy_bearer_token(config)? {
+                profile = profile.with_bearer_token(token);
+            }
+            Ok(TransportProfile::proxy(profile))
+        }
     }
+}
+
+fn proxy_bearer_token(config: &RuntimeConfig) -> Result<Option<String>, RuntimeError> {
+    if let Some(path) = config.transport.proxy.token_file.as_ref() {
+        let token = fs::read_to_string(path).map_err(|error| {
+            RuntimeError::Config(format!(
+                "failed to read proxy token file {}: {error}",
+                path.display()
+            ))
+        })?;
+        return normalize_proxy_bearer_token(
+            token.as_str(),
+            format!("proxy token file {}", path.display()).as_str(),
+        )
+        .map(Some);
+    }
+
+    if let Some(secret_id) = config.transport.proxy.token_secret_id.as_ref() {
+        let vault = account::account_secret_vault(config)?;
+        let token = vault.load_secret(secret_id).map_err(|error| {
+            RuntimeError::Config(format!(
+                "failed to load proxy token secret `{secret_id}`: {error}"
+            ))
+        })?;
+        let token = token.ok_or_else(|| {
+            RuntimeError::Config(format!("proxy token secret `{secret_id}` was not found"))
+        })?;
+        return normalize_proxy_bearer_token(
+            token.as_str(),
+            format!("proxy token secret `{secret_id}`").as_str(),
+        )
+        .map(Some);
+    }
+
+    Ok(None)
+}
+
+fn normalize_proxy_bearer_token(raw: &str, source: &str) -> Result<String, RuntimeError> {
+    let token = raw.trim();
+    if token.is_empty() {
+        return Err(RuntimeError::Config(format!("{source} is empty")));
+    }
+    if token.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(RuntimeError::Config(format!(
+            "{source} contains unsupported control characters"
+        )));
+    }
+    Ok(token.to_owned())
 }
 
 #[cfg(test)]
@@ -658,7 +711,7 @@ mod tests {
     use std::time::Duration;
 
     use radroots_authority::RadrootsEventSigner;
-    use radroots_sdk::{SdkStorageKind, StorageStatusRequest};
+    use radroots_sdk::{ProxyAuth, SdkStorageKind, StorageStatusRequest};
     use radroots_secret_vault::RadrootsSecretBackend;
     use tempfile::tempdir;
 
@@ -1123,6 +1176,63 @@ mod tests {
             profile.relay_urls(),
             vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
         );
+    }
+
+    #[test]
+    fn maps_proxy_token_file_to_sdk_profile_auth() {
+        let root = tempdir().expect("tempdir");
+        let mut config = sample_config(root.path(), Vec::new());
+        let token_file = root.path().join("proxy.token");
+        fs::write(&token_file, "proxy-file-token\n").expect("write token file");
+        config.transport.profile = TransportProfileKind::Proxy;
+        config.transport.proxy.url = "http://127.0.0.1:7070".to_owned();
+        config.transport.proxy.token_file = Some(token_file);
+
+        let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
+
+        let TransportProfile::Proxy { profile } = sdk_config.transport_profile else {
+            panic!("expected proxy transport profile");
+        };
+        assert_eq!(profile.endpoint_url(), "http://127.0.0.1:7070");
+        assert_eq!(
+            profile.auth(),
+            &ProxyAuth::BearerToken("proxy-file-token".to_owned())
+        );
+    }
+
+    #[test]
+    fn maps_proxy_token_secret_id_to_sdk_profile_auth() {
+        let root = tempdir().expect("tempdir");
+        let mut config = sample_config(root.path(), Vec::new());
+        config.transport.profile = TransportProfileKind::Proxy;
+        config.transport.proxy.url = "http://127.0.0.1:7070".to_owned();
+        config.transport.proxy.token_secret_id = Some("proxy_token".to_owned());
+        let vault = account::account_secret_vault(&config).expect("account vault");
+        vault
+            .store_secret("proxy_token", "proxy-secret-token")
+            .expect("store proxy token");
+
+        let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
+
+        let TransportProfile::Proxy { profile } = sdk_config.transport_profile else {
+            panic!("expected proxy transport profile");
+        };
+        assert_eq!(
+            profile.auth(),
+            &ProxyAuth::BearerToken("proxy-secret-token".to_owned())
+        );
+    }
+
+    #[test]
+    fn proxy_token_resolution_rejects_empty_or_header_unsafe_tokens() {
+        assert!(matches!(
+            normalize_proxy_bearer_token(" \n", "proxy token"),
+            Err(RuntimeError::Config(message)) if message.contains("empty")
+        ));
+        assert!(matches!(
+            normalize_proxy_bearer_token("proxy\nsecret", "proxy token"),
+            Err(RuntimeError::Config(message)) if message.contains("control characters")
+        ));
     }
 
     #[test]
