@@ -223,7 +223,7 @@ where
         let mut view = empty_action_from_snapshot(snapshot, "pull");
         view.state = "ready".to_owned();
         view.reason = Some("dry run requested; relay fetch skipped".to_owned());
-        view.target_relays = config.relay.urls.clone();
+        view.target_relays = config.transport.nostr_relay_urls.clone();
         view.fetched_count = Some(0);
         view.ingested_count = Some(0);
         view.publishable_count = None;
@@ -237,7 +237,7 @@ where
     }
 
     let started_at = unix_now();
-    let receipt = match fetcher(&config.relay.urls, scope.filter()) {
+    let receipt = match fetcher(&config.transport.nostr_relay_urls, scope.filter()) {
         Ok(receipt) if receipt.connected_relays.is_empty() && !receipt.failed_relays.is_empty() => {
             let target_relays = receipt.target_relays;
             let failed_relays = relay_failures(receipt.failed_relays);
@@ -249,7 +249,7 @@ where
                 &executor,
                 &sync_record_from_failure(
                     scope,
-                    &config.relay.urls,
+                    &config.transport.nostr_relay_urls,
                     target_relays.clone(),
                     failed_relays.clone(),
                     started_at,
@@ -274,8 +274,8 @@ where
                 &executor,
                 &sync_record_from_failure(
                     scope,
-                    &config.relay.urls,
-                    config.relay.urls.clone(),
+                    &config.transport.nostr_relay_urls,
+                    config.transport.nostr_relay_urls.clone(),
                     Vec::new(),
                     started_at,
                     failure_reason.clone(),
@@ -285,7 +285,7 @@ where
             view.state = "unavailable".to_owned();
             view.reason = Some(failure_reason);
             view.reason_code = Some("relay_fetch_failed".to_owned());
-            view.target_relays = config.relay.urls.clone();
+            view.target_relays = config.transport.nostr_relay_urls.clone();
             view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
             return Ok(view);
         }
@@ -296,7 +296,13 @@ where
     let ingest = ingest_events(&executor, &receipt, scope)?;
     record_sync_run(
         &executor,
-        &sync_record_from_ingest(scope, &config.relay.urls, &receipt, &ingest, started_at)?,
+        &sync_record_from_ingest(
+            scope,
+            &config.transport.nostr_relay_urls,
+            &receipt,
+            &ingest,
+            started_at,
+        )?,
     )?;
     let failed_relays = relay_failures(receipt.failed_relays);
     let failed_count = ingest.failed_count + failed_relays.len();
@@ -311,8 +317,8 @@ where
         source: INGEST_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "ready".to_owned(),
-        relay_count: config.relay.urls.len(),
-        publish_policy: config.relay.publish_policy.as_str().to_owned(),
+        relay_count: config.transport.nostr_relay_urls.len(),
+        publish_policy: "any".to_owned(),
         freshness,
         queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
         target_relays: receipt.target_relays,
@@ -423,7 +429,7 @@ fn sdk_sync_status_view(config: &RuntimeConfig, receipt: SyncStatusReceipt) -> S
         local_root: config.local.root.display().to_string(),
         replica_db: "derived_projection_not_checked".to_owned(),
         relay_count,
-        publish_policy: config.relay.publish_policy.as_str().to_owned(),
+        publish_policy: "any".to_owned(),
         freshness: sdk_sync_freshness(&receipt),
         queue: sdk_sync_queue(&receipt),
         reason: None,
@@ -521,8 +527,8 @@ fn sdk_push_action_view(
         source: SDK_PUSH_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "derived_projection_not_checked".to_owned(),
-        relay_count: config.relay.urls.len(),
-        publish_policy: config.relay.publish_policy.as_str().to_owned(),
+        relay_count: config.transport.nostr_relay_urls.len(),
+        publish_policy: "any".to_owned(),
         freshness,
         queue,
         target_relays,
@@ -737,8 +743,8 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
             source: SYNC_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
             replica_db: "missing".to_owned(),
-            relay_count: config.relay.urls.len(),
-            publish_policy: config.relay.publish_policy.as_str().to_owned(),
+            relay_count: config.transport.nostr_relay_urls.len(),
+            publish_policy: "any".to_owned(),
             freshness: missing_freshness(),
             queue: derived_projection_sync_queue(0, 0),
             reason: Some("local replica database is not initialized".to_owned()),
@@ -751,8 +757,8 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
     let queue = radroots_replica_sync_status(&executor)?;
     let freshness =
         freshness_for_scope_from_executor(config, &executor, RelayIngestScope::SyncPull)?;
-    let relay_count = config.relay.urls.len();
-    let publish_policy = config.relay.publish_policy.as_str().to_owned();
+    let relay_count = config.transport.nostr_relay_urls.len();
+    let publish_policy = "any".to_owned();
     let mut actions = Vec::new();
 
     if relay_count == 0 {
@@ -820,7 +826,7 @@ pub(crate) fn relay_provenance_relays_for_scope(
     let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
     migrations::run_all_up(&executor)?;
     ensure_sync_run_table(&executor)?;
-    let current_fingerprint = relay_set_fingerprint(&config.relay.urls);
+    let current_fingerprint = relay_set_fingerprint(&config.transport.nostr_relay_urls);
     let Some(run) = latest_sync_run(&executor, scope)? else {
         return Ok(Vec::new());
     };
@@ -842,7 +848,7 @@ pub(crate) fn freshness_for_scope_from_executor(
     let now = unix_now();
     let age_seconds = last_event_at.map(|last_event_at| now.saturating_sub(last_event_at));
     ensure_sync_run_table(executor)?;
-    let current_fingerprint = relay_set_fingerprint(&config.relay.urls);
+    let current_fingerprint = relay_set_fingerprint(&config.transport.nostr_relay_urls);
     let latest = latest_sync_run(executor, scope)?;
     let current = latest
         .as_ref()
@@ -1465,9 +1471,8 @@ mod tests {
     use crate::cli::global::{FindQueryArgs, RecordLookupArgs};
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        PublishConfig, PublishTransport, PublishTransportSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RpcConfig,
+        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
 
     const FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
@@ -2348,16 +2353,6 @@ mod tests {
             transport: crate::runtime::config::TransportConfig::from_nostr_relay_urls(
                 relays.clone(),
             ),
-            publish: PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Defaults,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            },
-            relay: RelayConfig {
-                urls: relays,
-                publish_policy: RelayPublishPolicy::Any,
-                source: RelayConfigSource::Defaults,
-            },
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
                 replica_db_path: data.join("apps/cli/replica/replica.sqlite"),

@@ -372,7 +372,7 @@ fn validate_request_contract(
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
     validate_pre_runtime_request_contract(request)?;
-    validate_publish_transport_contract(request, config)?;
+    validate_transport_profile_contract(request, config)?;
     validate_signer_mode_contract(request, config)?;
     validate_network_contract(request, config)?;
     Ok(())
@@ -407,7 +407,7 @@ fn validate_signer_mode_contract(
 ) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
     if matches!(config.signer.backend, SignerBackend::Myc)
-        && requires_local_signer_mode_for_publish_transport(spec.operation_id, config)
+        && requires_local_signer_mode_for_transport_profile(spec.operation_id, config)
     {
         return Err(OperationAdapterError::SignerModeDeferred {
             operation_id: spec.operation_id.to_owned(),
@@ -468,7 +468,7 @@ fn validate_network_contract(
     }
 }
 
-fn requires_local_signer_mode_for_publish_transport(
+fn requires_local_signer_mode_for_transport_profile(
     operation_id: &str,
     config: &RuntimeConfig,
 ) -> bool {
@@ -477,19 +477,19 @@ fn requires_local_signer_mode_for_publish_transport(
 }
 
 fn requires_pre_runtime_transport_target(operation_id: &str) -> bool {
-    !is_publish_transport_routed_operation(operation_id)
+    !is_transport_profile_routed_operation(operation_id)
 }
 
 fn allows_offline_local_mutation(operation_id: &str) -> bool {
     matches!(operation_id, "listing.publish")
 }
 
-fn validate_publish_transport_contract(
+fn validate_transport_profile_contract(
     request: &TargetOperationRequest,
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
-    if !is_publish_transport_routed_operation(spec.operation_id) {
+    if !is_transport_profile_routed_operation(spec.operation_id) {
         return Ok(());
     }
     if request.context().dry_run
@@ -529,7 +529,7 @@ fn validate_publish_transport_contract(
     Ok(())
 }
 
-fn is_publish_transport_routed_operation(operation_id: &str) -> bool {
+fn is_transport_profile_routed_operation(operation_id: &str) -> bool {
     matches!(
         operation_id,
         "farm.publish"

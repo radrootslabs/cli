@@ -1164,7 +1164,7 @@ pub fn event_list(
     config: &RuntimeConfig,
     order_id: Option<&str>,
 ) -> Result<OrderEventListView, RuntimeError> {
-    if config.relay.urls.is_empty() {
+    if config.transport.nostr_relay_urls.is_empty() {
         return Ok(order_event_list_unconfigured(
             None,
             ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
@@ -1181,16 +1181,20 @@ pub fn event_list(
                 None,
                 ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
                 "trade event list requires a selected seller account".to_owned(),
-                config.relay.urls.clone(),
+                config.transport.nostr_relay_urls.clone(),
                 vec!["radroots account create".to_owned()],
             ));
         }
     };
     let seller_pubkey = actor_context.seller_pubkey;
     let filter = order_request_filter(seller_pubkey.as_str(), order_id)?;
-    let receipt =
-        fetch_relay_events_via_shared_transport(&config.relay.urls, now_unix_ms(), 1_000, filter)
-            .map_err(order_relay_fetch_error)?;
+    let receipt = fetch_relay_events_via_shared_transport(
+        &config.transport.nostr_relay_urls,
+        now_unix_ms(),
+        1_000,
+        filter,
+    )
+    .map_err(order_relay_fetch_error)?;
     if receipt.connected_relays.is_empty() && !receipt.failed_relays.is_empty() {
         return Ok(order_event_list_unavailable(
             seller_pubkey,
@@ -1588,7 +1592,7 @@ fn sdk_trade_decision_outcome_view(
             view.prev_event_id = Some(plan.request_event_id.to_string());
             view.event_id = Some(plan.expected_event_id.to_string());
             view.event_kind = Some(KIND_ORDER_DECISION);
-            view.target_relays = config.relay.urls.clone();
+            view.target_relays = config.transport.nostr_relay_urls.clone();
             view.reason = Some(format!(
                 "dry run requested; seller trade {} publication skipped",
                 args.decision.command()
@@ -1630,7 +1634,7 @@ fn sdk_trade_revision_outcome_view(
                 })
                 .collect();
             view.economics = Some(revision.economics);
-            view.target_relays = config.relay.urls.clone();
+            view.target_relays = config.transport.nostr_relay_urls.clone();
             view.reason =
                 Some("dry run requested; seller revision proposal publication skipped".to_owned());
             view.actions = vec![format!("radroots trade status get {}", status.order_id)];
@@ -1665,7 +1669,7 @@ fn sdk_trade_revision_decision_outcome_view(
             view.prev_event_id = Some(plan.previous_event_id.to_string());
             view.event_id = Some(plan.expected_event_id.to_string());
             view.event_kind = Some(KIND_ORDER_REVISION_DECISION);
-            view.target_relays = config.relay.urls.clone();
+            view.target_relays = config.transport.nostr_relay_urls.clone();
             view.reason = Some(format!(
                 "dry run requested; buyer revision {} publication skipped",
                 args.decision.command()
@@ -1696,7 +1700,7 @@ fn sdk_trade_cancellation_outcome_view(
             view.prev_event_id = Some(plan.previous_event_id.to_string());
             view.event_id = Some(plan.expected_event_id.to_string());
             view.event_kind = Some(KIND_ORDER_CANCELLATION);
-            view.target_relays = config.relay.urls.clone();
+            view.target_relays = config.transport.nostr_relay_urls.clone();
             view.reason =
                 Some("dry run requested; buyer trade cancellation publication skipped".to_owned());
             view.actions = vec![format!("radroots trade status get {}", status.order_id)];
@@ -1920,7 +1924,7 @@ fn order_decision_base_view(
         event_kind: None,
         inventory: None,
         dry_run,
-        target_relays: config.relay.urls.clone(),
+        target_relays: config.transport.nostr_relay_urls.clone(),
         connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
@@ -1960,7 +1964,7 @@ fn order_revision_base_view(
         economics: None,
         inventory: None,
         dry_run,
-        target_relays: config.relay.urls.clone(),
+        target_relays: config.transport.nostr_relay_urls.clone(),
         connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
@@ -2001,7 +2005,7 @@ fn order_revision_decision_base_view(
         economics: None,
         inventory: None,
         dry_run,
-        target_relays: config.relay.urls.clone(),
+        target_relays: config.transport.nostr_relay_urls.clone(),
         connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
@@ -2038,7 +2042,7 @@ fn order_cancellation_base_view(
         event_kind: None,
         cancellation_reason: Some(args.reason.clone()),
         dry_run,
-        target_relays: config.relay.urls.clone(),
+        target_relays: config.transport.nostr_relay_urls.clone(),
         connected_relays: Vec::new(),
         acknowledged_relays: Vec::new(),
         failed_relays: Vec::new(),
@@ -2406,7 +2410,7 @@ fn sdk_enqueued_order_decision_view(
     view.event_kind = Some(KIND_ORDER_DECISION);
     view.target_relays = push_event
         .map(sdk_push_target_relays)
-        .unwrap_or_else(|| config.relay.urls.clone());
+        .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
     view.connected_relays = push_event
         .map(sdk_push_connected_relays)
         .unwrap_or_default();
@@ -2515,7 +2519,7 @@ fn sdk_enqueued_order_revision_view(
     view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
     view.target_relays = push_event
         .map(sdk_push_target_relays)
-        .unwrap_or_else(|| config.relay.urls.clone());
+        .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
     view.connected_relays = push_event
         .map(sdk_push_connected_relays)
         .unwrap_or_default();
@@ -2558,7 +2562,7 @@ fn sdk_enqueued_order_revision_decision_view(
     }
     view.target_relays = push_event
         .map(sdk_push_target_relays)
-        .unwrap_or_else(|| config.relay.urls.clone());
+        .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
     view.connected_relays = push_event
         .map(sdk_push_connected_relays)
         .unwrap_or_default();
@@ -2595,7 +2599,7 @@ fn sdk_enqueued_order_cancellation_view(
     view.event_kind = Some(KIND_ORDER_CANCELLATION);
     view.target_relays = push_event
         .map(sdk_push_target_relays)
-        .unwrap_or_else(|| config.relay.urls.clone());
+        .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
     view.connected_relays = push_event
         .map(sdk_push_connected_relays)
         .unwrap_or_default();
@@ -4477,7 +4481,7 @@ fn order_rebind_existing_request_check(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
 ) -> Result<OrderRebindExistingRequestCheck, RuntimeError> {
-    if config.relay.urls.is_empty() {
+    if config.transport.nostr_relay_urls.is_empty() {
         return Ok(OrderRebindExistingRequestCheck {
             state: "skipped_no_relays".to_owned(),
             event_ids: Vec::new(),
@@ -4488,9 +4492,13 @@ fn order_rebind_existing_request_check(
         loaded.document.order.seller_pubkey.as_str(),
         Some(loaded.document.order.order_id.as_str()),
     )?;
-    let receipt =
-        fetch_relay_events_via_shared_transport(&config.relay.urls, now_unix_ms(), 1_000, filter)
-            .map_err(order_relay_fetch_error)?;
+    let receipt = fetch_relay_events_via_shared_transport(
+        &config.transport.nostr_relay_urls,
+        now_unix_ms(),
+        1_000,
+        filter,
+    )
+    .map_err(order_relay_fetch_error)?;
     let mut event_ids = receipt
         .events
         .iter()
@@ -4901,9 +4909,13 @@ fn sdk_trade_submit_outcome_view(
     outcome: TradeMutationOutcome<TradeSubmitPlan, TradeSubmitReceipt>,
 ) -> OrderSubmitView {
     match outcome {
-        TradeMutationOutcome::DryRun { plan } => {
-            order_submit_dry_run_view(config, loaded, args, plan, config.relay.urls.clone())
-        }
+        TradeMutationOutcome::DryRun { plan } => order_submit_dry_run_view(
+            config,
+            loaded,
+            args,
+            plan,
+            config.transport.nostr_relay_urls.clone(),
+        ),
         TradeMutationOutcome::Enqueued { receipt } => {
             sdk_enqueued_order_submit_view(config, loaded, args, receipt, None)
         }
@@ -4943,7 +4955,7 @@ fn sdk_enqueued_order_submit_view(
         deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
         target_relays: push_event
             .map(sdk_push_target_relays)
-            .unwrap_or_else(|| config.relay.urls.clone()),
+            .unwrap_or_else(|| config.transport.nostr_relay_urls.clone()),
         connected_relays: push_event
             .map(sdk_push_connected_relays)
             .unwrap_or_default(),

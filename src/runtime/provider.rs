@@ -2,7 +2,7 @@
 use crate::runtime::config::{
     CapabilityBindingInspection, CapabilityBindingInspectionState, INFERENCE_HYF_STDIO_CAPABILITY,
 };
-use crate::runtime::config::{PublishTransport, RuntimeConfig};
+use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 #[cfg(test)]
 use crate::runtime::hyf;
 use crate::view::runtime::PublishRuntimeView;
@@ -21,7 +21,7 @@ pub enum ProviderProvenance {
     DirectConfig,
     #[cfg(test)]
     Disabled,
-    PublishTransport,
+    TransportProfile,
     #[cfg(test)]
     Unavailable,
 }
@@ -37,7 +37,7 @@ impl ProviderProvenance {
             Self::DirectConfig => "direct_config",
             #[cfg(test)]
             Self::Disabled => "disabled",
-            Self::PublishTransport => "publish_transport",
+            Self::TransportProfile => "transport_profile",
             #[cfg(test)]
             Self::Unavailable => "unavailable",
         }
@@ -95,23 +95,33 @@ pub fn resolve_write_plane_provider(
     config: &RuntimeConfig,
     publish: &PublishRuntimeView,
 ) -> WritePlaneProviderView {
-    let (provider_runtime_id, binding_model, detail) = match config.publish.transport {
-        PublishTransport::Nostr => (
+    let (provider_runtime_id, binding_model, detail) = match config.transport.profile {
+        TransportProfileKind::Nostr => (
             "nostr",
             "nostr_transport",
             "Nostr transport profile is selected; readiness is reported under publish",
         ),
-        PublishTransport::Proxy => (
+        TransportProfileKind::Proxy => (
             "proxy",
             "proxy_transport",
             "proxy transport profile is selected; readiness is reported under publish",
+        ),
+        TransportProfileKind::LocalOnly => (
+            "local_only",
+            "local_transport",
+            "local_only transport profile does not provide network publish",
+        ),
+        TransportProfileKind::ReticulumPreview => (
+            "reticulum_preview",
+            "reticulum_preview",
+            "reticulum preview transport is non-networked in the MVP",
         ),
     };
     WritePlaneProviderView {
         provider_runtime_id: provider_runtime_id.to_owned(),
         binding_model: binding_model.to_owned(),
         state: publish.state.clone(),
-        provenance: ProviderProvenance::PublishTransport.as_str().to_owned(),
+        provenance: ProviderProvenance::TransportProfile.as_str().to_owned(),
         source: publish.source.clone(),
         target_kind: None,
         target: None,
@@ -260,9 +270,7 @@ mod tests {
         AccountConfig, AccountSecretContractConfig, CapabilityBindingConfig,
         CapabilityBindingSource, CapabilityBindingTargetKind, HyfConfig, IdentityConfig,
         InteractionConfig, LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat,
-        PathsConfig, PublishConfig, PublishTransport, PublishTransportSource, RelayConfig,
-        RelayConfigSource, RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend,
-        SignerConfig, Verbosity,
+        PathsConfig, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::view::runtime::{
         PublishProviderRuntimeView, PublishRelayRuntimeView, PublishRuntimeView,
@@ -327,16 +335,6 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             transport: crate::runtime::config::TransportConfig::local_only(),
-            publish: PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Defaults,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            },
-            relay: RelayConfig {
-                urls: Vec::new(),
-                publish_policy: RelayPublishPolicy::Any,
-                source: RelayConfigSource::Defaults,
-            },
             local: LocalConfig {
                 root: PathBuf::from("/tmp/local"),
                 replica_db_path: PathBuf::from("/tmp/local/replica.sqlite"),
@@ -368,22 +366,22 @@ mod tests {
         reason: Option<&str>,
     ) -> PublishRuntimeView {
         PublishRuntimeView {
-            transport: config.publish.transport.as_str().to_owned(),
-            source: config.publish.source.as_str().to_owned(),
-            transport_family: config.publish.transport.transport_family().to_owned(),
+            transport: config.transport.profile.as_str().to_owned(),
+            source: config.transport.source.as_str().to_owned(),
+            transport_family: config.transport.profile.transport_family().to_owned(),
             state: state.to_owned(),
             executable: state == "ready",
             reason: reason.map(str::to_owned),
             signed_write_required: true,
             relay: PublishRelayRuntimeView {
-                ready: !config.relay.urls.is_empty(),
-                count: config.relay.urls.len(),
-                source: config.relay.source.as_str().to_owned(),
+                ready: !config.transport.nostr_relay_urls.is_empty(),
+                count: config.transport.nostr_relay_urls.len(),
+                source: config.transport.source.as_str().to_owned(),
             },
             provider: PublishProviderRuntimeView {
-                provider_runtime_id: config.publish.transport.as_str().to_owned(),
+                provider_runtime_id: config.transport.profile.as_str().to_owned(),
                 state: state.to_owned(),
-                source: config.publish.source.as_str().to_owned(),
+                source: config.transport.source.as_str().to_owned(),
                 reason: reason.map(str::to_owned),
             },
         }
@@ -403,7 +401,7 @@ mod tests {
         assert_eq!(view.state, "unconfigured");
         assert_eq!(
             view.provenance,
-            ProviderProvenance::PublishTransport.as_str()
+            ProviderProvenance::TransportProfile.as_str()
         );
         assert!(view.target.is_none());
         assert!(view.detail.contains("configured Nostr relay"));

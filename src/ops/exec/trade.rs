@@ -1267,9 +1267,8 @@ mod tests {
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        PublishConfig, PublishTransport, PublishTransportSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RpcConfig,
+        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::view::runtime::OrderDecisionView;
 
@@ -1683,7 +1682,7 @@ mod tests {
     fn order_event_list_requires_seller_account_with_account_action() {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
-        config.relay.urls = vec!["ws://127.0.0.1:9".to_owned()];
+        config.transport.nostr_relay_urls = vec!["ws://127.0.0.1:9".to_owned()];
         let service = OperationAdapter::new(TradeOperationService::new(&config));
         let context = OperationContext::default();
         let request = OperationRequest::new(context.clone(), TradeEventListRequest::default())
@@ -1813,16 +1812,6 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             transport: crate::runtime::config::TransportConfig::local_only(),
-            publish: PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Defaults,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            },
-            relay: RelayConfig {
-                urls: Vec::new(),
-                publish_policy: RelayPublishPolicy::Any,
-                source: RelayConfigSource::Defaults,
-            },
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
                 replica_db_path: data.join("apps/cli/replica/replica.sqlite"),

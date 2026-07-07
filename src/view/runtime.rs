@@ -903,7 +903,7 @@ pub struct FarmStatusView {
     pub config_valid: bool,
     pub account_state: String,
     pub listing_defaults_state: String,
-    pub publish_transport: String,
+    pub transport_profile: String,
     pub publish_state: String,
     pub publish_executable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2810,7 +2810,7 @@ pub struct SellMutationView {
     #[serde(default)]
     pub deduplicated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub publish_transport: Option<String>,
+    pub transport_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

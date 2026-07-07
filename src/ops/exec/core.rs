@@ -27,7 +27,7 @@ use crate::runtime::account::{
     remove_account, resolve_account_resolution, resolve_account_selector, secret_backend_status,
     select_account, snapshot, unresolved_account_reason,
 };
-use crate::runtime::config::{PublishTransport, RuntimeConfig, SignerBackend};
+use crate::runtime::config::{RuntimeConfig, SignerBackend, TransportProfileKind};
 use crate::runtime::logging::LoggingState;
 use crate::runtime::sdk::CliSdkAdapterError;
 use crate::runtime::signer::resolve_signer_status;
@@ -794,22 +794,22 @@ fn publish_runtime_view(
     signed_write_required: bool,
     account: &AccountResolution,
 ) -> PublishRuntimeView {
-    let relay_ready = !config.relay.urls.is_empty();
-    let source = config.publish.source.as_str().to_owned();
+    let relay_ready = !config.transport.nostr_relay_urls.is_empty();
+    let source = config.transport.source.as_str().to_owned();
     let relay = PublishRelayRuntimeView {
         ready: relay_ready,
-        count: config.relay.urls.len(),
-        source: config.relay.source.as_str().to_owned(),
+        count: config.transport.nostr_relay_urls.len(),
+        source: config.transport.source.as_str().to_owned(),
     };
 
-    match config.publish.transport {
-        PublishTransport::Nostr => {
+    match config.transport.profile {
+        TransportProfileKind::Nostr => {
             let (state, executable, reason) =
                 nostr_publish_readiness(config, relay_ready, signed_write_required, account);
             PublishRuntimeView {
-                transport: config.publish.transport.as_str().to_owned(),
+                transport: config.transport.profile.as_str().to_owned(),
                 source,
-                transport_family: config.publish.transport.transport_family().to_owned(),
+                transport_family: config.transport.profile.transport_family().to_owned(),
                 state: state.to_owned(),
                 executable,
                 reason: reason.clone(),
@@ -818,17 +818,17 @@ fn publish_runtime_view(
                 provider: PublishProviderRuntimeView {
                     provider_runtime_id: "nostr".to_owned(),
                     state: state.to_owned(),
-                    source: config.relay.source.as_str().to_owned(),
+                    source: config.transport.source.as_str().to_owned(),
                     reason,
                 },
             }
         }
-        PublishTransport::Proxy => {
+        TransportProfileKind::Proxy => {
             let (state, executable, reason) = proxy_publish_readiness(config);
             PublishRuntimeView {
-                transport: config.publish.transport.as_str().to_owned(),
+                transport: config.transport.profile.as_str().to_owned(),
                 source,
-                transport_family: config.publish.transport.transport_family().to_owned(),
+                transport_family: config.transport.profile.transport_family().to_owned(),
                 state: state.to_owned(),
                 executable,
                 reason: reason.clone(),
@@ -842,6 +842,42 @@ fn publish_runtime_view(
                 },
             }
         }
+        TransportProfileKind::LocalOnly => PublishRuntimeView {
+            transport: config.transport.profile.as_str().to_owned(),
+            source,
+            transport_family: config.transport.profile.transport_family().to_owned(),
+            state: "local_only".to_owned(),
+            executable: false,
+            reason: Some(
+                "local_only transport profile does not perform network publish".to_owned(),
+            ),
+            signed_write_required,
+            relay,
+            provider: PublishProviderRuntimeView {
+                provider_runtime_id: "local_only".to_owned(),
+                state: "local_only".to_owned(),
+                source: config.transport.source.as_str().to_owned(),
+                reason: Some("local_only transport profile writes only to local state".to_owned()),
+            },
+        },
+        TransportProfileKind::ReticulumPreview => PublishRuntimeView {
+            transport: config.transport.profile.as_str().to_owned(),
+            source,
+            transport_family: config.transport.profile.transport_family().to_owned(),
+            state: "preview_unavailable".to_owned(),
+            executable: false,
+            reason: Some(
+                "reticulum preview transport does not perform MVP network delivery".to_owned(),
+            ),
+            signed_write_required,
+            relay,
+            provider: PublishProviderRuntimeView {
+                provider_runtime_id: "reticulum_preview".to_owned(),
+                state: "preview_unavailable".to_owned(),
+                source: config.transport.source.as_str().to_owned(),
+                reason: Some("reticulum preview is non-networked in the MVP".to_owned()),
+            },
+        },
     }
 }
 
@@ -900,7 +936,9 @@ fn nostr_publish_readiness(
 }
 
 fn proxy_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
-    if config.publish.proxy.token_file.is_none() && config.publish.proxy.token_secret_id.is_none() {
+    if config.transport.proxy.token_file.is_none()
+        && config.transport.proxy.token_secret_id.is_none()
+    {
         return (
             "unconfigured",
             false,
@@ -1072,9 +1110,9 @@ fn publish_recovery_actions(
     }
 
     let mut actions = Vec::new();
-    match config.publish.transport {
-        PublishTransport::Nostr => {
-            if config.relay.urls.is_empty() {
+    match config.transport.profile {
+        TransportProfileKind::Nostr => {
+            if config.transport.nostr_relay_urls.is_empty() {
                 push_unique(
                     &mut actions,
                     "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com",
@@ -1092,7 +1130,7 @@ fn publish_recovery_actions(
                 }
             }
         }
-        PublishTransport::Proxy => {
+        TransportProfileKind::Proxy => {
             if self::proxy_token_configured(config) {
                 if publish.signed_write_required
                     && matches!(config.signer.backend, SignerBackend::Myc)
@@ -1106,12 +1144,24 @@ fn publish_recovery_actions(
                 );
             }
         }
+        TransportProfileKind::LocalOnly => {
+            push_unique(
+                &mut actions,
+                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com",
+            );
+        }
+        TransportProfileKind::ReticulumPreview => {
+            push_unique(
+                &mut actions,
+                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com",
+            );
+        }
     }
     actions
 }
 
 fn proxy_token_configured(config: &RuntimeConfig) -> bool {
-    config.publish.proxy.token_file.is_some() || config.publish.proxy.token_secret_id.is_some()
+    config.transport.proxy.token_file.is_some() || config.transport.proxy.token_secret_id.is_some()
 }
 
 fn push_unique(actions: &mut Vec<String>, action: impl Into<String>) {
@@ -1200,9 +1250,8 @@ mod tests {
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        PublishConfig, PublishTransport, PublishTransportSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RpcConfig,
+        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::runtime::logging::LoggingState;
 
@@ -1448,16 +1497,6 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             transport: crate::runtime::config::TransportConfig::local_only(),
-            publish: PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Defaults,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            },
-            relay: RelayConfig {
-                urls: Vec::new(),
-                publish_policy: RelayPublishPolicy::Any,
-                source: RelayConfigSource::Defaults,
-            },
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
                 replica_db_path: data.join("apps/cli/replica/replica.sqlite"),

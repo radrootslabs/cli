@@ -253,9 +253,8 @@ mod tests {
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        PublishConfig, PublishTransport, PublishTransportSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RpcConfig,
+        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::view::runtime::{
         FindPriceView, FindQuantityView, FindResultProvenanceView, FindResultView, FindView,
@@ -311,7 +310,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
         config.output.dry_run = true;
-        config.relay.urls = vec!["wss://relay.example.com".to_owned()];
+        config.transport.nostr_relay_urls = vec!["wss://relay.example.com".to_owned()];
         crate::runtime::store::init(&config).expect("store init");
 
         let service = OperationAdapter::new(MarketOperationService::new(&config));
@@ -671,16 +670,6 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             transport: crate::runtime::config::TransportConfig::local_only(),
-            publish: PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Defaults,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            },
-            relay: RelayConfig {
-                urls: Vec::new(),
-                publish_policy: RelayPublishPolicy::Any,
-                source: RelayConfigSource::Defaults,
-            },
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
                 replica_db_path: data.join("apps/cli/replica/replica.sqlite"),

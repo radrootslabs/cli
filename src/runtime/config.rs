@@ -198,6 +198,15 @@ impl TransportProfileKind {
             Self::Proxy => "proxy",
         }
     }
+
+    pub fn transport_family(self) -> &'static str {
+        match self {
+            Self::LocalOnly => "local",
+            Self::Nostr => "nostr",
+            Self::ReticulumPreview => "reticulum",
+            Self::Proxy => "proxy",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,56 +277,6 @@ impl TransportConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublishTransport {
-    Nostr,
-    Proxy,
-}
-
-impl PublishTransport {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Nostr => "nostr",
-            Self::Proxy => "proxy",
-        }
-    }
-
-    pub fn transport_family(self) -> &'static str {
-        match self {
-            Self::Nostr => "nostr",
-            Self::Proxy => "proxy",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublishTransportSource {
-    Flags,
-    Environment,
-    UserConfig,
-    WorkspaceConfig,
-    Defaults,
-}
-
-impl PublishTransportSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Flags => "cli flags · transport profile",
-            Self::Environment => "environment · transport profile",
-            Self::UserConfig => "user config · transport profile",
-            Self::WorkspaceConfig => "workspace config · transport profile",
-            Self::Defaults => "defaults · transport profile",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublishConfig {
-    pub transport: PublishTransport,
-    pub source: PublishTransportSource,
-    pub proxy: ProxyTransportConfig,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyTransportConfig {
     pub url: String,
@@ -333,47 +292,6 @@ impl Default for ProxyTransportConfig {
             token_secret_id: None,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelayPublishPolicy {
-    Any,
-}
-
-impl RelayPublishPolicy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Any => "any",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelayConfigSource {
-    Flags,
-    Environment,
-    UserConfig,
-    WorkspaceConfig,
-    Defaults,
-}
-
-impl RelayConfigSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Flags => "cli flags · local first",
-            Self::Environment => "environment · local first",
-            Self::UserConfig => "user config · local first",
-            Self::WorkspaceConfig => "workspace config · local first",
-            Self::Defaults => "defaults · local first",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelayConfig {
-    pub urls: Vec<String>,
-    pub publish_policy: RelayPublishPolicy,
-    pub source: RelayConfigSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -530,8 +448,6 @@ pub struct RuntimeConfig {
     pub identity: IdentityConfig,
     pub signer: SignerConfig,
     pub transport: TransportConfig,
-    pub publish: PublishConfig,
-    pub relay: RelayConfig,
     pub local: LocalConfig,
     pub myc: MycConfig,
     pub hyf: HyfConfig,
@@ -875,9 +791,7 @@ impl RuntimeConfig {
                 app_config.as_ref(),
                 workspace_config.as_ref(),
             )?,
-            transport: transport.clone(),
-            publish: publish_config_from_transport(&transport),
-            relay: relay_config_from_transport(&transport),
+            transport,
             local: LocalConfig {
                 root: paths.app_data_root.join(DEFAULT_LOCAL_STATE_DIR),
                 replica_db_path: paths
@@ -1193,41 +1107,6 @@ fn resolve_transport_proxy_file(
         token_file: proxy.and_then(|proxy| proxy.token_file.clone()),
         token_secret_id: proxy.and_then(|proxy| proxy.token_secret_id.clone()),
     })
-}
-
-fn publish_config_from_transport(transport: &TransportConfig) -> PublishConfig {
-    PublishConfig {
-        transport: match transport.profile {
-            TransportProfileKind::Proxy => PublishTransport::Proxy,
-            TransportProfileKind::LocalOnly
-            | TransportProfileKind::Nostr
-            | TransportProfileKind::ReticulumPreview => PublishTransport::Nostr,
-        },
-        source: match transport.source {
-            TransportConfigSource::Environment => PublishTransportSource::Environment,
-            TransportConfigSource::UserConfig => PublishTransportSource::UserConfig,
-            TransportConfigSource::WorkspaceConfig => PublishTransportSource::WorkspaceConfig,
-            TransportConfigSource::Defaults => PublishTransportSource::Defaults,
-        },
-        proxy: transport.proxy.clone(),
-    }
-}
-
-fn relay_config_from_transport(transport: &TransportConfig) -> RelayConfig {
-    RelayConfig {
-        urls: if matches!(transport.profile, TransportProfileKind::Nostr) {
-            transport.nostr_relay_urls.clone()
-        } else {
-            Vec::new()
-        },
-        publish_policy: RelayPublishPolicy::Any,
-        source: match transport.source {
-            TransportConfigSource::Environment => RelayConfigSource::Environment,
-            TransportConfigSource::UserConfig => RelayConfigSource::UserConfig,
-            TransportConfigSource::WorkspaceConfig => RelayConfigSource::WorkspaceConfig,
-            TransportConfigSource::Defaults => RelayConfigSource::Defaults,
-        },
-    }
 }
 
 fn resolve_rhi_config(
@@ -2046,8 +1925,7 @@ mod tests {
         CapabilityBindingSource, CapabilityBindingTargetKind, DEFAULT_HYF_EXECUTABLE,
         DEFAULT_LOG_FILTER, DEFAULT_MYC_STATUS_TIMEOUT_MS, DEFAULT_RPC_URL, EnvFileValues,
         Environment, HyfConfig, INFERENCE_HYF_STDIO_CAPABILITY, InteractionConfig, OutputConfig,
-        OutputFormat, PathsConfig, PublishConfig, PublishTransport, PublishTransportSource,
-        RelayConfigSource, RelayPublishPolicy, RuntimeConfig, SignerBackend, TransportConfigSource,
+        OutputFormat, PathsConfig, RuntimeConfig, SignerBackend, TransportConfigSource,
         TransportProfileKind, Verbosity, parse_env_file_values,
     };
     use crate::cli::global::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
@@ -2282,19 +2160,13 @@ mod tests {
             TransportConfigSource::Environment
         );
         assert_eq!(
-            resolved.publish,
-            PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Environment,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            }
-        );
-        assert_eq!(
-            resolved.relay.urls,
+            resolved.transport.nostr_relay_urls,
             vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
         );
-        assert_eq!(resolved.relay.source, RelayConfigSource::Environment);
-        assert_eq!(resolved.relay.publish_policy, RelayPublishPolicy::Any);
+        assert_eq!(
+            resolved.transport.source,
+            TransportConfigSource::Environment
+        );
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc-cli"));
         assert_eq!(resolved.myc.status_timeout_ms, 2500);
         assert_eq!(
@@ -2392,18 +2264,13 @@ mod tests {
             TransportConfigSource::Environment
         );
         assert_eq!(
-            resolved.publish,
-            PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Environment,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            }
-        );
-        assert_eq!(
-            resolved.relay.urls,
+            resolved.transport.nostr_relay_urls,
             vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
         );
-        assert_eq!(resolved.relay.source, RelayConfigSource::Environment);
+        assert_eq!(
+            resolved.transport.source,
+            TransportConfigSource::Environment
+        );
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
         assert_eq!(resolved.myc.status_timeout_ms, 3500);
         assert_eq!(
@@ -2471,8 +2338,8 @@ mod tests {
             RadrootsSecretBackend::HostVault(RadrootsHostVaultPolicy::desktop())
         );
         assert_eq!(resolved.signer.backend, SignerBackend::Local);
-        assert_eq!(resolved.publish.transport, PublishTransport::Nostr);
-        assert_eq!(resolved.relay.urls, Vec::<String>::new());
+        assert_eq!(resolved.transport.profile, TransportProfileKind::Nostr);
+        assert_eq!(resolved.transport.nostr_relay_urls, Vec::<String>::new());
         assert_eq!(resolved.myc.executable, PathBuf::from("myc"));
         assert_eq!(
             resolved.myc.status_timeout_ms,
@@ -2796,15 +2663,13 @@ RADROOTS_CLI_HYF_EXECUTABLE=bin/hyfd
             TransportConfigSource::Environment
         );
         assert_eq!(
-            resolved.publish,
-            PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Environment,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            }
+            resolved.transport.nostr_relay_urls,
+            vec!["wss://relay.env-file".to_owned()]
         );
-        assert_eq!(resolved.relay.urls, vec!["wss://relay.env-file".to_owned()]);
-        assert_eq!(resolved.relay.source, RelayConfigSource::Environment);
+        assert_eq!(
+            resolved.transport.source,
+            TransportConfigSource::Environment
+        );
         assert_eq!(resolved.myc.executable, PathBuf::from("bin/myc"));
         assert_eq!(resolved.myc.status_timeout_ms, 4500);
         assert_eq!(
@@ -2947,14 +2812,13 @@ RADROOTS_CLI_LOGGING_STDOUT=true
         assert_eq!(resolved.transport.profile, TransportProfileKind::Nostr);
         assert_eq!(resolved.transport.source, TransportConfigSource::UserConfig);
         assert_eq!(
-            resolved.relay.urls,
+            resolved.transport.nostr_relay_urls,
             vec![
                 "wss://relay.user".to_owned(),
                 "wss://relay.workspace".to_owned()
             ]
         );
-        assert_eq!(resolved.relay.source, RelayConfigSource::UserConfig);
-        assert_eq!(resolved.relay.publish_policy, RelayPublishPolicy::Any);
+        assert_eq!(resolved.transport.source, TransportConfigSource::UserConfig);
     }
 
     #[test]
@@ -2994,36 +2858,6 @@ RADROOTS_CLI_LOGGING_STDOUT=true
             resolved.transport.source,
             TransportConfigSource::Environment
         );
-        assert_eq!(
-            resolved.publish,
-            PublishConfig {
-                transport: PublishTransport::Proxy,
-                source: PublishTransportSource::Environment,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            }
-        );
-
-        let env = repo_local_env(
-            workspace_root.clone(),
-            repo_local_root.clone(),
-            user_home.clone(),
-            BTreeMap::from([(
-                "RADROOTS_CLI_TRANSPORT_PROFILE".to_owned(),
-                "proxy".to_owned(),
-            )]),
-        );
-        let resolved =
-            RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
-                .expect("resolve environment publish transport");
-        assert_eq!(
-            resolved.publish,
-            PublishConfig {
-                transport: PublishTransport::Proxy,
-                source: PublishTransportSource::Environment,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            }
-        );
-
         let env = repo_local_env(
             workspace_root.clone(),
             repo_local_root.clone(),
@@ -3035,15 +2869,6 @@ RADROOTS_CLI_LOGGING_STDOUT=true
                 .expect("resolve user transport profile");
         assert_eq!(resolved.transport.profile, TransportProfileKind::Nostr);
         assert_eq!(resolved.transport.source, TransportConfigSource::UserConfig);
-        assert_eq!(
-            resolved.publish,
-            PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::UserConfig,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            }
-        );
-
         fs::remove_file(app_config_dir.join("config.toml")).expect("remove user config");
         let env = repo_local_env(
             workspace_root.clone(),
@@ -3059,15 +2884,6 @@ RADROOTS_CLI_LOGGING_STDOUT=true
             resolved.transport.source,
             TransportConfigSource::WorkspaceConfig
         );
-        assert_eq!(
-            resolved.publish,
-            PublishConfig {
-                transport: PublishTransport::Proxy,
-                source: PublishTransportSource::WorkspaceConfig,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            }
-        );
-
         fs::remove_file(repo_local_root.join("config.toml")).expect("remove workspace config");
         let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
         let resolved =
@@ -3075,14 +2891,6 @@ RADROOTS_CLI_LOGGING_STDOUT=true
                 .expect("resolve default transport profile");
         assert_eq!(resolved.transport.profile, TransportProfileKind::LocalOnly);
         assert_eq!(resolved.transport.source, TransportConfigSource::Defaults);
-        assert_eq!(
-            resolved.publish,
-            PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Defaults,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            }
-        );
     }
 
     #[test]
@@ -3503,7 +3311,10 @@ target = "workflow-default"
         let config = RuntimeConfig::resolve_with_env_file(&args, &env, &EnvFileValues::default())
             .expect("valid relay url");
 
-        assert_eq!(config.relay.urls, vec!["ws://[::1]:443/relay"]);
+        assert_eq!(
+            config.transport.nostr_relay_urls,
+            vec!["ws://[::1]:443/relay"]
+        );
     }
 
     #[test]

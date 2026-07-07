@@ -27,7 +27,7 @@ use crate::cli::global::{
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::account::{self, AccountRecordView};
-use crate::runtime::config::{PublishTransport, RuntimeConfig, SignerBackend};
+use crate::runtime::config::{RuntimeConfig, SignerBackend, TransportProfileKind};
 use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
     FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
@@ -474,7 +474,7 @@ pub fn status(
             config_valid: false,
             account_state: "not_checked".to_owned(),
             listing_defaults_state: "missing".to_owned(),
-            publish_transport: config.publish.transport.as_str().to_owned(),
+            transport_profile: config.transport.profile.as_str().to_owned(),
             publish_state: "not_checked".to_owned(),
             publish_executable: false,
             publish_reason: None,
@@ -538,7 +538,7 @@ pub fn status(
         config_valid: true,
         account_state: account_state.to_owned(),
         listing_defaults_state: listing_defaults_state.to_owned(),
-        publish_transport: config.publish.transport.as_str().to_owned(),
+        transport_profile: config.transport.profile.as_str().to_owned(),
         publish_state: publish.state.to_owned(),
         publish_executable: publish.executable,
         publish_reason: publish.reason,
@@ -621,7 +621,9 @@ fn relay_farm_publish_readiness(
     config: &RuntimeConfig,
     account: &AccountRecordView,
 ) -> FarmPublishReadiness {
-    if matches!(config.publish.transport, PublishTransport::Nostr) && config.relay.urls.is_empty() {
+    if matches!(config.transport.profile, TransportProfileKind::Nostr)
+        && config.transport.nostr_relay_urls.is_empty()
+    {
         return FarmPublishReadiness {
             state: "unconfigured",
             executable: false,
@@ -1152,7 +1154,7 @@ fn sdk_enqueued_publish_view(
             deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
             target_relays: push_event
                 .map(sdk_push_target_relays)
-                .unwrap_or_else(|| config.relay.urls.clone()),
+                .unwrap_or_else(|| config.transport.nostr_relay_urls.clone()),
             connected_relays: push_event
                 .map(sdk_push_connected_relays)
                 .unwrap_or_default(),

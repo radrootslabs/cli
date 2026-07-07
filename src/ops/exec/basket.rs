@@ -1333,9 +1333,8 @@ mod tests {
     use crate::runtime::account;
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        PublishConfig, PublishTransport, PublishTransportSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RpcConfig,
+        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
 
     const LISTING_ADDR: &str = "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
@@ -1907,16 +1906,6 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             transport: crate::runtime::config::TransportConfig::local_only(),
-            publish: PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Defaults,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            },
-            relay: RelayConfig {
-                urls: Vec::new(),
-                publish_policy: RelayPublishPolicy::Any,
-                source: RelayConfigSource::Defaults,
-            },
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
                 replica_db_path: data.join("apps/cli/replica/replica.sqlite"),

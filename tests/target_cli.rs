@@ -1728,7 +1728,7 @@ fn farm_readiness_check_reports_mode_specific_publish_gates() {
     } else {
         &relay_value["result"]
     };
-    assert_eq!(relay_detail["publish_transport"], "nostr");
+    assert_eq!(relay_detail["transport_profile"], "nostr");
     assert_eq!(relay_detail["publish_state"], "unconfigured");
     assert_eq!(relay_detail["publish_executable"], false);
     assert_eq!(
@@ -1762,7 +1762,7 @@ signer_session_ref = "session_test"
 
     assert!(output.status.success());
     assert_eq!(proxy_value["operation_id"], "farm.readiness.check");
-    assert_contains(&proxy_value["result"]["publish_transport"], "proxy");
+    assert_contains(&proxy_value["result"]["transport_profile"], "proxy");
     assert_eq!(proxy_value["result"]["publish_state"], "ready");
     assert_eq!(proxy_value["result"]["publish_executable"], true);
     assert_eq!(proxy_value["result"]["reason"], Value::Null);
@@ -3750,7 +3750,7 @@ fn order_status_get_invalid_order_id_uses_sdk_error_contract() {
 }
 
 #[test]
-fn removed_publish_transport_flag_is_rejected() {
+fn removed_transport_profile_flag_is_rejected() {
     let sandbox = RadrootsCliSandbox::new();
     let output = sandbox
         .command()

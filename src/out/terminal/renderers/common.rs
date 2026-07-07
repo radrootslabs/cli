@@ -239,7 +239,7 @@ fn add_terminal_display_fields(
     if let Some(state) = terminal_state(display) {
         push_field(document, "State", terminal_status_label(state));
     }
-    if let Some(mode) = terminal_publish_transport(display) {
+    if let Some(mode) = terminal_transport_profile(display) {
         push_field(document, "Transport", transport_label(mode));
     }
     if let Some(state) = terminal_publish_state(display) {
@@ -282,10 +282,10 @@ fn terminal_state(result: &Value) -> Option<&str> {
     string_path(result, &["state"])
 }
 
-fn terminal_publish_transport(result: &Value) -> Option<&str> {
+fn terminal_transport_profile(result: &Value) -> Option<&str> {
     string_path(result, &["publish", "mode"])
         .or_else(|| string_path(result, &["checks", "publish", "mode"]))
-        .or_else(|| string_path(result, &["publish_transport"]))
+        .or_else(|| string_path(result, &["transport_profile"]))
 }
 
 fn terminal_publish_state(result: &Value) -> Option<&str> {

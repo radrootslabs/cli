@@ -1616,7 +1616,7 @@ pub fn get(
     let provenance = FindResultProvenanceView {
         origin: "local_replica.trade_product".to_owned(),
         freshness: freshness.display.clone(),
-        relay_count: config.relay.urls.len(),
+        relay_count: config.transport.nostr_relay_urls.len(),
     };
 
     if !config.local.replica_db_path.exists() {
@@ -1724,7 +1724,7 @@ pub fn get(
 fn refresh_market_listing_if_needed(config: &RuntimeConfig) -> Result<(), RuntimeError> {
     if !config.local.replica_db_path.exists()
         || config.output.dry_run
-        || config.relay.urls.is_empty()
+        || config.transport.nostr_relay_urls.is_empty()
     {
         return Ok(());
     }
@@ -1902,7 +1902,7 @@ fn sdk_enqueued_publish_view(
     let reason = sdk_publish_reason(args, push_event);
     let target_relays = push_event
         .map(sdk_push_target_relays)
-        .unwrap_or_else(|| config.relay.urls.clone());
+        .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
     let connected_relays = push_event
         .map(sdk_push_connected_relays)
         .unwrap_or_default();

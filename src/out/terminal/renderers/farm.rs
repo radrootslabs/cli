@@ -154,7 +154,7 @@ fn farm_readiness_document(envelope: &OutputEnvelope, result: &Value) -> Termina
         &["listing_defaults_state"],
     );
     common::push_path_field(&mut document, "Publish", result, &["publish_state"]);
-    if let Some(mode) = common::string(result, &["publish_transport"]) {
+    if let Some(mode) = common::string(result, &["transport_profile"]) {
         common::push_field(&mut document, "Transport", transport_label(mode.as_str()));
     }
     common::push_bool_field(&mut document, "Executable", result, &["publish_executable"]);

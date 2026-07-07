@@ -224,7 +224,7 @@ fn listing_publish_document(envelope: &OutputEnvelope, result: &Value) -> Termin
         result,
         &[
             &["publish", "mode"],
-            &["publish_transport"],
+            &["transport_profile"],
             &["transport"],
             &["source"],
         ],

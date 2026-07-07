@@ -51,7 +51,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
             source: FIND_SOURCE.to_owned(),
             query,
             count: 0,
-            relay_count: config.relay.urls.len(),
+            relay_count: config.transport.nostr_relay_urls.len(),
             replica_db: config.local.replica_db_path.display().to_string(),
             freshness: missing_freshness(),
             results: Vec::new(),
@@ -71,7 +71,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
         .map(|rewrite| rewrite.query_terms.clone())
         .unwrap_or_else(|| normalize_query_terms(args.query.clone()));
     let rows = db.trade_product_search(effective_query_terms.as_slice())?;
-    let relay_count = config.relay.urls.len();
+    let relay_count = config.transport.nostr_relay_urls.len();
     let result_provenance = FindResultProvenanceView {
         origin: "local_replica.trade_product".to_owned(),
         freshness: freshness.display.clone(),
@@ -159,7 +159,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
 }
 
 fn refresh_market_if_needed(config: &RuntimeConfig) -> Result<(), RuntimeError> {
-    if config.output.dry_run || config.relay.urls.is_empty() {
+    if config.output.dry_run || config.transport.nostr_relay_urls.is_empty() {
         return Ok(());
     }
     let executor = SqliteExecutor::open(&config.local.replica_db_path)?;

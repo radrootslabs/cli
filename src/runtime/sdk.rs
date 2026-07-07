@@ -718,9 +718,8 @@ mod tests {
     use super::*;
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        PublishConfig, PublishTransport, PublishTransportSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RhiConfig, RpcConfig, SignerBackend, SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RhiConfig,
+        RpcConfig, SignerBackend, SignerConfig, Verbosity,
     };
 
     struct DirectRrRsDependency {
@@ -2235,16 +2234,6 @@ mod tests {
             transport: crate::runtime::config::TransportConfig::from_nostr_relay_urls(
                 relays.clone(),
             ),
-            publish: PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Defaults,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            },
-            relay: RelayConfig {
-                urls: relays,
-                publish_policy: RelayPublishPolicy::Any,
-                source: RelayConfigSource::Flags,
-            },
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
                 replica_db_path: data.join("apps/cli/replica/replica.sqlite"),

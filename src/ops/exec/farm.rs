@@ -16,7 +16,7 @@ use crate::ops::{
     OperationResult, OperationResultData, OperationService,
 };
 use crate::runtime::RuntimeError;
-use crate::runtime::config::{PublishTransport, RuntimeConfig};
+use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 use crate::view::runtime::{CommandDisposition, FarmPublishView};
 
 pub struct FarmOperationService<'a> {
@@ -232,7 +232,7 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
                 request.operation_id(),
             ));
         }
-        if matches!(self.config.publish.transport, PublishTransport::Nostr) {
+        if matches!(self.config.transport.profile, TransportProfileKind::Nostr) {
             require_relay_target(&request, self.config)?;
         }
 
@@ -358,7 +358,7 @@ fn require_relay_target<P>(
 where
     P: OperationRequestPayload,
 {
-    if !config.relay.urls.is_empty() {
+    if !config.transport.nostr_relay_urls.is_empty() {
         return Ok(());
     }
 
@@ -596,9 +596,8 @@ mod tests {
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        PublishConfig, PublishTransport, PublishTransportSource, RelayConfig, RelayConfigSource,
-        RelayPublishPolicy, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RpcConfig,
+        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
     };
     use crate::view::runtime::{
         FarmPrivateExactLocationView, FarmPrivateLocationCandidateView, FarmPrivateLocationView,
@@ -877,16 +876,6 @@ mod tests {
                 backend: SignerBackend::Local,
             },
             transport: crate::runtime::config::TransportConfig::local_only(),
-            publish: PublishConfig {
-                transport: PublishTransport::Nostr,
-                source: PublishTransportSource::Defaults,
-                proxy: crate::runtime::config::ProxyTransportConfig::default(),
-            },
-            relay: RelayConfig {
-                urls: Vec::new(),
-                publish_policy: RelayPublishPolicy::Any,
-                source: RelayConfigSource::Defaults,
-            },
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
                 replica_db_path: data.join("apps/cli/replica/replica.sqlite"),
