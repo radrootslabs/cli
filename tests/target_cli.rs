@@ -1353,6 +1353,41 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
 }
 
 #[test]
+fn config_get_reticulum_preview_transport_exec_readiness_uses_shared_unavailable_copy() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.write_app_config(
+        "[transport]\nprofile = \"reticulum_preview\"\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+    );
+
+    let value = sandbox.json_success(&["--format", "json", "config", "get"]);
+    let result = &value["result"];
+
+    assert_eq!(value["operation_id"], "config.get");
+    assert_eq!(result["publish"]["transport"], "reticulum_preview");
+    assert_eq!(result["publish"]["state"], "preview_unavailable");
+    assert_eq!(result["publish"]["executable"], false);
+    assert_eq!(
+        result["publish"]["reason"],
+        RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
+    );
+    assert_eq!(
+        result["publish"]["provider"]["reason"],
+        RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
+    );
+    assert_eq!(
+        result["write_plane"]["detail"],
+        RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
+    );
+    assert_eq!(
+        result["transport"]["message"],
+        RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
+    );
+    let result_json = serde_json::to_string(result).expect("result json");
+    assert!(!result_json.contains("MVP network delivery"));
+    assert!(!result_json.contains("non-networked in the MVP"));
+}
+
+#[test]
 fn mesh_status_reports_reticulum_preview_unusable_state_without_fallback() {
     let sandbox = RadrootsCliSandbox::new();
 

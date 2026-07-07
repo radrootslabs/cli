@@ -6,6 +6,7 @@ use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 #[cfg(test)]
 use crate::runtime::hyf;
 use crate::view::runtime::PublishRuntimeView;
+use radroots_transport::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
 
 #[cfg(test)]
 const WRITE_PLANE_TARGET_DETAIL: &str =
@@ -114,7 +115,7 @@ pub fn resolve_write_plane_provider(
         TransportProfileKind::ReticulumPreview => (
             "reticulum_preview",
             "reticulum_preview",
-            "reticulum preview transport is non-networked in the MVP",
+            RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
         ),
     };
     WritePlaneProviderView {

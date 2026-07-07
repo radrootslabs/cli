@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use radroots_transport::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -866,16 +867,14 @@ fn publish_runtime_view(
             transport_family: config.transport.profile.transport_family().to_owned(),
             state: "preview_unavailable".to_owned(),
             executable: false,
-            reason: Some(
-                "reticulum preview transport does not perform MVP network delivery".to_owned(),
-            ),
+            reason: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
             signed_write_required,
             relay,
             provider: PublishProviderRuntimeView {
                 provider_runtime_id: "reticulum_preview".to_owned(),
                 state: "preview_unavailable".to_owned(),
                 source: config.transport.source.as_str().to_owned(),
-                reason: Some("reticulum preview is non-networked in the MVP".to_owned()),
+                reason: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
             },
         },
     }
