@@ -1394,6 +1394,7 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
     ] {
         let source = fs::read_to_string(manifest_dir.join(relative_path)).expect("read source");
         for forbidden in [
+            "\"radrootsd_proxy\"",
             "radrootsd.publish_proxy.v1",
             "publish.relays.resolve",
             "\"publish.event\"",
@@ -1406,6 +1407,20 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
                 "{relative_path} must not contain removed transport surface `{forbidden}`"
             );
         }
+    }
+
+    let transport_source =
+        fs::read_to_string(manifest_dir.join("src/runtime/transport.rs")).expect("read source");
+    for required in [
+        "RETICULUM_PREVIEW_UNAVAILABLE_MESSAGE",
+        "Reticulum transport is configured for future compatibility, ",
+        "but this build does not implement Reticulum delivery.",
+        "if config.transport.profile != TransportProfileKind::ReticulumPreview",
+    ] {
+        assert!(
+            transport_source.contains(required),
+            "src/runtime/transport.rs must retain transport status/message witness `{required}`"
+        );
     }
 }
 
