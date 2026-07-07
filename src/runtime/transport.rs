@@ -13,6 +13,10 @@ use crate::view::runtime::{
 };
 
 const TRANSPORT_SOURCE: &str = "transport profile config";
+const RETICULUM_PREVIEW_UNAVAILABLE_MESSAGE: &str = concat!(
+    "Reticulum transport is configured for future compatibility, ",
+    "but this build does not implement Reticulum delivery."
+);
 
 pub fn profile(config: &RuntimeConfig) -> TransportProfileView {
     active_profile_view(config)
@@ -75,19 +79,21 @@ pub fn set_profile(
 }
 
 pub fn status(config: &RuntimeConfig) -> TransportStatusView {
+    let mut transports = vec![active_profile_view(config)];
+    if config.transport.profile != TransportProfileKind::ReticulumPreview {
+        transports.push(profile_view_from_parts(
+            "reticulum_preview",
+            Vec::new(),
+            Some("reject_delivery_attempts".to_owned()),
+            None,
+            "preview_unavailable",
+        ));
+    }
+
     TransportStatusView {
         state: "ready".to_owned(),
         source: TRANSPORT_SOURCE.to_owned(),
-        transports: vec![
-            active_profile_view(config),
-            profile_view_from_parts(
-                "reticulum_preview",
-                Vec::new(),
-                Some("reject_delivery_attempts".to_owned()),
-                None,
-                "preview_unavailable",
-            ),
-        ],
+        transports,
     }
 }
 
@@ -226,7 +232,7 @@ fn profile_view_from_parts(
     let message = match profile_id {
         "nostr" if usable_for_delivery => "Nostr relay transport is configured for delivery",
         "nostr" => "Nostr transport requires configured Nostr relay targets",
-        "reticulum_preview" => "Reticulum preview is explicit and unavailable for real delivery",
+        "reticulum_preview" => RETICULUM_PREVIEW_UNAVAILABLE_MESSAGE,
         "proxy" => "Proxy transport delegates delivery to the configured endpoint",
         _ => "Local-only profile does not deliver to network transports",
     };

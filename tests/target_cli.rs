@@ -1300,9 +1300,9 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
     assert_eq!(result["implementation_state"], "preview_unavailable");
     assert_eq!(result["usable_for_delivery"], false);
     assert_eq!(result["reticulum_preview_behavior"], "defer_delivery_plans");
-    assert_contains(
-        &result["message"],
-        "Reticulum preview is explicit and unavailable",
+    assert_eq!(
+        result["message"],
+        "Reticulum transport is configured for future compatibility, but this build does not implement Reticulum delivery."
     );
     assert!(
         !result["message"]
@@ -1334,14 +1334,15 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
 
     assert_eq!(value["operation_id"], "transport.status");
     assert_eq!(result["state"], "ready");
+    assert_eq!(transports.len(), 1);
     assert_eq!(active["profile_id"], "reticulum_preview");
     assert_eq!(active["transport_kind"], "reticulum");
     assert_eq!(active["implementation_state"], "preview_unavailable");
     assert_eq!(active["usable_for_delivery"], false);
     assert_eq!(active["reticulum_preview_behavior"], "defer_delivery_plans");
-    assert_contains(
-        &active["message"],
-        "Reticulum preview is explicit and unavailable",
+    assert_eq!(
+        active["message"],
+        "Reticulum transport is configured for future compatibility, but this build does not implement Reticulum delivery."
     );
     assert!(
         !active["message"]
