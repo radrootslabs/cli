@@ -34,6 +34,7 @@ use radroots_replica_db::{farm, migrations};
 use radroots_replica_db_schema::farm::IFarmFields;
 use radroots_replica_sync::radroots_replica_pending_publish_batch;
 use radroots_sql_core::SqliteExecutor;
+use radroots_transport::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
 use serde_json::Value;
 use serde_json::json;
 
@@ -1300,10 +1301,7 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
     assert_eq!(result["implementation_state"], "preview_unavailable");
     assert_eq!(result["usable_for_delivery"], false);
     assert_eq!(result["reticulum_preview_behavior"], "defer_delivery_plans");
-    assert_eq!(
-        result["message"],
-        "Reticulum transport is configured for future compatibility, but this build does not implement Reticulum delivery."
-    );
+    assert_eq!(result["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     assert!(
         !result["message"]
             .as_str()
@@ -1340,10 +1338,7 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
     assert_eq!(active["implementation_state"], "preview_unavailable");
     assert_eq!(active["usable_for_delivery"], false);
     assert_eq!(active["reticulum_preview_behavior"], "defer_delivery_plans");
-    assert_eq!(
-        active["message"],
-        "Reticulum transport is configured for future compatibility, but this build does not implement Reticulum delivery."
-    );
+    assert_eq!(active["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     assert!(
         !active["message"]
             .as_str()
@@ -1412,9 +1407,7 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
     let transport_source =
         fs::read_to_string(manifest_dir.join("src/runtime/transport.rs")).expect("read source");
     for required in [
-        "RETICULUM_PREVIEW_UNAVAILABLE_MESSAGE",
-        "Reticulum transport is configured for future compatibility, ",
-        "but this build does not implement Reticulum delivery.",
+        "RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE",
         "if config.transport.profile != TransportProfileKind::ReticulumPreview",
     ] {
         assert!(

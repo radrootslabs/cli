@@ -3640,6 +3640,7 @@ dependencies = [
  "radroots_sp1_host_trade",
  "radroots_sql_core",
  "radroots_trade",
+ "radroots_transport",
  "radroots_transport_nostr",
  "serde",
  "serde_json",

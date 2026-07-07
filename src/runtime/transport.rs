@@ -1,6 +1,7 @@
 use std::fs;
 
 use radroots_sdk::{PushOutboxRequest, SyncStatusRequest};
+use radroots_transport::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
 use serde_json::Value as JsonValue;
 use toml::{Value, map::Map};
 
@@ -13,11 +14,6 @@ use crate::view::runtime::{
 };
 
 const TRANSPORT_SOURCE: &str = "transport profile config";
-const RETICULUM_PREVIEW_UNAVAILABLE_MESSAGE: &str = concat!(
-    "Reticulum transport is configured for future compatibility, ",
-    "but this build does not implement Reticulum delivery."
-);
-
 pub fn profile(config: &RuntimeConfig) -> TransportProfileView {
     active_profile_view(config)
 }
@@ -234,7 +230,7 @@ fn profile_view_from_parts(
     let message = match profile_id {
         "nostr" if usable_for_delivery => "Nostr relay transport is configured for delivery",
         "nostr" => "Nostr transport requires configured Nostr relay targets",
-        "reticulum_preview" => RETICULUM_PREVIEW_UNAVAILABLE_MESSAGE,
+        "reticulum_preview" => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
         "proxy" => "Proxy transport delegates delivery to the configured endpoint",
         _ => "Local-only profile does not deliver to network transports",
     };
