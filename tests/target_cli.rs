@@ -1283,6 +1283,99 @@ fn root_help_explains_transport_and_mesh_surfaces() {
     assert!(stdout.contains("Show effective configuration and publish-plane readiness."));
 }
 
+#[test]
+fn transport_profile_reticulum_preview_output_is_transport_specific() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.write_app_config(
+        "[transport]\nprofile = \"reticulum_preview\"\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+    );
+
+    let value = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
+    let result = &value["result"];
+    let actions = result["actions"].as_array().expect("actions");
+
+    assert_eq!(value["operation_id"], "transport.profile.get");
+    assert_eq!(result["profile_id"], "reticulum_preview");
+    assert_eq!(result["transport_kind"], "reticulum");
+    assert_eq!(result["implementation_state"], "preview_unavailable");
+    assert_eq!(result["usable_for_delivery"], false);
+    assert_eq!(result["reticulum_preview_behavior"], "defer_delivery_plans");
+    assert_contains(
+        &result["message"],
+        "Reticulum preview is explicit and unavailable",
+    );
+    assert!(
+        !result["message"]
+            .as_str()
+            .expect("message")
+            .contains("Nostr")
+    );
+    assert_eq!(actions.len(), 2);
+    assert_eq!(actions[0], "radroots mesh status");
+    assert_eq!(actions[1], "radroots transport profile get");
+    assert!(
+        !serde_json::to_string(actions)
+            .expect("actions json")
+            .contains("nostr")
+    );
+}
+
+#[test]
+fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.write_app_config(
+        "[transport]\nprofile = \"reticulum_preview\"\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+    );
+
+    let value = sandbox.json_success(&["--format", "json", "transport", "status"]);
+    let result = &value["result"];
+    let transports = result["transports"].as_array().expect("transports");
+    let active = &transports[0];
+
+    assert_eq!(value["operation_id"], "transport.status");
+    assert_eq!(result["state"], "ready");
+    assert_eq!(active["profile_id"], "reticulum_preview");
+    assert_eq!(active["transport_kind"], "reticulum");
+    assert_eq!(active["implementation_state"], "preview_unavailable");
+    assert_eq!(active["usable_for_delivery"], false);
+    assert_eq!(active["reticulum_preview_behavior"], "defer_delivery_plans");
+    assert_contains(
+        &active["message"],
+        "Reticulum preview is explicit and unavailable",
+    );
+    assert!(
+        !active["message"]
+            .as_str()
+            .expect("message")
+            .contains("Nostr")
+    );
+    assert!(
+        !serde_json::to_string(&active["actions"])
+            .expect("actions json")
+            .contains("nostr")
+    );
+}
+
+#[test]
+fn mesh_status_reports_reticulum_preview_unusable_state_without_fallback() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let value = sandbox.json_success(&["--format", "json", "mesh", "status"]);
+    let result = &value["result"];
+
+    assert_eq!(value["operation_id"], "mesh.status");
+    assert_eq!(result["transport_kind"], "reticulum");
+    assert_eq!(result["implementation_state"], "preview_unavailable");
+    assert_eq!(result["usable_for_delivery"], false);
+    assert_contains(&result["message"], "Reticulum mesh preview is explicit");
+    assert!(
+        !result["message"]
+            .as_str()
+            .expect("message")
+            .contains("Nostr")
+    );
+}
+
 fn help_lists(stdout: &str, command: &str) -> bool {
     stdout.lines().any(|line| {
         let line = line.trim_start();

@@ -242,14 +242,26 @@ fn profile_view_from_parts(
         nostr_relays,
         reticulum_preview_behavior,
         proxy_url,
-        actions: if usable_for_delivery {
-            Vec::new()
-        } else {
+        actions: profile_actions(profile_id, usable_for_delivery),
+    }
+}
+
+fn profile_actions(profile_id: &str, usable_for_delivery: bool) -> Vec<String> {
+    if usable_for_delivery {
+        return Vec::new();
+    }
+    match profile_id {
+        "reticulum_preview" => vec![
+            "radroots mesh status".to_owned(),
+            "radroots transport profile get".to_owned(),
+        ],
+        "nostr" => {
             vec![
                 "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
                     .to_owned(),
             ]
-        },
+        }
+        _ => vec!["radroots transport profile get".to_owned()],
     }
 }
 
