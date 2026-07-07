@@ -232,10 +232,7 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
                 request.operation_id(),
             ));
         }
-        if matches!(
-            self.config.publish.transport,
-            PublishTransport::DirectNostrRelay
-        ) {
+        if matches!(self.config.publish.transport, PublishTransport::Nostr) {
             require_relay_target(&request, self.config)?;
         }
 
@@ -368,7 +365,7 @@ where
     Err(OperationAdapterError::NetworkUnavailable {
         operation_id: request.operation_id().to_owned(),
         message: format!(
-            "`{}` requires at least one configured relay for direct relay publication",
+            "`{}` requires at least one configured Nostr relay in the active transport profile",
             request.spec.cli_path
         ),
     })
@@ -879,10 +876,11 @@ mod tests {
             signer: SignerConfig {
                 backend: SignerBackend::Local,
             },
+            transport: crate::runtime::config::TransportConfig::local_only(),
             publish: PublishConfig {
-                transport: PublishTransport::DirectNostrRelay,
+                transport: PublishTransport::Nostr,
                 source: PublishTransportSource::Defaults,
-                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
+                proxy: crate::runtime::config::ProxyTransportConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -903,6 +901,7 @@ mod tests {
                 enabled: false,
                 executable: PathBuf::from("hyfd"),
             },
+            mesh: crate::runtime::config::MeshConfig::disabled(),
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
             },

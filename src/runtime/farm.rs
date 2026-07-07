@@ -15,7 +15,7 @@ use radroots_sdk::{
     FarmPrivateLocationClearRequest, FarmPrivateLocationInput, FarmPrivateLocationLookupCandidate,
     FarmPrivateLocationReceipt, FarmPrivateLocationSetRequest, FarmPrivateLocationSetResult,
     FarmPublishPlan, GeocoderLocalityQuery, PushOutboxEventReceipt, PushOutboxEventState,
-    PushOutboxReceipt, PushOutboxRelayOutcomeKind, PushOutboxRequest, SdkExactLocation,
+    PushOutboxReceipt, PushOutboxRequest, PushOutboxTargetOutcomeKind, SdkExactLocation,
     SdkMutationState,
 };
 use serde_json::json;
@@ -34,7 +34,7 @@ use crate::runtime::farm_config::{
 };
 use crate::runtime::local_events::append_local_work;
 use crate::runtime::sdk::{
-    CliSdkAdapterError, CliSdkSession, sdk_relay_target_policy, sdk_relay_url_policy,
+    CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_policy,
     validate_configured_signer_for_actor,
 };
 use crate::runtime::signer::ActorWriteBindingError;
@@ -621,17 +621,16 @@ fn relay_farm_publish_readiness(
     config: &RuntimeConfig,
     account: &AccountRecordView,
 ) -> FarmPublishReadiness {
-    if matches!(config.publish.transport, PublishTransport::DirectNostrRelay)
-        && config.relay.urls.is_empty()
-    {
+    if matches!(config.publish.transport, PublishTransport::Nostr) && config.relay.urls.is_empty() {
         return FarmPublishReadiness {
             state: "unconfigured",
             executable: false,
-            reason: Some(
-                "direct_nostr_relay farm publish requires at least one configured relay".to_owned(),
-            ),
-            missing: vec!["Configured relay".to_owned()],
-            actions: vec!["radroots --relay wss://relay.example.com farm publish".to_owned()],
+            reason: Some("farm publish requires a configured Nostr transport profile".to_owned()),
+            missing: vec!["Configured Nostr transport profile".to_owned()],
+            actions: vec![
+                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+                    .to_owned(),
+            ],
         };
     }
 
@@ -816,7 +815,7 @@ fn publish_via_sdk(
         "farm seller",
     )?;
     let mut request =
-        FarmEnqueuePublishRequest::new(input.actor, input.farm, sdk_relay_target_policy(config));
+        FarmEnqueuePublishRequest::new(input.actor, input.farm, sdk_target_policy(config));
     if let Some(idempotency_key) = farm_idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }
@@ -825,7 +824,7 @@ fn publish_via_sdk(
         session.sdk().sync().push_outbox(
             PushOutboxRequest::new()
                 .with_limit(1)
-                .with_relay_url_policy(sdk_relay_url_policy(config)),
+                .with_nostr_relay_url_policy(sdk_nostr_relay_url_policy(config)),
         ),
     )?;
     let view = sdk_enqueued_publish_view(
@@ -1233,71 +1232,72 @@ fn sdk_publish_actions(push_event: Option<&PushOutboxEventReceipt>) -> Vec<Strin
 
 fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
-        .relays
+        .targets
         .iter()
-        .map(|relay| relay.relay_url.clone())
+        .map(|target| target.endpoint_uri.clone())
         .collect()
 }
 
 fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
-        .relays
+        .targets
         .iter()
-        .filter(|relay| relay.attempted)
-        .map(|relay| relay.relay_url.clone())
+        .filter(|target| target.attempted)
+        .map(|target| target.endpoint_uri.clone())
         .collect()
 }
 
 fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
-        .relays
+        .targets
         .iter()
-        .filter(|relay| {
+        .filter(|target| {
             matches!(
-                relay.outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                target.outcome_kind,
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )
         })
-        .map(|relay| relay.relay_url.clone())
+        .map(|target| target.endpoint_uri.clone())
         .collect()
 }
 
 fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureView> {
     event
-        .relays
+        .targets
         .iter()
-        .filter(|relay| {
+        .filter(|target| {
             !matches!(
-                relay.outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                target.outcome_kind,
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )
         })
-        .map(|relay| RelayFailureView {
-            relay: relay.relay_url.clone(),
-            reason: relay
+        .map(|target| RelayFailureView {
+            relay: target.endpoint_uri.clone(),
+            reason: target
                 .message
                 .clone()
-                .unwrap_or_else(|| sdk_relay_outcome_kind(relay.outcome_kind).to_owned()),
+                .unwrap_or_else(|| sdk_target_outcome_kind(target.outcome_kind).to_owned()),
         })
         .collect()
 }
 
-fn sdk_relay_outcome_kind(kind: PushOutboxRelayOutcomeKind) -> &'static str {
+fn sdk_target_outcome_kind(kind: PushOutboxTargetOutcomeKind) -> &'static str {
     match kind {
-        PushOutboxRelayOutcomeKind::Accepted => "accepted",
-        PushOutboxRelayOutcomeKind::DuplicateAccepted => "duplicate_accepted",
-        PushOutboxRelayOutcomeKind::Blocked => "blocked",
-        PushOutboxRelayOutcomeKind::RateLimited => "rate_limited",
-        PushOutboxRelayOutcomeKind::Invalid => "invalid",
-        PushOutboxRelayOutcomeKind::PowRequired => "pow_required",
-        PushOutboxRelayOutcomeKind::Restricted => "restricted",
-        PushOutboxRelayOutcomeKind::AuthRequired => "auth_required",
-        PushOutboxRelayOutcomeKind::Error => "error",
-        PushOutboxRelayOutcomeKind::Timeout => "timeout",
-        PushOutboxRelayOutcomeKind::ConnectionFailed => "connection_failed",
-        PushOutboxRelayOutcomeKind::Unknown => "unknown",
+        PushOutboxTargetOutcomeKind::Accepted => "accepted",
+        PushOutboxTargetOutcomeKind::DuplicateAccepted => "duplicate_accepted",
+        PushOutboxTargetOutcomeKind::Blocked => "blocked",
+        PushOutboxTargetOutcomeKind::RateLimited => "rate_limited",
+        PushOutboxTargetOutcomeKind::Invalid => "invalid",
+        PushOutboxTargetOutcomeKind::PowRequired => "pow_required",
+        PushOutboxTargetOutcomeKind::Restricted => "restricted",
+        PushOutboxTargetOutcomeKind::AuthRequired => "auth_required",
+        PushOutboxTargetOutcomeKind::Error => "error",
+        PushOutboxTargetOutcomeKind::Timeout => "timeout",
+        PushOutboxTargetOutcomeKind::ConnectionFailed => "connection_failed",
+        PushOutboxTargetOutcomeKind::TargetUriRejected => "target_uri_rejected",
+        PushOutboxTargetOutcomeKind::Unknown => "unknown",
         _ => "unknown",
     }
 }

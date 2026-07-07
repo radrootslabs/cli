@@ -32,15 +32,12 @@ use radroots_events_codec::d_tag::is_d_tag_base64url;
 use radroots_events_codec::order::{order_event_context_from_tags, order_request_from_event};
 use radroots_local_events::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecord, LocalRecordFamily,
-    LocalRecordStatus, PublishOutboxStatus, RelayDeliveryEvidence, RelayDeliveryState,
-    SourceRuntime, normalize_relay_urls, validate_supported_buyer_order_request_local_work_payload,
+    LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
+    validate_supported_buyer_order_request_local_work_payload,
 };
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
     radroots_nostr_kind,
-};
-use radroots_relay_transport::{
-    RadrootsRelayFetchFailure, RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError,
 };
 use radroots_replica_db::{
     ReplicaSql, ReplicaTradeProductSummaryRow, nostr_event_head, trade_product,
@@ -52,19 +49,23 @@ use radroots_replica_db_schema::trade_product::{
     ITradeProductFieldsFilter, ITradeProductFindMany, TradeProduct,
 };
 use radroots_sdk::{
-    AckPolicy, PrivacyPreflightConfirmation, ProductSensitivityField, PublishMode,
-    PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt, PushOutboxRelayOutcomeKind,
-    RelayResolutionPolicy, SdkMutationState, SdkTradeStatusSource, TradeAcceptRequest,
-    TradeCancelRequest, TradeCancellationPlan, TradeCancellationReceipt, TradeDecisionPlan,
-    TradeDecisionReceipt, TradeDeclineRequest, TradeEvidenceMode, TradeMutationOutcome,
-    TradeProposeRequest, TradeRevisionDecisionPlan, TradeRevisionDecisionReceipt,
-    TradeRevisionDecisionRequest, TradeRevisionProposalPlan, TradeRevisionProposalReceipt,
-    TradeRevisionProposalRequest, TradeStatusReceipt, TradeStatusRequest, TradeSubmitPlan,
-    TradeSubmitReceipt, TradeWorkflowEnqueueReceipt,
+    PrivacyPreflightConfirmation, ProductSensitivityField, PublishMode, PushOutboxEventReceipt,
+    PushOutboxEventState, PushOutboxReceipt, PushOutboxTargetOutcomeKind, SatisfactionPolicy,
+    SdkMutationState, SdkTradeStatusSource, TargetPolicy, TradeAcceptRequest, TradeCancelRequest,
+    TradeCancellationPlan, TradeCancellationReceipt, TradeDecisionPlan, TradeDecisionReceipt,
+    TradeDeclineRequest, TradeEvidenceMode, TradeMutationOutcome, TradeProposeRequest,
+    TradeRevisionDecisionPlan, TradeRevisionDecisionReceipt, TradeRevisionDecisionRequest,
+    TradeRevisionProposalPlan, TradeRevisionProposalReceipt, TradeRevisionProposalRequest,
+    TradeStatusReceipt, TradeStatusRequest, TradeSubmitPlan, TradeSubmitReceipt,
+    TradeWorkflowEnqueueReceipt,
 };
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::identity::RadrootsTradeLocator;
 use radroots_trade::order::canonicalize_order_request_for_signer;
+use radroots_transport_nostr::{
+    RadrootsRelayFetchFailure, RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError,
+    RadrootsRelayUrl, RadrootsRelayUrlPolicy,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -105,7 +106,7 @@ const ORDER_CANCELLATION_SOURCE: &str = "SDK trade cancellation · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "shared relay transport fetch · selected seller identity";
 const ORDER_STATUS_SDK_SOURCE: &str = "SDK local trade projection";
 const ORDER_EVENT_LIST_RELAY_ACTION: &str =
-    "radroots --relay wss://relay.example.com trade event list";
+    "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com";
 const ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
 const ORDER_BUYER_ACTOR_SOURCE_REBIND: &str = "order_rebind";
 const ORDER_APP_RECORD_LIST_LIMIT: u32 = 500;
@@ -161,10 +162,10 @@ fn trade_publish_mode(config: &RuntimeConfig) -> PublishMode {
     }
 }
 
-fn trade_ack_policy(mode: PublishMode) -> Result<AckPolicy, RuntimeError> {
+fn trade_satisfaction_policy(mode: PublishMode) -> Result<SatisfactionPolicy, RuntimeError> {
     Ok(match mode {
-        PublishMode::DryRun | PublishMode::EnqueueOnly => AckPolicy::NoWait,
-        PublishMode::EnqueueAndPublish => AckPolicy::AtLeastOneRelay,
+        PublishMode::DryRun | PublishMode::EnqueueOnly => SatisfactionPolicy::NoWait,
+        PublishMode::EnqueueAndPublish => SatisfactionPolicy::AtLeastOneTarget,
         _ => {
             return Err(RuntimeError::Config(
                 "unsupported SDK publish mode for CLI trade workflow".to_owned(),
@@ -173,8 +174,8 @@ fn trade_ack_policy(mode: PublishMode) -> Result<AckPolicy, RuntimeError> {
     })
 }
 
-fn trade_relay_resolution_policy() -> RelayResolutionPolicy {
-    RelayResolutionPolicy::configured_relays()
+fn trade_target_policy() -> TargetPolicy {
+    TargetPolicy::use_transport_profile()
 }
 
 fn trade_privacy_confirmation(confirm_public_note: bool) -> PrivacyPreflightConfirmation {
@@ -860,7 +861,7 @@ pub fn app_record_export(
                 app_order.loaded.document.order.order_id
             ),
             format!(
-                "radroots --relay wss://relay.example.com trade submit {}",
+                "radroots trade submit {}",
                 app_order.loaded.document.order.order_id
             ),
         ],
@@ -1167,7 +1168,7 @@ pub fn event_list(
         return Ok(order_event_list_unconfigured(
             None,
             ORDER_ACTOR_CONTEXT_NETWORK_ONLY,
-            "trade event list requires at least one configured relay".to_owned(),
+            "trade event list requires a configured Nostr transport profile".to_owned(),
             Vec::new(),
             vec![ORDER_EVENT_LIST_RELAY_ACTION.to_owned()],
         ));
@@ -1314,7 +1315,7 @@ fn decide_trade_via_sdk(
     let status = trade_status_for_locator(config, &session, locator.clone())?;
     let status_view = sdk_order_status_view(status.clone());
     let publish_mode = trade_publish_mode(config);
-    let ack_policy = trade_ack_policy(publish_mode)?;
+    let ack_policy = trade_satisfaction_policy(publish_mode)?;
     let outcome = match args.decision {
         TradeDecisionArg::Accept => {
             let commitments = inventory_commitments_from_status(&status)?;
@@ -1322,7 +1323,7 @@ fn decide_trade_via_sdk(
                 actor,
                 locator,
                 commitments,
-                trade_relay_resolution_policy(),
+                trade_target_policy(),
                 publish_mode,
                 ack_policy,
                 TradeEvidenceMode::ResyncBeforeMutation,
@@ -1346,7 +1347,7 @@ fn decide_trade_via_sdk(
                 actor,
                 locator,
                 reason,
-                trade_relay_resolution_policy(),
+                trade_target_policy(),
                 publish_mode,
                 ack_policy,
                 TradeEvidenceMode::ResyncBeforeMutation,
@@ -1378,7 +1379,7 @@ fn propose_revision_via_sdk(
     let status_view = sdk_order_status_view(status);
     let revision = revision_request_parts_from_status(args, &status_view)?;
     let publish_mode = trade_publish_mode(config);
-    let ack_policy = trade_ack_policy(publish_mode)?;
+    let ack_policy = trade_satisfaction_policy(publish_mode)?;
     let mut request = TradeRevisionProposalRequest::new(
         actor,
         locator,
@@ -1386,7 +1387,7 @@ fn propose_revision_via_sdk(
         revision.items.clone(),
         revision.economics.clone(),
         args.reason.trim(),
-        trade_relay_resolution_policy(),
+        trade_target_policy(),
         publish_mode,
         ack_policy,
         TradeEvidenceMode::ResyncBeforeMutation,
@@ -1441,13 +1442,13 @@ fn decide_revision_via_sdk(
         },
     };
     let publish_mode = trade_publish_mode(config);
-    let ack_policy = trade_ack_policy(publish_mode)?;
+    let ack_policy = trade_satisfaction_policy(publish_mode)?;
     let mut request = TradeRevisionDecisionRequest::new(
         actor,
         locator,
         revision_id,
         decision,
-        trade_relay_resolution_policy(),
+        trade_target_policy(),
         publish_mode,
         ack_policy,
         TradeEvidenceMode::ResyncBeforeMutation,
@@ -1489,12 +1490,12 @@ fn cancel_trade_via_sdk(
     let status = trade_status_for_locator(config, &session, locator.clone())?;
     let status_view = sdk_order_status_view(status);
     let publish_mode = trade_publish_mode(config);
-    let ack_policy = trade_ack_policy(publish_mode)?;
+    let ack_policy = trade_satisfaction_policy(publish_mode)?;
     let mut request = TradeCancelRequest::new(
         actor,
         locator,
         args.reason.trim(),
-        trade_relay_resolution_policy(),
+        trade_target_policy(),
         publish_mode,
         ack_policy,
         TradeEvidenceMode::ResyncBeforeMutation,
@@ -2955,48 +2956,8 @@ fn resolve_shared_signed_listing_provenance(
     listing_addr: &str,
     listing_event_id: Option<&str>,
 ) -> Result<Option<SharedListingProvenance>, RuntimeError> {
-    let mut candidates = list_shared_records_latest(config, ORDER_APP_RECORD_LIST_LIMIT)?
-        .into_iter()
-        .filter(|record| record.family == LocalRecordFamily::SignedEvent)
-        .filter(|record| record.status == LocalRecordStatus::Published)
-        .filter(|record| record.event_kind == Some(i64::from(KIND_LISTING)))
-        .filter(|record| record.listing_addr.as_deref() == Some(listing_addr))
-        .filter(|record| {
-            listing_event_id.is_none() || record.event_id.as_deref() == listing_event_id
-        })
-        .filter_map(|record| {
-            let event_id = record.event_id?;
-            if !is_valid_event_id(event_id.as_str()) {
-                return None;
-            }
-            let delivery = record.relay_delivery_json.as_ref()?;
-            let evidence = RelayDeliveryEvidence::from_json_value(delivery).ok()?;
-            let relays = listing_provenance_relays_from_delivery_evidence(evidence).ok()?;
-            if relays.is_empty() {
-                return None;
-            }
-            Some(SharedListingProvenance { event_id, relays })
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| left.event_id.cmp(&right.event_id));
-    candidates.dedup_by(|left, right| left.event_id == right.event_id);
-    if candidates.len() > 1 && listing_event_id.is_none() {
-        return Err(RuntimeError::Config(format!(
-            "listing address `{listing_addr}` has multiple published shared local listing events; run `radroots market refresh` or pass a current listing event id source"
-        )));
-    }
-    Ok(candidates.pop())
-}
-
-fn listing_provenance_relays_from_delivery_evidence(
-    evidence: RelayDeliveryEvidence,
-) -> Result<Vec<String>, String> {
-    let relays = match evidence.state {
-        RelayDeliveryState::Acknowledged => evidence.acknowledged_relays,
-        RelayDeliveryState::Observed => evidence.observed_relays,
-        RelayDeliveryState::Pending | RelayDeliveryState::Failed => Vec::new(),
-    };
-    normalize_listing_relay_set(relays)
+    let _ = (config, listing_addr, listing_event_id);
+    Ok(None)
 }
 
 fn trade_product_listing_addr_filter(listing_addr: &str) -> ITradeProductFieldsFilter {
@@ -3948,10 +3909,7 @@ fn app_order_record_summary(
         vec![
             format!("radroots trade get {}", document.order.order_id),
             format!("radroots trade app export {}", record.record_id),
-            format!(
-                "radroots --relay wss://relay.example.com trade submit {}",
-                document.order.order_id
-            ),
+            format!("radroots trade submit {}", document.order.order_id),
         ]
     } else if app_order_issue_present(&issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
         vec![format!(
@@ -4894,7 +4852,7 @@ fn propose_trade_via_sdk(
 ) -> Result<OrderSubmitView, CliSdkAdapterError> {
     let actor = sdk_trade_actor(account, RadrootsActorRole::Buyer, "propose")?;
     let publish_mode = trade_publish_mode(config);
-    let ack_policy = trade_ack_policy(publish_mode)?;
+    let ack_policy = trade_satisfaction_policy(publish_mode)?;
     let economics =
         loaded.document.order.economics.clone().ok_or_else(|| {
             RuntimeError::Config("trade draft is missing quote economics".to_owned())
@@ -4922,7 +4880,7 @@ fn propose_trade_via_sdk(
         )?,
         items,
         economics,
-        trade_relay_resolution_policy(),
+        trade_target_policy(),
         publish_mode,
         ack_policy,
     )
@@ -5063,71 +5021,72 @@ fn sdk_order_submit_actions(push_event: Option<&PushOutboxEventReceipt>) -> Vec<
 
 fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
-        .relays
+        .targets
         .iter()
-        .map(|relay| relay.relay_url.clone())
+        .map(|target| target.endpoint_uri.clone())
         .collect()
 }
 
 fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
-        .relays
+        .targets
         .iter()
-        .filter(|relay| relay.attempted)
-        .map(|relay| relay.relay_url.clone())
+        .filter(|target| target.attempted)
+        .map(|target| target.endpoint_uri.clone())
         .collect()
 }
 
 fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
-        .relays
+        .targets
         .iter()
-        .filter(|relay| {
+        .filter(|target| {
             matches!(
-                relay.outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                target.outcome_kind,
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )
         })
-        .map(|relay| relay.relay_url.clone())
+        .map(|target| target.endpoint_uri.clone())
         .collect()
 }
 
 fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureView> {
     event
-        .relays
+        .targets
         .iter()
-        .filter(|relay| {
+        .filter(|target| {
             !matches!(
-                relay.outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                target.outcome_kind,
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )
         })
-        .map(|relay| RelayFailureView {
-            relay: relay.relay_url.clone(),
-            reason: relay
+        .map(|target| RelayFailureView {
+            relay: target.endpoint_uri.clone(),
+            reason: target
                 .message
                 .clone()
-                .unwrap_or_else(|| sdk_relay_outcome_kind(relay.outcome_kind).to_owned()),
+                .unwrap_or_else(|| sdk_target_outcome_kind(target.outcome_kind).to_owned()),
         })
         .collect()
 }
 
-fn sdk_relay_outcome_kind(kind: PushOutboxRelayOutcomeKind) -> &'static str {
+fn sdk_target_outcome_kind(kind: PushOutboxTargetOutcomeKind) -> &'static str {
     match kind {
-        PushOutboxRelayOutcomeKind::Accepted => "accepted",
-        PushOutboxRelayOutcomeKind::DuplicateAccepted => "duplicate_accepted",
-        PushOutboxRelayOutcomeKind::Blocked => "blocked",
-        PushOutboxRelayOutcomeKind::RateLimited => "rate_limited",
-        PushOutboxRelayOutcomeKind::Invalid => "invalid",
-        PushOutboxRelayOutcomeKind::PowRequired => "pow_required",
-        PushOutboxRelayOutcomeKind::Restricted => "restricted",
-        PushOutboxRelayOutcomeKind::AuthRequired => "auth_required",
-        PushOutboxRelayOutcomeKind::Error => "error",
-        PushOutboxRelayOutcomeKind::Timeout => "timeout",
-        PushOutboxRelayOutcomeKind::ConnectionFailed => "connection_failed",
-        PushOutboxRelayOutcomeKind::Unknown => "unknown",
+        PushOutboxTargetOutcomeKind::Accepted => "accepted",
+        PushOutboxTargetOutcomeKind::DuplicateAccepted => "duplicate_accepted",
+        PushOutboxTargetOutcomeKind::Blocked => "blocked",
+        PushOutboxTargetOutcomeKind::RateLimited => "rate_limited",
+        PushOutboxTargetOutcomeKind::Invalid => "invalid",
+        PushOutboxTargetOutcomeKind::PowRequired => "pow_required",
+        PushOutboxTargetOutcomeKind::Restricted => "restricted",
+        PushOutboxTargetOutcomeKind::AuthRequired => "auth_required",
+        PushOutboxTargetOutcomeKind::Error => "error",
+        PushOutboxTargetOutcomeKind::Timeout => "timeout",
+        PushOutboxTargetOutcomeKind::ConnectionFailed => "connection_failed",
+        PushOutboxTargetOutcomeKind::TargetUriRejected => "target_uri_rejected",
+        PushOutboxTargetOutcomeKind::Unknown => "unknown",
         _ => "unknown",
     }
 }
@@ -5437,7 +5396,16 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    normalize_relay_urls(values).map_err(|error| error.to_string())
+    let mut normalized = Vec::new();
+    for value in values {
+        let relay = RadrootsRelayUrl::parse(value.as_ref(), RadrootsRelayUrlPolicy::Public)
+            .map_err(|error| error.to_string())?
+            .into_string();
+        if !normalized.contains(&relay) {
+            normalized.push(relay);
+        }
+    }
+    Ok(normalized)
 }
 
 fn order_listing_relays(document: &OrderDraftDocument) -> Vec<String> {

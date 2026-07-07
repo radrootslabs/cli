@@ -88,11 +88,12 @@ mod farm;
 mod health;
 mod listing;
 mod market;
-mod relay;
+mod mesh;
 mod signer;
 mod store;
 mod sync;
 mod trade;
+mod transport;
 mod validation;
 mod workspace;
 
@@ -112,7 +113,15 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
     account::ACCOUNT_SELECTION_UPDATE,
     account::ACCOUNT_SELECTION_CLEAR,
     signer::SIGNER_STATUS_GET,
-    relay::RELAY_LIST,
+    transport::TRANSPORT_PROFILE_GET,
+    transport::TRANSPORT_PROFILE_SET,
+    transport::TRANSPORT_STATUS,
+    transport::TRANSPORT_OUTBOX_STATUS,
+    transport::TRANSPORT_OUTBOX_PUSH,
+    mesh::MESH_SCOPE_GET,
+    mesh::MESH_SCOPE_SET,
+    mesh::MESH_STATUS,
+    mesh::MESH_POLICY_CHECK,
     store::STORE_INIT,
     store::STORE_STATUS_GET,
     store::STORE_EXPORT,
@@ -185,6 +194,7 @@ pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
     match operation_id {
         "sync.pull"
         | "sync.push"
+        | "transport.outbox.push"
         | "sync.watch"
         | "market.refresh"
         | "farm.publish"
@@ -214,6 +224,7 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
     matches!(
         operation_id,
         "sync.push"
+            | "transport.outbox.push"
             | "trade.submit"
             | "trade.accept"
             | "trade.decline"
@@ -224,11 +235,11 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
     )
 }
 
-#[cfg(test)]
-pub fn requires_direct_nostr_relay_publish_transport(operation_id: &str) -> bool {
+pub fn requires_nostr_publish_transport(operation_id: &str) -> bool {
     matches!(
         operation_id,
         "sync.push"
+            | "transport.outbox.push"
             | "farm.publish"
             | "listing.publish"
             | "listing.update"
@@ -258,8 +269,8 @@ mod tests {
 
     use super::{
         ApprovalPolicy, NetworkRequirement, OPERATION_REGISTRY, OperationRole, RiskLevel,
-        get_operation, network_requirement, requires_direct_nostr_relay_publish_transport,
-        requires_local_signer_mode,
+        get_operation, network_requirement, requires_local_signer_mode,
+        requires_nostr_publish_transport,
     };
 
     const EXPECTED_OPERATION_IDS: &[&str] = &[
@@ -278,7 +289,15 @@ mod tests {
         "account.selection.update",
         "account.selection.clear",
         "signer.status.get",
-        "relay.list",
+        "transport.profile.get",
+        "transport.profile.set",
+        "transport.status",
+        "transport.outbox.status",
+        "transport.outbox.push",
+        "mesh.scope.get",
+        "mesh.scope.set",
+        "mesh.status",
+        "mesh.policy.check",
         "store.init",
         "store.status.get",
         "store.export",
@@ -354,6 +373,9 @@ mod tests {
         "store.backup.restore",
         "sync.pull",
         "sync.push",
+        "transport.profile.set",
+        "transport.outbox.push",
+        "mesh.scope.set",
         "farm.create",
         "farm.rebind",
         "farm.profile.update",
@@ -396,7 +418,7 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(OPERATION_REGISTRY.len(), 76);
+        assert_eq!(OPERATION_REGISTRY.len(), 84);
     }
 
     #[test]
@@ -448,6 +470,9 @@ mod tests {
             "listing.publish",
             "listing.update",
             "listing.archive",
+            "transport.profile.set",
+            "transport.outbox.push",
+            "mesh.scope.set",
             "trade.submit",
             "trade.rebind",
             "trade.accept",
@@ -513,7 +538,7 @@ mod tests {
             "health.check.run",
             "config.get",
             "account.list",
-            "relay.list",
+            "transport.outbox.push",
             "farm.location.set",
             "sync.pull",
             "sync.push",
@@ -560,6 +585,7 @@ mod tests {
             "trade.revision.propose",
             "trade.revision.accept",
             "trade.revision.decline",
+            "transport.outbox.push",
             "trade.event.list",
             "validation.receipt.get",
             "validation.receipt.list",
@@ -587,6 +613,7 @@ mod tests {
             "trade.revision.propose",
             "trade.revision.accept",
             "trade.revision.decline",
+            "transport.outbox.push",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -595,16 +622,15 @@ mod tests {
     }
 
     #[test]
-    fn registry_direct_nostr_relay_publish_requirements_are_explicit() {
+    fn registry_nostr_publish_requirements_are_explicit() {
         let publish = OPERATION_REGISTRY
             .iter()
-            .filter(|operation| {
-                requires_direct_nostr_relay_publish_transport(operation.operation_id)
-            })
+            .filter(|operation| requires_nostr_publish_transport(operation.operation_id))
             .map(|operation| operation.operation_id)
             .collect::<BTreeSet<_>>();
         let expected = [
             "sync.push",
+            "transport.outbox.push",
             "farm.publish",
             "listing.publish",
             "listing.update",

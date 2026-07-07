@@ -11,7 +11,15 @@ use super::common;
 pub fn register(registry: TerminalRendererRegistry) -> TerminalRendererRegistry {
     registry
         .register("signer.status.get", &RUNTIME_RENDERER)
-        .register("relay.list", &RUNTIME_RENDERER)
+        .register("transport.profile.get", &RUNTIME_RENDERER)
+        .register("transport.profile.set", &RUNTIME_RENDERER)
+        .register("transport.status", &RUNTIME_RENDERER)
+        .register("transport.outbox.status", &RUNTIME_RENDERER)
+        .register("transport.outbox.push", &RUNTIME_RENDERER)
+        .register("mesh.scope.get", &RUNTIME_RENDERER)
+        .register("mesh.scope.set", &RUNTIME_RENDERER)
+        .register("mesh.status", &RUNTIME_RENDERER)
+        .register("mesh.policy.check", &RUNTIME_RENDERER)
 }
 
 struct RuntimeRenderer;
@@ -25,7 +33,14 @@ impl TerminalOperationRenderer for RuntimeRenderer {
         }
         let result = common::result(envelope);
         match envelope.operation_id.as_str() {
-            "relay.list" => relay_document(envelope, result),
+            "transport.profile.get" | "transport.profile.set" => {
+                transport_profile_document(envelope, result)
+            }
+            "transport.status" => transport_status_document(envelope, result),
+            "transport.outbox.status" => transport_outbox_status_document(envelope, result),
+            "transport.outbox.push" => transport_outbox_push_document(envelope, result),
+            "mesh.scope.get" | "mesh.scope.set" => mesh_scope_document(envelope, result),
+            "mesh.status" | "mesh.policy.check" => mesh_status_document(envelope, result),
             _ => signer_document(envelope, result),
         }
     }
@@ -77,36 +92,134 @@ fn signer_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocumen
     document
 }
 
-fn relay_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
-    let title = common::title_for(envelope, "Relays");
+fn transport_profile_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
+    let title = common::title_for(envelope, "Transport Profile");
     let mut document = common::document_with_title(envelope, title);
     common::push_path_field(&mut document, "State", result, &["state"]);
-    common::push_count_field(&mut document, "Count", result, &["count"]);
     common::push_path_field(&mut document, "Source", result, &["source"]);
-    let rows = common::array(result, &["relays"])
+    common::push_path_field(&mut document, "Profile", result, &["profile_id"]);
+    common::push_path_field(&mut document, "Kind", result, &["transport_kind"]);
+    common::push_path_field(&mut document, "Configured", result, &["configured_state"]);
+    common::push_path_field(
+        &mut document,
+        "Implementation",
+        result,
+        &["implementation_state"],
+    );
+    common::push_bool_field(&mut document, "Usable", result, &["usable_for_delivery"]);
+    common::push_path_field(&mut document, "Message", result, &["message"]);
+    if let Some(relays) = common::array(result, &["nostr_relays"]) {
+        let rows = relays
+            .iter()
+            .map(|relay| TerminalTableRow::new(vec![relay.as_str().unwrap_or_default().to_owned()]))
+            .collect::<Vec<_>>();
+        document.sections.push(common::table_section(
+            "Nostr relays",
+            vec![TerminalTableColumn::new("URL", 12, 48)],
+            rows,
+            "No Nostr relays configured",
+        ));
+    }
+    document
+}
+
+fn transport_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
+    let title = common::title_for(envelope, "Transport Status");
+    let mut document = common::document_with_title(envelope, title);
+    common::push_path_field(&mut document, "State", result, &["state"]);
+    common::push_path_field(&mut document, "Source", result, &["source"]);
+    let rows = common::array(result, &["transports"])
         .into_iter()
         .flatten()
-        .map(|relay| {
+        .map(|transport| {
             TerminalTableRow::new(vec![
-                common::string(relay, &["url"]).unwrap_or_default(),
-                common::bool_path(relay, &["read"])
-                    .map(|value| if value { "yes" } else { "no" }.to_owned())
-                    .unwrap_or_default(),
-                common::bool_path(relay, &["write"])
+                common::string(transport, &["profile_id"]).unwrap_or_default(),
+                common::string(transport, &["transport_kind"]).unwrap_or_default(),
+                common::string(transport, &["configured_state"]).unwrap_or_default(),
+                common::string(transport, &["implementation_state"]).unwrap_or_default(),
+                common::bool_path(transport, &["usable_for_delivery"])
                     .map(|value| if value { "yes" } else { "no" }.to_owned())
                     .unwrap_or_default(),
             ])
         })
         .collect::<Vec<_>>();
     document.sections.push(common::table_section(
-        "Relays",
+        "Transports",
         vec![
-            TerminalTableColumn::new("URL", 12, 42),
-            TerminalTableColumn::new("Read", 4, 4),
-            TerminalTableColumn::new("Write", 5, 5),
+            TerminalTableColumn::new("Profile", 7, 18),
+            TerminalTableColumn::new("Kind", 4, 12),
+            TerminalTableColumn::new("Configured", 10, 18),
+            TerminalTableColumn::new("Implementation", 14, 24),
+            TerminalTableColumn::new("Usable", 6, 6),
         ],
         rows,
-        "No relays configured",
+        "No transports reported",
     ));
+    document
+}
+
+fn transport_outbox_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
+    let title = common::title_for(envelope, "Transport Outbox");
+    let mut document = common::document_with_title(envelope, title);
+    common::push_path_field(&mut document, "State", result, &["state"]);
+    common::push_path_field(&mut document, "Profile", result, &["transport_profile"]);
+    common::push_count_field(&mut document, "Total", result, &["total_count"]);
+    common::push_count_field(&mut document, "Pending", result, &["pending_count"]);
+    common::push_count_field(&mut document, "Retryable", result, &["retryable_count"]);
+    common::push_count_field(&mut document, "Terminal", result, &["terminal_count"]);
+    common::push_count_field(
+        &mut document,
+        "Ready signed",
+        result,
+        &["ready_signed_count"],
+    );
+    common::push_path_field(&mut document, "Last error", result, &["last_error"]);
+    document
+}
+
+fn transport_outbox_push_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
+    let title = common::title_for(envelope, "Transport Outbox Push");
+    let mut document = common::document_with_title(envelope, title);
+    common::push_path_field(&mut document, "State", result, &["state"]);
+    common::push_count_field(&mut document, "Attempted", result, &["attempted_events"]);
+    common::push_count_field(&mut document, "Published", result, &["published_events"]);
+    common::push_count_field(&mut document, "Retryable", result, &["retryable_events"]);
+    common::push_count_field(&mut document, "Terminal", result, &["terminal_events"]);
+    common::push_count_field(&mut document, "Targets", result, &["target_count"]);
+    common::push_path_field(&mut document, "Reason", result, &["reason"]);
+    document
+}
+
+fn mesh_scope_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
+    let title = common::title_for(envelope, "Mesh Scope");
+    let mut document = common::document_with_title(envelope, title);
+    common::push_path_field(&mut document, "State", result, &["state"]);
+    common::push_path_field(&mut document, "Scope", result, &["scope"]);
+    common::push_path_field(
+        &mut document,
+        "Implementation",
+        result,
+        &["implementation_state"],
+    );
+    common::push_path_field(&mut document, "Message", result, &["message"]);
+    document
+}
+
+fn mesh_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
+    let title = common::title_for(envelope, "Mesh");
+    let mut document = common::document_with_title(envelope, title);
+    common::push_path_field(&mut document, "State", result, &["state"]);
+    common::push_path_field(&mut document, "Scope", result, &["scope"]);
+    common::push_path_field(&mut document, "Kind", result, &["transport_kind"]);
+    common::push_path_field(&mut document, "Configured", result, &["configured_state"]);
+    common::push_path_field(
+        &mut document,
+        "Implementation",
+        result,
+        &["implementation_state"],
+    );
+    common::push_bool_field(&mut document, "Usable", result, &["usable_for_delivery"]);
+    common::push_path_field(&mut document, "Decision", result, &["decision"]);
+    common::push_path_field(&mut document, "Message", result, &["message"]);
     document
 }

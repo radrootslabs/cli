@@ -362,7 +362,7 @@ fn inspection_from_sdk_receipt(
             failed_relays,
             reason_code: Some("validation_receipt_not_found".to_owned()),
             reason: Some(format!(
-                "validation receipt event `{receipt_event_id}` was not found on configured relays"
+                "validation receipt event `{receipt_event_id}` was not found on configured Nostr relays"
             )),
             sdk_error: None,
             actions: Vec::new(),
@@ -638,8 +638,8 @@ fn sdk_error_parts(error: RadrootsSdkError) -> ValidationReceiptSdkErrorParts {
     };
     let actions = if error.code() == "empty_target_relays" {
         vec![
-                "radroots --relay wss://relay.example.com validation receipt list --trade-id <trade-id>"
-                    .to_owned(),
+            "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+                .to_owned(),
         ]
     } else {
         Vec::new()

@@ -253,14 +253,14 @@ mod tests {
                 "invalid_count": 0,
                 "receipts": [],
                 "invalid_receipts": [],
-                "actions": ["radroots --relay wss://relay.example.com validation receipt list --trade-id trade_test"]
+                "actions": ["radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"]
             }),
         );
         let document = VALIDATION_RENDERER.render(&envelope, &TerminalRenderContext::default());
         let rendered = render_terminal_document(&document, &TerminalRenderContext::default());
 
         assert!(rendered.contains("Validation receipts"));
-        assert!(rendered.contains("--trade-id trade_test"));
+        assert!(rendered.contains("trade_test"));
         assert!(!rendered.contains("--order-id"));
     }
 

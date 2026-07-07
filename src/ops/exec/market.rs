@@ -82,7 +82,7 @@ fn market_refresh_view(mut view: SyncActionView) -> SyncActionView {
                 actions.push("radroots store init".to_owned());
             }
             if view.relay_count == 0 {
-                actions.push("radroots --relay wss://relay.example.com market refresh".to_owned());
+                actions.push("radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com".to_owned());
             }
             if actions.is_empty() {
                 actions.extend(std::mem::take(&mut view.actions));
@@ -361,7 +361,7 @@ mod tests {
         assert_eq!(envelope.result["state"], "unconfigured");
         assert_eq!(
             envelope.result["actions"][0],
-            "radroots --relay wss://relay.example.com market refresh"
+            "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
         );
     }
 
@@ -670,10 +670,11 @@ mod tests {
             signer: SignerConfig {
                 backend: SignerBackend::Local,
             },
+            transport: crate::runtime::config::TransportConfig::local_only(),
             publish: PublishConfig {
-                transport: PublishTransport::DirectNostrRelay,
+                transport: PublishTransport::Nostr,
                 source: PublishTransportSource::Defaults,
-                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
+                proxy: crate::runtime::config::ProxyTransportConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -694,6 +695,7 @@ mod tests {
                 enabled: false,
                 executable: PathBuf::from("hyfd"),
             },
+            mesh: crate::runtime::config::MeshConfig::disabled(),
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
             },

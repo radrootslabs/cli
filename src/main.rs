@@ -29,10 +29,12 @@ use radroots_cli::out::terminal::renderer::{
     TerminalRenderContext, TerminalVerbosity, render_terminal_document,
 };
 use radroots_cli::registry::{
-    NetworkRequirement, OPERATION_REGISTRY, network_requirement, requires_local_signer_mode,
+    ApprovalPolicy, NetworkRequirement, OPERATION_REGISTRY, network_requirement,
+    requires_local_signer_mode,
 };
 use radroots_cli::runtime::config::{
-    OutputFormat as RuntimeOutputFormat, RuntimeConfig, SignerBackend, Verbosity,
+    OutputFormat as RuntimeOutputFormat, RuntimeConfig, SignerBackend, TransportProfileKind,
+    Verbosity,
 };
 use radroots_cli::runtime::logging::initialize_logging;
 
@@ -149,7 +151,31 @@ fn execute_request(
         TargetOperationRequest::SignerStatusGet(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::RelayList(request) => {
+        TargetOperationRequest::TransportProfileGet(request) => {
+            execute_with(RuntimeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TransportProfileSet(request) => {
+            execute_with(RuntimeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TransportStatus(request) => {
+            execute_with(RuntimeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TransportOutboxStatus(request) => {
+            execute_with(RuntimeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TransportOutboxPush(request) => {
+            execute_with(RuntimeOperationService::new(config), request)
+        }
+        TargetOperationRequest::MeshScopeGet(request) => {
+            execute_with(RuntimeOperationService::new(config), request)
+        }
+        TargetOperationRequest::MeshScopeSet(request) => {
+            execute_with(RuntimeOperationService::new(config), request)
+        }
+        TargetOperationRequest::MeshStatus(request) => {
+            execute_with(RuntimeOperationService::new(config), request)
+        }
+        TargetOperationRequest::MeshPolicyCheck(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
         TargetOperationRequest::SyncStatusGet(request) => {
@@ -414,7 +440,7 @@ fn validate_network_contract(
                 return Err(OperationAdapterError::OfflineForbidden {
                     operation_id: spec.operation_id.to_owned(),
                     message: format!(
-                        "`{}` requires relay, provider, or workflow network access",
+                        "`{}` requires transport, provider, or workflow network access",
                         spec.cli_path
                     ),
                 });
@@ -426,13 +452,13 @@ fn validate_network_contract(
                 dry_run_requires_network,
             } = requirement
                 && (!request.context().dry_run || dry_run_requires_network)
-                && requires_pre_runtime_relay_target(spec.operation_id)
-                && config.relay.urls.is_empty()
+                && requires_pre_runtime_transport_target(spec.operation_id)
+                && !transport_profile_is_usable_for_delivery(config)
             {
                 return Err(OperationAdapterError::NetworkUnavailable {
                     operation_id: spec.operation_id.to_owned(),
                     message: format!(
-                        "`{}` requires at least one configured relay for online execution",
+                        "`{}` requires a delivery-capable transport profile for online execution",
                         spec.cli_path
                     ),
                 });
@@ -450,7 +476,7 @@ fn requires_local_signer_mode_for_publish_transport(
     requires_local_signer_mode(operation_id)
 }
 
-fn requires_pre_runtime_relay_target(operation_id: &str) -> bool {
+fn requires_pre_runtime_transport_target(operation_id: &str) -> bool {
     !is_publish_transport_routed_operation(operation_id)
 }
 
@@ -462,16 +488,64 @@ fn validate_publish_transport_contract(
     request: &TargetOperationRequest,
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
-    let _ = request;
-    let _ = config;
+    let spec = request.spec();
+    if !is_publish_transport_routed_operation(spec.operation_id) {
+        return Ok(());
+    }
+    if request.context().dry_run
+        || matches!(
+            request.context().network_mode,
+            OperationNetworkMode::Offline
+        )
+        || (spec.approval_policy == ApprovalPolicy::Required
+            && request.context().requires_approval_token())
+    {
+        return Ok(());
+    }
+    if matches!(
+        config.transport.profile,
+        TransportProfileKind::LocalOnly | TransportProfileKind::ReticulumPreview
+    ) {
+        return Err(OperationAdapterError::NetworkUnavailable {
+            operation_id: spec.operation_id.to_owned(),
+            message: format!(
+                "`{}` requires a delivery-capable transport profile; active profile `{}` cannot deliver",
+                spec.cli_path,
+                config.transport.profile.as_str()
+            ),
+        });
+    }
+    if matches!(config.transport.profile, TransportProfileKind::Nostr)
+        && config.transport.nostr_relay_urls.is_empty()
+    {
+        return Err(OperationAdapterError::NetworkUnavailable {
+            operation_id: spec.operation_id.to_owned(),
+            message: format!(
+                "`{}` requires at least one configured Nostr relay in the active transport profile",
+                spec.cli_path
+            ),
+        });
+    }
     Ok(())
 }
 
 fn is_publish_transport_routed_operation(operation_id: &str) -> bool {
     matches!(
         operation_id,
-        "farm.publish" | "listing.publish" | "listing.update" | "listing.archive"
+        "farm.publish"
+            | "listing.publish"
+            | "listing.update"
+            | "listing.archive"
+            | "transport.outbox.push"
     )
+}
+
+fn transport_profile_is_usable_for_delivery(config: &RuntimeConfig) -> bool {
+    match config.transport.profile {
+        TransportProfileKind::Nostr => !config.transport.nostr_relay_urls.is_empty(),
+        TransportProfileKind::Proxy => true,
+        TransportProfileKind::LocalOnly | TransportProfileKind::ReticulumPreview => false,
+    }
 }
 
 fn failure_envelope(

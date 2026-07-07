@@ -210,7 +210,7 @@ mod tests {
             "Listing published",
         ))
         .with_field(TerminalField::new("Listing", "AAAAAAAAAAAAAAAAAAAAAg"))
-        .with_field(TerminalField::new("Transport", "direct nostr relay"))
+        .with_field(TerminalField::new("Transport", "nostr"))
         .with_field(TerminalField::new("Relays", "2 acknowledged · 0 failed"))
         .with_field(TerminalField::new("Event", "9f3a…c12"))
         .with_next(TerminalAction::command(
@@ -219,7 +219,7 @@ mod tests {
 
         assert_eq!(
             render_terminal_document(&document, &TerminalRenderContext::default()),
-            "✓ Listing published\n\n  Listing    AAAAAAAAAAAAAAAAAAAAAg\n  Transport  direct nostr relay\n  Relays     2 acknowledged · 0 failed\n  Event      9f3a…c12\n\nNext\n  radroots listing get AAAAAAAAAAAAAAAAAAAAAg"
+            "✓ Listing published\n\n  Listing    AAAAAAAAAAAAAAAAAAAAAg\n  Transport  nostr\n  Relays     2 acknowledged · 0 failed\n  Event      9f3a…c12\n\nNext\n  radroots listing get AAAAAAAAAAAAAAAAAAAAAg"
         );
     }
 

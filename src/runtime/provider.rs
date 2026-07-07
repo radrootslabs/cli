@@ -96,15 +96,15 @@ pub fn resolve_write_plane_provider(
     publish: &PublishRuntimeView,
 ) -> WritePlaneProviderView {
     let (provider_runtime_id, binding_model, detail) = match config.publish.transport {
-        PublishTransport::DirectNostrRelay => (
-            "direct_nostr_relay",
-            "direct_relay_publish",
-            "direct relay publish is selected; readiness is reported under publish",
+        PublishTransport::Nostr => (
+            "nostr",
+            "nostr_transport",
+            "Nostr transport profile is selected; readiness is reported under publish",
         ),
-        PublishTransport::RadrootsdProxy => (
-            "radrootsd_proxy",
-            "daemon_proxy_publish",
-            "radrootsd_proxy publish is selected; readiness is reported under publish",
+        PublishTransport::Proxy => (
+            "proxy",
+            "proxy_transport",
+            "proxy transport profile is selected; readiness is reported under publish",
         ),
     };
     WritePlaneProviderView {
@@ -326,10 +326,11 @@ mod tests {
             signer: SignerConfig {
                 backend: SignerBackend::Local,
             },
+            transport: crate::runtime::config::TransportConfig::local_only(),
             publish: PublishConfig {
-                transport: PublishTransport::DirectNostrRelay,
+                transport: PublishTransport::Nostr,
                 source: PublishTransportSource::Defaults,
-                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
+                proxy: crate::runtime::config::ProxyTransportConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -350,6 +351,7 @@ mod tests {
                 enabled: hyf_enabled,
                 executable: PathBuf::from("hyfd"),
             },
+            mesh: crate::runtime::config::MeshConfig::disabled(),
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
             },
@@ -388,23 +390,23 @@ mod tests {
     }
 
     #[test]
-    fn write_plane_provider_tracks_direct_relay_publish() {
+    fn write_plane_provider_tracks_nostr_transport_publish() {
         let config = sample_config(Vec::new(), false);
         let publish = publish_view(
             &config,
             "unconfigured",
-            Some("direct_nostr_relay publish transport requires a configured relay"),
+            Some("Nostr transport profile requires a configured Nostr relay"),
         );
         let view = resolve_write_plane_provider(&config, &publish);
-        assert_eq!(view.provider_runtime_id, "direct_nostr_relay");
-        assert_eq!(view.binding_model, "direct_relay_publish");
+        assert_eq!(view.provider_runtime_id, "nostr");
+        assert_eq!(view.binding_model, "nostr_transport");
         assert_eq!(view.state, "unconfigured");
         assert_eq!(
             view.provenance,
             ProviderProvenance::PublishTransport.as_str()
         );
         assert!(view.target.is_none());
-        assert!(view.detail.contains("configured relay"));
+        assert!(view.detail.contains("configured Nostr relay"));
     }
 
     #[test]

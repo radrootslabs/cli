@@ -3,11 +3,16 @@ use serde_json::Value;
 
 use crate::cli::global::SyncWatchArgs;
 use crate::ops::{
+    MeshPolicyCheckRequest, MeshPolicyCheckResult, MeshScopeGetRequest, MeshScopeGetResult,
+    MeshScopeSetRequest, MeshScopeSetResult, MeshStatusRequest, MeshStatusResult,
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
-    OperationResult, OperationResultData, OperationService, RelayListRequest, RelayListResult,
-    SignerStatusGetRequest, SignerStatusGetResult, SyncPullRequest, SyncPullResult,
-    SyncPushRequest, SyncPushResult, SyncStatusGetRequest, SyncStatusGetResult, SyncWatchRequest,
-    SyncWatchResult,
+    OperationResult, OperationResultData, OperationService, SignerStatusGetRequest,
+    SignerStatusGetResult, SyncPullRequest, SyncPullResult, SyncPushRequest, SyncPushResult,
+    SyncStatusGetRequest, SyncStatusGetResult, SyncWatchRequest, SyncWatchResult,
+    TransportOutboxPushRequest, TransportOutboxPushResult, TransportOutboxStatusRequest,
+    TransportOutboxStatusResult, TransportProfileGetRequest, TransportProfileGetResult,
+    TransportProfileSetRequest, TransportProfileSetResult, TransportStatusRequest,
+    TransportStatusResult,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -35,15 +40,126 @@ impl OperationService<SignerStatusGetRequest> for RuntimeOperationService<'_> {
     }
 }
 
-impl OperationService<RelayListRequest> for RuntimeOperationService<'_> {
-    type Result = RelayListResult;
+impl OperationService<TransportProfileGetRequest> for RuntimeOperationService<'_> {
+    type Result = TransportProfileGetResult;
 
     fn execute(
         &self,
-        _request: OperationRequest<RelayListRequest>,
+        _request: OperationRequest<TransportProfileGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = crate::runtime::network::relay_list(self.config);
-        serialized_operation_result::<RelayListResult, _>(&view)
+        let view = crate::runtime::transport::profile(self.config);
+        serialized_operation_result::<TransportProfileGetResult, _>(&view)
+    }
+}
+
+impl OperationService<TransportProfileSetRequest> for RuntimeOperationService<'_> {
+    type Result = TransportProfileSetResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<TransportProfileSetRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let view = map_runtime(
+            "transport.profile.set",
+            crate::runtime::transport::set_profile(self.config, request.payload.input()),
+        )?;
+        serialized_operation_result::<TransportProfileSetResult, _>(&view)
+    }
+}
+
+impl OperationService<TransportStatusRequest> for RuntimeOperationService<'_> {
+    type Result = TransportStatusResult;
+
+    fn execute(
+        &self,
+        _request: OperationRequest<TransportStatusRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let view = crate::runtime::transport::status(self.config);
+        serialized_operation_result::<TransportStatusResult, _>(&view)
+    }
+}
+
+impl OperationService<TransportOutboxStatusRequest> for RuntimeOperationService<'_> {
+    type Result = TransportOutboxStatusResult;
+
+    fn execute(
+        &self,
+        _request: OperationRequest<TransportOutboxStatusRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let view = crate::runtime::transport::outbox_status(self.config).map_err(|error| {
+            OperationAdapterError::sdk_adapter_failure("transport.outbox.status", error)
+        })?;
+        serialized_operation_result::<TransportOutboxStatusResult, _>(&view)
+    }
+}
+
+impl OperationService<TransportOutboxPushRequest> for RuntimeOperationService<'_> {
+    type Result = TransportOutboxPushResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<TransportOutboxPushRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        if request.context.requires_approval_token() {
+            return Err(OperationAdapterError::approval_required(
+                "transport.outbox.push",
+            ));
+        }
+        let view = crate::runtime::transport::outbox_push(self.config).map_err(|error| {
+            OperationAdapterError::sdk_adapter_failure("transport.outbox.push", error)
+        })?;
+        serialized_operation_result::<TransportOutboxPushResult, _>(&view)
+    }
+}
+
+impl OperationService<MeshScopeGetRequest> for RuntimeOperationService<'_> {
+    type Result = MeshScopeGetResult;
+
+    fn execute(
+        &self,
+        _request: OperationRequest<MeshScopeGetRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let view = crate::runtime::mesh::scope(self.config);
+        serialized_operation_result::<MeshScopeGetResult, _>(&view)
+    }
+}
+
+impl OperationService<MeshScopeSetRequest> for RuntimeOperationService<'_> {
+    type Result = MeshScopeSetResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<MeshScopeSetRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let view = map_runtime(
+            "mesh.scope.set",
+            crate::runtime::mesh::set_scope(self.config, request.payload.input()),
+        )?;
+        serialized_operation_result::<MeshScopeSetResult, _>(&view)
+    }
+}
+
+impl OperationService<MeshStatusRequest> for RuntimeOperationService<'_> {
+    type Result = MeshStatusResult;
+
+    fn execute(
+        &self,
+        _request: OperationRequest<MeshStatusRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let view = crate::runtime::mesh::status(self.config);
+        serialized_operation_result::<MeshStatusResult, _>(&view)
+    }
+}
+
+impl OperationService<MeshPolicyCheckRequest> for RuntimeOperationService<'_> {
+    type Result = MeshPolicyCheckResult;
+
+    fn execute(
+        &self,
+        _request: OperationRequest<MeshPolicyCheckRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let view = crate::runtime::mesh::policy_check(self.config);
+        serialized_operation_result::<MeshPolicyCheckResult, _>(&view)
     }
 }
 
@@ -220,8 +336,8 @@ mod tests {
 
     use super::RuntimeOperationService;
     use crate::ops::{
-        OperationAdapter, OperationContext, OperationRequest, RelayListRequest,
-        SignerStatusGetRequest, SyncStatusGetRequest,
+        OperationAdapter, OperationContext, OperationRequest, SignerStatusGetRequest,
+        SyncStatusGetRequest, TransportProfileGetRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -231,7 +347,7 @@ mod tests {
     };
 
     #[test]
-    fn runtime_service_backs_signer_and_relay_status() {
+    fn runtime_service_backs_signer_and_transport_profile() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.test".into()]);
         let service = OperationAdapter::new(RuntimeOperationService::new(&config));
@@ -249,16 +365,19 @@ mod tests {
         assert_eq!(signer_envelope.operation_id, "signer.status.get");
         assert_eq!(signer_envelope.result["state"], "unconfigured");
 
-        let relay = OperationRequest::new(OperationContext::default(), RelayListRequest::default())
-            .expect("relay list request");
-        let relay_envelope = service
-            .execute(relay)
-            .expect("relay list result")
-            .to_envelope(OperationContext::default().envelope_context("req_relay"))
-            .expect("relay envelope");
-        assert_eq!(relay_envelope.operation_id, "relay.list");
-        assert_eq!(relay_envelope.result["state"], "configured");
-        assert_eq!(relay_envelope.result["count"], 1);
+        let profile = OperationRequest::new(
+            OperationContext::default(),
+            TransportProfileGetRequest::default(),
+        )
+        .expect("transport profile request");
+        let profile_envelope = service
+            .execute(profile)
+            .expect("transport profile result")
+            .to_envelope(OperationContext::default().envelope_context("req_transport"))
+            .expect("transport profile envelope");
+        assert_eq!(profile_envelope.operation_id, "transport.profile.get");
+        assert_eq!(profile_envelope.result["state"], "configured");
+        assert_eq!(profile_envelope.result["profile_id"], "nostr");
     }
 
     #[test]
@@ -353,10 +472,13 @@ mod tests {
             signer: SignerConfig {
                 backend: SignerBackend::Local,
             },
+            transport: crate::runtime::config::TransportConfig::from_nostr_relay_urls(
+                relays.clone(),
+            ),
             publish: PublishConfig {
-                transport: PublishTransport::DirectNostrRelay,
+                transport: PublishTransport::Nostr,
                 source: PublishTransportSource::Defaults,
-                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
+                proxy: crate::runtime::config::ProxyTransportConfig::default(),
             },
             relay: RelayConfig {
                 urls: relays,
@@ -377,6 +499,7 @@ mod tests {
                 enabled: false,
                 executable: PathBuf::from("hyfd"),
             },
+            mesh: crate::runtime::config::MeshConfig::disabled(),
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
             },

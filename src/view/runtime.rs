@@ -617,7 +617,7 @@ pub struct SdkEventStoreStatusView {
     pub store: SdkSqliteStatusView,
     pub total_events: i64,
     pub projection_eligible_events: i64,
-    pub relay_observations: i64,
+    pub transport_observations: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3262,56 +3262,99 @@ impl LocalExportView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RelayListView {
+pub struct TransportProfileView {
     pub state: String,
     pub source: String,
-    pub publish_policy: String,
-    pub count: usize,
+    pub profile_id: String,
+    pub transport_kind: String,
+    pub configured_state: String,
+    pub implementation_state: String,
+    pub usable_for_delivery: bool,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nostr_relays: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    pub relays: Vec<RelayEntryView>,
+    pub reticulum_preview_behavior: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_url: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
 }
 
-impl RelayListView {
-    pub fn disposition(&self) -> CommandDisposition {
-        match self.state.as_str() {
-            "unconfigured" => CommandDisposition::Unconfigured,
-            _ => CommandDisposition::Success,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
-pub struct RelayEntryView {
-    pub url: String,
-    pub read: bool,
-    pub write: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NetStatusView {
+pub struct TransportStatusView {
     pub state: String,
     pub source: String,
-    pub session: String,
-    pub relay_count: usize,
-    pub publish_policy: String,
-    pub signer_mode: String,
-    pub account_resolution: AccountResolutionView,
+    pub transports: Vec<TransportProfileView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransportOutboxStatusView {
+    pub state: String,
+    pub source: String,
+    pub transport_profile: String,
+    pub total_count: i64,
+    pub pending_count: i64,
+    pub retryable_count: i64,
+    pub terminal_count: i64,
+    pub ready_signed_count: i64,
+    pub publishing_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_attempt_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransportOutboxPushView {
+    pub state: String,
+    pub source: String,
+    pub attempted_events: usize,
+    pub published_events: usize,
+    pub retryable_events: usize,
+    pub terminal_events: usize,
+    pub target_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
 }
 
-impl NetStatusView {
-    pub fn disposition(&self) -> CommandDisposition {
-        match self.state.as_str() {
-            "unconfigured" => CommandDisposition::Unconfigured,
-            _ => CommandDisposition::Success,
-        }
-    }
+#[derive(Debug, Clone, Serialize)]
+pub struct MeshScopeView {
+    pub state: String,
+    pub source: String,
+    pub scope: String,
+    pub implementation_state: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MeshStatusView {
+    pub state: String,
+    pub source: String,
+    pub scope: String,
+    pub transport_kind: String,
+    pub configured_state: String,
+    pub implementation_state: String,
+    pub usable_for_delivery: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MeshPolicyCheckView {
+    pub state: String,
+    pub source: String,
+    pub scope: String,
+    pub policy: String,
+    pub transport_kind: String,
+    pub usable_for_delivery: bool,
+    pub decision: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

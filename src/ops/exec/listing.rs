@@ -335,10 +335,10 @@ where
 fn listing_relay_unavailable(view: &ListingMutationView) -> bool {
     matches!(
         view.source.as_str(),
-        "direct Nostr relay publish · local key" | "SDK listing publish · configured signer"
+        "Nostr transport publish · local key" | "SDK listing publish · configured signer"
     ) && (view.reason.as_deref().is_some_and(|reason| {
-        reason.contains("configured relay")
-            || reason.contains("direct relay connection failed")
+        reason.contains("configured Nostr relay")
+            || reason.contains("Nostr transport connection failed")
             || reason.contains("SDK relay publish")
     }) || !view.target_relays.is_empty()
         || !view.connected_relays.is_empty()
@@ -606,10 +606,11 @@ mod tests {
             signer: SignerConfig {
                 backend: SignerBackend::Local,
             },
+            transport: crate::runtime::config::TransportConfig::local_only(),
             publish: PublishConfig {
-                transport: PublishTransport::DirectNostrRelay,
+                transport: PublishTransport::Nostr,
                 source: PublishTransportSource::Defaults,
-                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
+                proxy: crate::runtime::config::ProxyTransportConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -630,6 +631,7 @@ mod tests {
                 enabled: false,
                 executable: PathBuf::from("hyfd"),
             },
+            mesh: crate::runtime::config::MeshConfig::disabled(),
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
             },

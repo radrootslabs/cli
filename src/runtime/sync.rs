@@ -11,19 +11,19 @@ use radroots_events::kinds::{
 use radroots_nostr::prelude::{
     RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_event_from_nostr, radroots_nostr_kind,
 };
-use radroots_relay_transport::{
-    RadrootsRelayFetchFailure, RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError,
-};
 use radroots_replica_db::{ReplicaSql, migrations};
 use radroots_replica_sync::{
     RadrootsReplicaEventsError, RadrootsReplicaIngestOutcome, radroots_replica_ingest_event,
     radroots_replica_sync_status,
 };
 use radroots_sdk::{
-    PushOutboxEventReceipt, PushOutboxReceipt, PushOutboxRelayOutcomeKind, PushOutboxRequest,
-    SyncStatusReceipt, SyncStatusRequest,
+    PushOutboxEventReceipt, PushOutboxReceipt, PushOutboxRequest, PushOutboxTargetOutcomeKind,
+    PushOutboxTargetReceipt, SyncStatusReceipt, SyncStatusRequest,
 };
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
+use radroots_transport_nostr::{
+    RadrootsRelayFetchFailure, RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError,
+};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -32,7 +32,7 @@ use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, fetch_relay_events_via_shared_transport,
-    sdk_relay_url_policy,
+    sdk_nostr_relay_url_policy,
 };
 use crate::view::runtime::{
     RelayFailureView, SyncActionView, SyncFreshnessView, SyncQueueView, SyncRunFreshnessView,
@@ -42,7 +42,8 @@ use crate::view::runtime::{
 const SYNC_SOURCE: &str = "local replica · local first";
 const SDK_SYNC_SOURCE: &str = "SDK canonical event store and outbox";
 const SDK_PUSH_SOURCE: &str = "SDK outbox push";
-const RELAY_PULL_SETUP_ACTION: &str = "radroots --relay wss://relay.example.com sync pull";
+const RELAY_PULL_SETUP_ACTION: &str =
+    "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com";
 const SYNC_PULL_ACTION: &str = "radroots sync pull";
 const SYNC_PUSH_ACTION: &str = "radroots sync push";
 const SYNC_READY_ACTION: &str = "radroots market product search eggs";
@@ -340,7 +341,7 @@ pub fn push(config: &RuntimeConfig) -> Result<SyncActionView, CliSdkAdapterError
     }
 
     let receipt = session.block_on(session.sdk().sync().push_outbox(
-        PushOutboxRequest::new().with_relay_url_policy(sdk_relay_url_policy(config)),
+        PushOutboxRequest::new().with_nostr_relay_url_policy(sdk_nostr_relay_url_policy(config)),
     ))?;
     let status = session.block_on(session.sdk().sync().status(SyncStatusRequest::new()))?;
     Ok(sdk_push_view(config, receipt, status))
@@ -415,7 +416,7 @@ fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncAc
 
 fn sdk_sync_status_view(config: &RuntimeConfig, receipt: SyncStatusReceipt) -> SyncStatusView {
     let actions = sdk_sync_status_actions(&receipt);
-    let relay_count = receipt.relay_targets.configured_count;
+    let relay_count = receipt.transport_profile.configured_nostr_relay_count;
     SyncStatusView {
         state: "ready".to_owned(),
         source: SDK_SYNC_SOURCE.to_owned(),
@@ -449,7 +450,7 @@ fn sdk_push_dry_run_view(config: &RuntimeConfig, status: SyncStatusReceipt) -> S
         state,
         sdk_sync_queue(&status),
         sdk_sync_freshness(&status),
-        status.relay_targets.configured_relays,
+        status.transport_profile.configured_nostr_relays,
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -646,78 +647,81 @@ fn sdk_sync_freshness(receipt: &SyncStatusReceipt) -> SyncFreshnessView {
 }
 
 fn sdk_push_target_relays(receipt: &PushOutboxReceipt, status: &SyncStatusReceipt) -> Vec<String> {
-    let mut relays = Vec::new();
-    for relay in receipt.events.iter().flat_map(|event| event.relays.iter()) {
-        if !relays.contains(&relay.relay_url) {
-            relays.push(relay.relay_url.clone());
+    let mut targets = Vec::new();
+    for target in receipt.events.iter().flat_map(|event| event.targets.iter()) {
+        if !targets.contains(&target.endpoint_uri) {
+            targets.push(target.endpoint_uri.clone());
         }
     }
-    if relays.is_empty() {
-        relays.extend(status.relay_targets.configured_relays.clone());
+    if targets.is_empty() {
+        targets.extend(status.transport_profile.configured_nostr_relays.clone());
     }
-    relays
+    targets
 }
 
 fn sdk_push_connected_relays(receipt: &PushOutboxReceipt) -> Vec<String> {
-    sdk_push_relays_matching(receipt, |_, relay| relay.attempted)
+    sdk_push_targets_matching(receipt, |_, target| target.attempted)
 }
 
 fn sdk_push_acknowledged_relays(receipt: &PushOutboxReceipt) -> Vec<String> {
-    sdk_push_relays_matching(receipt, |_, relay| sdk_relay_accepted(relay.outcome_kind))
+    sdk_push_targets_matching(receipt, |_, target| {
+        sdk_target_accepted(target.outcome_kind)
+    })
 }
 
-fn sdk_push_relays_matching(
+fn sdk_push_targets_matching(
     receipt: &PushOutboxReceipt,
-    predicate: impl Fn(&PushOutboxEventReceipt, &radroots_sdk::PushOutboxRelayReceipt) -> bool,
+    predicate: impl Fn(&PushOutboxEventReceipt, &PushOutboxTargetReceipt) -> bool,
 ) -> Vec<String> {
-    let mut relays = Vec::new();
+    let mut targets = Vec::new();
     for event in &receipt.events {
-        for relay in &event.relays {
-            if predicate(event, relay) && !relays.contains(&relay.relay_url) {
-                relays.push(relay.relay_url.clone());
+        for target in &event.targets {
+            if predicate(event, target) && !targets.contains(&target.endpoint_uri) {
+                targets.push(target.endpoint_uri.clone());
             }
         }
     }
-    relays
+    targets
 }
 
 fn sdk_push_failed_relays(receipt: &PushOutboxReceipt) -> Vec<RelayFailureView> {
     receipt
         .events
         .iter()
-        .flat_map(|event| event.relays.iter())
-        .filter(|relay| !sdk_relay_accepted(relay.outcome_kind))
-        .map(|relay| RelayFailureView {
-            relay: relay.relay_url.clone(),
-            reason: relay
+        .flat_map(|event| event.targets.iter())
+        .filter(|target| !sdk_target_accepted(target.outcome_kind))
+        .map(|target| RelayFailureView {
+            relay: target.endpoint_uri.clone(),
+            reason: target
                 .message
                 .clone()
-                .unwrap_or_else(|| sdk_relay_outcome_kind(relay.outcome_kind).to_owned()),
+                .unwrap_or_else(|| sdk_target_outcome_kind(target.outcome_kind).to_owned()),
         })
         .collect()
 }
 
-fn sdk_relay_accepted(kind: PushOutboxRelayOutcomeKind) -> bool {
+fn sdk_target_accepted(kind: PushOutboxTargetOutcomeKind) -> bool {
     matches!(
         kind,
-        PushOutboxRelayOutcomeKind::Accepted | PushOutboxRelayOutcomeKind::DuplicateAccepted
+        PushOutboxTargetOutcomeKind::Accepted | PushOutboxTargetOutcomeKind::DuplicateAccepted
     )
 }
 
-fn sdk_relay_outcome_kind(kind: PushOutboxRelayOutcomeKind) -> &'static str {
+fn sdk_target_outcome_kind(kind: PushOutboxTargetOutcomeKind) -> &'static str {
     match kind {
-        PushOutboxRelayOutcomeKind::Accepted => "accepted",
-        PushOutboxRelayOutcomeKind::DuplicateAccepted => "duplicate_accepted",
-        PushOutboxRelayOutcomeKind::Blocked => "blocked",
-        PushOutboxRelayOutcomeKind::RateLimited => "rate_limited",
-        PushOutboxRelayOutcomeKind::Invalid => "invalid",
-        PushOutboxRelayOutcomeKind::PowRequired => "pow_required",
-        PushOutboxRelayOutcomeKind::Restricted => "restricted",
-        PushOutboxRelayOutcomeKind::AuthRequired => "auth_required",
-        PushOutboxRelayOutcomeKind::Error => "error",
-        PushOutboxRelayOutcomeKind::Timeout => "timeout",
-        PushOutboxRelayOutcomeKind::ConnectionFailed => "connection_failed",
-        PushOutboxRelayOutcomeKind::Unknown => "unknown",
+        PushOutboxTargetOutcomeKind::Accepted => "accepted",
+        PushOutboxTargetOutcomeKind::DuplicateAccepted => "duplicate_accepted",
+        PushOutboxTargetOutcomeKind::Blocked => "blocked",
+        PushOutboxTargetOutcomeKind::RateLimited => "rate_limited",
+        PushOutboxTargetOutcomeKind::Invalid => "invalid",
+        PushOutboxTargetOutcomeKind::PowRequired => "pow_required",
+        PushOutboxTargetOutcomeKind::Restricted => "restricted",
+        PushOutboxTargetOutcomeKind::AuthRequired => "auth_required",
+        PushOutboxTargetOutcomeKind::Error => "error",
+        PushOutboxTargetOutcomeKind::Timeout => "timeout",
+        PushOutboxTargetOutcomeKind::ConnectionFailed => "connection_failed",
+        PushOutboxTargetOutcomeKind::TargetUriRejected => "target_uri_rejected",
+        PushOutboxTargetOutcomeKind::Unknown => "unknown",
         _ => "unknown",
     }
 }
@@ -1441,16 +1445,16 @@ mod tests {
     use radroots_nostr::prelude::{
         RadrootsNostrEvent, RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_nostr_build_event,
     };
-    use radroots_relay_transport::{
+    use radroots_sdk::{
+        PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
+        PushOutboxTargetOutcomeKind, PushOutboxTargetReceipt, SyncEventStoreStatus,
+        SyncOutboxStatus, SyncStatusReceipt, SyncStatusSource, SyncTransportProfileSummary,
+    };
+    use radroots_secret_vault::RadrootsSecretBackend;
+    use radroots_transport_nostr::{
         RadrootsRelayFetchFailure, RadrootsRelayFetchedEvent, RadrootsRelayFetchedEventsReceipt,
         RadrootsRelayTransportError,
     };
-    use radroots_sdk::{
-        PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
-        PushOutboxRelayOutcomeKind, PushOutboxRelayReceipt, SyncEventStoreStatus, SyncOutboxStatus,
-        SyncRelayTargetSummary, SyncStatusReceipt, SyncStatusSource,
-    };
-    use radroots_secret_vault::RadrootsSecretBackend;
     use tempfile::tempdir;
 
     use super::{
@@ -1503,7 +1507,9 @@ mod tests {
         assert_eq!(view.state, "unconfigured");
         assert_eq!(
             view.actions,
-            vec!["radroots --relay wss://relay.example.com sync pull"]
+            vec![
+                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+            ]
         );
     }
 
@@ -1667,14 +1673,14 @@ mod tests {
                 sdk_push_event(
                     "a",
                     PushOutboxEventState::Published,
-                    PushOutboxRelayOutcomeKind::Accepted,
+                    PushOutboxTargetOutcomeKind::Accepted,
                     "wss://relay-a.example.com",
                     Some("accepted".to_owned()),
                 ),
                 sdk_push_event(
                     "b",
                     PushOutboxEventState::PublishRetryable,
-                    PushOutboxRelayOutcomeKind::AuthRequired,
+                    PushOutboxTargetOutcomeKind::AuthRequired,
                     "wss://relay-b.example.com",
                     Some("auth-required: login".to_owned()),
                 ),
@@ -1750,7 +1756,7 @@ mod tests {
             event_store: SyncEventStoreStatus {
                 total_events,
                 projection_eligible_events: total_events,
-                relay_observations: 0,
+                transport_observations: 0,
                 last_event_seq: (total_events > 0).then_some(total_events),
                 last_event_updated_at_ms: (total_events > 0).then_some(1_700_000_000_000),
             },
@@ -1765,9 +1771,10 @@ mod tests {
                 last_attempt_at_ms,
                 last_error,
             },
-            relay_targets: SyncRelayTargetSummary {
-                configured_count: relays.len(),
-                configured_relays: relays.iter().map(|relay| (*relay).to_owned()).collect(),
+            transport_profile: SyncTransportProfileSummary {
+                transport_profile_id: "nostr".to_owned(),
+                configured_nostr_relay_count: relays.len(),
+                configured_nostr_relays: relays.iter().map(|relay| (*relay).to_owned()).collect(),
             },
         }
     }
@@ -1775,7 +1782,7 @@ mod tests {
     fn sdk_push_event(
         event_id_prefix: &str,
         final_state: PushOutboxEventState,
-        outcome_kind: PushOutboxRelayOutcomeKind,
+        outcome_kind: PushOutboxTargetOutcomeKind,
         relay_url: &str,
         message: Option<String>,
     ) -> PushOutboxEventReceipt {
@@ -1787,33 +1794,34 @@ mod tests {
             attempted_count: 1,
             accepted_count: usize::from(matches!(
                 outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )),
             retryable_count: usize::from(matches!(
                 outcome_kind,
-                PushOutboxRelayOutcomeKind::AuthRequired
-                    | PushOutboxRelayOutcomeKind::Timeout
-                    | PushOutboxRelayOutcomeKind::ConnectionFailed
+                PushOutboxTargetOutcomeKind::AuthRequired
+                    | PushOutboxTargetOutcomeKind::Timeout
+                    | PushOutboxTargetOutcomeKind::ConnectionFailed
             )),
             terminal_count: usize::from(matches!(
                 outcome_kind,
-                PushOutboxRelayOutcomeKind::Blocked
-                    | PushOutboxRelayOutcomeKind::RateLimited
-                    | PushOutboxRelayOutcomeKind::Invalid
-                    | PushOutboxRelayOutcomeKind::PowRequired
-                    | PushOutboxRelayOutcomeKind::Restricted
-                    | PushOutboxRelayOutcomeKind::Error
-                    | PushOutboxRelayOutcomeKind::Unknown
+                PushOutboxTargetOutcomeKind::Blocked
+                    | PushOutboxTargetOutcomeKind::RateLimited
+                    | PushOutboxTargetOutcomeKind::Invalid
+                    | PushOutboxTargetOutcomeKind::PowRequired
+                    | PushOutboxTargetOutcomeKind::Restricted
+                    | PushOutboxTargetOutcomeKind::Error
+                    | PushOutboxTargetOutcomeKind::Unknown
             )),
             quorum: 1,
             quorum_met: matches!(
                 outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             ),
-            relays: vec![PushOutboxRelayReceipt {
-                relay_url: relay_url.to_owned(),
+            targets: vec![PushOutboxTargetReceipt {
+                transport_kind: "nostr".to_owned(),
+                endpoint_uri: relay_url.to_owned(),
                 outcome_kind,
                 attempted: true,
                 message,
@@ -2337,10 +2345,13 @@ mod tests {
             signer: SignerConfig {
                 backend: SignerBackend::Local,
             },
+            transport: crate::runtime::config::TransportConfig::from_nostr_relay_urls(
+                relays.clone(),
+            ),
             publish: PublishConfig {
-                transport: PublishTransport::DirectNostrRelay,
+                transport: PublishTransport::Nostr,
                 source: PublishTransportSource::Defaults,
-                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
+                proxy: crate::runtime::config::ProxyTransportConfig::default(),
             },
             relay: RelayConfig {
                 urls: relays,
@@ -2361,6 +2372,7 @@ mod tests {
                 enabled: false,
                 executable: PathBuf::from("hyfd"),
             },
+            mesh: crate::runtime::config::MeshConfig::disabled(),
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
             },

@@ -197,7 +197,7 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
         let write_plane =
             crate::runtime::provider::resolve_write_plane_provider(self.config, &publish);
         let actions = config_actions(self.config, &account, &publish);
-        let mut result = json!({
+        let result = json!({
             "output": {
                 "format": self.config.output.format.as_str(),
                 "verbosity": self.config.output.verbosity.as_str(),
@@ -225,12 +225,9 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
             "signer": {
                 "mode": self.config.signer.backend.as_str(),
             },
+            "transport": crate::runtime::transport::profile(self.config),
+            "mesh": crate::runtime::mesh::scope(self.config),
             "publish": publish,
-            "relay": {
-                "count": self.config.relay.urls.len(),
-                "urls": self.config.relay.urls,
-                "source": self.config.relay.source.as_str(),
-            },
             "myc": {
                 "executable": self.config.myc.executable.display().to_string(),
                 "status_timeout_ms": self.config.myc.status_timeout_ms,
@@ -257,16 +254,6 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
             },
             "actions": actions,
         });
-        if matches!(
-            self.config.publish.transport,
-            PublishTransport::RadrootsdProxy
-        ) {
-            result["radrootsd_proxy"] = json!({
-                "url": self.config.publish.radrootsd_proxy.url,
-                "token_file_configured": self.config.publish.radrootsd_proxy.token_file.is_some(),
-                "token_secret_id_configured": self.config.publish.radrootsd_proxy.token_secret_id.is_some(),
-            });
-        }
         json_operation_result::<ConfigGetResult>(result)
     }
 }
@@ -816,13 +803,9 @@ fn publish_runtime_view(
     };
 
     match config.publish.transport {
-        PublishTransport::DirectNostrRelay => {
-            let (state, executable, reason) = direct_nostr_relay_publish_readiness(
-                config,
-                relay_ready,
-                signed_write_required,
-                account,
-            );
+        PublishTransport::Nostr => {
+            let (state, executable, reason) =
+                nostr_publish_readiness(config, relay_ready, signed_write_required, account);
             PublishRuntimeView {
                 transport: config.publish.transport.as_str().to_owned(),
                 source,
@@ -833,15 +816,15 @@ fn publish_runtime_view(
                 signed_write_required,
                 relay,
                 provider: PublishProviderRuntimeView {
-                    provider_runtime_id: "direct_nostr_relay".to_owned(),
+                    provider_runtime_id: "nostr".to_owned(),
                     state: state.to_owned(),
                     source: config.relay.source.as_str().to_owned(),
                     reason,
                 },
             }
         }
-        PublishTransport::RadrootsdProxy => {
-            let (state, executable, reason) = radrootsd_publish_readiness(config);
+        PublishTransport::Proxy => {
+            let (state, executable, reason) = proxy_publish_readiness(config);
             PublishRuntimeView {
                 transport: config.publish.transport.as_str().to_owned(),
                 source,
@@ -852,9 +835,9 @@ fn publish_runtime_view(
                 signed_write_required,
                 relay,
                 provider: PublishProviderRuntimeView {
-                    provider_runtime_id: "radrootsd_proxy".to_owned(),
+                    provider_runtime_id: "proxy".to_owned(),
                     state: state.to_owned(),
-                    source: "publish transport · local first".to_owned(),
+                    source: "publish transport · transport profile".to_owned(),
                     reason,
                 },
             }
@@ -862,7 +845,7 @@ fn publish_runtime_view(
     }
 }
 
-fn direct_nostr_relay_publish_readiness(
+fn nostr_publish_readiness(
     config: &RuntimeConfig,
     relay_ready: bool,
     signed_write_required: bool,
@@ -873,7 +856,7 @@ fn direct_nostr_relay_publish_readiness(
             "unconfigured",
             false,
             Some(
-                "direct_nostr_relay publish transport requires at least one configured relay for writes"
+                "Nostr transport profile requires at least one configured Nostr relay for writes"
                     .to_owned(),
             ),
         );
@@ -897,7 +880,7 @@ fn direct_nostr_relay_publish_readiness(
             "unconfigured",
             false,
             Some(
-                "direct_nostr_relay publish transport requires a selected or default write-capable local account for signed writes"
+                "Nostr transport profile requires a selected or default write-capable local account for signed writes"
                     .to_owned(),
             ),
         );
@@ -916,14 +899,15 @@ fn direct_nostr_relay_publish_readiness(
     ("ready", true, None)
 }
 
-fn radrootsd_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
-    if config.publish.radrootsd_proxy.token_file.is_none()
-        && config.publish.radrootsd_proxy.token_secret_id.is_none()
-    {
+fn proxy_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
+    if config.publish.proxy.token_file.is_none() && config.publish.proxy.token_secret_id.is_none() {
         return (
             "unconfigured",
             false,
-            Some("radrootsd_proxy publish transport requires a configured token file or token secret id".to_owned()),
+            Some(
+                "proxy transport profile requires a configured token file or token secret id"
+                    .to_owned(),
+            ),
         );
     }
 
@@ -1089,11 +1073,11 @@ fn publish_recovery_actions(
 
     let mut actions = Vec::new();
     match config.publish.transport {
-        PublishTransport::DirectNostrRelay => {
+        PublishTransport::Nostr => {
             if config.relay.urls.is_empty() {
                 push_unique(
                     &mut actions,
-                    "radroots --relay wss://relay.example.com sync pull",
+                    "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com",
                 );
             }
             if publish.signed_write_required {
@@ -1108,7 +1092,7 @@ fn publish_recovery_actions(
                 }
             }
         }
-        PublishTransport::RadrootsdProxy => {
+        PublishTransport::Proxy => {
             if self::proxy_token_configured(config) {
                 if publish.signed_write_required
                     && matches!(config.signer.backend, SignerBackend::Myc)
@@ -1118,7 +1102,7 @@ fn publish_recovery_actions(
             } else {
                 push_unique(
                     &mut actions,
-                    "configure RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_FILE or RADROOTS_CLI_RADROOTSD_PROXY_TOKEN_SECRET_ID",
+                    "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID",
                 );
             }
         }
@@ -1127,8 +1111,7 @@ fn publish_recovery_actions(
 }
 
 fn proxy_token_configured(config: &RuntimeConfig) -> bool {
-    config.publish.radrootsd_proxy.token_file.is_some()
-        || config.publish.radrootsd_proxy.token_secret_id.is_some()
+    config.publish.proxy.token_file.is_some() || config.publish.proxy.token_secret_id.is_some()
 }
 
 fn push_unique(actions: &mut Vec<String>, action: impl Into<String>) {
@@ -1464,10 +1447,11 @@ mod tests {
             signer: SignerConfig {
                 backend: SignerBackend::Local,
             },
+            transport: crate::runtime::config::TransportConfig::local_only(),
             publish: PublishConfig {
-                transport: PublishTransport::DirectNostrRelay,
+                transport: PublishTransport::Nostr,
                 source: PublishTransportSource::Defaults,
-                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
+                proxy: crate::runtime::config::ProxyTransportConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -1488,6 +1472,7 @@ mod tests {
                 enabled: false,
                 executable: PathBuf::from("hyfd"),
             },
+            mesh: crate::runtime::config::MeshConfig::disabled(),
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
             },

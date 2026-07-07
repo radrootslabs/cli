@@ -1,4 +1,3 @@
-use std::fs;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,18 +14,18 @@ use radroots_nostr_connect::prelude::{
     RADROOTS_NOSTR_CONNECT_RPC_KIND, RadrootsNostrConnectBunkerUri,
     RadrootsNostrConnectClientTarget, RadrootsNostrConnectError, RadrootsNostrConnectUri,
 };
-use radroots_relay_transport::{
+use radroots_sdk::{
+    NostrProfile, NostrRelayUrlPolicy, ProxyProfile, RadrootsClient, RadrootsClientBuilder,
+    RadrootsSdkError, RadrootsSdkLocalKeySigner, RadrootsSdkMycNip46RequestPolicy,
+    RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport, RadrootsSdkNip46TransportFuture,
+    RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
+    ReticulumPreviewBehavior as SdkReticulumPreviewBehavior, ReticulumPreviewProfile, TargetPolicy,
+    TransportProfile,
+};
+use radroots_transport_nostr::{
     RadrootsNostrClientFetchAdapter, RadrootsRelayFetchRequest, RadrootsRelayFetchedEventsReceipt,
     RadrootsRelayTransportError, fetch_relay_events_blocking,
 };
-use radroots_sdk::{
-    RadrootsClient, RadrootsClientBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
-    RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
-    RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
-    SdkPublishTransport, SdkRelayUrlPolicy,
-    adapters::radrootsd::{RadrootsdAuth, RadrootsdProxyConfig as SdkRadrootsdProxyConfig},
-};
-use radroots_secret_vault::{RadrootsSecretVault, RadrootsSecretVaultOsKeyring};
 use tokio::runtime::{Builder as TokioRuntimeBuilder, Runtime};
 use tokio::sync::{Mutex, broadcast};
 use tokio::time::{Instant, timeout};
@@ -35,12 +34,11 @@ use url::Url;
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
 use crate::runtime::config::{
-    CapabilityBindingTargetKind, PublishTransport, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY,
-    SignerBackend,
+    CapabilityBindingTargetKind, ReticulumPreviewBehavior, RuntimeConfig,
+    SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend, TransportProfileKind,
 };
 
 const SDK_STORAGE_DIR_NAME: &str = "sdk";
-const RADROOTSD_PROXY_SECRET_SERVICE: &str = "org.radroots.cli.radrootsd-proxy";
 const CLI_RELAY_FETCH_TIMEOUT_MS: u64 = 10_000;
 pub(crate) const MYC_NIP46_SESSION_SECRET_SERVICE: &str = "org.radroots.cli.myc-nip46-session";
 
@@ -56,9 +54,8 @@ pub enum CliSdkAdapterError {
 pub struct CliSdkConfig {
     pub storage_root: PathBuf,
     pub geonames_cache_root: PathBuf,
-    pub relay_url_policy: SdkRelayUrlPolicy,
-    pub relay_urls: Vec<String>,
-    pub publish_transport: SdkPublishTransport,
+    pub nostr_relay_url_policy: NostrRelayUrlPolicy,
+    pub transport_profile: TransportProfile,
 }
 
 impl CliSdkConfig {
@@ -66,23 +63,18 @@ impl CliSdkConfig {
         Ok(Self {
             storage_root: sdk_storage_root(config),
             geonames_cache_root: config.paths.shared_cache_root.clone(),
-            relay_url_policy: sdk_relay_url_policy(config),
-            relay_urls: config.relay.urls.clone(),
-            publish_transport: sdk_publish_transport(config)?,
+            nostr_relay_url_policy: sdk_nostr_relay_url_policy(config),
+            transport_profile: sdk_transport_profile(config)?,
         })
     }
 
     pub fn builder(&self) -> RadrootsClientBuilder {
-        self.relay_urls.iter().fold(
-            RadrootsClient::builder()
-                .storage(RadrootsSdkStorageConfig::Directory(
-                    self.storage_root.clone(),
-                ))
-                .geonames_cache_root(self.geonames_cache_root.clone())
-                .relay_url_policy(self.relay_url_policy)
-                .publish_transport(self.publish_transport.clone()),
-            |builder, relay_url| builder.relay_url(relay_url.clone()),
-        )
+        RadrootsClient::builder()
+            .storage(RadrootsSdkStorageConfig::Directory(
+                self.storage_root.clone(),
+            ))
+            .geonames_cache_root(self.geonames_cache_root.clone())
+            .transport_profile(self.transport_profile.clone())
     }
 }
 
@@ -606,86 +598,56 @@ pub(crate) fn fetch_relay_events_via_shared_transport(
 }
 
 fn memory_builder(config: &CliSdkConfig) -> RadrootsClientBuilder {
-    config.relay_urls.iter().fold(
-        RadrootsClient::builder()
-            .geonames_cache_root(config.geonames_cache_root.clone())
-            .relay_url_policy(config.relay_url_policy)
-            .publish_transport(config.publish_transport.clone()),
-        |builder, relay_url| builder.relay_url(relay_url.clone()),
-    )
+    RadrootsClient::builder()
+        .geonames_cache_root(config.geonames_cache_root.clone())
+        .transport_profile(config.transport_profile.clone())
 }
 
-pub fn sdk_relay_url_policy(config: &RuntimeConfig) -> SdkRelayUrlPolicy {
+pub fn sdk_nostr_relay_url_policy(config: &RuntimeConfig) -> NostrRelayUrlPolicy {
     if config
-        .relay
-        .urls
+        .transport
+        .nostr_relay_urls
         .iter()
         .any(|relay_url| relay_url.starts_with("ws://"))
     {
-        SdkRelayUrlPolicy::Localhost
+        NostrRelayUrlPolicy::Localhost
     } else {
-        SdkRelayUrlPolicy::Public
+        NostrRelayUrlPolicy::Public
     }
 }
 
-pub fn sdk_relay_target_policy(config: &RuntimeConfig) -> radroots_sdk::SdkRelayTargetPolicy {
-    match config.publish.transport {
-        PublishTransport::DirectNostrRelay => {
-            radroots_sdk::SdkRelayTargetPolicy::UseConfiguredRelays
-        }
-        PublishTransport::RadrootsdProxy => {
-            radroots_sdk::SdkRelayTargetPolicy::use_publish_transport()
-        }
-    }
+pub fn sdk_target_policy(_config: &RuntimeConfig) -> TargetPolicy {
+    TargetPolicy::use_transport_profile()
 }
 
-fn sdk_publish_transport(config: &RuntimeConfig) -> Result<SdkPublishTransport, RuntimeError> {
-    match config.publish.transport {
-        PublishTransport::DirectNostrRelay => Ok(SdkPublishTransport::DirectNostrRelay),
-        PublishTransport::RadrootsdProxy => {
-            let mut proxy_config =
-                SdkRadrootsdProxyConfig::new(config.publish.radrootsd_proxy.url.clone());
-            if let Some(auth) = radrootsd_proxy_auth(config)? {
-                proxy_config = proxy_config.with_auth(auth);
-            }
-            Ok(SdkPublishTransport::RadrootsdProxy(proxy_config))
+fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, RuntimeError> {
+    match config.transport.profile {
+        TransportProfileKind::LocalOnly => Ok(TransportProfile::local_only()),
+        TransportProfileKind::Nostr => {
+            let profile = NostrProfile::new(
+                config.transport.nostr_relay_urls.iter().map(String::as_str),
+                sdk_nostr_relay_url_policy(config),
+            )
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+            Ok(TransportProfile::nostr(profile))
         }
-    }
-}
-
-fn radrootsd_proxy_auth(config: &RuntimeConfig) -> Result<Option<RadrootsdAuth>, RuntimeError> {
-    let proxy = &config.publish.radrootsd_proxy;
-    let token = if let Some(path) = proxy.token_file.as_ref() {
-        fs::read_to_string(path).map_err(|error| {
-            RuntimeError::Config(format!(
-                "failed to read radrootsd proxy token file {}: {error}",
-                path.display()
+        TransportProfileKind::ReticulumPreview => {
+            let behavior = match config.transport.reticulum_preview_behavior {
+                ReticulumPreviewBehavior::RejectDeliveryAttempts => {
+                    SdkReticulumPreviewBehavior::RejectDeliveryAttempts
+                }
+                ReticulumPreviewBehavior::DeferDeliveryPlans => {
+                    SdkReticulumPreviewBehavior::DeferDeliveryPlans
+                }
+            };
+            Ok(TransportProfile::reticulum_preview(
+                ReticulumPreviewProfile::preview_unavailable().with_behavior(behavior),
             ))
-        })?
-    } else if let Some(secret_id) = proxy.token_secret_id.as_ref() {
-        let vault = RadrootsSecretVaultOsKeyring::new(RADROOTSD_PROXY_SECRET_SERVICE);
-        vault
-            .load_secret(secret_id)
-            .map_err(|error| {
-                RuntimeError::Config(format!(
-                    "failed to load radrootsd proxy token secret `{secret_id}`: {error}"
-                ))
-            })?
-            .ok_or_else(|| {
-                RuntimeError::Config(format!(
-                    "radrootsd proxy token secret `{secret_id}` was not found"
-                ))
-            })?
-    } else {
-        return Ok(None);
-    };
-    let token = token.trim();
-    if token.is_empty() {
-        return Err(RuntimeError::Config(
-            "radrootsd proxy bearer token is empty".to_owned(),
-        ));
+        }
+        TransportProfileKind::Proxy => Ok(TransportProfile::proxy(ProxyProfile::new(
+            config.transport.proxy.url.clone(),
+        ))),
     }
-    Ok(Some(RadrootsdAuth::BearerToken(token.to_owned())))
 }
 
 #[cfg(test)]
@@ -783,9 +745,9 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
-            name: "radroots_relay_transport",
-            owner: "cli-shared-relay-read-boundary",
-            reason: "shared fail-closed relay fetch receipts for trade event list, sync pull, and market refresh",
+            name: "radroots_transport_nostr",
+            owner: "cli-nostr-transport-read-boundary",
+            reason: "shared fail-closed Nostr relay fetch receipts for trade event list, sync pull, and market refresh",
             lifecycle: "retain until those read surfaces are fully SDK-owned",
         },
         DirectRrRsDependency {
@@ -881,7 +843,7 @@ mod tests {
         },
     ];
 
-    const DIRECT_RELAY_FETCH_DISALLOWED_TOKENS: &[&str] = &[
+    const NOSTR_RELAY_FETCH_DISALLOWED_TOKENS: &[&str] = &[
         "pub mod direct_relay",
         "use crate::runtime::direct_relay",
         "fetch_events_from_relays",
@@ -1150,9 +1112,15 @@ mod tests {
         let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
 
         assert_eq!(sdk_config.storage_root, config.local.root.join("sdk"));
-        assert_eq!(sdk_config.relay_url_policy, SdkRelayUrlPolicy::Public);
         assert_eq!(
-            sdk_config.relay_urls,
+            sdk_config.nostr_relay_url_policy,
+            NostrRelayUrlPolicy::Public
+        );
+        let TransportProfile::Nostr { profile } = sdk_config.transport_profile else {
+            panic!("expected Nostr transport profile");
+        };
+        assert_eq!(
+            profile.relay_urls(),
             vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
         );
     }
@@ -1162,7 +1130,10 @@ mod tests {
         let root = tempdir().expect("tempdir");
         let config = sample_config(root.path(), vec!["ws://127.0.0.1:8080".to_owned()]);
 
-        assert_eq!(sdk_relay_url_policy(&config), SdkRelayUrlPolicy::Localhost);
+        assert_eq!(
+            sdk_nostr_relay_url_policy(&config),
+            NostrRelayUrlPolicy::Localhost
+        );
     }
 
     #[test]
@@ -1298,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_production_sources_reject_direct_relay_fetch_helpers() {
+    fn cli_production_sources_reject_unowned_relay_fetch_helpers() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = Vec::new();
         collect_rs_files(manifest_dir.join("src").as_path(), &mut files);
@@ -1311,7 +1282,7 @@ mod tests {
                 let relative_path = relative_source_path(manifest_dir, file.as_path());
                 match production_source_without_tests(&relative_path, &source) {
                     Ok(production_source) => {
-                        direct_relay_fetch_findings(&relative_path, production_source.as_str())
+                        nostr_relay_fetch_findings(&relative_path, production_source.as_str())
                     }
                     Err(error) => vec![error],
                 }
@@ -1320,7 +1291,7 @@ mod tests {
 
         assert!(
             findings.is_empty(),
-            "CLI production sources contain direct relay fetch helpers:\n{}",
+            "CLI production sources contain unowned Nostr relay fetch helpers:\n{}",
             findings.join("\n")
         );
     }
@@ -1723,13 +1694,13 @@ mod tests {
             .collect()
     }
 
-    fn direct_relay_fetch_findings(label: &str, source: &str) -> Vec<String> {
-        DIRECT_RELAY_FETCH_DISALLOWED_TOKENS
+    fn nostr_relay_fetch_findings(label: &str, source: &str) -> Vec<String> {
+        NOSTR_RELAY_FETCH_DISALLOWED_TOKENS
             .iter()
             .flat_map(|token| {
                 source.match_indices(token).map(move |(index, _)| {
                     format!(
-                        "{label}:{} uses direct relay fetch token `{token}`",
+                        "{label}:{} uses unowned Nostr relay fetch token `{token}`",
                         line_number(source, index)
                     )
                 })
@@ -2151,10 +2122,13 @@ mod tests {
             signer: SignerConfig {
                 backend: SignerBackend::Local,
             },
+            transport: crate::runtime::config::TransportConfig::from_nostr_relay_urls(
+                relays.clone(),
+            ),
             publish: PublishConfig {
-                transport: PublishTransport::DirectNostrRelay,
+                transport: PublishTransport::Nostr,
                 source: PublishTransportSource::Defaults,
-                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
+                proxy: crate::runtime::config::ProxyTransportConfig::default(),
             },
             relay: RelayConfig {
                 urls: relays,
@@ -2175,6 +2149,7 @@ mod tests {
                 enabled: false,
                 executable: PathBuf::from("hyfd"),
             },
+            mesh: crate::runtime::config::MeshConfig::disabled(),
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".to_owned(),
             },

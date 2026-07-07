@@ -10,8 +10,7 @@ use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
 use radroots_local_events::{
     LocalEventRecord, LocalEventRecordInput, LocalEventsStore, LocalRecordFamily,
-    LocalRecordStatus, PublishOutboxStatus, RelayDeliveryEvidence, SourceRuntime,
-    canonical_relay_set_fingerprint,
+    LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
 };
 use radroots_protected_store::RadrootsProtectedFileSecretVault;
 use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
@@ -24,7 +23,6 @@ use tempfile::TempDir;
 use std::os::unix::fs::PermissionsExt;
 
 static COMMAND_LOCK: Mutex<()> = Mutex::new(());
-pub const ORDERABLE_LISTING_RELAY: &str = "ws://127.0.0.1:9";
 
 pub fn radroots() -> Command {
     Command::cargo_bin("radroots").expect("binary")
@@ -111,6 +109,20 @@ impl RadrootsCliSandbox {
         path
     }
 
+    pub fn write_nostr_transport_profile(&self, relay_urls: &[&str]) -> PathBuf {
+        let relays = relay_urls
+            .iter()
+            .map(|relay| format!("\"{}\"", relay.replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.write_app_config(
+            format!(
+                "[transport]\nprofile = \"nostr\"\n\n[transport.nostr]\nrelay_urls = [{relays}]\n"
+            )
+            .as_str(),
+        )
+    }
+
     pub fn replica_db_path(&self) -> PathBuf {
         self.root
             .path()
@@ -159,6 +171,8 @@ impl RadrootsCliSandbox {
 const _: () = {
     let _ = ndjson_from_stdout as fn(&Output) -> Vec<Value>;
     let _ = RadrootsCliSandbox::write_workspace_config as fn(&RadrootsCliSandbox, &str) -> PathBuf;
+    let _ = RadrootsCliSandbox::write_nostr_transport_profile
+        as fn(&RadrootsCliSandbox, &[&str]) -> PathBuf;
     let _ = RadrootsCliSandbox::replica_db_path as fn(&RadrootsCliSandbox) -> PathBuf;
     let _ =
         RadrootsCliSandbox::local_event_records as fn(&RadrootsCliSandbox) -> Vec<LocalEventRecord>;
@@ -318,6 +332,98 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
     event_id
 }
 
+#[allow(dead_code)]
+pub fn seed_market_refresh_provenance(sandbox: &RadrootsCliSandbox, relay_urls: &[&str]) {
+    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica db");
+    executor
+        .exec(
+            "CREATE TABLE IF NOT EXISTS radroots_cli_sync_run (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope TEXT NOT NULL,
+                relay_set_fingerprint TEXT NOT NULL,
+                target_relays_json TEXT NOT NULL,
+                connected_relays_json TEXT NOT NULL,
+                failed_relays_json TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                completed_at INTEGER,
+                state TEXT NOT NULL,
+                fetched_count INTEGER NOT NULL,
+                ingested_count INTEGER NOT NULL,
+                skipped_count INTEGER NOT NULL,
+                unsupported_count INTEGER NOT NULL,
+                failed_count INTEGER NOT NULL,
+                failure_reason TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_radroots_cli_sync_run_scope_started
+                ON radroots_cli_sync_run(scope, started_at DESC);",
+            "[]",
+        )
+        .expect("create sync run table");
+    let relays = relay_urls
+        .iter()
+        .map(|relay| relay.to_string())
+        .collect::<Vec<_>>();
+    executor
+        .exec(
+            "INSERT INTO radroots_cli_sync_run (
+                scope,
+                relay_set_fingerprint,
+                target_relays_json,
+                connected_relays_json,
+                failed_relays_json,
+                started_at,
+                completed_at,
+                state,
+                fetched_count,
+                ingested_count,
+                skipped_count,
+                unsupported_count,
+                failed_count,
+                failure_reason
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);",
+            json!([
+                "market_refresh",
+                relay_set_fingerprint(&relays),
+                serde_json::to_string(&relays).expect("target relays json"),
+                serde_json::to_string(&relays).expect("connected relays json"),
+                serde_json::to_string(&Vec::<String>::new()).expect("failed relays json"),
+                1_779_000_001_000_i64,
+                1_779_000_001_001_i64,
+                "success",
+                1_i64,
+                1_i64,
+                0_i64,
+                0_i64,
+                0_i64,
+                Value::Null
+            ])
+            .to_string()
+            .as_str(),
+        )
+        .expect("insert market refresh provenance");
+}
+
+#[allow(dead_code)]
+fn relay_set_fingerprint(relays: &[String]) -> String {
+    let mut normalized = relays
+        .iter()
+        .map(|relay| relay.trim().to_ascii_lowercase())
+        .filter(|relay| !relay.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    let mut hash = 0xcbf29ce484222325_u64;
+    for relay in normalized {
+        for byte in relay.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("relayset_{hash:016x}")
+}
+
 fn seed_orderable_listing_signed_event(
     sandbox: &RadrootsCliSandbox,
     event: &RadrootsNostrEvent,
@@ -329,13 +435,6 @@ fn seed_orderable_listing_signed_event(
     let executor = SqliteExecutor::open(database_path).expect("open local events");
     let store = LocalEventsStore::new(executor);
     store.migrate_up().expect("migrate local events");
-    let delivery = RelayDeliveryEvidence::acknowledged(
-        [ORDERABLE_LISTING_RELAY],
-        [ORDERABLE_LISTING_RELAY],
-        [ORDERABLE_LISTING_RELAY],
-        Vec::new(),
-    )
-    .expect("listing relay delivery evidence");
     store
         .append_record(&LocalEventRecordInput {
             record_id: format!("test:signed_listing:{}", event.id),
@@ -358,8 +457,6 @@ fn seed_orderable_listing_signed_event(
             event_sig: Some(event.sig.clone()),
             raw_event_json: Some(json!(event)),
             outbox_status: PublishOutboxStatus::Acknowledged,
-            relay_set_fingerprint: canonical_relay_set_fingerprint([ORDERABLE_LISTING_RELAY]),
-            relay_delivery_json: Some(delivery.to_json_value().expect("delivery json")),
         })
         .expect("append listing signed event record");
 }

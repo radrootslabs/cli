@@ -61,8 +61,6 @@ mod tests {
             "json",
             "--account-id",
             "acct_test",
-            "--relay",
-            "wss://relay.one",
             "--online",
             "--dry-run",
             "--idempotency-key",
@@ -86,7 +84,6 @@ mod tests {
 
         assert_eq!(context.output_format, OperationOutputFormat::Json);
         assert_eq!(context.account_id.as_deref(), Some("acct_test"));
-        assert_eq!(context.relays, vec!["wss://relay.one".to_owned()]);
         assert_eq!(context.network_mode, OperationNetworkMode::Online);
         assert!(context.dry_run);
         assert_eq!(context.idempotency_key.as_deref(), Some("idem_test"));
@@ -601,7 +598,7 @@ mod tests {
             (
                 OperationAdapterError::unavailable(
                     "listing.publish",
-                    "radrootsd bridge is unavailable".to_owned(),
+                    "proxy provider is unavailable".to_owned(),
                 ),
                 "provider_unavailable",
                 "provider",
@@ -657,7 +654,7 @@ mod tests {
             (
                 OperationAdapterError::runtime_failure(
                     "farm.publish",
-                    RuntimeError::Network("direct relay connection failed".to_owned()),
+                    RuntimeError::Network("Nostr transport connection failed".to_owned()),
                 ),
                 "network_unavailable",
                 "network",

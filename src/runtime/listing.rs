@@ -28,7 +28,7 @@ use radroots_replica_db::ReplicaSql;
 use radroots_sdk::{
     ListingEnqueuePublishRequest, ListingEnqueueReceipt, ListingPreparePublishRequest,
     ListingPublishPlan, PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
-    PushOutboxRelayOutcomeKind, PushOutboxRequest, SdkMutationState,
+    PushOutboxRequest, PushOutboxTargetOutcomeKind, SdkMutationState,
 };
 use radroots_sql_core::SqliteExecutor;
 use radroots_trade::listing::{RadrootsListingDraftDocumentV1, validation::validate_listing_event};
@@ -48,7 +48,7 @@ use crate::runtime::local_events::{
     shared_local_events_db_path,
 };
 use crate::runtime::sdk::{
-    CliSdkAdapterError, CliSdkSession, sdk_relay_target_policy, sdk_relay_url_policy,
+    CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_policy,
     validate_configured_signer_for_actor,
 };
 use crate::runtime::sync::{
@@ -1769,7 +1769,7 @@ pub fn publish_via_sdk(
     let mut request = ListingEnqueuePublishRequest::from_document(
         input.actor,
         input.document,
-        sdk_relay_target_policy(config),
+        sdk_target_policy(config),
     );
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
@@ -1783,7 +1783,7 @@ pub fn publish_via_sdk(
                 session.sdk().sync().push_outbox(
                     PushOutboxRequest::new()
                         .with_limit(1)
-                        .with_relay_url_policy(sdk_relay_url_policy(config)),
+                        .with_nostr_relay_url_policy(sdk_nostr_relay_url_policy(config)),
                 ),
             )?,
         )
@@ -2020,71 +2020,72 @@ fn sdk_publish_actions(
 
 fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
-        .relays
+        .targets
         .iter()
-        .map(|relay| relay.relay_url.clone())
+        .map(|target| target.endpoint_uri.clone())
         .collect()
 }
 
 fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
-        .relays
+        .targets
         .iter()
-        .filter(|relay| relay.attempted)
-        .map(|relay| relay.relay_url.clone())
+        .filter(|target| target.attempted)
+        .map(|target| target.endpoint_uri.clone())
         .collect()
 }
 
 fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
-        .relays
+        .targets
         .iter()
-        .filter(|relay| {
+        .filter(|target| {
             matches!(
-                relay.outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                target.outcome_kind,
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )
         })
-        .map(|relay| relay.relay_url.clone())
+        .map(|target| target.endpoint_uri.clone())
         .collect()
 }
 
 fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureView> {
     event
-        .relays
+        .targets
         .iter()
-        .filter(|relay| {
+        .filter(|target| {
             !matches!(
-                relay.outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                target.outcome_kind,
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )
         })
-        .map(|relay| RelayFailureView {
-            relay: relay.relay_url.clone(),
-            reason: relay
+        .map(|target| RelayFailureView {
+            relay: target.endpoint_uri.clone(),
+            reason: target
                 .message
                 .clone()
-                .unwrap_or_else(|| sdk_relay_outcome_kind(relay.outcome_kind).to_owned()),
+                .unwrap_or_else(|| sdk_target_outcome_kind(target.outcome_kind).to_owned()),
         })
         .collect()
 }
 
-fn sdk_relay_outcome_kind(kind: PushOutboxRelayOutcomeKind) -> &'static str {
+fn sdk_target_outcome_kind(kind: PushOutboxTargetOutcomeKind) -> &'static str {
     match kind {
-        PushOutboxRelayOutcomeKind::Accepted => "accepted",
-        PushOutboxRelayOutcomeKind::DuplicateAccepted => "duplicate_accepted",
-        PushOutboxRelayOutcomeKind::Blocked => "blocked",
-        PushOutboxRelayOutcomeKind::RateLimited => "rate_limited",
-        PushOutboxRelayOutcomeKind::Invalid => "invalid",
-        PushOutboxRelayOutcomeKind::PowRequired => "pow_required",
-        PushOutboxRelayOutcomeKind::Restricted => "restricted",
-        PushOutboxRelayOutcomeKind::AuthRequired => "auth_required",
-        PushOutboxRelayOutcomeKind::Error => "error",
-        PushOutboxRelayOutcomeKind::Timeout => "timeout",
-        PushOutboxRelayOutcomeKind::ConnectionFailed => "connection_failed",
-        PushOutboxRelayOutcomeKind::Unknown => "unknown",
+        PushOutboxTargetOutcomeKind::Accepted => "accepted",
+        PushOutboxTargetOutcomeKind::DuplicateAccepted => "duplicate_accepted",
+        PushOutboxTargetOutcomeKind::Blocked => "blocked",
+        PushOutboxTargetOutcomeKind::RateLimited => "rate_limited",
+        PushOutboxTargetOutcomeKind::Invalid => "invalid",
+        PushOutboxTargetOutcomeKind::PowRequired => "pow_required",
+        PushOutboxTargetOutcomeKind::Restricted => "restricted",
+        PushOutboxTargetOutcomeKind::AuthRequired => "auth_required",
+        PushOutboxTargetOutcomeKind::Error => "error",
+        PushOutboxTargetOutcomeKind::Timeout => "timeout",
+        PushOutboxTargetOutcomeKind::ConnectionFailed => "connection_failed",
+        PushOutboxTargetOutcomeKind::TargetUriRejected => "target_uri_rejected",
+        PushOutboxTargetOutcomeKind::Unknown => "unknown",
         _ => "unknown",
     }
 }
@@ -2185,11 +2186,8 @@ fn mutate_via_sdk_from_canonical(
         canonical.seller_pubkey.as_str(),
         "listing seller",
     )?;
-    let mut request = ListingEnqueuePublishRequest::from_document(
-        actor,
-        document,
-        sdk_relay_target_policy(config),
-    );
+    let mut request =
+        ListingEnqueuePublishRequest::from_document(actor, document, sdk_target_policy(config));
     if let Some(idempotency_key) = args.idempotency_key.as_deref() {
         request = request.try_with_idempotency_key(idempotency_key)?;
     }
@@ -2202,7 +2200,7 @@ fn mutate_via_sdk_from_canonical(
                 session.sdk().sync().push_outbox(
                     PushOutboxRequest::new()
                         .with_limit(1)
-                        .with_relay_url_policy(sdk_relay_url_policy(config)),
+                        .with_nostr_relay_url_policy(sdk_nostr_relay_url_policy(config)),
                 ),
             )?,
         )
@@ -3151,8 +3149,8 @@ mod tests {
     use radroots_events::ids::RadrootsEventId;
     use radroots_events_codec::d_tag::is_d_tag_base64url;
     use radroots_sdk::{
-        PushOutboxEventReceipt, PushOutboxEventState, PushOutboxRelayOutcomeKind,
-        PushOutboxRelayReceipt,
+        PushOutboxEventReceipt, PushOutboxEventState, PushOutboxTargetOutcomeKind,
+        PushOutboxTargetReceipt,
     };
 
     #[test]
@@ -3172,7 +3170,7 @@ mod tests {
     fn sdk_push_receipt_helpers_map_published_and_auth_required_states() {
         let accepted = sdk_push_event(
             PushOutboxEventState::Published,
-            PushOutboxRelayOutcomeKind::Accepted,
+            PushOutboxTargetOutcomeKind::Accepted,
             Some("accepted".to_owned()),
         );
         let args = listing_mutation_args(false);
@@ -3188,7 +3186,7 @@ mod tests {
 
         let auth_required = sdk_push_event(
             PushOutboxEventState::PublishRetryable,
-            PushOutboxRelayOutcomeKind::AuthRequired,
+            PushOutboxTargetOutcomeKind::AuthRequired,
             Some("auth required".to_owned()),
         );
         let failed = sdk_push_failed_relays(&auth_required);
@@ -3349,7 +3347,7 @@ mod tests {
 
     fn sdk_push_event(
         final_state: PushOutboxEventState,
-        outcome_kind: PushOutboxRelayOutcomeKind,
+        outcome_kind: PushOutboxTargetOutcomeKind,
         message: Option<String>,
     ) -> PushOutboxEventReceipt {
         PushOutboxEventReceipt {
@@ -3359,24 +3357,25 @@ mod tests {
             attempted_count: 1,
             accepted_count: usize::from(matches!(
                 outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )),
             retryable_count: usize::from(matches!(
                 outcome_kind,
-                PushOutboxRelayOutcomeKind::AuthRequired
-                    | PushOutboxRelayOutcomeKind::Timeout
-                    | PushOutboxRelayOutcomeKind::ConnectionFailed
+                PushOutboxTargetOutcomeKind::AuthRequired
+                    | PushOutboxTargetOutcomeKind::Timeout
+                    | PushOutboxTargetOutcomeKind::ConnectionFailed
             )),
             terminal_count: 0,
             quorum: 1,
             quorum_met: matches!(
                 outcome_kind,
-                PushOutboxRelayOutcomeKind::Accepted
-                    | PushOutboxRelayOutcomeKind::DuplicateAccepted
+                PushOutboxTargetOutcomeKind::Accepted
+                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
             ),
-            relays: vec![PushOutboxRelayReceipt {
-                relay_url: "ws://127.0.0.1:19000".to_owned(),
+            targets: vec![PushOutboxTargetReceipt {
+                transport_kind: "nostr".to_owned(),
+                endpoint_uri: "ws://127.0.0.1:19000".to_owned(),
                 outcome_kind,
                 attempted: true,
                 message,

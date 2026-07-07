@@ -26,8 +26,6 @@ pub fn runtime_invocation_args_from_target(args: &TargetCliArgs) -> RuntimeInvoc
         account: args.account_id.clone(),
         identity_path: None,
         signer: None,
-        publish_transport: args.publish_transport.map(|mode| mode.as_str().to_owned()),
-        relay: args.relay.clone(),
         myc_executable: None,
         myc_status_timeout_ms: None,
         hyf_enabled: false,
@@ -45,9 +43,10 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
         AccountCommand, AccountSelectionCommand, BasketAdjustmentCommand, BasketCommand,
         BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
         FarmLocationCommand, FarmProfileCommand, ListingAppCommand, ListingCommand, MarketCommand,
-        MarketListingCommand, MarketProductCommand, StoreBackupCommand, StoreCommand,
-        TradeAppCommand, TradeCommand, TradeEventCommand, TradeRevisionCommand, TradeStatusCommand,
-        ValidationCommand, ValidationReceiptCommand,
+        MarketListingCommand, MarketProductCommand, MeshCommand, MeshScopeCommand,
+        StoreBackupCommand, StoreCommand, TradeAppCommand, TradeCommand, TradeEventCommand,
+        TradeRevisionCommand, TradeStatusCommand, TransportCommand, TransportOutboxCommand,
+        TransportProfileCommand, ValidationCommand, ValidationReceiptCommand,
     };
 
     let mut input = OperationData::new();
@@ -323,6 +322,42 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                     insert_string(&mut input, "trade_id", &args.trade_id);
                 }
             },
+        },
+        TargetCommand::Transport(args) => match &args.command {
+            TransportCommand::Profile(profile) => match &profile.command {
+                TransportProfileCommand::Set(args) => {
+                    input.insert(
+                        "kind".to_owned(),
+                        Value::String(args.kind.as_str().to_owned()),
+                    );
+                    insert_string_array(&mut input, "nostr_relays", args.nostr_relay.as_slice());
+                    if let Some(behavior) = args.reticulum_preview_behavior {
+                        input.insert(
+                            "reticulum_preview_behavior".to_owned(),
+                            Value::String(behavior.as_str().to_owned()),
+                        );
+                    }
+                    insert_string(&mut input, "proxy_url", &args.proxy_url);
+                }
+                TransportProfileCommand::Get => {}
+            },
+            TransportCommand::Status => {}
+            TransportCommand::Outbox(outbox) => match outbox.command {
+                TransportOutboxCommand::Status | TransportOutboxCommand::Push => {}
+            },
+        },
+        TargetCommand::Mesh(args) => match &args.command {
+            MeshCommand::Scope(scope) => match &scope.command {
+                MeshScopeCommand::Set(args) => {
+                    input.insert(
+                        "scope".to_owned(),
+                        Value::String(args.scope.as_str().to_owned()),
+                    );
+                }
+                MeshScopeCommand::Get => {}
+            },
+            MeshCommand::Status => {}
+            MeshCommand::Policy(_) => {}
         },
         _ => {}
     }

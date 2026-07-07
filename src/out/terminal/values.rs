@@ -4,8 +4,8 @@ use serde_json::Value;
 
 pub fn transport_label(value: &str) -> String {
     match value {
-        "direct_nostr_relay" => "direct nostr relay",
-        "radrootsd_proxy" => "radrootsd proxy",
+        "nostr" => "nostr",
+        "proxy" => "proxy",
         "local" => "local",
         "preview" => "preview",
         other => other,
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn formats_domain_values() {
-        assert_eq!(transport_label("direct_nostr_relay"), "direct nostr relay");
+        assert_eq!(transport_label("nostr"), "nostr");
         assert_eq!(
             relay_summary(2, 0, "acknowledged"),
             "2 acknowledged · 0 failed"

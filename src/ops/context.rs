@@ -64,7 +64,6 @@ impl Default for OperationInputMode {
 pub struct OperationContext {
     pub output_format: OperationOutputFormat,
     pub account_id: Option<String>,
-    pub relays: Vec<String>,
     pub network_mode: OperationNetworkMode,
     pub dry_run: bool,
     pub idempotency_key: Option<String>,
@@ -84,7 +83,6 @@ impl OperationContext {
                 .map(OperationOutputFormat::from)
                 .unwrap_or_default(),
             account_id: args.account_id.clone(),
-            relays: args.relay.clone(),
             network_mode: if args.offline {
                 OperationNetworkMode::Offline
             } else if args.online {

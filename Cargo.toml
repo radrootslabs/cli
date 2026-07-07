@@ -42,7 +42,9 @@ radroots_protected_store = { path = "../lib/crates/protected_store", features = 
 radroots_replica_db = { path = "../lib/crates/replica_db" }
 radroots_replica_db_schema = { path = "../lib/crates/replica_db_schema" }
 radroots_replica_sync = { path = "../lib/crates/replica_sync" }
-radroots_relay_transport = { path = "../lib/crates/relay_transport", default-features = false, features = ["runtime-tokio"] }
+radroots_transport_nostr = { path = "../lib/crates/transport_nostr", default-features = false, features = [
+  "runtime-tokio",
+] }
 radroots_runtime = { path = "../lib/crates/runtime" }
 radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
 radroots_sdk = { path = "../sdk/crates/sdk", features = ["local-runtime-radrootsd-proxy", "relay-runtime"] }

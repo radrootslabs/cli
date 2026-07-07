@@ -587,8 +587,8 @@ fn sdk_recovery_next_actions(
             RadrootsSdkRecoveryAction::InspectLocalStores => {
                 Some("radroots store status get".to_owned())
             }
-            RadrootsSdkRecoveryAction::ConfigureRelayTargets => {
-                Some("radroots relay list".to_owned())
+            RadrootsSdkRecoveryAction::ConfigureTransportTargets => {
+                Some("radroots transport profile get".to_owned())
             }
             RadrootsSdkRecoveryAction::SelectAuthorizedActor => {
                 Some("radroots account list".to_owned())
@@ -774,15 +774,7 @@ fn classify_runtime_failure(
     }
     if contains_any(
         &lowered,
-        &[
-            "provider",
-            "write-plane",
-            "write plane",
-            "radrootsd",
-            "bridge",
-            "rpc",
-            "daemon",
-        ],
+        &["provider", "write-plane", "write plane", "rpc", "proxy"],
     ) {
         return match availability {
             RuntimeFailureAvailability::Unconfigured => {
@@ -851,8 +843,6 @@ fn looks_like_provider_failure(value: &str) -> bool {
             "provider unconfigured",
             "provider runtime",
             "provider failed",
-            "radrootsd unavailable",
-            "daemon unavailable",
             "proxy provider",
         ],
     )

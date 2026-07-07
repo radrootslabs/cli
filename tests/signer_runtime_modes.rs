@@ -889,7 +889,7 @@ fn myc_mode_allows_read_inspection_commands() {
         &["--format", "json", "workspace", "get"][..],
         &["--format", "json", "config", "get"][..],
         &["--format", "json", "account", "list"][..],
-        &["--format", "json", "relay", "list"][..],
+        &["--format", "json", "transport", "profile", "get"][..],
     ] {
         let (output, value) = sandbox.json_output(args);
 
@@ -920,11 +920,10 @@ fn local_listing_publish_fails_without_local_account_authority() {
         account_id,
     ]);
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
-        "--relay",
-        "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
         "listing",
@@ -963,6 +962,7 @@ fn local_listing_publish_dry_run_validates_local_account_authority() {
         account_id,
     ]);
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
@@ -999,6 +999,7 @@ fn local_listing_update_dry_run_validates_local_account_authority() {
         account_id,
     ]);
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
@@ -1027,6 +1028,7 @@ fn local_listing_update_dry_run_rejects_mismatched_local_account() {
         .as_str()
         .expect("second account id");
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
@@ -1068,9 +1070,12 @@ fn local_listing_publish_fails_without_configured_relay() {
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "listing.publish");
     assert_eq!(value["result"], serde_json::Value::Null);
-    assert_eq!(value["errors"][0]["code"], "empty_target_relays");
-    assert_eq!(value["errors"][0]["detail"]["class"], "configuration");
-    assert_contains(&value["errors"][0]["message"], "sdk empty target relays");
+    assert_eq!(value["errors"][0]["code"], "network_unavailable");
+    assert_eq!(value["errors"][0]["detail"]["class"], "network");
+    assert_contains(
+        &value["errors"][0]["message"],
+        "requires a delivery-capable transport profile",
+    );
     assert_no_removed_command_reference(&value, &["listing", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["listing", "publish"]);
 }
@@ -1082,6 +1087,7 @@ fn local_listing_publish_dry_run_does_not_sign_matching_listing() {
     let listing_file = create_listing_draft(&sandbox, "local-dry-run");
     make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let value = sandbox.json_success(&[
         "--format",
         "json",
@@ -1121,6 +1127,7 @@ fn local_listing_archive_dry_run_validates_local_account_authority() {
         .as_str()
         .expect("second account id");
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
@@ -1153,11 +1160,10 @@ fn local_listing_publish_fails_when_selected_account_does_not_match_seller() {
         .expect("second account id");
     assert_ne!(first_account_id, second_account_id);
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
-        "--relay",
-        "ws://127.0.0.1:9",
         "--account-id",
         second_account_id,
         "--approval-token",
@@ -1203,15 +1209,8 @@ fn local_farm_publish_dry_run_validates_secret_backed_account() {
         "pickup",
     ]);
 
-    let value = sandbox.json_success(&[
-        "--format",
-        "json",
-        "--relay",
-        "ws://127.0.0.1:9",
-        "--dry-run",
-        "farm",
-        "publish",
-    ]);
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
+    let value = sandbox.json_success(&["--format", "json", "--dry-run", "farm", "publish"]);
 
     assert_eq!(value["operation_id"], "farm.publish");
     assert_eq!(value["dry_run"], true);
@@ -1254,7 +1253,7 @@ fn local_farm_publish_dry_run_fails_without_configured_relay() {
     assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "requires at least one configured relay",
+        "requires at least one configured Nostr relay in the active transport profile",
     );
     assert_no_removed_command_reference(&value, &["farm", "publish", "--dry-run"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish", "--dry-run"]);
@@ -1299,7 +1298,7 @@ fn local_farm_publish_fails_without_configured_relay() {
     assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "requires at least one configured relay",
+        "requires a delivery-capable transport profile",
     );
     assert_no_removed_command_reference(&value, &["farm", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish"]);
@@ -1332,11 +1331,10 @@ fn farm_setup_actions_offer_publish_only_when_relay_publish_executable() {
     assert_action_present(&unconfigured, "radroots farm readiness check");
     assert_action_absent(&unconfigured, "radroots farm publish");
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let configured = sandbox.json_success(&[
         "--format",
         "json",
-        "--relay",
-        "ws://127.0.0.1:9",
         "farm",
         "profile",
         "update",
@@ -1367,11 +1365,10 @@ fn farm_setup_actions_withhold_publish_for_watch_only_account() {
         public_identity_file.to_string_lossy().as_ref(),
     ]);
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let created = sandbox.json_success(&[
         "--format",
         "json",
-        "--relay",
-        "ws://127.0.0.1:9",
         "farm",
         "create",
         "--name",
@@ -1394,8 +1391,6 @@ fn farm_setup_actions_withhold_publish_for_watch_only_account() {
     let updated = sandbox.json_success(&[
         "--format",
         "json",
-        "--relay",
-        "ws://127.0.0.1:9",
         "farm",
         "profile",
         "update",
@@ -1433,11 +1428,10 @@ fn local_farm_publish_reports_sdk_push_failure_without_profile_publish() {
     ]);
     let relay_url = "ws://127.0.0.1:9";
 
+    sandbox.write_nostr_transport_profile(&[relay_url]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
-        "--relay",
-        relay_url,
         "--approval-token",
         "approve",
         "--idempotency-key",
@@ -1519,11 +1513,10 @@ fn local_farm_publish_does_not_persist_publication_until_sdk_push_publishes() {
     ]);
     let relay_url = "ws://127.0.0.1:9";
 
+    sandbox.write_nostr_transport_profile(&[relay_url]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
-        "--relay",
-        relay_url,
         "--approval-token",
         "approve",
         "--idempotency-key",
@@ -1784,15 +1777,9 @@ fn farm_rebind_is_explicit_and_publish_defaults_ignore_ambient_selection() {
     assert_next_action_present(&missing_rebind, "radroots account import <path>");
     assert_next_action_present(&missing_rebind, "radroots account create");
 
-    let publish_dry_run = sandbox.json_success(&[
-        "--format",
-        "json",
-        "--relay",
-        "ws://127.0.0.1:9",
-        "--dry-run",
-        "farm",
-        "publish",
-    ]);
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
+    let publish_dry_run =
+        sandbox.json_success(&["--format", "json", "--dry-run", "farm", "publish"]);
     assert_eq!(publish_dry_run["operation_id"], "farm.publish");
     assert_eq!(publish_dry_run["result"]["state"], "dry_run");
     assert_eq!(
@@ -2098,15 +2085,8 @@ fn farm_rebind_allows_watch_only_target_and_attach_secret_recovers_publish() {
         watch_account_id
     );
 
-    let readiness = sandbox.json_success(&[
-        "--format",
-        "json",
-        "--relay",
-        "ws://127.0.0.1:9",
-        "farm",
-        "readiness",
-        "check",
-    ]);
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
+    let readiness = sandbox.json_success(&["--format", "json", "farm", "readiness", "check"]);
     assert_eq!(readiness["operation_id"], "farm.readiness.check");
     assert_eq!(readiness["result"]["publish_state"], "unconfigured");
     assert_eq!(
@@ -2118,15 +2098,8 @@ fn farm_rebind_allows_watch_only_target_and_attach_secret_recovers_publish() {
         format!("radroots account attach-secret {watch_account_id} <path>").as_str(),
     );
 
-    let (publish_output, publish) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "--relay",
-        "ws://127.0.0.1:9",
-        "--dry-run",
-        "farm",
-        "publish",
-    ]);
+    let (publish_output, publish) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "farm", "publish"]);
     assert!(!publish_output.status.success());
     assert_eq!(publish["operation_id"], "farm.publish");
     assert_eq!(publish["errors"][0]["code"], "account_watch_only");
@@ -2141,15 +2114,7 @@ fn farm_rebind_allows_watch_only_target_and_attach_secret_recovers_publish() {
         watch_account_id,
         secret_identity_file.to_string_lossy().as_ref(),
     ]);
-    let recovered = sandbox.json_success(&[
-        "--format",
-        "json",
-        "--relay",
-        "ws://127.0.0.1:9",
-        "--dry-run",
-        "farm",
-        "publish",
-    ]);
+    let recovered = sandbox.json_success(&["--format", "json", "--dry-run", "farm", "publish"]);
     assert_eq!(recovered["operation_id"], "farm.publish");
     assert_eq!(recovered["result"]["state"], "dry_run");
     assert_eq!(recovered["result"]["seller_account_id"], watch_account_id);
@@ -2186,11 +2151,10 @@ fn local_seller_publish_commands_attempt_configured_relay() {
         .expect("farm d tag");
     let relay = "ws://127.0.0.1:9";
 
+    sandbox.write_nostr_transport_profile(&[relay]);
     let (farm_output, farm_value) = sandbox.json_output(&[
         "--format",
         "json",
-        "--relay",
-        relay,
         "--approval-token",
         "approve",
         "farm",
@@ -2227,8 +2191,6 @@ fn local_seller_publish_commands_attempt_configured_relay() {
     let (publish_output, publish_value) = sandbox.json_output(&[
         "--format",
         "json",
-        "--relay",
-        relay,
         "--approval-token",
         "approve",
         "listing",
@@ -2268,8 +2230,6 @@ fn local_seller_publish_commands_attempt_configured_relay() {
     let (archive_output, archive_value) = sandbox.json_output(&[
         "--format",
         "json",
-        "--relay",
-        relay,
         "--approval-token",
         "approve",
         "listing",
@@ -2336,8 +2296,6 @@ fn local_seller_publish_commands_attempt_configured_relay() {
     let (order_output, order_value) = sandbox.json_output(&[
         "--format",
         "json",
-        "--relay",
-        relay,
         "--approval-token",
         "approve",
         "trade",
@@ -2347,15 +2305,19 @@ fn local_seller_publish_commands_attempt_configured_relay() {
     assert!(!order_output.status.success());
     assert_eq!(order_value["operation_id"], "trade.submit");
     assert_eq!(order_value["result"], serde_json::Value::Null);
-    assert_eq!(order_value["errors"][0]["code"], "invalid_relay_url");
-    assert_eq!(order_value["errors"][0]["detail"]["class"], "configuration");
+    assert_eq!(order_value["errors"][0]["code"], "operation_unavailable");
+    assert_eq!(order_value["errors"][0]["detail"]["class"], "operation");
     assert_eq!(
         order_value["errors"][0]["detail"]["operation_id"],
         "trade.submit"
     );
     assert_contains(
         &order_value["errors"][0]["message"],
-        "loopback IPv4 address",
+        "trade draft is not ready for submit",
+    );
+    assert_eq!(
+        order_value["errors"][0]["detail"]["issues"][0]["code"],
+        "listing_provenance_missing"
     );
     assert_no_removed_command_reference(&order_value, &["trade", "submit"]);
     assert_no_daemon_runtime_reference(&order_value, &["trade", "submit"]);
@@ -2366,10 +2328,9 @@ fn local_order_event_list_attempts_configured_shared_relay_transport() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let relay = "ws://127.0.0.1:9";
+    sandbox.write_nostr_transport_profile(&[relay]);
 
-    let (output, value) = sandbox.json_output(&[
-        "--format", "json", "--relay", relay, "trade", "event", "list",
-    ]);
+    let (output, value) = sandbox.json_output(&["--format", "json", "trade", "event", "list"]);
 
     assert!(!output.status.success());
     assert_relay_transport_fetch_failure(&value, "trade.event.list", &["trade", "event", "list"]);
@@ -2415,11 +2376,10 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     );
     assert_no_daemon_runtime_reference(&watch, &watch_args);
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let submit_args = [
         "--format",
         "json",
-        "--publish-transport",
-        "direct_nostr_relay",
         "--dry-run",
         "trade",
         "submit",
@@ -2455,6 +2415,7 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     );
     assert_no_daemon_runtime_reference(&status, &status_args);
 
+    sandbox.write_app_config("[transport]\nprofile = \"local_only\"\n");
     let event_list_no_relay_args = ["--format", "json", "trade", "event", "list"];
     let (event_list_no_relay_output, event_list_no_relay) =
         sandbox.json_output(&event_list_no_relay_args);
@@ -2469,19 +2430,12 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     );
     assert_eq!(
         event_list_no_relay["next_actions"][0]["command"],
-        "radroots --relay wss://relay.example.com trade event list"
+        "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
     );
     assert_no_daemon_runtime_reference(&event_list_no_relay, &event_list_no_relay_args);
 
-    let event_list_no_account_args = [
-        "--format",
-        "json",
-        "--relay",
-        "ws://127.0.0.1:9",
-        "trade",
-        "event",
-        "list",
-    ];
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
+    let event_list_no_account_args = ["--format", "json", "trade", "event", "list"];
     let (event_list_no_account_output, event_list_no_account) =
         sandbox.json_output(&event_list_no_account_args);
     assert!(!event_list_no_account_output.status.success());
@@ -2502,8 +2456,6 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     let accept_args = [
         "--format",
         "json",
-        "--publish-transport",
-        "direct_nostr_relay",
         "--dry-run",
         "trade",
         "accept",
@@ -2520,8 +2472,6 @@ fn local_order_failure_envelopes_are_structured_and_actionable() {
     let decline_args = [
         "--format",
         "json",
-        "--publish-transport",
-        "direct_nostr_relay",
         "--dry-run",
         "trade",
         "decline",
@@ -2573,15 +2523,9 @@ fn watch_only_farm_publish_dry_run_fails_as_account_watch_only() {
         "pickup",
     ]);
 
-    let (output, value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "--relay",
-        "ws://127.0.0.1:9",
-        "--dry-run",
-        "farm",
-        "publish",
-    ]);
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
+    let (output, value) =
+        sandbox.json_output(&["--format", "json", "--dry-run", "farm", "publish"]);
 
     assert!(!output.status.success());
     assert_eq!(value["operation_id"], "farm.publish");
@@ -2608,11 +2552,10 @@ fn watch_only_listing_publish_fails_as_account_watch_only() {
     let listing_file = create_listing_draft(&sandbox, "watch-only-publish");
     make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
-        "--relay",
-        "ws://127.0.0.1:9",
         "--approval-token",
         "approve",
         "listing",
@@ -2649,6 +2592,7 @@ fn watch_only_listing_update_dry_run_fails_as_account_watch_only() {
     let listing_file = create_listing_draft(&sandbox, "watch-only-update");
     make_listing_publishable(&listing_file, "AAAAAAAAAAAAAAAAAAAAAw");
 
+    sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let (output, value) = sandbox.json_output(&[
         "--format",
         "json",
@@ -2683,7 +2627,10 @@ fn myc_listing_publish_does_not_fallback_to_local_account() {
         )
         .as_str(),
     );
-    configure_myc_mode(&sandbox, &myc);
+    sandbox.write_app_config(&format!(
+        "[transport]\nprofile = \"nostr\"\n\n[transport.nostr]\nrelay_urls = [\"ws://127.0.0.1:9\"]\n\n[signer]\nbackend = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
+        toml_string(myc.display().to_string().as_str())
+    ));
 
     let (output, value) = sandbox.json_output(&[
         "--format",

@@ -1662,14 +1662,20 @@ mod tests {
 
         assert_eq!(envelope.errors[0].code, "operation_unavailable");
         assert_eq!(envelope.errors[0].exit_code, 3);
-        assert!(envelope.errors[0].message.contains("configured relay"));
+        assert!(
+            envelope.errors[0]
+                .message
+                .contains("configured Nostr transport profile")
+        );
         assert_eq!(
             envelope.errors[0].detail.as_ref().unwrap()["actions"][0],
-            "radroots --relay wss://relay.example.com trade event list"
+            "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
         );
         assert_eq!(
             envelope.next_actions[0].command.as_deref(),
-            Some("radroots --relay wss://relay.example.com trade event list")
+            Some(
+                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+            )
         );
     }
 
@@ -1806,10 +1812,11 @@ mod tests {
             signer: SignerConfig {
                 backend: SignerBackend::Local,
             },
+            transport: crate::runtime::config::TransportConfig::local_only(),
             publish: PublishConfig {
-                transport: PublishTransport::DirectNostrRelay,
+                transport: PublishTransport::Nostr,
                 source: PublishTransportSource::Defaults,
-                radrootsd_proxy: crate::runtime::config::RadrootsdProxyConfig::default(),
+                proxy: crate::runtime::config::ProxyTransportConfig::default(),
             },
             relay: RelayConfig {
                 urls: Vec::new(),
@@ -1830,6 +1837,7 @@ mod tests {
                 enabled: false,
                 executable: PathBuf::from("hyfd"),
             },
+            mesh: crate::runtime::config::MeshConfig::disabled(),
             rpc: RpcConfig {
                 url: "http://127.0.0.1:7070".into(),
             },

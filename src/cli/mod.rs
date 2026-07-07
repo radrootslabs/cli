@@ -8,11 +8,12 @@ pub mod health;
 pub mod input;
 pub mod listing;
 pub mod market;
-pub mod relay;
+pub mod mesh;
 pub mod signer;
 pub mod store;
 pub mod sync;
 pub mod trade;
+pub mod transport;
 pub mod validation;
 pub mod workspace;
 
@@ -23,11 +24,12 @@ pub use farm::*;
 pub use health::*;
 pub use listing::*;
 pub use market::*;
-pub use relay::*;
+pub use mesh::*;
 pub use signer::*;
 pub use store::*;
 pub use sync::*;
 pub use trade::*;
+pub use transport::*;
 pub use validation::*;
 pub use workspace::*;
 
@@ -40,28 +42,11 @@ pub enum TargetOutputFormat {
     Ndjson,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum TargetPublishTransport {
-    #[value(name = "direct_nostr_relay")]
-    DirectNostrRelay,
-    #[value(name = "radrootsd_proxy")]
-    RadrootsdProxy,
-}
-
-impl TargetPublishTransport {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::DirectNostrRelay => "direct_nostr_relay",
-            Self::RadrootsdProxy => "radrootsd_proxy",
-        }
-    }
-}
-
 #[derive(Debug, Parser, Clone)]
 #[command(
     name = "radroots",
     about = "Operate Radroots local-first trade workflows.",
-    long_about = "Operate Radroots local-first trade workflows.\n\nPublish transports:\n  direct_nostr_relay publishes directly to configured relays with local signer custody.\n  radrootsd_proxy publishes locally signed events through the local daemon proxy.",
+    long_about = "Operate Radroots local-first trade workflows.",
     disable_help_subcommand = true
 )]
 pub struct TargetCliArgs {
@@ -69,15 +54,6 @@ pub struct TargetCliArgs {
     pub format: Option<TargetOutputFormat>,
     #[arg(long = "account-id", global = true)]
     pub account_id: Option<String>,
-    #[arg(long = "relay", global = true)]
-    pub relay: Vec<String>,
-    #[arg(
-        long = "publish-transport",
-        global = true,
-        value_enum,
-        help = "Select direct_nostr_relay direct relay publish or radrootsd_proxy daemon proxy publish"
-    )]
-    pub publish_transport: Option<TargetPublishTransport>,
     #[arg(long = "offline", global = true, action = ArgAction::SetTrue, conflicts_with = "online")]
     pub offline: bool,
     #[arg(long = "online", global = true, action = ArgAction::SetTrue, conflicts_with = "offline")]
@@ -114,8 +90,10 @@ pub enum TargetCommand {
     Account(AccountArgs),
     #[command(about = "Inspect signer readiness for local relay writes.")]
     Signer(SignerArgs),
-    #[command(about = "List configured relay targets for direct relay mode.")]
-    Relay(RelayArgs),
+    #[command(about = "Manage transport profiles and outbox delivery.")]
+    Transport(TransportArgs),
+    #[command(about = "Inspect mesh scope and Reticulum preview policy.")]
+    Mesh(MeshArgs),
     #[command(about = "Initialize and inspect the local replica store.")]
     Store(StoreArgs),
     #[command(about = "Read from relay events into the local replica.")]
@@ -170,8 +148,26 @@ impl TargetCommand {
                     SignerStatusCommand::Get => "signer.status.get",
                 },
             },
-            Self::Relay(args) => match args.command {
-                RelayCommand::List => "relay.list",
+            Self::Transport(args) => match &args.command {
+                TransportCommand::Profile(profile) => match &profile.command {
+                    TransportProfileCommand::Get => "transport.profile.get",
+                    TransportProfileCommand::Set(_) => "transport.profile.set",
+                },
+                TransportCommand::Status => "transport.status",
+                TransportCommand::Outbox(outbox) => match outbox.command {
+                    TransportOutboxCommand::Status => "transport.outbox.status",
+                    TransportOutboxCommand::Push => "transport.outbox.push",
+                },
+            },
+            Self::Mesh(args) => match &args.command {
+                MeshCommand::Scope(scope) => match &scope.command {
+                    MeshScopeCommand::Get => "mesh.scope.get",
+                    MeshScopeCommand::Set(_) => "mesh.scope.set",
+                },
+                MeshCommand::Status => "mesh.status",
+                MeshCommand::Policy(policy) => match policy.command {
+                    MeshPolicyCommand::Check => "mesh.policy.check",
+                },
             },
             Self::Store(args) => match &args.command {
                 StoreCommand::Init => "store.init",
@@ -324,7 +320,8 @@ mod tests {
             "config",
             "account",
             "signer",
-            "relay",
+            "transport",
+            "mesh",
             "store",
             "sync",
             "farm",
@@ -349,10 +346,6 @@ mod tests {
             "ndjson",
             "--account-id",
             "acct_test",
-            "--relay",
-            "wss://relay.one",
-            "--relay",
-            "wss://relay.two",
             "--offline",
             "--dry-run",
             "--idempotency-key",
@@ -370,10 +363,6 @@ mod tests {
 
         assert_eq!(parsed.format, Some(TargetOutputFormat::Ndjson));
         assert_eq!(parsed.account_id.as_deref(), Some("acct_test"));
-        assert_eq!(
-            parsed.relay,
-            vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
-        );
         assert!(parsed.offline);
         assert!(parsed.dry_run);
         assert_eq!(parsed.idempotency_key.as_deref(), Some("idem_test"));
@@ -388,6 +377,20 @@ mod tests {
     fn target_parser_rejects_removed_no_color_flag() {
         let error = TargetCliArgs::try_parse_from(["radroots", "--no-color", "workspace", "get"])
             .expect_err("removed no-color flag should be rejected");
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn target_parser_rejects_removed_relay_flag() {
+        let error = TargetCliArgs::try_parse_from([
+            "radroots",
+            "--relay",
+            "wss://relay.example.com",
+            "workspace",
+            "get",
+        ])
+        .expect_err("removed relay flag should be rejected");
 
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }

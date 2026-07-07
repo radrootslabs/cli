@@ -3630,7 +3630,6 @@ dependencies = [
  "radroots_nostr_connect",
  "radroots_nostr_signer",
  "radroots_protected_store",
- "radroots_relay_transport",
  "radroots_replica_db",
  "radroots_replica_db_schema",
  "radroots_replica_sync",
@@ -3641,6 +3640,7 @@ dependencies = [
  "radroots_sp1_host_trade",
  "radroots_sql_core",
  "radroots_trade",
+ "radroots_transport_nostr",
  "serde",
  "serde_json",
  "tar",
@@ -3668,6 +3668,7 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "radroots_events",
  "radroots_nostr",
+ "radroots_transport",
  "serde",
  "serde_json",
  "sqlx",
@@ -3813,6 +3814,7 @@ dependencies = [
  "hex",
  "radroots_event_store",
  "radroots_events",
+ "radroots_transport",
  "serde",
  "serde_json",
  "sha2",
@@ -3837,23 +3839,6 @@ name = "radroots_publish_proxy_protocol"
 version = "0.1.0-alpha.2"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "radroots_relay_transport"
-version = "0.1.0-alpha.2"
-dependencies = [
- "futures",
- "nostr",
- "radroots_event_store",
- "radroots_events",
- "radroots_nostr",
- "radroots_outbox",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "url",
 ]
 
 [[package]]
@@ -3945,9 +3930,11 @@ dependencies = [
  "radroots_nostr_signer",
  "radroots_outbox",
  "radroots_publish_proxy_protocol",
- "radroots_relay_transport",
  "radroots_runtime_paths",
  "radroots_trade",
+ "radroots_transport",
+ "radroots_transport_nostr",
+ "radroots_transport_reticulum",
  "reqwest",
  "serde",
  "serde_json",
@@ -4017,6 +4004,39 @@ dependencies = [
  "sha2",
  "sqlx",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "radroots_transport"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "serde",
+ "sha2",
+]
+
+[[package]]
+name = "radroots_transport_nostr"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "futures",
+ "nostr",
+ "radroots_event_store",
+ "radroots_events",
+ "radroots_nostr",
+ "radroots_outbox",
+ "radroots_transport",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "radroots_transport_reticulum"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "radroots_transport",
 ]
 
 [[package]]

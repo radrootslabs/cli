@@ -7,7 +7,7 @@ pub mod hyf;
 pub mod listing;
 pub mod local_events;
 pub mod logging;
-pub mod network;
+pub mod mesh;
 pub mod order;
 pub mod paths;
 pub mod provider;
@@ -15,6 +15,7 @@ pub mod sdk;
 pub mod signer;
 pub mod store;
 pub mod sync;
+pub mod transport;
 pub mod validation_receipt;
 
 use std::process::ExitCode;

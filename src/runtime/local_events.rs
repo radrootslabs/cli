@@ -51,8 +51,6 @@ pub fn append_local_work(
         event_sig: None,
         raw_event_json: None,
         outbox_status: PublishOutboxStatus::None,
-        relay_set_fingerprint: None,
-        relay_delivery_json: None,
     };
     let store = open_store(config)?;
     Ok(store.append_record(&input)?)

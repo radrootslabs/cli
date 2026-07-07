@@ -412,7 +412,7 @@ fn sdk_event_store_status_view(
         store: sdk_sqlite_status_view(status.store),
         total_events: status.total_events,
         projection_eligible_events: status.projection_eligible_events,
-        relay_observations: status.relay_observations,
+        transport_observations: status.transport_observations,
         last_event_seq: status.last_event_seq,
         last_event_updated_at_ms: status.last_event_updated_at_ms,
     }
@@ -680,7 +680,7 @@ fn manifest_counts(manifest: &ReplicaDbExportManifestRs) -> LocalReplicaCountsVi
         farms: table_row_count(manifest, "farm"),
         listings: table_row_count(manifest, "trade_product"),
         profiles: table_row_count(manifest, "nostr_profile"),
-        relays: table_row_count(manifest, "direct_nostr_relay"),
+        relays: table_row_count(manifest, "nostr"),
         event_states: table_row_count(manifest, "nostr_event_state"),
     }
 }
