@@ -1454,10 +1454,52 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
     for required in [
         "RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE",
         "if config.transport.profile != TransportProfileKind::ReticulumPreview",
+        "validate_proxy_token_material",
+        "proxy_token_ready(&validation_config)",
+        "crate::runtime::sdk::validate_proxy_bearer_token(config)",
     ] {
         assert!(
             transport_source.contains(required),
             "src/runtime/transport.rs must retain transport status/message witness `{required}`"
+        );
+    }
+
+    let sdk_source = fs::read_to_string(manifest_dir.join("src/runtime/sdk.rs")).expect("read sdk");
+    for required in [
+        "pub(crate) fn validate_proxy_bearer_token",
+        ".with_bearer_token(proxy_bearer_token(config)?)",
+        "proxy transport profile requires a configured token file or token secret id",
+        "contains unsupported control characters",
+    ] {
+        assert!(
+            sdk_source.contains(required),
+            "src/runtime/sdk.rs must retain proxy token materialization witness `{required}`"
+        );
+    }
+
+    let main_source = fs::read_to_string(manifest_dir.join("src/main.rs")).expect("read main");
+    assert!(
+        main_source.contains("runtime::transport::proxy_token_ready(config)"),
+        "src/main.rs must retain routed proxy token readiness validation"
+    );
+
+    let core_source =
+        fs::read_to_string(manifest_dir.join("src/ops/exec/core.rs")).expect("read core");
+    assert!(
+        core_source.contains("crate::runtime::transport::proxy_token_ready(config)"),
+        "src/ops/exec/core.rs must retain config and health proxy token readiness validation"
+    );
+
+    let test_source = fs::read_to_string(file!()).expect("read test source");
+    for required in [
+        "config_get_proxy_reports_redacted_token_material_failures",
+        "transport_profile_set_proxy_rejects_unmaterializable_token_sources",
+        "routed_proxy_operations_validate_token_material_before_sdk_runtime",
+        "config_get_proxy_with_token_secret_id_reports_ready_transport",
+    ] {
+        assert!(
+            test_source.contains(required),
+            "tests/target_cli.rs must retain proxy readiness proof `{required}`"
         );
     }
 }
