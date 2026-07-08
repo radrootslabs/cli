@@ -227,10 +227,23 @@ fn transport_outbox_status_document(envelope: &OutputEnvelope, result: &Value) -
     common::push_count_field(&mut document, "Terminal", result, &["terminal_count"]);
     common::push_count_field(
         &mut document,
+        "Preview unavailable",
+        result,
+        &["preview_unavailable_count"],
+    );
+    common::push_count_field(
+        &mut document,
+        "Deferred",
+        result,
+        &["deferred_until_implemented_count"],
+    );
+    common::push_count_field(
+        &mut document,
         "Ready signed",
         result,
         &["ready_signed_count"],
     );
+    common::push_count_field(&mut document, "Publishing", result, &["publishing_count"]);
     common::push_path_field(&mut document, "Last error", result, &["last_error"]);
     document
 }

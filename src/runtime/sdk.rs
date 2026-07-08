@@ -69,6 +69,15 @@ impl CliSdkConfig {
         })
     }
 
+    pub fn from_runtime_config_for_storage_status(config: &RuntimeConfig) -> Self {
+        Self {
+            storage_root: sdk_storage_root(config),
+            geonames_cache_root: config.paths.shared_cache_root.clone(),
+            nostr_relay_url_policy: sdk_nostr_relay_url_policy(config),
+            transport_profile: TransportProfile::local_only(),
+        }
+    }
+
     pub fn builder(&self) -> RadrootsClientBuilder {
         RadrootsClient::builder()
             .storage(RadrootsSdkStorageConfig::Directory(
@@ -88,6 +97,17 @@ pub struct CliSdkSession {
 impl CliSdkSession {
     pub fn connect(config: &RuntimeConfig) -> Result<Self, CliSdkAdapterError> {
         let sdk_config = CliSdkConfig::from_runtime_config(config)?;
+        let runtime = sdk_runtime()?;
+        let sdk = runtime.block_on(sdk_config.builder().build())?;
+        Ok(Self {
+            runtime,
+            sdk,
+            config: sdk_config,
+        })
+    }
+
+    pub fn connect_storage_status(config: &RuntimeConfig) -> Result<Self, CliSdkAdapterError> {
+        let sdk_config = CliSdkConfig::from_runtime_config_for_storage_status(config);
         let runtime = sdk_runtime()?;
         let sdk = runtime.block_on(sdk_config.builder().build())?;
         Ok(Self {

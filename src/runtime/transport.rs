@@ -136,12 +136,22 @@ pub fn status(config: &RuntimeConfig) -> TransportStatusView {
 pub fn outbox_status(
     config: &RuntimeConfig,
 ) -> Result<TransportOutboxStatusView, CliSdkAdapterError> {
-    let session = CliSdkSession::connect(config)?;
+    let profile = active_profile_view(config);
+    let session = if profile.profile_delivery_usable {
+        CliSdkSession::connect(config)?
+    } else {
+        CliSdkSession::connect_storage_status(config)?
+    };
     let receipt = session.block_on(session.sdk().sync().status(SyncStatusRequest::new()))?;
+    let state = if profile.configured_state == "configured" {
+        "ready".to_owned()
+    } else {
+        profile.configured_state.clone()
+    };
     Ok(TransportOutboxStatusView {
-        state: "ready".to_owned(),
+        state,
         source: "SDK transport outbox".to_owned(),
-        transport_profile: receipt.transport_profile.transport_profile_id,
+        transport_profile: profile.profile_id,
         total_count: receipt.outbox.total_events,
         pending_count: receipt.outbox.pending_events,
         retryable_count: receipt.outbox.retryable_events,

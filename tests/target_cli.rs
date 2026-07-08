@@ -14,10 +14,11 @@ use std::time::{Duration, Instant};
 use nostr::nips::nip44::{self, Version};
 use nostr::{EventBuilder, Keys, Kind, PublicKey, SecretKey, Tag};
 use radroots_events::RadrootsNostrEventPtr;
+use radroots_events::draft::RadrootsFrozenEventDraft;
 use radroots_events::ids::{
     RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId, RadrootsPublicKey,
 };
-use radroots_events::kinds::{KIND_LISTING, KIND_ORDER_REQUEST};
+use radroots_events::kinds::{KIND_LISTING, KIND_ORDER_REQUEST, KIND_POST};
 use radroots_events::order::{RadrootsOrderEconomics, RadrootsOrderItem, RadrootsOrderRequest};
 use radroots_events_codec::order::order_request_event_build;
 use radroots_identity::RadrootsIdentity;
@@ -25,16 +26,26 @@ use radroots_local_events::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecordInput, LocalEventsStore,
     LocalRecordFamily, LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
 };
-use radroots_nostr::prelude::{RadrootsNostrEvent, radroots_nostr_build_event};
+use radroots_nostr::prelude::{
+    RadrootsNostrEvent, RadrootsNostrKeys, radroots_nostr_build_event,
+    radroots_nostr_sign_frozen_draft,
+};
 use radroots_nostr_connect::prelude::{
     RADROOTS_NOSTR_CONNECT_RPC_KIND, RadrootsNostrConnectRequest,
     RadrootsNostrConnectRequestMessage, RadrootsNostrConnectResponse,
+};
+use radroots_outbox::{
+    RadrootsOutbox, RadrootsOutboxDeliveryPlanInput, RadrootsOutboxReticulumPreviewBehavior,
+    RadrootsOutboxSignedOperationInput,
 };
 use radroots_replica_db::{farm, migrations};
 use radroots_replica_db_schema::farm::IFarmFields;
 use radroots_replica_sync::radroots_replica_pending_publish_batch;
 use radroots_sql_core::SqliteExecutor;
-use radroots_transport::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
+use radroots_transport::{
+    RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
+    RadrootsTransportKind, RadrootsTransportSatisfactionPolicy, RadrootsTransportTarget,
+};
 use serde_json::Value;
 use serde_json::json;
 
@@ -84,6 +95,105 @@ fn write_proxy_transport_config(sandbox: &RadrootsCliSandbox, body: &str) -> Pat
     sandbox.write_app_config(
         format!("[transport]\nprofile = \"proxy\"\n\n[transport.proxy]\n{body}").as_str(),
     )
+}
+
+fn sdk_outbox_path(sandbox: &RadrootsCliSandbox) -> PathBuf {
+    sandbox
+        .root()
+        .join("data/apps/cli/replica/sdk/outbox.sqlite")
+}
+
+fn post_outbox_draft(public_key_hex: &str, content: &str) -> RadrootsFrozenEventDraft {
+    RadrootsFrozenEventDraft::new(
+        "radroots.social.post.v1",
+        KIND_POST,
+        1_700_000_000,
+        vec![vec!["t".to_owned(), "soil".to_owned()]],
+        content,
+        public_key_hex,
+    )
+    .expect("post outbox draft")
+}
+
+fn outbox_signer(seed: u8) -> (String, RadrootsNostrKeys) {
+    let identity = identity_secret(seed);
+    let public_key_hex = identity.public_key_hex();
+    (public_key_hex, identity.into_keys())
+}
+
+fn transport_target(kind: RadrootsTransportKind, uri: &str) -> RadrootsTransportTarget {
+    RadrootsTransportTarget::new(kind, uri).expect("transport target")
+}
+
+fn seed_signed_transport_outbox_event(
+    sandbox: &RadrootsCliSandbox,
+    content: &str,
+    transport_profile_id: &str,
+    target: RadrootsTransportTarget,
+    behavior: RadrootsOutboxReticulumPreviewBehavior,
+    claim_for_publish: bool,
+) {
+    let outbox_path = sdk_outbox_path(sandbox);
+    fs::create_dir_all(outbox_path.parent().expect("outbox parent")).expect("outbox parent");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("outbox fixture runtime");
+    runtime.block_on(async {
+        let outbox = RadrootsOutbox::open_file(&outbox_path)
+            .await
+            .expect("open outbox fixture");
+        let (public_key_hex, keys) = outbox_signer(201);
+        let draft = post_outbox_draft(public_key_hex.as_str(), content);
+        let signed_event =
+            radroots_nostr_sign_frozen_draft(&keys, &draft).expect("signed outbox event");
+        let receipt = outbox
+            .enqueue_signed_operation(RadrootsOutboxSignedOperationInput::new(
+                "transport_status_fixture",
+                draft,
+                signed_event,
+                RadrootsOutboxDeliveryPlanInput::new(
+                    transport_profile_id,
+                    1,
+                    RadrootsTransportSatisfactionPolicy::all_accepted(),
+                    vec![target],
+                )
+                .with_reticulum_preview_behavior(behavior),
+                true,
+                1_700_000_000_007,
+                1_700_000_000_000,
+            ))
+            .await
+            .expect("enqueue outbox fixture");
+        if claim_for_publish {
+            outbox
+                .claim_next_ready_signed_event(
+                    "transport_status_fixture",
+                    "claim-publishing",
+                    1_700_000_010_000,
+                    1_700_000_000_100,
+                )
+                .await
+                .expect("claim outbox fixture")
+                .expect("claimed outbox fixture");
+            let event = outbox
+                .get_event(receipt.outbox_event_id)
+                .await
+                .expect("read claimed event")
+                .expect("claimed event");
+            assert_eq!(event.state.as_str(), "publishing");
+        }
+    });
+}
+
+fn assert_terminal_field(stdout: &str, label: &str, expected_value: &str) {
+    assert!(
+        stdout.lines().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with(label) && trimmed.trim_end().ends_with(expected_value)
+        }),
+        "missing terminal field `{label}` with value `{expected_value}` in `{stdout}`"
+    );
 }
 
 struct RelayFetchServer {
@@ -1527,6 +1637,88 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
             .expect("actions json")
             .contains("nostr")
     );
+}
+
+#[test]
+fn transport_outbox_status_human_output_reports_preview_deferred_and_publishing_counts() {
+    let sandbox = RadrootsCliSandbox::new();
+    seed_signed_transport_outbox_event(
+        &sandbox,
+        "preview unavailable",
+        "reticulum_preview",
+        transport_target(
+            RadrootsTransportKind::Reticulum,
+            RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI,
+        ),
+        RadrootsOutboxReticulumPreviewBehavior::RejectDeliveryAttempts,
+        false,
+    );
+    seed_signed_transport_outbox_event(
+        &sandbox,
+        "deferred until implemented",
+        "reticulum_preview",
+        transport_target(
+            RadrootsTransportKind::Reticulum,
+            RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI,
+        ),
+        RadrootsOutboxReticulumPreviewBehavior::DeferDeliveryPlans,
+        false,
+    );
+    seed_signed_transport_outbox_event(
+        &sandbox,
+        "publishing",
+        "nostr",
+        transport_target(RadrootsTransportKind::Nostr, ORDERABLE_LISTING_RELAY),
+        RadrootsOutboxReticulumPreviewBehavior::RejectDeliveryAttempts,
+        true,
+    );
+
+    let output = sandbox
+        .command()
+        .args(["transport", "outbox", "status"])
+        .output()
+        .expect("run transport outbox status");
+    assert!(
+        output.status.success(),
+        "stderr `{}` stdout `{}`",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("terminal stdout");
+
+    assert!(stdout.contains("Transport Outbox"), "{stdout}");
+    assert_terminal_field(&stdout, "Preview unavailable", "1");
+    assert_terminal_field(&stdout, "Deferred", "1");
+    assert_terminal_field(&stdout, "Publishing", "1");
+    assert_terminal_field(&stdout, "Ready signed", "0");
+}
+
+#[test]
+fn transport_outbox_status_read_only_succeeds_for_empty_nostr_profile() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.write_app_config(
+        "[transport]\nprofile = \"nostr\"\n\n[transport.nostr]\nrelay_urls = []\n",
+    );
+
+    let output = sandbox
+        .command()
+        .args(["transport", "outbox", "status"])
+        .output()
+        .expect("run transport outbox status");
+    assert!(
+        output.status.success(),
+        "stderr `{}` stdout `{}`",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("terminal stdout");
+
+    assert_terminal_field(&stdout, "State", "unconfigured");
+    assert_terminal_field(&stdout, "Profile", "nostr");
+    assert_terminal_field(&stdout, "Total", "0");
+    assert_terminal_field(&stdout, "Preview unavailable", "0");
+    assert_terminal_field(&stdout, "Deferred", "0");
+    assert_terminal_field(&stdout, "Publishing", "0");
 }
 
 #[test]

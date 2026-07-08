@@ -3629,6 +3629,7 @@ dependencies = [
  "radroots_nostr_accounts",
  "radroots_nostr_connect",
  "radroots_nostr_signer",
+ "radroots_outbox",
  "radroots_protected_store",
  "radroots_replica_db",
  "radroots_replica_db_schema",
