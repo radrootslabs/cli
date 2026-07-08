@@ -54,8 +54,23 @@ pub fn set_profile(
                     "transport profile `proxy` requires --proxy-url".to_owned(),
                 ));
             };
+            let token_file = string_input(input, "proxy_token_file").map(str::to_owned);
+            let token_secret_id = string_input(input, "proxy_token_secret_id").map(str::to_owned);
+            validate_proxy_token_source(token_file.as_deref(), token_secret_id.as_deref())?;
             let mut proxy = Map::new();
             proxy.insert("url".to_owned(), Value::String(url.to_owned()));
+            if let Some(token_file) = token_file.as_ref() {
+                proxy.insert(
+                    "token_file".to_owned(),
+                    Value::String(token_file.to_owned()),
+                );
+            }
+            if let Some(token_secret_id) = token_secret_id.as_ref() {
+                proxy.insert(
+                    "token_secret_id".to_owned(),
+                    Value::String(token_secret_id.to_owned()),
+                );
+            }
             transport.insert("proxy".to_owned(), Value::Table(proxy));
         }
         other => {
@@ -70,6 +85,8 @@ pub fn set_profile(
         string_array_input(input, "nostr_relays"),
         string_input(input, "reticulum_preview_behavior").map(str::to_owned),
         string_input(input, "proxy_url").map(str::to_owned),
+        string_input(input, "proxy_token_file").map(str::to_owned),
+        string_input(input, "proxy_token_secret_id").map(str::to_owned),
         "configured",
     ))
 }
@@ -81,6 +98,8 @@ pub fn status(config: &RuntimeConfig) -> TransportStatusView {
             "reticulum_preview",
             Vec::new(),
             Some("reject_delivery_attempts".to_owned()),
+            None,
+            None,
             None,
             "preview_unavailable",
         ));
@@ -169,12 +188,20 @@ pub fn outbox_push(config: &RuntimeConfig) -> Result<TransportOutboxPushView, Cl
 
 fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
     match config.transport.profile {
-        TransportProfileKind::LocalOnly => {
-            profile_view_from_parts("local_only", Vec::new(), None, None, "configured")
-        }
+        TransportProfileKind::LocalOnly => profile_view_from_parts(
+            "local_only",
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            "configured",
+        ),
         TransportProfileKind::Nostr => profile_view_from_parts(
             "nostr",
             config.transport.nostr_relay_urls.clone(),
+            None,
+            None,
             None,
             None,
             if config.transport.nostr_relay_urls.is_empty() {
@@ -194,6 +221,8 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
                     .to_owned(),
             ),
             None,
+            None,
+            None,
             "preview_unavailable",
         ),
         TransportProfileKind::Proxy => profile_view_from_parts(
@@ -201,7 +230,18 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
             Vec::new(),
             None,
             Some(config.transport.proxy.url.clone()),
-            "configured",
+            config
+                .transport
+                .proxy
+                .token_file
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            config.transport.proxy.token_secret_id.clone(),
+            if proxy_token_configured(config) {
+                "configured"
+            } else {
+                "unconfigured"
+            },
         ),
     }
 }
@@ -211,6 +251,8 @@ fn profile_view_from_parts(
     nostr_relays: Vec<String>,
     reticulum_preview_behavior: Option<String>,
     proxy_url: Option<String>,
+    proxy_token_file: Option<String>,
+    proxy_token_secret_id: Option<String>,
     configured_state: &str,
 ) -> TransportProfileView {
     let transport_kind = match profile_id {
@@ -231,8 +273,21 @@ fn profile_view_from_parts(
         "nostr" if usable_for_delivery => "Nostr relay transport is configured for delivery",
         "nostr" => "Nostr transport requires configured Nostr relay targets",
         "reticulum_preview" => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
-        "proxy" => "Proxy transport delegates delivery to the configured endpoint",
+        "proxy" if usable_for_delivery => {
+            "Proxy transport delegates delivery to the configured endpoint"
+        }
+        "proxy" => "Proxy transport requires a configured token file or token secret id",
         _ => "Local-only profile does not deliver to network transports",
+    };
+    let proxy_token_source = match (
+        proxy_token_file.as_ref().filter(|value| !value.is_empty()),
+        proxy_token_secret_id
+            .as_ref()
+            .filter(|value| !value.is_empty()),
+    ) {
+        (Some(_), None) => Some("token_file".to_owned()),
+        (None, Some(_)) => Some("token_secret_id".to_owned()),
+        _ => None,
     };
     TransportProfileView {
         state: configured_state.to_owned(),
@@ -246,6 +301,9 @@ fn profile_view_from_parts(
         nostr_relays,
         reticulum_preview_behavior,
         proxy_url,
+        proxy_token_source,
+        proxy_token_file,
+        proxy_token_secret_id,
         actions: profile_actions(profile_id, usable_for_delivery),
     }
 }
@@ -265,8 +323,39 @@ fn profile_actions(profile_id: &str, usable_for_delivery: bool) -> Vec<String> {
                     .to_owned(),
             ]
         }
+        "proxy" => vec![
+            "radroots transport profile set --kind proxy --proxy-url http://127.0.0.1:7070 --proxy-token-file <path>"
+                .to_owned(),
+        ],
         _ => vec!["radroots transport profile get".to_owned()],
     }
+}
+
+fn validate_proxy_token_source(
+    token_file: Option<&str>,
+    token_secret_id: Option<&str>,
+) -> Result<(), RuntimeError> {
+    match (token_file, token_secret_id) {
+        (None, None) => Err(RuntimeError::Config(
+            "transport profile `proxy` requires --proxy-token-file or --proxy-token-secret-id"
+                .to_owned(),
+        )),
+        (Some(file), None) if file.trim().is_empty() => Err(RuntimeError::Config(
+            "transport profile `proxy` requires a non-empty --proxy-token-file".to_owned(),
+        )),
+        (None, Some(secret_id)) if secret_id.trim().is_empty() => Err(RuntimeError::Config(
+            "transport profile `proxy` requires a non-empty --proxy-token-secret-id".to_owned(),
+        )),
+        (Some(_), Some(_)) => Err(RuntimeError::Config(
+            "transport profile `proxy` cannot set both --proxy-token-file and --proxy-token-secret-id"
+                .to_owned(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn proxy_token_configured(config: &RuntimeConfig) -> bool {
+    config.transport.proxy.token_file.is_some() || config.transport.proxy.token_secret_id.is_some()
 }
 
 pub(crate) fn update_app_config_table(

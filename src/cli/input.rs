@@ -338,6 +338,12 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                         );
                     }
                     insert_string(&mut input, "proxy_url", &args.proxy_url);
+                    insert_path(&mut input, "proxy_token_file", &args.proxy_token_file);
+                    insert_string(
+                        &mut input,
+                        "proxy_token_secret_id",
+                        &args.proxy_token_secret_id,
+                    );
                 }
                 TransportProfileCommand::Get => {}
             },

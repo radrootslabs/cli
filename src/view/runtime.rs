@@ -3283,6 +3283,12 @@ pub struct TransportProfileView {
     pub reticulum_preview_behavior: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_token_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_token_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_token_secret_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
 }

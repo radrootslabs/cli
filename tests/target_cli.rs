@@ -1528,10 +1528,15 @@ fn config_get_exposes_proxy_missing_token_state() {
     );
     assert_eq!(value["result"]["write_plane"]["state"], "unconfigured");
     assert_eq!(value["result"]["transport"]["profile_id"], "proxy");
+    assert_eq!(value["result"]["transport"]["state"], "unconfigured");
+    assert_eq!(value["result"]["transport"]["usable_for_delivery"], false);
     assert_eq!(
         value["result"]["transport"]["proxy_url"],
         "http://127.0.0.1:7070"
     );
+    assert!(value["result"]["transport"]["proxy_token_source"].is_null());
+    assert!(value["result"]["transport"]["proxy_token_file"].is_null());
+    assert!(value["result"]["transport"]["proxy_token_secret_id"].is_null());
     assert_eq!(
         value["result"]["actions"][0],
         "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID"
@@ -1562,12 +1567,206 @@ fn config_get_proxy_with_token_file_reports_ready_transport() {
     assert_eq!(value["result"]["publish"]["executable"], true);
     assert_eq!(value["result"]["publish"]["reason"], Value::Null);
     assert_eq!(value["result"]["transport"]["profile_id"], "proxy");
+    assert_eq!(value["result"]["transport"]["state"], "configured");
+    assert_eq!(value["result"]["transport"]["usable_for_delivery"], true);
+    assert_eq!(
+        value["result"]["transport"]["proxy_token_source"],
+        "token_file"
+    );
+    assert_eq!(
+        value["result"]["transport"]["proxy_token_file"],
+        token_file.display().to_string()
+    );
+    assert!(value["result"]["transport"]["proxy_token_secret_id"].is_null());
+    assert!(
+        !serde_json::to_string(&value)
+            .expect("json")
+            .contains("proxy_test_token")
+    );
     assert_eq!(
         value["result"]["actions"]
             .as_array()
             .expect("actions")
             .len(),
         0
+    );
+}
+
+#[test]
+fn transport_profile_set_proxy_persists_token_file_without_printing_token_material() {
+    let sandbox = RadrootsCliSandbox::new();
+    let token_file = proxy_token_file(&sandbox);
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "transport",
+        "profile",
+        "set",
+        "--kind",
+        "proxy",
+        "--proxy-url",
+        "http://127.0.0.1:7070",
+        "--proxy-token-file",
+        token_file.to_string_lossy().as_ref(),
+    ]);
+
+    assert_eq!(value["operation_id"], "transport.profile.set");
+    assert_eq!(value["result"]["profile_id"], "proxy");
+    assert_eq!(value["result"]["state"], "configured");
+    assert_eq!(value["result"]["usable_for_delivery"], true);
+    assert_eq!(value["result"]["proxy_token_source"], "token_file");
+    assert_eq!(
+        value["result"]["proxy_token_file"],
+        token_file.display().to_string()
+    );
+    assert!(value["result"]["proxy_token_secret_id"].is_null());
+    assert!(
+        !serde_json::to_string(&value)
+            .expect("json")
+            .contains("proxy_test_token")
+    );
+
+    let get = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
+    assert_eq!(get["result"]["proxy_token_source"], "token_file");
+    assert_eq!(
+        get["result"]["proxy_token_file"],
+        token_file.display().to_string()
+    );
+    assert!(
+        !serde_json::to_string(&get)
+            .expect("json")
+            .contains("proxy_test_token")
+    );
+}
+
+#[test]
+fn transport_profile_set_proxy_persists_token_secret_id_without_printing_token_material() {
+    let sandbox = RadrootsCliSandbox::new();
+    let token_file = proxy_token_file(&sandbox);
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "transport",
+        "profile",
+        "set",
+        "--kind",
+        "proxy",
+        "--proxy-url",
+        "http://127.0.0.1:7070",
+        "--proxy-token-secret-id",
+        "proxy.publish.token",
+    ]);
+
+    assert_eq!(value["operation_id"], "transport.profile.set");
+    assert_eq!(value["result"]["profile_id"], "proxy");
+    assert_eq!(value["result"]["state"], "configured");
+    assert_eq!(value["result"]["usable_for_delivery"], true);
+    assert_eq!(value["result"]["proxy_token_source"], "token_secret_id");
+    assert!(value["result"]["proxy_token_file"].is_null());
+    assert_eq!(
+        value["result"]["proxy_token_secret_id"],
+        "proxy.publish.token"
+    );
+    assert!(
+        !serde_json::to_string(&value)
+            .expect("json")
+            .contains("proxy_test_token")
+    );
+
+    let get = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
+    assert_eq!(get["result"]["proxy_token_source"], "token_secret_id");
+    assert_eq!(
+        get["result"]["proxy_token_secret_id"],
+        "proxy.publish.token"
+    );
+    assert!(
+        !serde_json::to_string(&get)
+            .expect("json")
+            .contains("proxy_test_token")
+    );
+    assert!(token_file.exists());
+}
+
+#[test]
+fn transport_profile_set_proxy_rejects_missing_and_conflicting_token_sources() {
+    let sandbox = RadrootsCliSandbox::new();
+    let token_file = proxy_token_file(&sandbox);
+
+    let (missing_output, missing_value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "transport",
+        "profile",
+        "set",
+        "--kind",
+        "proxy",
+        "--proxy-url",
+        "http://127.0.0.1:7070",
+    ]);
+    assert!(!missing_output.status.success());
+    assert_contains(
+        &missing_value["errors"][0]["message"],
+        "requires --proxy-token-file or --proxy-token-secret-id",
+    );
+
+    let (conflict_output, conflict_value) = sandbox.json_output(&[
+        "--format",
+        "json",
+        "transport",
+        "profile",
+        "set",
+        "--kind",
+        "proxy",
+        "--proxy-url",
+        "http://127.0.0.1:7070",
+        "--proxy-token-file",
+        token_file.to_string_lossy().as_ref(),
+        "--proxy-token-secret-id",
+        "proxy.publish.token",
+    ]);
+    assert!(!conflict_output.status.success());
+    assert_contains(
+        &conflict_value["errors"][0]["message"],
+        "cannot set both --proxy-token-file and --proxy-token-secret-id",
+    );
+    assert!(
+        !serde_json::to_string(&conflict_value)
+            .expect("json")
+            .contains("proxy_test_token")
+    );
+}
+
+#[test]
+fn config_get_rejects_proxy_transport_config_with_conflicting_token_sources() {
+    let sandbox = RadrootsCliSandbox::new();
+    let token_file = proxy_token_file(&sandbox);
+    sandbox.write_app_config(
+        format!(
+            r#"[transport]
+profile = "proxy"
+
+[transport.proxy]
+token_file = "{}"
+token_secret_id = "proxy.publish.token"
+"#,
+            toml_string(token_file.display().to_string().as_str())
+        )
+        .as_str(),
+    );
+
+    let (output, value) = sandbox.json_output(&["--format", "json", "config", "get"]);
+
+    assert!(!output.status.success());
+    assert_contains(
+        &value["errors"][0]["message"],
+        "cannot set both token_file and token_secret_id",
+    );
+    assert!(
+        !serde_json::to_string(&value)
+            .expect("json")
+            .contains("proxy_test_token")
     );
 }
 

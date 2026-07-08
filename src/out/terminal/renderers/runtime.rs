@@ -108,6 +108,24 @@ fn transport_profile_document(envelope: &OutputEnvelope, result: &Value) -> Term
     );
     common::push_bool_field(&mut document, "Usable", result, &["usable_for_delivery"]);
     common::push_path_field(&mut document, "Message", result, &["message"]);
+    common::push_path_field(
+        &mut document,
+        "Proxy token",
+        result,
+        &["proxy_token_source"],
+    );
+    common::push_path_field(
+        &mut document,
+        "Proxy token file",
+        result,
+        &["proxy_token_file"],
+    );
+    common::push_path_field(
+        &mut document,
+        "Proxy token secret",
+        result,
+        &["proxy_token_secret_id"],
+    );
     if let Some(relays) = common::array(result, &["nostr_relays"]) {
         let rows = relays
             .iter()

@@ -1083,6 +1083,11 @@ fn resolve_transport_proxy_env(
     let token_file =
         env_value(env, env_file, &[ENV_CLI_TRANSPORT_PROXY_TOKEN_FILE]).map(PathBuf::from);
     let token_secret_id = env_value(env, env_file, &[ENV_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID]);
+    validate_proxy_token_source(
+        token_file.as_ref(),
+        token_secret_id.as_deref(),
+        "environment proxy transport",
+    )?;
     Ok(ProxyTransportConfig {
         url: validate_rpc_url(url.as_str())?,
         token_file,
@@ -1097,6 +1102,13 @@ fn resolve_transport_proxy_file(
     let url = proxy
         .and_then(|proxy| proxy.url.clone())
         .unwrap_or_else(|| DEFAULT_RPC_URL.to_owned());
+    let token_file = proxy.and_then(|proxy| proxy.token_file.clone());
+    let token_secret_id = proxy.and_then(|proxy| proxy.token_secret_id.clone());
+    validate_proxy_token_source(
+        token_file.as_ref(),
+        token_secret_id.as_deref(),
+        format!("{source_label}.proxy").as_str(),
+    )?;
     Ok(ProxyTransportConfig {
         url: validate_rpc_url(url.as_str()).map_err(|error| match error {
             RuntimeError::Config(message) => {
@@ -1104,9 +1116,32 @@ fn resolve_transport_proxy_file(
             }
             other => other,
         })?,
-        token_file: proxy.and_then(|proxy| proxy.token_file.clone()),
-        token_secret_id: proxy.and_then(|proxy| proxy.token_secret_id.clone()),
+        token_file,
+        token_secret_id,
     })
+}
+
+fn validate_proxy_token_source(
+    token_file: Option<&PathBuf>,
+    token_secret_id: Option<&str>,
+    source_label: &str,
+) -> Result<(), RuntimeError> {
+    if token_file.is_some_and(|path| path.as_os_str().is_empty()) {
+        return Err(RuntimeError::Config(format!(
+            "{source_label}.token_file must not be empty"
+        )));
+    }
+    if token_secret_id.is_some_and(|secret_id| secret_id.trim().is_empty()) {
+        return Err(RuntimeError::Config(format!(
+            "{source_label}.token_secret_id must not be empty"
+        )));
+    }
+    if token_file.is_some() && token_secret_id.is_some() {
+        return Err(RuntimeError::Config(format!(
+            "{source_label} cannot set both token_file and token_secret_id"
+        )));
+    }
+    Ok(())
 }
 
 fn resolve_rhi_config(

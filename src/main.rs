@@ -526,6 +526,18 @@ fn validate_transport_profile_contract(
             ),
         });
     }
+    if matches!(config.transport.profile, TransportProfileKind::Proxy)
+        && config.transport.proxy.token_file.is_none()
+        && config.transport.proxy.token_secret_id.is_none()
+    {
+        return Err(OperationAdapterError::NetworkUnavailable {
+            operation_id: spec.operation_id.to_owned(),
+            message: format!(
+                "`{}` requires a configured proxy token file or token secret id",
+                spec.cli_path
+            ),
+        });
+    }
     Ok(())
 }
 
@@ -543,7 +555,10 @@ fn is_transport_profile_routed_operation(operation_id: &str) -> bool {
 fn transport_profile_is_usable_for_delivery(config: &RuntimeConfig) -> bool {
     match config.transport.profile {
         TransportProfileKind::Nostr => !config.transport.nostr_relay_urls.is_empty(),
-        TransportProfileKind::Proxy => true,
+        TransportProfileKind::Proxy => {
+            config.transport.proxy.token_file.is_some()
+                || config.transport.proxy.token_secret_id.is_some()
+        }
         TransportProfileKind::LocalOnly | TransportProfileKind::ReticulumPreview => false,
     }
 }

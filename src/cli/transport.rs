@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone, Args)]
@@ -35,6 +37,10 @@ pub struct TransportProfileSetArgs {
     pub reticulum_preview_behavior: Option<ReticulumPreviewBehaviorArg>,
     #[arg(long = "proxy-url")]
     pub proxy_url: Option<String>,
+    #[arg(long = "proxy-token-file", value_name = "PATH")]
+    pub proxy_token_file: Option<PathBuf>,
+    #[arg(long = "proxy-token-secret-id", value_name = "SECRET_ID")]
+    pub proxy_token_secret_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
