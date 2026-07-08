@@ -453,13 +453,13 @@ fn validate_network_contract(
             } = requirement
                 && (!request.context().dry_run || dry_run_requires_network)
                 && requires_pre_runtime_transport_target(spec.operation_id)
-                && !transport_profile_is_usable_for_delivery(config)
+                && let Some(reason) = transport_profile_delivery_unavailable_reason(config)
             {
                 return Err(OperationAdapterError::NetworkUnavailable {
                     operation_id: spec.operation_id.to_owned(),
                     message: format!(
-                        "`{}` requires a delivery-capable transport profile for online execution",
-                        spec.cli_path
+                        "`{}` requires a delivery-capable transport profile for online execution: {reason}",
+                        spec.cli_path,
                     ),
                 });
             }
@@ -527,14 +527,13 @@ fn validate_transport_profile_contract(
         });
     }
     if matches!(config.transport.profile, TransportProfileKind::Proxy)
-        && config.transport.proxy.token_file.is_none()
-        && config.transport.proxy.token_secret_id.is_none()
+        && let Err(error) = runtime::transport::proxy_token_ready(config)
     {
         return Err(OperationAdapterError::NetworkUnavailable {
             operation_id: spec.operation_id.to_owned(),
             message: format!(
-                "`{}` requires a configured proxy token file or token secret id",
-                spec.cli_path
+                "`{}` requires a usable proxy token source: {error}",
+                spec.cli_path,
             ),
         });
     }
@@ -552,14 +551,23 @@ fn is_transport_profile_routed_operation(operation_id: &str) -> bool {
     )
 }
 
-fn transport_profile_is_usable_for_delivery(config: &RuntimeConfig) -> bool {
+fn transport_profile_delivery_unavailable_reason(config: &RuntimeConfig) -> Option<String> {
     match config.transport.profile {
-        TransportProfileKind::Nostr => !config.transport.nostr_relay_urls.is_empty(),
-        TransportProfileKind::Proxy => {
-            config.transport.proxy.token_file.is_some()
-                || config.transport.proxy.token_secret_id.is_some()
+        TransportProfileKind::Nostr => {
+            config.transport.nostr_relay_urls.is_empty().then(|| {
+                "active Nostr transport profile has no configured relay targets".to_owned()
+            })
         }
-        TransportProfileKind::LocalOnly | TransportProfileKind::ReticulumPreview => false,
+        TransportProfileKind::Proxy => match runtime::transport::proxy_token_ready(config) {
+            Ok(()) => None,
+            Err(error) => Some(error.to_string()),
+        },
+        TransportProfileKind::LocalOnly => {
+            Some("active local_only transport profile cannot deliver".to_owned())
+        }
+        TransportProfileKind::ReticulumPreview => {
+            Some("active reticulum_preview transport profile cannot deliver".to_owned())
+        }
     }
 }
 

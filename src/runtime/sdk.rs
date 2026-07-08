@@ -646,16 +646,18 @@ fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, Run
             ))
         }
         TransportProfileKind::Proxy => {
-            let mut profile = ProxyProfile::new(config.transport.proxy.url.clone());
-            if let Some(token) = proxy_bearer_token(config)? {
-                profile = profile.with_bearer_token(token);
-            }
+            let profile = ProxyProfile::new(config.transport.proxy.url.clone())
+                .with_bearer_token(proxy_bearer_token(config)?);
             Ok(TransportProfile::proxy(profile))
         }
     }
 }
 
-fn proxy_bearer_token(config: &RuntimeConfig) -> Result<Option<String>, RuntimeError> {
+pub(crate) fn validate_proxy_bearer_token(config: &RuntimeConfig) -> Result<(), RuntimeError> {
+    proxy_bearer_token(config).map(|_| ())
+}
+
+fn proxy_bearer_token(config: &RuntimeConfig) -> Result<String, RuntimeError> {
     if let Some(path) = config.transport.proxy.token_file.as_ref() {
         let token = fs::read_to_string(path).map_err(|error| {
             RuntimeError::Config(format!(
@@ -666,8 +668,7 @@ fn proxy_bearer_token(config: &RuntimeConfig) -> Result<Option<String>, RuntimeE
         return normalize_proxy_bearer_token(
             token.as_str(),
             format!("proxy token file {}", path.display()).as_str(),
-        )
-        .map(Some);
+        );
     }
 
     if let Some(secret_id) = config.transport.proxy.token_secret_id.as_ref() {
@@ -683,11 +684,12 @@ fn proxy_bearer_token(config: &RuntimeConfig) -> Result<Option<String>, RuntimeE
         return normalize_proxy_bearer_token(
             token.as_str(),
             format!("proxy token secret `{secret_id}`").as_str(),
-        )
-        .map(Some);
+        );
     }
 
-    Ok(None)
+    Err(RuntimeError::Config(
+        "proxy transport profile requires a configured token file or token secret id".to_owned(),
+    ))
 }
 
 fn normalize_proxy_bearer_token(raw: &str, source: &str) -> Result<String, RuntimeError> {
@@ -1220,6 +1222,20 @@ mod tests {
             profile.auth(),
             &ProxyAuth::BearerToken("proxy-secret-token".to_owned())
         );
+    }
+
+    #[test]
+    fn proxy_sdk_profile_requires_materialized_bearer_token() {
+        let root = tempdir().expect("tempdir");
+        let mut config = sample_config(root.path(), Vec::new());
+        config.transport.profile = TransportProfileKind::Proxy;
+        config.transport.proxy.url = "http://127.0.0.1:7070".to_owned();
+
+        assert!(matches!(
+            CliSdkConfig::from_runtime_config(&config),
+            Err(RuntimeError::Config(message))
+                if message.contains("configured token file or token secret id")
+        ));
     }
 
     #[test]

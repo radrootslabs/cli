@@ -935,17 +935,8 @@ fn nostr_publish_readiness(
 }
 
 fn proxy_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
-    if config.transport.proxy.token_file.is_none()
-        && config.transport.proxy.token_secret_id.is_none()
-    {
-        return (
-            "unconfigured",
-            false,
-            Some(
-                "proxy transport profile requires a configured token file or token secret id"
-                    .to_owned(),
-            ),
-        );
+    if let Err(error) = crate::runtime::transport::proxy_token_ready(config) {
+        return ("unconfigured", false, Some(error.to_string()));
     }
 
     if matches!(config.signer.backend, SignerBackend::Myc) {
@@ -1130,7 +1121,7 @@ fn publish_recovery_actions(
             }
         }
         TransportProfileKind::Proxy => {
-            if self::proxy_token_configured(config) {
+            if crate::runtime::transport::proxy_token_ready(config).is_ok() {
                 if publish.signed_write_required
                     && matches!(config.signer.backend, SignerBackend::Myc)
                 {
@@ -1157,10 +1148,6 @@ fn publish_recovery_actions(
         }
     }
     actions
-}
-
-fn proxy_token_configured(config: &RuntimeConfig) -> bool {
-    config.transport.proxy.token_file.is_some() || config.transport.proxy.token_secret_id.is_some()
 }
 
 fn push_unique(actions: &mut Vec<String>, action: impl Into<String>) {

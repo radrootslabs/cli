@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 
 use radroots_sdk::{PushOutboxRequest, SyncStatusRequest};
 use radroots_transport::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
@@ -57,6 +58,12 @@ pub fn set_profile(
             let token_file = string_input(input, "proxy_token_file").map(str::to_owned);
             let token_secret_id = string_input(input, "proxy_token_secret_id").map(str::to_owned);
             validate_proxy_token_source(token_file.as_deref(), token_secret_id.as_deref())?;
+            validate_proxy_token_material(
+                config,
+                url,
+                token_file.as_deref(),
+                token_secret_id.as_deref(),
+            )?;
             let mut proxy = Map::new();
             proxy.insert("url".to_owned(), Value::String(url.to_owned()));
             if let Some(token_file) = token_file.as_ref() {
@@ -225,24 +232,31 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
             None,
             "preview_unavailable",
         ),
-        TransportProfileKind::Proxy => profile_view_from_parts(
-            "proxy",
-            Vec::new(),
-            None,
-            Some(config.transport.proxy.url.clone()),
-            config
-                .transport
-                .proxy
-                .token_file
-                .as_ref()
-                .map(|path| path.display().to_string()),
-            config.transport.proxy.token_secret_id.clone(),
-            if proxy_token_configured(config) {
-                "configured"
-            } else {
-                "unconfigured"
-            },
-        ),
+        TransportProfileKind::Proxy => {
+            let proxy_readiness = proxy_token_ready(config);
+            profile_view_from_parts(
+                "proxy",
+                Vec::new(),
+                None,
+                Some(config.transport.proxy.url.clone()),
+                config
+                    .transport
+                    .proxy
+                    .token_file
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                config.transport.proxy.token_secret_id.clone(),
+                if proxy_readiness.is_ok() {
+                    "configured"
+                } else {
+                    "unconfigured"
+                },
+            )
+            .with_message(proxy_readiness.err().map_or_else(
+                || "Proxy transport delegates delivery to the configured endpoint".to_owned(),
+                |error| error.to_string(),
+            ))
+        }
     }
 }
 
@@ -354,8 +368,33 @@ fn validate_proxy_token_source(
     }
 }
 
-fn proxy_token_configured(config: &RuntimeConfig) -> bool {
-    config.transport.proxy.token_file.is_some() || config.transport.proxy.token_secret_id.is_some()
+pub fn proxy_token_ready(config: &RuntimeConfig) -> Result<(), RuntimeError> {
+    crate::runtime::sdk::validate_proxy_bearer_token(config)
+}
+
+fn validate_proxy_token_material(
+    config: &RuntimeConfig,
+    url: &str,
+    token_file: Option<&str>,
+    token_secret_id: Option<&str>,
+) -> Result<(), RuntimeError> {
+    let mut validation_config = config.clone();
+    validation_config.transport.profile = TransportProfileKind::Proxy;
+    validation_config.transport.proxy.url = url.to_owned();
+    validation_config.transport.proxy.token_file = token_file.map(PathBuf::from);
+    validation_config.transport.proxy.token_secret_id = token_secret_id.map(str::to_owned);
+    proxy_token_ready(&validation_config)
+}
+
+trait TransportProfileViewMessage {
+    fn with_message(self, message: String) -> Self;
+}
+
+impl TransportProfileViewMessage for TransportProfileView {
+    fn with_message(mut self, message: String) -> Self {
+        self.message = message;
+        self
+    }
 }
 
 pub(crate) fn update_app_config_table(
