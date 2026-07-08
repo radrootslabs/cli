@@ -21,6 +21,11 @@ use radroots_sdk::{
     PushOutboxTargetReceipt, SyncStatusReceipt, SyncStatusRequest,
 };
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
+use radroots_transport::{
+    RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
+    RadrootsTransportImplementationState, RadrootsTransportKind, RadrootsTransportReadinessState,
+    RadrootsTransportStatus, RadrootsTransportTarget,
+};
 use radroots_transport_nostr::{
     RadrootsRelayFetchFailure, RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError,
 };
@@ -29,7 +34,7 @@ use serde_json::json;
 
 use crate::cli::global::SyncWatchArgs;
 use crate::runtime::RuntimeError;
-use crate::runtime::config::RuntimeConfig;
+use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, fetch_relay_events_via_shared_transport,
     sdk_nostr_relay_url_policy,
@@ -85,11 +90,19 @@ struct SyncSnapshot {
     local_root: String,
     replica_db: String,
     configured_transport_target_count: usize,
+    configured_transport_targets: Vec<SyncTransportTargetView>,
+    transport_statuses: Vec<SyncTransportStatusView>,
     publish_policy: String,
     freshness: SyncFreshnessView,
     queue: SyncQueueView,
     reason: Option<String>,
     actions: Vec<String>,
+}
+
+struct SyncTransportMetadata {
+    configured_transport_target_count: usize,
+    configured_transport_targets: Vec<SyncTransportTargetView>,
+    transport_statuses: Vec<SyncTransportStatusView>,
 }
 
 #[derive(Debug, Clone)]
@@ -216,7 +229,7 @@ where
     ) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError>,
 {
     let snapshot = inspect_sync(config)?;
-    if snapshot.state == "unconfigured" {
+    if snapshot.state != "ready" {
         return Ok(empty_action_from_snapshot(snapshot, "pull"));
     }
 
@@ -319,8 +332,9 @@ where
         source: INGEST_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "ready".to_owned(),
-        configured_transport_target_count: config.transport.nostr_relay_urls.len(),
-        transport_statuses: Vec::new(),
+        configured_transport_target_count: snapshot.configured_transport_target_count,
+        configured_transport_targets: snapshot.configured_transport_targets,
+        transport_statuses: snapshot.transport_statuses,
         publish_policy: "any".to_owned(),
         freshness,
         queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
@@ -402,7 +416,8 @@ fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncAc
         local_root: snapshot.local_root,
         replica_db: snapshot.replica_db,
         configured_transport_target_count: snapshot.configured_transport_target_count,
-        transport_statuses: Vec::new(),
+        configured_transport_targets: snapshot.configured_transport_targets,
+        transport_statuses: snapshot.transport_statuses,
         publish_policy: snapshot.publish_policy,
         freshness: snapshot.freshness,
         queue: snapshot.queue,
@@ -466,6 +481,7 @@ fn sdk_push_dry_run_view(config: &RuntimeConfig, status: SyncStatusReceipt) -> S
         sdk_sync_queue(&status),
         sdk_sync_freshness(&status),
         status.transport_profile.configured_transport_target_count,
+        sdk_transport_targets(&status),
         sdk_transport_statuses(&status),
         status
             .transport_profile
@@ -509,6 +525,7 @@ fn sdk_push_view(
         sdk_sync_queue(&status),
         sdk_sync_freshness(&status),
         status.transport_profile.configured_transport_target_count,
+        sdk_transport_targets(&status),
         sdk_transport_statuses(&status),
         sdk_push_target_transport_endpoints(&receipt, &status),
         sdk_push_attempted_transport_endpoints(&receipt),
@@ -529,6 +546,7 @@ fn sdk_push_action_view(
     queue: SyncQueueView,
     freshness: SyncFreshnessView,
     configured_transport_target_count: usize,
+    configured_transport_targets: Vec<SyncTransportTargetView>,
     transport_statuses: Vec<SyncTransportStatusView>,
     target_transport_endpoints: Vec<String>,
     attempted_transport_endpoints: Vec<String>,
@@ -548,6 +566,7 @@ fn sdk_push_action_view(
         local_root: config.local.root.display().to_string(),
         replica_db: "derived_projection_not_checked".to_owned(),
         configured_transport_target_count,
+        configured_transport_targets,
         transport_statuses,
         publish_policy: "any".to_owned(),
         freshness,
@@ -806,14 +825,187 @@ fn usize_from_i64(value: i64) -> usize {
     usize::try_from(value.max(0)).unwrap_or(usize::MAX)
 }
 
+fn sync_transport_metadata(config: &RuntimeConfig) -> Result<SyncTransportMetadata, RuntimeError> {
+    let configured_transport_targets = sync_configured_transport_targets(config)?;
+    Ok(SyncTransportMetadata {
+        configured_transport_target_count: configured_transport_targets.len(),
+        configured_transport_targets,
+        transport_statuses: sync_transport_statuses(config),
+    })
+}
+
+fn sync_configured_transport_targets(
+    config: &RuntimeConfig,
+) -> Result<Vec<SyncTransportTargetView>, RuntimeError> {
+    let mut targets = Vec::new();
+    match config.transport.profile {
+        TransportProfileKind::LocalOnly => {}
+        TransportProfileKind::Nostr => {
+            for relay_url in &config.transport.nostr_relay_urls {
+                targets.push(sync_transport_target_view(
+                    RadrootsTransportKind::Nostr,
+                    relay_url,
+                )?);
+            }
+        }
+        TransportProfileKind::ReticulumPreview => {
+            targets.push(sync_transport_target_view(
+                RadrootsTransportKind::Reticulum,
+                RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI,
+            )?);
+        }
+        TransportProfileKind::Hybrid => {
+            for relay_url in &config.transport.nostr_relay_urls {
+                targets.push(sync_transport_target_view(
+                    RadrootsTransportKind::Nostr,
+                    relay_url,
+                )?);
+            }
+            targets.push(sync_transport_target_view(
+                RadrootsTransportKind::Reticulum,
+                RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI,
+            )?);
+        }
+        TransportProfileKind::Proxy => {
+            targets.push(sync_transport_target_view(
+                RadrootsTransportKind::Proxy,
+                config.transport.proxy.url.as_str(),
+            )?);
+        }
+    }
+    Ok(targets)
+}
+
+fn sync_transport_target_view(
+    kind: RadrootsTransportKind,
+    endpoint_uri: &str,
+) -> Result<SyncTransportTargetView, RuntimeError> {
+    let target = RadrootsTransportTarget::new(kind, endpoint_uri)
+        .map_err(|error| RuntimeError::Config(format!("invalid transport target: {error}")))?;
+    Ok(SyncTransportTargetView {
+        transport_kind: target.kind.canonical_label(),
+        endpoint_uri: target.uri.as_str().to_owned(),
+        endpoint_fingerprint: target.fingerprint.as_str().to_owned(),
+    })
+}
+
+fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusView> {
+    let profile_id = config.transport.profile.as_str();
+    match config.transport.profile {
+        TransportProfileKind::LocalOnly => vec![sync_transport_status_view(
+            RadrootsTransportStatus::new(
+                RadrootsTransportKind::Local,
+                RadrootsTransportImplementationState::Available,
+                RadrootsTransportReadinessState::Ready,
+            )
+            .with_profile_id(profile_id),
+        )],
+        TransportProfileKind::Nostr => {
+            vec![sync_transport_status_view(nostr_transport_status(
+                profile_id,
+            ))]
+        }
+        TransportProfileKind::ReticulumPreview => {
+            vec![sync_transport_status_view(
+                reticulum_preview_transport_status(profile_id),
+            )]
+        }
+        TransportProfileKind::Hybrid => vec![
+            sync_transport_status_view(nostr_transport_status(profile_id)),
+            sync_transport_status_view(reticulum_preview_transport_status(profile_id)),
+        ],
+        TransportProfileKind::Proxy => {
+            let auth_configured = config.transport.proxy.token_file.is_some()
+                || config.transport.proxy.token_secret_id.is_some();
+            vec![sync_transport_status_view(
+                RadrootsTransportStatus::new(
+                    RadrootsTransportKind::Proxy,
+                    if auth_configured {
+                        RadrootsTransportImplementationState::Available
+                    } else {
+                        RadrootsTransportImplementationState::Misconfigured
+                    },
+                    if auth_configured {
+                        RadrootsTransportReadinessState::Ready
+                    } else {
+                        RadrootsTransportReadinessState::Misconfigured
+                    },
+                )
+                .with_profile_id(profile_id)
+                .with_endpoint_uri(config.transport.proxy.url.as_str())
+                .with_publish_usable(auth_configured),
+            )]
+        }
+    }
+}
+
+fn nostr_transport_status(profile_id: &str) -> RadrootsTransportStatus {
+    RadrootsTransportStatus::new(
+        RadrootsTransportKind::Nostr,
+        RadrootsTransportImplementationState::Available,
+        RadrootsTransportReadinessState::Ready,
+    )
+    .with_profile_id(profile_id)
+    .with_publish_usable(true)
+    .with_fetch_usable(true)
+}
+
+fn reticulum_preview_transport_status(profile_id: &str) -> RadrootsTransportStatus {
+    RadrootsTransportStatus::new(
+        RadrootsTransportKind::Reticulum,
+        RadrootsTransportImplementationState::PreviewUnavailable,
+        RadrootsTransportReadinessState::PreviewUnavailable,
+    )
+    .with_profile_id(profile_id)
+    .with_endpoint_uri(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI)
+    .with_redacted_message(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE)
+}
+
+fn sync_transport_status_view(status: RadrootsTransportStatus) -> SyncTransportStatusView {
+    SyncTransportStatusView {
+        transport_kind: status.kind.canonical_label(),
+        profile_id: status.profile_id,
+        endpoint_uri: status.endpoint_uri,
+        implementation_state: transport_implementation_state_label(status.implementation_state)
+            .to_owned(),
+        readiness: transport_readiness_state_label(status.readiness).to_owned(),
+        publish_usable: status.publish_usable,
+        fetch_usable: status.fetch_usable,
+        redacted_message: status.redacted_message,
+    }
+}
+
+fn transport_implementation_state_label(
+    state: RadrootsTransportImplementationState,
+) -> &'static str {
+    match state {
+        RadrootsTransportImplementationState::Available => "available",
+        RadrootsTransportImplementationState::Disabled => "disabled",
+        RadrootsTransportImplementationState::Misconfigured => "misconfigured",
+        RadrootsTransportImplementationState::PreviewUnavailable => "preview_unavailable",
+    }
+}
+
+fn transport_readiness_state_label(state: RadrootsTransportReadinessState) -> &'static str {
+    match state {
+        RadrootsTransportReadinessState::Ready => "ready",
+        RadrootsTransportReadinessState::Disabled => "disabled",
+        RadrootsTransportReadinessState::Misconfigured => "misconfigured",
+        RadrootsTransportReadinessState::PreviewUnavailable => "preview_unavailable",
+    }
+}
+
 fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
+    let transport_metadata = sync_transport_metadata(config)?;
     if !config.local.replica_db_path.exists() {
         return Ok(SyncSnapshot {
             state: "unconfigured".to_owned(),
             source: SYNC_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
             replica_db: "missing".to_owned(),
-            configured_transport_target_count: config.transport.nostr_relay_urls.len(),
+            configured_transport_target_count: transport_metadata.configured_transport_target_count,
+            configured_transport_targets: transport_metadata.configured_transport_targets,
+            transport_statuses: transport_metadata.transport_statuses,
             publish_policy: "any".to_owned(),
             freshness: missing_freshness(),
             queue: derived_projection_sync_queue(0, 0),
@@ -827,22 +1019,40 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
     let queue = radroots_replica_sync_status(&executor)?;
     let freshness =
         freshness_for_scope_from_executor(config, &executor, RelayIngestScope::SyncPull)?;
-    let configured_transport_target_count = config.transport.nostr_relay_urls.len();
     let publish_policy = "any".to_owned();
     let mut actions = Vec::new();
 
-    if configured_transport_target_count == 0 {
-        actions.push(RELAY_PULL_SETUP_ACTION.to_owned());
+    if config.transport.nostr_relay_urls.is_empty() {
+        let (state, reason) = if transport_metadata.configured_transport_target_count == 0 {
+            (
+                "unconfigured",
+                "no transport targets are configured for this operator session",
+            )
+        } else {
+            (
+                "unavailable",
+                "active transport profile does not expose Nostr relay fetch targets",
+            )
+        };
+        actions.push(
+            if transport_metadata.configured_transport_target_count == 0 {
+                RELAY_PULL_SETUP_ACTION.to_owned()
+            } else {
+                "radroots transport profile get".to_owned()
+            },
+        );
         return Ok(SyncSnapshot {
-            state: "unconfigured".to_owned(),
+            state: state.to_owned(),
             source: SYNC_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
             replica_db: "ready".to_owned(),
-            configured_transport_target_count,
+            configured_transport_target_count: transport_metadata.configured_transport_target_count,
+            configured_transport_targets: transport_metadata.configured_transport_targets,
+            transport_statuses: transport_metadata.transport_statuses,
             publish_policy,
             freshness,
             queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
-            reason: Some("no relays are configured for this operator session".to_owned()),
+            reason: Some(reason.to_owned()),
             actions,
         });
     }
@@ -857,7 +1067,9 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
         source: SYNC_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "ready".to_owned(),
-        configured_transport_target_count,
+        configured_transport_target_count: transport_metadata.configured_transport_target_count,
+        configured_transport_targets: transport_metadata.configured_transport_targets,
+        transport_statuses: transport_metadata.transport_statuses,
         publish_policy,
         freshness,
         queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
@@ -1530,6 +1742,9 @@ mod tests {
         SyncTransportStatusSummary, SyncTransportTargetSummary,
     };
     use radroots_secret_vault::RadrootsSecretBackend;
+    use radroots_transport::{
+        RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
+    };
     use radroots_transport_nostr::{
         RadrootsRelayFetchFailure, RadrootsRelayFetchedEvent, RadrootsRelayFetchedEventsReceipt,
         RadrootsRelayTransportError,
@@ -1537,15 +1752,16 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        RelayIngestScope, freshness_for_scope, market_refresh_with_fetcher, pull_with_fetcher,
-        relay_provenance_relays_for_scope, sdk_push_dry_run_view, sdk_push_view,
+        RelayIngestScope, freshness_for_scope, inspect_sync, market_refresh_with_fetcher,
+        pull_with_fetcher, relay_provenance_relays_for_scope, sdk_push_dry_run_view, sdk_push_view,
         sdk_sync_status_view,
     };
     use crate::cli::global::{FindQueryArgs, RecordLookupArgs};
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RpcConfig,
-        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
+        ReticulumPreviewBehavior, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig,
+        TransportProfileKind, Verbosity,
     };
 
     const FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
@@ -1595,6 +1811,89 @@ mod tests {
     }
 
     #[test]
+    fn sync_pull_hybrid_reports_profile_targets_and_nostr_fetch_detail() {
+        let dir = tempdir().expect("tempdir");
+        let config = hybrid_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        crate::runtime::store::init(&config).expect("store init");
+
+        let view = pull_with_fetcher(&config, fake_fetcher(Vec::new())).expect("sync pull hybrid");
+
+        assert_eq!(view.state, "ready");
+        assert_eq!(view.configured_transport_target_count, 2);
+        assert_eq!(view.configured_transport_targets.len(), 2);
+        assert_eq!(view.configured_transport_targets[0].transport_kind, "nostr");
+        assert_eq!(
+            view.configured_transport_targets[0].endpoint_uri,
+            "wss://relay.example.com"
+        );
+        assert_eq!(
+            view.configured_transport_targets[1].transport_kind,
+            "reticulum"
+        );
+        assert_eq!(view.transport_statuses.len(), 2);
+        assert_eq!(view.transport_statuses[0].transport_kind, "nostr");
+        assert!(view.transport_statuses[0].fetch_usable);
+        assert_eq!(view.transport_statuses[1].transport_kind, "reticulum");
+        assert_eq!(view.transport_statuses[1].readiness, "preview_unavailable");
+        assert!(!view.transport_statuses[1].fetch_usable);
+        assert_eq!(
+            view.target_transport_endpoints,
+            vec!["wss://relay.example.com"]
+        );
+        assert_eq!(
+            view.attempted_transport_endpoints,
+            vec!["wss://relay.example.com"]
+        );
+    }
+
+    #[test]
+    fn sync_inspect_hybrid_uses_profile_target_count() {
+        let dir = tempdir().expect("tempdir");
+        let config = hybrid_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        crate::runtime::store::init(&config).expect("store init");
+
+        let snapshot = inspect_sync(&config).expect("inspect sync hybrid");
+
+        assert_eq!(snapshot.state, "ready");
+        assert_eq!(snapshot.configured_transport_target_count, 2);
+        assert_eq!(snapshot.configured_transport_targets.len(), 2);
+        assert_eq!(snapshot.transport_statuses.len(), 2);
+        assert_eq!(snapshot.transport_statuses[1].transport_kind, "reticulum");
+        assert_eq!(
+            snapshot.transport_statuses[1].readiness,
+            "preview_unavailable"
+        );
+    }
+
+    #[test]
+    fn sync_pull_reticulum_preview_does_not_report_fetch_success() {
+        let dir = tempdir().expect("tempdir");
+        let config = reticulum_preview_config(dir.path());
+        crate::runtime::store::init(&config).expect("store init");
+
+        let view = pull_with_fetcher(&config, |_, _| {
+            panic!("reticulum preview sync pull must not run Nostr fetch")
+        })
+        .expect("sync pull reticulum preview");
+
+        assert_eq!(view.state, "unavailable");
+        assert_eq!(view.configured_transport_target_count, 1);
+        assert_eq!(
+            view.configured_transport_targets[0].transport_kind,
+            "reticulum"
+        );
+        assert_eq!(view.transport_statuses[0].readiness, "preview_unavailable");
+        assert_eq!(view.fetched_count, None);
+        assert!(view.target_transport_endpoints.is_empty());
+        assert!(
+            view.reason
+                .as_deref()
+                .expect("reticulum preview reason")
+                .contains("does not expose Nostr relay fetch targets")
+        );
+    }
+
+    #[test]
     fn sync_status_empty_sdk_store_reports_canonical_source() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(
@@ -1636,6 +1935,78 @@ mod tests {
         assert_eq!(view.queue.deferred_until_implemented_count, Some(0));
         assert_eq!(view.queue.ready_signed_count, Some(0));
         assert_eq!(view.actions, vec!["radroots sync pull"]);
+    }
+
+    #[test]
+    fn sync_status_hybrid_reports_profile_targets_and_statuses() {
+        let dir = tempdir().expect("tempdir");
+        let config = hybrid_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        let mut receipt = sdk_status_receipt(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            &["wss://relay.example.com"],
+        );
+        receipt.transport_profile = SyncTransportProfileSummary {
+            transport_profile_id: "hybrid".to_owned(),
+            configured_transport_target_count: 2,
+            configured_transport_targets: vec![
+                SyncTransportTargetSummary {
+                    transport_kind: "nostr".to_owned(),
+                    endpoint_uri: "wss://relay.example.com".to_owned(),
+                    endpoint_fingerprint: "0".repeat(64),
+                },
+                SyncTransportTargetSummary {
+                    transport_kind: "reticulum".to_owned(),
+                    endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
+                    endpoint_fingerprint: "1".repeat(64),
+                },
+            ],
+            transport_statuses: vec![
+                SyncTransportStatusSummary {
+                    transport_kind: "nostr".to_owned(),
+                    profile_id: Some("hybrid".to_owned()),
+                    endpoint_uri: None,
+                    implementation_state: "available".to_owned(),
+                    readiness: "ready".to_owned(),
+                    publish_usable: true,
+                    fetch_usable: true,
+                    redacted_message: None,
+                },
+                SyncTransportStatusSummary {
+                    transport_kind: "reticulum".to_owned(),
+                    profile_id: Some("hybrid".to_owned()),
+                    endpoint_uri: Some(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned()),
+                    implementation_state: "preview_unavailable".to_owned(),
+                    readiness: "preview_unavailable".to_owned(),
+                    publish_usable: false,
+                    fetch_usable: false,
+                    redacted_message: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
+                },
+            ],
+        };
+
+        let view = sdk_sync_status_view(&config, receipt);
+
+        assert_eq!(view.configured_transport_target_count, 2);
+        assert_eq!(view.configured_transport_targets.len(), 2);
+        assert_eq!(view.configured_transport_targets[0].transport_kind, "nostr");
+        assert_eq!(
+            view.configured_transport_targets[1].transport_kind,
+            "reticulum"
+        );
+        assert_eq!(view.transport_statuses.len(), 2);
+        assert_eq!(view.transport_statuses[1].readiness, "preview_unavailable");
+        assert!(!view.transport_statuses[1].fetch_usable);
     }
 
     #[test]
@@ -2499,5 +2870,19 @@ mod tests {
             },
             capability_bindings: Vec::new(),
         }
+    }
+
+    fn hybrid_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {
+        let mut config = sample_config(root, relays);
+        config.transport.profile = TransportProfileKind::Hybrid;
+        config.transport.reticulum_preview_behavior = ReticulumPreviewBehavior::DeferDeliveryPlans;
+        config
+    }
+
+    fn reticulum_preview_config(root: &Path) -> RuntimeConfig {
+        let mut config = sample_config(root, Vec::new());
+        config.transport.profile = TransportProfileKind::ReticulumPreview;
+        config.transport.reticulum_preview_behavior = ReticulumPreviewBehavior::DeferDeliveryPlans;
+        config
     }
 }

@@ -1580,6 +1580,8 @@ fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_ou
 
     for required in [
         "fn sdk_sync_status_view",
+        "fn sync_transport_metadata",
+        "fn sync_configured_transport_targets",
         "fn sdk_push_action_view",
         "fn sdk_transport_targets",
         "fn sdk_push_target_transport_endpoints",

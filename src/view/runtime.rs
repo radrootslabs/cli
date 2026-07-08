@@ -3481,6 +3481,8 @@ pub struct SyncActionView {
     pub replica_db: String,
     pub configured_transport_target_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured_transport_targets: Vec<SyncTransportTargetView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transport_statuses: Vec<SyncTransportStatusView>,
     pub publish_policy: String,
     pub freshness: SyncFreshnessView,
