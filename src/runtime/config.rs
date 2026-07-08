@@ -186,6 +186,7 @@ pub enum TransportProfileKind {
     LocalOnly,
     Nostr,
     ReticulumPreview,
+    Hybrid,
     Proxy,
 }
 
@@ -195,6 +196,7 @@ impl TransportProfileKind {
             Self::LocalOnly => "local_only",
             Self::Nostr => "nostr",
             Self::ReticulumPreview => "reticulum_preview",
+            Self::Hybrid => "hybrid",
             Self::Proxy => "proxy",
         }
     }
@@ -204,6 +206,7 @@ impl TransportProfileKind {
             Self::LocalOnly => "local",
             Self::Nostr => "nostr",
             Self::ReticulumPreview => "reticulum",
+            Self::Hybrid => "hybrid",
             Self::Proxy => "proxy",
         }
     }
@@ -1885,9 +1888,10 @@ fn parse_transport_profile_kind(
         "local_only" => Ok(TransportProfileKind::LocalOnly),
         "nostr" => Ok(TransportProfileKind::Nostr),
         "reticulum_preview" => Ok(TransportProfileKind::ReticulumPreview),
+        "hybrid" => Ok(TransportProfileKind::Hybrid),
         "proxy" => Ok(TransportProfileKind::Proxy),
         other => Err(RuntimeError::Config(format!(
-            "{source} must be `local_only`, `nostr`, `reticulum_preview`, or `proxy`, got `{other}`"
+            "{source} must be `local_only`, `nostr`, `reticulum_preview`, `hybrid`, or `proxy`, got `{other}`"
         ))),
     }
 }
@@ -2854,6 +2858,41 @@ RADROOTS_CLI_LOGGING_STDOUT=true
             ]
         );
         assert_eq!(resolved.transport.source, TransportConfigSource::UserConfig);
+    }
+
+    #[test]
+    fn hybrid_transport_config_uses_nostr_targets_and_reticulum_preview_behavior() {
+        let temp = tempdir().expect("tempdir");
+        let workspace_root = temp.path().join("workspace");
+        let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
+        let app_config_dir = repo_local_root.join("config/apps/cli");
+        let user_home = temp.path().join("home");
+        fs::create_dir_all(&repo_local_root).expect("workspace config dir");
+        fs::create_dir_all(&app_config_dir).expect("app config dir");
+        fs::write(
+            app_config_dir.join("config.toml"),
+            "[transport]\nprofile = \"hybrid\"\n\n[transport.nostr]\nrelay_urls = [\"wss://relay.user\", \"wss://relay.backup\"]\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+        )
+        .expect("write user config");
+
+        let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
+        let resolved =
+            RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
+                .expect("resolve hybrid transport profile");
+
+        assert_eq!(resolved.transport.profile, TransportProfileKind::Hybrid);
+        assert_eq!(resolved.transport.source, TransportConfigSource::UserConfig);
+        assert_eq!(
+            resolved.transport.nostr_relay_urls,
+            vec![
+                "wss://relay.user".to_owned(),
+                "wss://relay.backup".to_owned()
+            ]
+        );
+        assert_eq!(
+            resolved.transport.reticulum_preview_behavior,
+            super::ReticulumPreviewBehavior::DeferDeliveryPlans
+        );
     }
 
     #[test]

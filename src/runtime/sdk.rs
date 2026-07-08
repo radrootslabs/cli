@@ -16,10 +16,10 @@ use radroots_nostr_connect::prelude::{
     RadrootsNostrConnectClientTarget, RadrootsNostrConnectError, RadrootsNostrConnectUri,
 };
 use radroots_sdk::{
-    NostrProfile, NostrRelayUrlPolicy, ProxyProfile, RadrootsClient, RadrootsClientBuilder,
-    RadrootsSdkError, RadrootsSdkLocalKeySigner, RadrootsSdkMycNip46RequestPolicy,
-    RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport, RadrootsSdkNip46TransportFuture,
-    RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
+    HybridProfile, NostrProfile, NostrRelayUrlPolicy, ProxyProfile, RadrootsClient,
+    RadrootsClientBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
+    RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
+    RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
     ReticulumPreviewBehavior as SdkReticulumPreviewBehavior, ReticulumPreviewProfile, TargetPolicy,
     TransportProfile,
 };
@@ -632,18 +632,19 @@ fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, Run
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
             Ok(TransportProfile::nostr(profile))
         }
-        TransportProfileKind::ReticulumPreview => {
-            let behavior = match config.transport.reticulum_preview_behavior {
-                ReticulumPreviewBehavior::RejectDeliveryAttempts => {
-                    SdkReticulumPreviewBehavior::RejectDeliveryAttempts
-                }
-                ReticulumPreviewBehavior::DeferDeliveryPlans => {
-                    SdkReticulumPreviewBehavior::DeferDeliveryPlans
-                }
-            };
-            Ok(TransportProfile::reticulum_preview(
-                ReticulumPreviewProfile::preview_unavailable().with_behavior(behavior),
-            ))
+        TransportProfileKind::ReticulumPreview => Ok(TransportProfile::reticulum_preview(
+            sdk_reticulum_preview_profile(config),
+        )),
+        TransportProfileKind::Hybrid => {
+            let nostr = NostrProfile::new(
+                config.transport.nostr_relay_urls.iter().map(String::as_str),
+                sdk_nostr_relay_url_policy(config),
+            )
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+            Ok(TransportProfile::hybrid(HybridProfile::new(
+                nostr,
+                sdk_reticulum_preview_profile(config),
+            )))
         }
         TransportProfileKind::Proxy => {
             let profile = ProxyProfile::new(config.transport.proxy.url.clone())
@@ -651,6 +652,18 @@ fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, Run
             Ok(TransportProfile::proxy(profile))
         }
     }
+}
+
+fn sdk_reticulum_preview_profile(config: &RuntimeConfig) -> ReticulumPreviewProfile {
+    let behavior = match config.transport.reticulum_preview_behavior {
+        ReticulumPreviewBehavior::RejectDeliveryAttempts => {
+            SdkReticulumPreviewBehavior::RejectDeliveryAttempts
+        }
+        ReticulumPreviewBehavior::DeferDeliveryPlans => {
+            SdkReticulumPreviewBehavior::DeferDeliveryPlans
+        }
+    };
+    ReticulumPreviewProfile::preview_unavailable().with_behavior(behavior)
 }
 
 pub(crate) fn validate_proxy_bearer_token(config: &RuntimeConfig) -> Result<(), RuntimeError> {
@@ -720,8 +733,8 @@ mod tests {
     use super::*;
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RhiConfig,
-        RpcConfig, SignerBackend, SignerConfig, Verbosity,
+        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
+        ReticulumPreviewBehavior, RhiConfig, RpcConfig, SignerBackend, SignerConfig, Verbosity,
     };
 
     struct DirectRrRsDependency {
@@ -1176,6 +1189,31 @@ mod tests {
         assert_eq!(
             profile.relay_urls(),
             vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
+        );
+    }
+
+    #[test]
+    fn maps_hybrid_runtime_config_to_sdk_hybrid_profile() {
+        let root = tempdir().expect("tempdir");
+        let mut config = sample_config(
+            root.path(),
+            vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()],
+        );
+        config.transport.profile = TransportProfileKind::Hybrid;
+        config.transport.reticulum_preview_behavior = ReticulumPreviewBehavior::DeferDeliveryPlans;
+
+        let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
+
+        let TransportProfile::Hybrid { profile } = sdk_config.transport_profile else {
+            panic!("expected Hybrid transport profile");
+        };
+        assert_eq!(
+            profile.nostr().relay_urls(),
+            vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
+        );
+        assert_eq!(
+            profile.reticulum_preview().behavior().as_str(),
+            "defer_delivery_plans"
         );
     }
 

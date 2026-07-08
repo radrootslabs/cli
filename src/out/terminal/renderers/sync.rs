@@ -32,7 +32,12 @@ impl TerminalOperationRenderer for SyncRenderer {
             result,
             &["freshness", "display"],
         );
-        common::push_count_field(&mut document, "Relays", result, &["relay_count"]);
+        common::push_count_field(
+            &mut document,
+            "Transport targets",
+            result,
+            &["configured_transport_target_count"],
+        );
         common::push_count_field(&mut document, "Fetched", result, &["fetched_count"]);
         common::push_count_field(&mut document, "Ingested", result, &["ingested_count"]);
         common::push_count_field(&mut document, "Skipped", result, &["skipped_count"]);

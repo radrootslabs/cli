@@ -804,7 +804,7 @@ fn publish_runtime_view(
     };
 
     match config.transport.profile {
-        TransportProfileKind::Nostr => {
+        TransportProfileKind::Nostr | TransportProfileKind::Hybrid => {
             let (state, executable, reason) =
                 nostr_publish_readiness(config, relay_ready, signed_write_required, account);
             PublishRuntimeView {
@@ -817,7 +817,7 @@ fn publish_runtime_view(
                 signed_write_required,
                 relay,
                 provider: PublishProviderRuntimeView {
-                    provider_runtime_id: "nostr".to_owned(),
+                    provider_runtime_id: config.transport.profile.as_str().to_owned(),
                     state: state.to_owned(),
                     source: config.transport.source.as_str().to_owned(),
                     reason,
@@ -1101,7 +1101,7 @@ fn publish_recovery_actions(
 
     let mut actions = Vec::new();
     match config.transport.profile {
-        TransportProfileKind::Nostr => {
+        TransportProfileKind::Nostr | TransportProfileKind::Hybrid => {
             if config.transport.nostr_relay_urls.is_empty() {
                 push_unique(
                     &mut actions,

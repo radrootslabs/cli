@@ -515,8 +515,10 @@ fn validate_transport_profile_contract(
             ),
         });
     }
-    if matches!(config.transport.profile, TransportProfileKind::Nostr)
-        && config.transport.nostr_relay_urls.is_empty()
+    if matches!(
+        config.transport.profile,
+        TransportProfileKind::Nostr | TransportProfileKind::Hybrid
+    ) && config.transport.nostr_relay_urls.is_empty()
     {
         return Err(OperationAdapterError::NetworkUnavailable {
             operation_id: spec.operation_id.to_owned(),
@@ -553,9 +555,12 @@ fn is_transport_profile_routed_operation(operation_id: &str) -> bool {
 
 fn transport_profile_delivery_unavailable_reason(config: &RuntimeConfig) -> Option<String> {
     match config.transport.profile {
-        TransportProfileKind::Nostr => {
+        TransportProfileKind::Nostr | TransportProfileKind::Hybrid => {
             config.transport.nostr_relay_urls.is_empty().then(|| {
-                "active Nostr transport profile has no configured relay targets".to_owned()
+                format!(
+                    "active {} transport profile has no configured Nostr relay targets",
+                    config.transport.profile.as_str()
+                )
             })
         }
         TransportProfileKind::Proxy => match runtime::transport::proxy_token_ready(config) {

@@ -621,8 +621,10 @@ fn relay_farm_publish_readiness(
     config: &RuntimeConfig,
     account: &AccountRecordView,
 ) -> FarmPublishReadiness {
-    if matches!(config.transport.profile, TransportProfileKind::Nostr)
-        && config.transport.nostr_relay_urls.is_empty()
+    if matches!(
+        config.transport.profile,
+        TransportProfileKind::Nostr | TransportProfileKind::Hybrid
+    ) && config.transport.nostr_relay_urls.is_empty()
     {
         return FarmPublishReadiness {
             state: "unconfigured",

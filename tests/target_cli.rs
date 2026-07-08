@@ -1319,6 +1319,56 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
 }
 
 #[test]
+fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let value = sandbox.json_success(&[
+        "--format",
+        "json",
+        "transport",
+        "profile",
+        "set",
+        "--kind",
+        "hybrid",
+        "--nostr-relay",
+        "wss://relay.example.com",
+        "--reticulum-preview-behavior",
+        "defer-delivery-plans",
+    ]);
+
+    assert_eq!(value["operation_id"], "transport.profile.set");
+    assert_eq!(value["result"]["profile_id"], "hybrid");
+    assert_eq!(value["result"]["transport_kind"], "hybrid");
+    assert_eq!(value["result"]["state"], "configured");
+    assert_eq!(
+        value["result"]["nostr_relays"][0],
+        "wss://relay.example.com"
+    );
+    assert_eq!(
+        value["result"]["reticulum_preview_behavior"],
+        "defer_delivery_plans"
+    );
+
+    let value = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
+    assert_eq!(value["result"]["profile_id"], "hybrid");
+    assert_eq!(
+        value["result"]["nostr_relays"][0],
+        "wss://relay.example.com"
+    );
+    assert_eq!(
+        value["result"]["reticulum_preview_behavior"],
+        "defer_delivery_plans"
+    );
+
+    let config = fs::read_to_string(sandbox.root().join("config/apps/cli/config.toml"))
+        .expect("read app config");
+    assert!(config.contains("profile = \"hybrid\""));
+    assert!(config.contains("[transport.nostr]"));
+    assert!(config.contains("[transport.reticulum_preview]"));
+    assert!(config.contains("behavior = \"defer_delivery_plans\""));
+}
+
+#[test]
 fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config(
@@ -1453,7 +1503,8 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         fs::read_to_string(manifest_dir.join("src/runtime/transport.rs")).expect("read source");
     for required in [
         "RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE",
-        "if config.transport.profile != TransportProfileKind::ReticulumPreview",
+        "if !matches!(",
+        "TransportProfileKind::ReticulumPreview | TransportProfileKind::Hybrid",
         "validate_proxy_token_material",
         "proxy_token_ready(&validation_config)",
         "crate::runtime::sdk::validate_proxy_bearer_token(config)",
@@ -6607,9 +6658,12 @@ fn sync_push_sdk_outbox_failure_reports_network_unavailable() {
         value["errors"][0]["detail"]["replica_db"],
         "derived_projection_not_checked"
     );
-    assert_eq!(value["errors"][0]["detail"]["target_relays"][0], relay);
     assert_eq!(
-        value["errors"][0]["detail"]["failed_relays"][0]["relay"],
+        value["errors"][0]["detail"]["target_transport_endpoints"][0],
+        relay
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["failed_transport_targets"][0]["endpoint_uri"],
         relay
     );
     assert_eq!(value["errors"][0]["detail"]["publishable_count"], 1);
@@ -6717,7 +6771,7 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(relay_refresh["dry_run"], true);
     assert_eq!(relay_refresh["result"]["state"], "ready");
     assert_eq!(
-        relay_refresh["result"]["target_relays"][0],
+        relay_refresh["result"]["target_transport_endpoints"][0],
         "ws://127.0.0.1:9"
     );
     assert_eq!(relay_refresh["result"]["fetched_count"], 0);
@@ -6733,7 +6787,7 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
         "derived_projection_not_checked"
     );
     assert_eq!(
-        sync_push_ready["result"]["target_relays"][0],
+        sync_push_ready["result"]["target_transport_endpoints"][0],
         "ws://127.0.0.1:9"
     );
     assert_eq!(sync_push_ready["result"]["publishable_count"], 0);

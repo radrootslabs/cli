@@ -3447,7 +3447,11 @@ pub struct SyncStatusView {
     pub source: String,
     pub local_root: String,
     pub replica_db: String,
-    pub relay_count: usize,
+    pub configured_transport_target_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured_transport_targets: Vec<SyncTransportTargetView>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_statuses: Vec<SyncTransportStatusView>,
     pub publish_policy: String,
     pub freshness: SyncFreshnessView,
     pub queue: SyncQueueView,
@@ -3475,18 +3479,20 @@ pub struct SyncActionView {
     pub source: String,
     pub local_root: String,
     pub replica_db: String,
-    pub relay_count: usize,
+    pub configured_transport_target_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_statuses: Vec<SyncTransportStatusView>,
     pub publish_policy: String,
     pub freshness: SyncFreshnessView,
     pub queue: SyncQueueView,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub acknowledged_relays: Vec<String>,
+    pub accepted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fetched_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3509,6 +3515,35 @@ pub struct SyncActionView {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncTransportTargetView {
+    pub transport_kind: String,
+    pub endpoint_uri: String,
+    pub endpoint_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncTransportStatusView {
+    pub transport_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_uri: Option<String>,
+    pub implementation_state: String,
+    pub readiness: String,
+    pub publish_usable: bool,
+    pub fetch_usable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redacted_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransportTargetFailureView {
+    pub transport_kind: String,
+    pub endpoint_uri: String,
+    pub reason: String,
 }
 
 impl SyncActionView {
@@ -3579,7 +3614,7 @@ pub struct SyncWatchFrameView {
     pub sequence: usize,
     pub observed_at: u64,
     pub state: String,
-    pub relay_count: usize,
+    pub configured_transport_target_count: usize,
     pub freshness: SyncFreshnessView,
     pub queue: SyncQueueView,
 }

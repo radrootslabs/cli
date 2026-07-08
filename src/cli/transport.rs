@@ -48,6 +48,7 @@ pub enum TransportProfileKindArg {
     LocalOnly,
     Nostr,
     ReticulumPreview,
+    Hybrid,
     Proxy,
 }
 
@@ -57,6 +58,7 @@ impl TransportProfileKindArg {
             Self::LocalOnly => "local_only",
             Self::Nostr => "nostr",
             Self::ReticulumPreview => "reticulum_preview",
+            Self::Hybrid => "hybrid",
             Self::Proxy => "proxy",
         }
     }

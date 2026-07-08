@@ -49,6 +49,25 @@ pub fn set_profile(
             preview.insert("behavior".to_owned(), Value::String(behavior.to_owned()));
             transport.insert("reticulum_preview".to_owned(), Value::Table(preview));
         }
+        "hybrid" => {
+            let relays = string_array_input(input, "nostr_relays");
+            if relays.is_empty() {
+                return Err(RuntimeError::Config(
+                    "transport profile `hybrid` requires at least one --nostr-relay".to_owned(),
+                ));
+            }
+            let behavior = string_input(input, "reticulum_preview_behavior")
+                .unwrap_or("reject_delivery_attempts");
+            let mut nostr = Map::new();
+            nostr.insert(
+                "relay_urls".to_owned(),
+                Value::Array(relays.into_iter().map(Value::String).collect()),
+            );
+            let mut preview = Map::new();
+            preview.insert("behavior".to_owned(), Value::String(behavior.to_owned()));
+            transport.insert("nostr".to_owned(), Value::Table(nostr));
+            transport.insert("reticulum_preview".to_owned(), Value::Table(preview));
+        }
         "proxy" => {
             let Some(url) = string_input(input, "proxy_url") else {
                 return Err(RuntimeError::Config(
@@ -100,7 +119,10 @@ pub fn set_profile(
 
 pub fn status(config: &RuntimeConfig) -> TransportStatusView {
     let mut transports = vec![active_profile_view(config)];
-    if config.transport.profile != TransportProfileKind::ReticulumPreview {
+    if !matches!(
+        config.transport.profile,
+        TransportProfileKind::ReticulumPreview | TransportProfileKind::Hybrid
+    ) {
         transports.push(profile_view_from_parts(
             "reticulum_preview",
             Vec::new(),
@@ -232,6 +254,29 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
             None,
             "preview_unavailable",
         ),
+        TransportProfileKind::Hybrid => profile_view_from_parts(
+            "hybrid",
+            config.transport.nostr_relay_urls.clone(),
+            Some(
+                config
+                    .transport
+                    .reticulum_preview_behavior
+                    .as_str()
+                    .to_owned(),
+            ),
+            None,
+            None,
+            None,
+            if config.transport.nostr_relay_urls.is_empty() {
+                "unconfigured"
+            } else {
+                "configured"
+            },
+        )
+        .with_message(
+            "Hybrid transport publishes through configured Nostr relays and reports Reticulum preview status"
+                .to_owned(),
+        ),
         TransportProfileKind::Proxy => {
             let proxy_readiness = proxy_token_ready(config);
             profile_view_from_parts(
@@ -272,21 +317,27 @@ fn profile_view_from_parts(
     let transport_kind = match profile_id {
         "nostr" => "nostr",
         "reticulum_preview" => "reticulum",
+        "hybrid" => "hybrid",
         "proxy" => "proxy",
         _ => "local",
     };
     let implementation_state = match profile_id {
         "nostr" => "available",
         "reticulum_preview" => "preview_unavailable",
+        "hybrid" => "available_with_preview",
         "proxy" => "delegated",
         _ => "local_only",
     };
     let usable_for_delivery =
-        matches!(profile_id, "nostr" | "proxy") && configured_state == "configured";
+        matches!(profile_id, "nostr" | "hybrid" | "proxy") && configured_state == "configured";
     let message = match profile_id {
         "nostr" if usable_for_delivery => "Nostr relay transport is configured for delivery",
         "nostr" => "Nostr transport requires configured Nostr relay targets",
         "reticulum_preview" => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
+        "hybrid" if usable_for_delivery => {
+            "Hybrid transport publishes through configured Nostr relays and reports Reticulum preview status"
+        }
+        "hybrid" => "Hybrid transport requires configured Nostr relay targets",
         "proxy" if usable_for_delivery => {
             "Proxy transport delegates delivery to the configured endpoint"
         }
@@ -334,6 +385,12 @@ fn profile_actions(profile_id: &str, usable_for_delivery: bool) -> Vec<String> {
         "nostr" => {
             vec![
                 "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+                    .to_owned(),
+            ]
+        }
+        "hybrid" => {
+            vec![
+                "radroots transport profile set --kind hybrid --nostr-relay wss://relay.example.com"
                     .to_owned(),
             ]
         }

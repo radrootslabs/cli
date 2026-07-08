@@ -35,8 +35,9 @@ use crate::runtime::sdk::{
     sdk_nostr_relay_url_policy,
 };
 use crate::view::runtime::{
-    RelayFailureView, SyncActionView, SyncFreshnessView, SyncQueueView, SyncRunFreshnessView,
-    SyncStatusView, SyncWatchFrameView, SyncWatchView,
+    SyncActionView, SyncFreshnessView, SyncQueueView, SyncRunFreshnessView, SyncStatusView,
+    SyncTransportStatusView, SyncTransportTargetView, SyncWatchFrameView, SyncWatchView,
+    TransportTargetFailureView,
 };
 
 const SYNC_SOURCE: &str = "local replica · local first";
@@ -83,7 +84,7 @@ struct SyncSnapshot {
     source: String,
     local_root: String,
     replica_db: String,
-    relay_count: usize,
+    configured_transport_target_count: usize,
     publish_policy: String,
     freshness: SyncFreshnessView,
     queue: SyncQueueView,
@@ -95,9 +96,9 @@ struct SyncSnapshot {
 struct SyncRunRecord {
     scope: String,
     relay_set_fingerprint: String,
-    target_relays_json: String,
-    connected_relays_json: String,
-    failed_relays_json: String,
+    target_transport_endpoints_json: String,
+    attempted_transport_endpoints_json: String,
+    failed_transport_targets_json: String,
     started_at: u64,
     completed_at: Option<u64>,
     state: String,
@@ -113,9 +114,9 @@ struct SyncRunRecord {
 struct SyncRunRow {
     scope: String,
     relay_set_fingerprint: String,
-    target_relays_json: String,
-    connected_relays_json: String,
-    failed_relays_json: String,
+    target_transport_endpoints_json: String,
+    attempted_transport_endpoints_json: String,
+    failed_transport_targets_json: String,
     started_at: i64,
     completed_at: Option<i64>,
     state: String,
@@ -223,7 +224,7 @@ where
         let mut view = empty_action_from_snapshot(snapshot, "pull");
         view.state = "ready".to_owned();
         view.reason = Some("dry run requested; relay fetch skipped".to_owned());
-        view.target_relays = config.transport.nostr_relay_urls.clone();
+        view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
         view.fetched_count = Some(0);
         view.ingested_count = Some(0);
         view.publishable_count = None;
@@ -239,9 +240,9 @@ where
     let started_at = unix_now();
     let receipt = match fetcher(&config.transport.nostr_relay_urls, scope.filter()) {
         Ok(receipt) if receipt.connected_relays.is_empty() && !receipt.failed_relays.is_empty() => {
-            let target_relays = receipt.target_relays;
-            let failed_relays = relay_failures(receipt.failed_relays);
-            let reason = relay_failure_reason(&failed_relays);
+            let target_transport_endpoints = receipt.target_relays;
+            let failed_transport_targets = relay_failures(receipt.failed_relays);
+            let reason = relay_failure_reason(&failed_transport_targets);
             let failure_reason = format!("relay transport fetch failed: {reason}");
             let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
             migrations::run_all_up(&executor)?;
@@ -250,8 +251,8 @@ where
                 &sync_record_from_failure(
                     scope,
                     &config.transport.nostr_relay_urls,
-                    target_relays.clone(),
-                    failed_relays.clone(),
+                    target_transport_endpoints.clone(),
+                    failed_transport_targets.clone(),
                     started_at,
                     failure_reason.clone(),
                 )?,
@@ -260,8 +261,8 @@ where
             view.state = "unavailable".to_owned();
             view.reason = Some(failure_reason);
             view.reason_code = Some("relay_fetch_failed".to_owned());
-            view.target_relays = target_relays;
-            view.failed_relays = failed_relays;
+            view.target_transport_endpoints = target_transport_endpoints;
+            view.failed_transport_targets = failed_transport_targets;
             view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
             return Ok(view);
         }
@@ -285,7 +286,7 @@ where
             view.state = "unavailable".to_owned();
             view.reason = Some(failure_reason);
             view.reason_code = Some("relay_fetch_failed".to_owned());
-            view.target_relays = config.transport.nostr_relay_urls.clone();
+            view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
             view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
             return Ok(view);
         }
@@ -304,10 +305,11 @@ where
             started_at,
         )?,
     )?;
-    let failed_relays = relay_failures(receipt.failed_relays);
-    let failed_count = ingest.failed_count + failed_relays.len();
-    let reason_code = relay_ingest_reason_code(&ingest, &failed_relays).map(str::to_owned);
-    let reason = relay_ingest_reason(&ingest, &failed_relays);
+    let failed_transport_targets = relay_failures(receipt.failed_relays);
+    let failed_count = ingest.failed_count + failed_transport_targets.len();
+    let reason_code =
+        relay_ingest_reason_code(&ingest, &failed_transport_targets).map(str::to_owned);
+    let reason = relay_ingest_reason(&ingest, &failed_transport_targets);
     let freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
     let queue = radroots_replica_sync_status(&executor)?;
 
@@ -317,14 +319,15 @@ where
         source: INGEST_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "ready".to_owned(),
-        relay_count: config.transport.nostr_relay_urls.len(),
+        configured_transport_target_count: config.transport.nostr_relay_urls.len(),
+        transport_statuses: Vec::new(),
         publish_policy: "any".to_owned(),
         freshness,
         queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
-        target_relays: receipt.target_relays,
-        connected_relays: receipt.connected_relays,
-        acknowledged_relays: Vec::new(),
-        failed_relays,
+        target_transport_endpoints: receipt.target_relays,
+        attempted_transport_endpoints: receipt.connected_relays,
+        accepted_transport_endpoints: Vec::new(),
+        failed_transport_targets,
         fetched_count: Some(ingest.fetched_count),
         ingested_count: Some(ingest.ingested_count),
         publishable_count: None,
@@ -369,7 +372,7 @@ pub fn watch(config: &RuntimeConfig, args: &SyncWatchArgs) -> Result<SyncWatchVi
             sequence: index + 1,
             observed_at: unix_now(),
             state: snapshot.state.clone(),
-            relay_count: snapshot.relay_count,
+            configured_transport_target_count: snapshot.configured_transport_target_count,
             freshness: snapshot.freshness.clone(),
             queue: snapshot.queue.clone(),
         });
@@ -398,14 +401,15 @@ fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncAc
         source: snapshot.source,
         local_root: snapshot.local_root,
         replica_db: snapshot.replica_db,
-        relay_count: snapshot.relay_count,
+        configured_transport_target_count: snapshot.configured_transport_target_count,
+        transport_statuses: Vec::new(),
         publish_policy: snapshot.publish_policy,
         freshness: snapshot.freshness,
         queue: snapshot.queue,
-        target_relays: Vec::new(),
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: Vec::new(),
+        attempted_transport_endpoints: Vec::new(),
+        accepted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         fetched_count: None,
         ingested_count: None,
         publishable_count: None,
@@ -422,13 +426,18 @@ fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncAc
 
 fn sdk_sync_status_view(config: &RuntimeConfig, receipt: SyncStatusReceipt) -> SyncStatusView {
     let actions = sdk_sync_status_actions(&receipt);
-    let relay_count = receipt.transport_profile.configured_nostr_relay_count;
+    let configured_transport_target_count =
+        receipt.transport_profile.configured_transport_target_count;
+    let configured_transport_targets = sdk_transport_targets(&receipt);
+    let transport_statuses = sdk_transport_statuses(&receipt);
     SyncStatusView {
         state: "ready".to_owned(),
         source: SDK_SYNC_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "derived_projection_not_checked".to_owned(),
-        relay_count,
+        configured_transport_target_count,
+        configured_transport_targets,
+        transport_statuses,
         publish_policy: "any".to_owned(),
         freshness: sdk_sync_freshness(&receipt),
         queue: sdk_sync_queue(&receipt),
@@ -456,7 +465,14 @@ fn sdk_push_dry_run_view(config: &RuntimeConfig, status: SyncStatusReceipt) -> S
         state,
         sdk_sync_queue(&status),
         sdk_sync_freshness(&status),
-        status.transport_profile.configured_nostr_relays,
+        status.transport_profile.configured_transport_target_count,
+        sdk_transport_statuses(&status),
+        status
+            .transport_profile
+            .configured_transport_targets
+            .iter()
+            .map(|target| target.endpoint_uri.clone())
+            .collect(),
         Vec::new(),
         Vec::new(),
         Vec::new(),
@@ -492,10 +508,12 @@ fn sdk_push_view(
         state,
         sdk_sync_queue(&status),
         sdk_sync_freshness(&status),
-        sdk_push_target_relays(&receipt, &status),
-        sdk_push_connected_relays(&receipt),
-        sdk_push_acknowledged_relays(&receipt),
-        sdk_push_failed_relays(&receipt),
+        status.transport_profile.configured_transport_target_count,
+        sdk_transport_statuses(&status),
+        sdk_push_target_transport_endpoints(&receipt, &status),
+        sdk_push_attempted_transport_endpoints(&receipt),
+        sdk_push_accepted_transport_endpoints(&receipt),
+        sdk_push_failed_transport_targets(&receipt),
         receipt.attempted_events,
         receipt.published_events,
         failed_count,
@@ -510,10 +528,12 @@ fn sdk_push_action_view(
     state: &str,
     queue: SyncQueueView,
     freshness: SyncFreshnessView,
-    target_relays: Vec<String>,
-    connected_relays: Vec<String>,
-    acknowledged_relays: Vec<String>,
-    failed_relays: Vec<RelayFailureView>,
+    configured_transport_target_count: usize,
+    transport_statuses: Vec<SyncTransportStatusView>,
+    target_transport_endpoints: Vec<String>,
+    attempted_transport_endpoints: Vec<String>,
+    accepted_transport_endpoints: Vec<String>,
+    failed_transport_targets: Vec<TransportTargetFailureView>,
     publishable_count: usize,
     published_count: usize,
     failed_count: usize,
@@ -527,14 +547,15 @@ fn sdk_push_action_view(
         source: SDK_PUSH_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "derived_projection_not_checked".to_owned(),
-        relay_count: config.transport.nostr_relay_urls.len(),
+        configured_transport_target_count,
+        transport_statuses,
         publish_policy: "any".to_owned(),
         freshness,
         queue,
-        target_relays,
-        connected_relays,
-        acknowledged_relays,
-        failed_relays,
+        target_transport_endpoints,
+        attempted_transport_endpoints,
+        accepted_transport_endpoints,
+        failed_transport_targets,
         fetched_count: None,
         ingested_count: None,
         publishable_count: Some(publishable_count),
@@ -547,6 +568,37 @@ fn sdk_push_action_view(
         reason,
         actions,
     }
+}
+
+fn sdk_transport_targets(receipt: &SyncStatusReceipt) -> Vec<SyncTransportTargetView> {
+    receipt
+        .transport_profile
+        .configured_transport_targets
+        .iter()
+        .map(|target| SyncTransportTargetView {
+            transport_kind: target.transport_kind.clone(),
+            endpoint_uri: target.endpoint_uri.clone(),
+            endpoint_fingerprint: target.endpoint_fingerprint.clone(),
+        })
+        .collect()
+}
+
+fn sdk_transport_statuses(receipt: &SyncStatusReceipt) -> Vec<SyncTransportStatusView> {
+    receipt
+        .transport_profile
+        .transport_statuses
+        .iter()
+        .map(|status| SyncTransportStatusView {
+            transport_kind: status.transport_kind.clone(),
+            profile_id: status.profile_id.clone(),
+            endpoint_uri: status.endpoint_uri.clone(),
+            implementation_state: status.implementation_state.clone(),
+            readiness: status.readiness.clone(),
+            publish_usable: status.publish_usable,
+            fetch_usable: status.fetch_usable,
+            redacted_message: status.redacted_message.clone(),
+        })
+        .collect()
 }
 
 fn sdk_sync_status_actions(receipt: &SyncStatusReceipt) -> Vec<String> {
@@ -658,7 +710,10 @@ fn sdk_sync_freshness(receipt: &SyncStatusReceipt) -> SyncFreshnessView {
     }
 }
 
-fn sdk_push_target_relays(receipt: &PushOutboxReceipt, status: &SyncStatusReceipt) -> Vec<String> {
+fn sdk_push_target_transport_endpoints(
+    receipt: &PushOutboxReceipt,
+    status: &SyncStatusReceipt,
+) -> Vec<String> {
     let mut targets = Vec::new();
     for target in receipt.events.iter().flat_map(|event| event.targets.iter()) {
         if !targets.contains(&target.endpoint_uri) {
@@ -666,16 +721,22 @@ fn sdk_push_target_relays(receipt: &PushOutboxReceipt, status: &SyncStatusReceip
         }
     }
     if targets.is_empty() {
-        targets.extend(status.transport_profile.configured_nostr_relays.clone());
+        targets.extend(
+            status
+                .transport_profile
+                .configured_transport_targets
+                .iter()
+                .map(|target| target.endpoint_uri.clone()),
+        );
     }
     targets
 }
 
-fn sdk_push_connected_relays(receipt: &PushOutboxReceipt) -> Vec<String> {
+fn sdk_push_attempted_transport_endpoints(receipt: &PushOutboxReceipt) -> Vec<String> {
     sdk_push_targets_matching(receipt, |_, target| target.attempted)
 }
 
-fn sdk_push_acknowledged_relays(receipt: &PushOutboxReceipt) -> Vec<String> {
+fn sdk_push_accepted_transport_endpoints(receipt: &PushOutboxReceipt) -> Vec<String> {
     sdk_push_targets_matching(receipt, |_, target| {
         sdk_target_accepted(target.outcome_kind)
     })
@@ -696,14 +757,17 @@ fn sdk_push_targets_matching(
     targets
 }
 
-fn sdk_push_failed_relays(receipt: &PushOutboxReceipt) -> Vec<RelayFailureView> {
+fn sdk_push_failed_transport_targets(
+    receipt: &PushOutboxReceipt,
+) -> Vec<TransportTargetFailureView> {
     receipt
         .events
         .iter()
         .flat_map(|event| event.targets.iter())
         .filter(|target| !sdk_target_accepted(target.outcome_kind))
-        .map(|target| RelayFailureView {
-            relay: target.endpoint_uri.clone(),
+        .map(|target| TransportTargetFailureView {
+            transport_kind: target.transport_kind.clone(),
+            endpoint_uri: target.endpoint_uri.clone(),
             reason: target
                 .message
                 .clone()
@@ -749,7 +813,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
             source: SYNC_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
             replica_db: "missing".to_owned(),
-            relay_count: config.transport.nostr_relay_urls.len(),
+            configured_transport_target_count: config.transport.nostr_relay_urls.len(),
             publish_policy: "any".to_owned(),
             freshness: missing_freshness(),
             queue: derived_projection_sync_queue(0, 0),
@@ -763,18 +827,18 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
     let queue = radroots_replica_sync_status(&executor)?;
     let freshness =
         freshness_for_scope_from_executor(config, &executor, RelayIngestScope::SyncPull)?;
-    let relay_count = config.transport.nostr_relay_urls.len();
+    let configured_transport_target_count = config.transport.nostr_relay_urls.len();
     let publish_policy = "any".to_owned();
     let mut actions = Vec::new();
 
-    if relay_count == 0 {
+    if configured_transport_target_count == 0 {
         actions.push(RELAY_PULL_SETUP_ACTION.to_owned());
         return Ok(SyncSnapshot {
             state: "unconfigured".to_owned(),
             source: SYNC_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
             replica_db: "ready".to_owned(),
-            relay_count,
+            configured_transport_target_count,
             publish_policy,
             freshness,
             queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
@@ -793,7 +857,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
         source: SYNC_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
         replica_db: "ready".to_owned(),
-        relay_count,
+        configured_transport_target_count,
         publish_policy,
         freshness,
         queue: derived_projection_sync_queue(queue.expected_count, queue.pending_count),
@@ -839,7 +903,8 @@ pub(crate) fn relay_provenance_relays_for_scope(
     if run.relay_set_fingerprint != current_fingerprint || !sync_run_successful(&run) {
         return Ok(Vec::new());
     }
-    let mut relays: Vec<String> = serde_json::from_str(run.connected_relays_json.as_str())?;
+    let mut relays: Vec<String> =
+        serde_json::from_str(run.attempted_transport_endpoints_json.as_str())?;
     relays.sort();
     relays.dedup();
     Ok(relays)
@@ -980,9 +1045,9 @@ pub(crate) fn ensure_sync_run_table(executor: &SqliteExecutor) -> Result<(), Run
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             scope TEXT NOT NULL,
             relay_set_fingerprint TEXT NOT NULL,
-            target_relays_json TEXT NOT NULL,
-            connected_relays_json TEXT NOT NULL,
-            failed_relays_json TEXT NOT NULL,
+            target_transport_endpoints_json TEXT NOT NULL,
+            attempted_transport_endpoints_json TEXT NOT NULL,
+            failed_transport_targets_json TEXT NOT NULL,
             started_at INTEGER NOT NULL,
             completed_at INTEGER,
             state TEXT NOT NULL,
@@ -1008,9 +1073,9 @@ fn latest_sync_run(
         &format!(
             "SELECT scope,
                     relay_set_fingerprint,
-                    target_relays_json,
-                    connected_relays_json,
-                    failed_relays_json,
+                    target_transport_endpoints_json,
+                    attempted_transport_endpoints_json,
+                    failed_transport_targets_json,
                     started_at,
                     completed_at,
                     state,
@@ -1035,9 +1100,9 @@ fn sync_run_record_from_row(row: SyncRunRow) -> SyncRunRecord {
     SyncRunRecord {
         scope: row.scope,
         relay_set_fingerprint: row.relay_set_fingerprint,
-        target_relays_json: row.target_relays_json,
-        connected_relays_json: row.connected_relays_json,
-        failed_relays_json: row.failed_relays_json,
+        target_transport_endpoints_json: row.target_transport_endpoints_json,
+        attempted_transport_endpoints_json: row.attempted_transport_endpoints_json,
+        failed_transport_targets_json: row.failed_transport_targets_json,
         started_at: u64_from_db(row.started_at),
         completed_at: row.completed_at.map(u64_from_db),
         state: row.state,
@@ -1057,9 +1122,9 @@ fn record_sync_run(executor: &SqliteExecutor, record: &SyncRunRecord) -> Result<
             "INSERT INTO {SYNC_RUN_TABLE} (
                 scope,
                 relay_set_fingerprint,
-                target_relays_json,
-                connected_relays_json,
-                failed_relays_json,
+                target_transport_endpoints_json,
+                attempted_transport_endpoints_json,
+                failed_transport_targets_json,
                 started_at,
                 completed_at,
                 state,
@@ -1074,9 +1139,9 @@ fn record_sync_run(executor: &SqliteExecutor, record: &SyncRunRecord) -> Result<
         json!([
             record.scope.as_str(),
             record.relay_set_fingerprint.as_str(),
-            record.target_relays_json.as_str(),
-            record.connected_relays_json.as_str(),
-            record.failed_relays_json.as_str(),
+            record.target_transport_endpoints_json.as_str(),
+            record.attempted_transport_endpoints_json.as_str(),
+            record.failed_transport_targets_json.as_str(),
             i64_from_u64(record.started_at),
             record.completed_at.map(i64_from_u64),
             record.state.as_str(),
@@ -1096,17 +1161,17 @@ fn record_sync_run(executor: &SqliteExecutor, record: &SyncRunRecord) -> Result<
 fn sync_record_from_failure(
     scope: RelayIngestScope,
     relays: &[String],
-    target_relays: Vec<String>,
-    failed_relays: Vec<RelayFailureView>,
+    target_transport_endpoints: Vec<String>,
+    failed_transport_targets: Vec<TransportTargetFailureView>,
     started_at: u64,
     reason: String,
 ) -> Result<SyncRunRecord, RuntimeError> {
     Ok(SyncRunRecord {
         scope: scope.id().to_owned(),
         relay_set_fingerprint: relay_set_fingerprint(relays),
-        target_relays_json: serde_json::to_string(&target_relays)?,
-        connected_relays_json: serde_json::to_string(&Vec::<String>::new())?,
-        failed_relays_json: serde_json::to_string(&failed_relays)?,
+        target_transport_endpoints_json: serde_json::to_string(&target_transport_endpoints)?,
+        attempted_transport_endpoints_json: serde_json::to_string(&Vec::<String>::new())?,
+        failed_transport_targets_json: serde_json::to_string(&failed_transport_targets)?,
         started_at,
         completed_at: Some(unix_now()),
         state: "failed".to_owned(),
@@ -1126,8 +1191,8 @@ fn sync_record_from_ingest(
     ingest: &RelayIngestCounts,
     started_at: u64,
 ) -> Result<SyncRunRecord, RuntimeError> {
-    let failed_relays = relay_failures(receipt.failed_relays.clone());
-    let state = if ingest.failed_count > 0 || !failed_relays.is_empty() {
+    let failed_transport_targets = relay_failures(receipt.failed_relays.clone());
+    let state = if ingest.failed_count > 0 || !failed_transport_targets.is_empty() {
         "partial"
     } else {
         "success"
@@ -1135,9 +1200,9 @@ fn sync_record_from_ingest(
     Ok(SyncRunRecord {
         scope: scope.id().to_owned(),
         relay_set_fingerprint: relay_set_fingerprint(relays),
-        target_relays_json: serde_json::to_string(&receipt.target_relays)?,
-        connected_relays_json: serde_json::to_string(&receipt.connected_relays)?,
-        failed_relays_json: serde_json::to_string(&failed_relays)?,
+        target_transport_endpoints_json: serde_json::to_string(&receipt.target_relays)?,
+        attempted_transport_endpoints_json: serde_json::to_string(&receipt.connected_relays)?,
+        failed_transport_targets_json: serde_json::to_string(&failed_transport_targets)?,
         started_at,
         completed_at: Some(unix_now()),
         state: state.to_owned(),
@@ -1145,7 +1210,7 @@ fn sync_record_from_ingest(
         ingested_count: ingest.ingested_count,
         skipped_count: ingest.skipped_count,
         unsupported_count: ingest.unsupported_count,
-        failed_count: ingest.failed_count + failed_relays.len(),
+        failed_count: ingest.failed_count + failed_transport_targets.len(),
         failure_reason: ingest.reason(),
     })
 }
@@ -1229,26 +1294,26 @@ impl RelayIngestCounts {
 
 fn relay_ingest_reason_code(
     ingest: &RelayIngestCounts,
-    failed_relays: &[RelayFailureView],
+    failed_transport_targets: &[TransportTargetFailureView],
 ) -> Option<&'static str> {
     ingest
         .reason_code()
-        .or_else(|| (!failed_relays.is_empty()).then_some("relay_fetch_partial"))
+        .or_else(|| (!failed_transport_targets.is_empty()).then_some("relay_fetch_partial"))
 }
 
 fn relay_ingest_reason(
     ingest: &RelayIngestCounts,
-    failed_relays: &[RelayFailureView],
+    failed_transport_targets: &[TransportTargetFailureView],
 ) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(reason) = ingest.reason() {
         parts.push(reason);
     }
-    if !failed_relays.is_empty() {
+    if !failed_transport_targets.is_empty() {
         parts.push(format!(
             "{} relay(s) failed during fetch: {}",
-            failed_relays.len(),
-            relay_failure_reason(failed_relays)
+            failed_transport_targets.len(),
+            relay_failure_reason(failed_transport_targets)
         ));
     }
 
@@ -1259,10 +1324,10 @@ fn relay_ingest_reason(
     }
 }
 
-fn relay_failure_reason(failed_relays: &[RelayFailureView]) -> String {
-    failed_relays
+fn relay_failure_reason(failed_transport_targets: &[TransportTargetFailureView]) -> String {
+    failed_transport_targets
         .iter()
-        .map(|failure| format!("{}: {}", failure.relay, failure.reason))
+        .map(|failure| format!("{}: {}", failure.endpoint_uri, failure.reason))
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -1361,11 +1426,12 @@ fn event_kind(event: &radroots_nostr::prelude::RadrootsNostrEvent) -> u32 {
     u32::from(event.kind.as_u16())
 }
 
-fn relay_failures(failures: Vec<RadrootsRelayFetchFailure>) -> Vec<RelayFailureView> {
+fn relay_failures(failures: Vec<RadrootsRelayFetchFailure>) -> Vec<TransportTargetFailureView> {
     failures
         .into_iter()
-        .map(|failure| RelayFailureView {
-            relay: failure.relay_url,
+        .map(|failure| TransportTargetFailureView {
+            transport_kind: "nostr".to_owned(),
+            endpoint_uri: failure.relay_url,
             reason: failure.reason,
         })
         .collect()
@@ -1461,6 +1527,7 @@ mod tests {
         PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
         PushOutboxTargetOutcomeKind, PushOutboxTargetReceipt, SyncEventStoreStatus,
         SyncOutboxStatus, SyncStatusReceipt, SyncStatusSource, SyncTransportProfileSummary,
+        SyncTransportStatusSummary, SyncTransportTargetSummary,
     };
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_transport_nostr::{
@@ -1496,7 +1563,10 @@ mod tests {
             .expect("sync pull dry run");
 
         assert_eq!(view.state, "ready");
-        assert_eq!(view.target_relays, vec!["wss://relay.example.com"]);
+        assert_eq!(
+            view.target_transport_endpoints,
+            vec!["wss://relay.example.com"]
+        );
         assert_eq!(view.fetched_count, Some(0));
         assert_eq!(view.ingested_count, Some(0));
         assert_eq!(view.skipped_count, Some(0));
@@ -1557,7 +1627,7 @@ mod tests {
         assert_eq!(view.state, "ready");
         assert_eq!(view.source, "SDK canonical event store and outbox");
         assert_eq!(view.replica_db, "derived_projection_not_checked");
-        assert_eq!(view.relay_count, 2);
+        assert_eq!(view.configured_transport_target_count, 2);
         assert_eq!(view.queue.total_count, Some(0));
         assert_eq!(view.queue.pending_count, 0);
         assert_eq!(view.queue.retryable_count, Some(0));
@@ -1637,7 +1707,10 @@ mod tests {
         assert_eq!(view.state, "dry_run");
         assert_eq!(view.source, "SDK outbox push");
         assert_eq!(view.replica_db, "derived_projection_not_checked");
-        assert_eq!(view.target_relays, vec!["wss://relay.example.com"]);
+        assert_eq!(
+            view.target_transport_endpoints,
+            vec!["wss://relay.example.com"]
+        );
         assert_eq!(view.publishable_count, Some(1));
         assert_eq!(view.published_count, Some(0));
         assert_eq!(view.failed_count, Some(0));
@@ -1734,26 +1807,33 @@ mod tests {
         assert_eq!(view.failed_count, Some(1));
         assert_eq!(view.reason_code.as_deref(), Some("sdk_outbox_push_partial"));
         assert_eq!(
-            view.target_relays,
+            view.target_transport_endpoints,
             vec![
                 "wss://relay-a.example.com".to_owned(),
                 "wss://relay-b.example.com".to_owned()
             ]
         );
         assert_eq!(
-            view.connected_relays,
+            view.attempted_transport_endpoints,
             vec![
                 "wss://relay-a.example.com".to_owned(),
                 "wss://relay-b.example.com".to_owned()
             ]
         );
         assert_eq!(
-            view.acknowledged_relays,
+            view.accepted_transport_endpoints,
             vec!["wss://relay-a.example.com".to_owned()]
         );
-        assert_eq!(view.failed_relays.len(), 1);
-        assert_eq!(view.failed_relays[0].relay, "wss://relay-b.example.com");
-        assert_eq!(view.failed_relays[0].reason, "auth-required: login");
+        assert_eq!(view.failed_transport_targets.len(), 1);
+        assert_eq!(
+            view.failed_transport_targets[0].endpoint_uri,
+            "wss://relay-b.example.com"
+        );
+        assert_eq!(view.failed_transport_targets[0].transport_kind, "nostr");
+        assert_eq!(
+            view.failed_transport_targets[0].reason,
+            "auth-required: login"
+        );
         assert_eq!(
             view.actions,
             vec!["radroots sync push", "radroots sync status get"]
@@ -1800,8 +1880,26 @@ mod tests {
             },
             transport_profile: SyncTransportProfileSummary {
                 transport_profile_id: "nostr".to_owned(),
-                configured_nostr_relay_count: relays.len(),
-                configured_nostr_relays: relays.iter().map(|relay| (*relay).to_owned()).collect(),
+                configured_transport_target_count: relays.len(),
+                configured_transport_targets: relays
+                    .iter()
+                    .enumerate()
+                    .map(|(index, relay)| SyncTransportTargetSummary {
+                        transport_kind: "nostr".to_owned(),
+                        endpoint_uri: (*relay).to_owned(),
+                        endpoint_fingerprint: format!("test-fingerprint-{index}"),
+                    })
+                    .collect(),
+                transport_statuses: vec![SyncTransportStatusSummary {
+                    transport_kind: "nostr".to_owned(),
+                    profile_id: Some("nostr".to_owned()),
+                    endpoint_uri: None,
+                    implementation_state: "available".to_owned(),
+                    readiness: "ready".to_owned(),
+                    publish_usable: true,
+                    fetch_usable: true,
+                    redacted_message: None,
+                }],
             },
         }
     }
@@ -1997,8 +2095,11 @@ mod tests {
         .expect("sync pull partial relay fetch");
 
         assert_eq!(view.state, "ready");
-        assert_eq!(view.connected_relays, vec!["wss://relay-a.example.com"]);
-        assert_eq!(view.failed_relays.len(), 1);
+        assert_eq!(
+            view.attempted_transport_endpoints,
+            vec!["wss://relay-a.example.com"]
+        );
+        assert_eq!(view.failed_transport_targets.len(), 1);
         assert_eq!(view.failed_count, Some(1));
         assert_eq!(view.reason_code.as_deref(), Some("relay_fetch_partial"));
         assert!(

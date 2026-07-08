@@ -97,10 +97,10 @@ pub fn resolve_write_plane_provider(
     publish: &PublishRuntimeView,
 ) -> WritePlaneProviderView {
     let (provider_runtime_id, binding_model, detail) = match config.transport.profile {
-        TransportProfileKind::Nostr => (
-            "nostr",
+        TransportProfileKind::Nostr | TransportProfileKind::Hybrid => (
+            config.transport.profile.as_str(),
             "nostr_transport",
-            "Nostr transport profile is selected; readiness is reported under publish",
+            "configured transport profile publishes through Nostr; readiness is reported under publish",
         ),
         TransportProfileKind::Proxy => (
             "proxy",

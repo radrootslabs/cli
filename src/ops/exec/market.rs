@@ -81,7 +81,7 @@ fn market_refresh_view(mut view: SyncActionView) -> SyncActionView {
             if view.replica_db == "missing" {
                 actions.push("radroots store init".to_owned());
             }
-            if view.relay_count == 0 {
+            if view.configured_transport_target_count == 0 {
                 actions.push("radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com".to_owned());
             }
             if actions.is_empty() {
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(envelope.operation_id, "market.refresh");
         assert_eq!(envelope.result["state"], "ready");
         assert_eq!(
-            envelope.result["target_relays"][0],
+            envelope.result["target_transport_endpoints"][0],
             "wss://relay.example.com"
         );
         assert_eq!(envelope.result["fetched_count"], 0);

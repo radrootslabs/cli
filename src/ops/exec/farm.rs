@@ -232,7 +232,10 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
                 request.operation_id(),
             ));
         }
-        if matches!(self.config.transport.profile, TransportProfileKind::Nostr) {
+        if matches!(
+            self.config.transport.profile,
+            TransportProfileKind::Nostr | TransportProfileKind::Hybrid
+        ) {
             require_relay_target(&request, self.config)?;
         }
 
