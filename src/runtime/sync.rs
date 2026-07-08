@@ -891,6 +891,7 @@ fn sync_transport_target_view(
 
 fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusView> {
     let profile_id = config.transport.profile.as_str();
+    let nostr_targets_configured = !config.transport.nostr_relay_urls.is_empty();
     match config.transport.profile {
         TransportProfileKind::LocalOnly => vec![sync_transport_status_view(
             RadrootsTransportStatus::new(
@@ -903,6 +904,7 @@ fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusVie
         TransportProfileKind::Nostr => {
             vec![sync_transport_status_view(nostr_transport_status(
                 profile_id,
+                nostr_targets_configured,
             ))]
         }
         TransportProfileKind::ReticulumPreview => {
@@ -911,7 +913,10 @@ fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusVie
             )]
         }
         TransportProfileKind::Hybrid => vec![
-            sync_transport_status_view(nostr_transport_status(profile_id)),
+            sync_transport_status_view(nostr_transport_status(
+                profile_id,
+                nostr_targets_configured,
+            )),
             sync_transport_status_view(reticulum_preview_transport_status(profile_id)),
         ],
         TransportProfileKind::Proxy => {
@@ -939,15 +944,23 @@ fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusVie
     }
 }
 
-fn nostr_transport_status(profile_id: &str) -> RadrootsTransportStatus {
+fn nostr_transport_status(profile_id: &str, targets_configured: bool) -> RadrootsTransportStatus {
     RadrootsTransportStatus::new(
         RadrootsTransportKind::Nostr,
-        RadrootsTransportImplementationState::Available,
-        RadrootsTransportReadinessState::Ready,
+        if targets_configured {
+            RadrootsTransportImplementationState::Available
+        } else {
+            RadrootsTransportImplementationState::Misconfigured
+        },
+        if targets_configured {
+            RadrootsTransportReadinessState::Ready
+        } else {
+            RadrootsTransportReadinessState::Misconfigured
+        },
     )
     .with_profile_id(profile_id)
-    .with_publish_usable(true)
-    .with_fetch_usable(true)
+    .with_publish_usable(targets_configured)
+    .with_fetch_usable(targets_configured)
 }
 
 fn reticulum_preview_transport_status(profile_id: &str) -> RadrootsTransportStatus {
@@ -1811,6 +1824,42 @@ mod tests {
     }
 
     #[test]
+    fn sync_pull_empty_nostr_profile_reports_nostr_misconfigured() {
+        let dir = tempdir().expect("tempdir");
+        let config = nostr_config(dir.path(), Vec::new());
+        crate::runtime::store::init(&config).expect("store init");
+
+        let view = pull_with_fetcher(&config, |_, _| {
+            panic!("empty Nostr profile sync pull must not fetch")
+        })
+        .expect("sync pull empty Nostr profile");
+
+        assert_eq!(view.state, "unconfigured");
+        assert_eq!(view.configured_transport_target_count, 0);
+        assert!(view.configured_transport_targets.is_empty());
+        assert_eq!(view.transport_statuses.len(), 1);
+        assert_eq!(view.transport_statuses[0].transport_kind, "nostr");
+        assert_eq!(
+            view.transport_statuses[0].profile_id.as_deref(),
+            Some("nostr")
+        );
+        assert_eq!(
+            view.transport_statuses[0].implementation_state,
+            "misconfigured"
+        );
+        assert_eq!(view.transport_statuses[0].readiness, "misconfigured");
+        assert!(!view.transport_statuses[0].publish_usable);
+        assert!(!view.transport_statuses[0].fetch_usable);
+        assert!(view.target_transport_endpoints.is_empty());
+        assert_eq!(
+            view.actions,
+            vec![
+                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+            ]
+        );
+    }
+
+    #[test]
     fn sync_pull_hybrid_reports_profile_targets_and_nostr_fetch_detail() {
         let dir = tempdir().expect("tempdir");
         let config = hybrid_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
@@ -1844,6 +1893,44 @@ mod tests {
             view.attempted_transport_endpoints,
             vec!["wss://relay.example.com"]
         );
+    }
+
+    #[test]
+    fn sync_pull_empty_hybrid_profile_reports_nostr_misconfigured() {
+        let dir = tempdir().expect("tempdir");
+        let config = hybrid_config(dir.path(), Vec::new());
+        crate::runtime::store::init(&config).expect("store init");
+
+        let view = pull_with_fetcher(&config, |_, _| {
+            panic!("empty Hybrid profile sync pull must not fetch")
+        })
+        .expect("sync pull empty Hybrid profile");
+
+        assert_eq!(view.state, "unavailable");
+        assert_eq!(view.configured_transport_target_count, 1);
+        assert_eq!(view.configured_transport_targets.len(), 1);
+        assert_eq!(
+            view.configured_transport_targets[0].transport_kind,
+            "reticulum"
+        );
+        assert_eq!(view.transport_statuses.len(), 2);
+        assert_eq!(view.transport_statuses[0].transport_kind, "nostr");
+        assert_eq!(
+            view.transport_statuses[0].profile_id.as_deref(),
+            Some("hybrid")
+        );
+        assert_eq!(
+            view.transport_statuses[0].implementation_state,
+            "misconfigured"
+        );
+        assert_eq!(view.transport_statuses[0].readiness, "misconfigured");
+        assert!(!view.transport_statuses[0].publish_usable);
+        assert!(!view.transport_statuses[0].fetch_usable);
+        assert_eq!(view.transport_statuses[1].transport_kind, "reticulum");
+        assert_eq!(view.transport_statuses[1].readiness, "preview_unavailable");
+        assert!(!view.transport_statuses[1].fetch_usable);
+        assert!(view.target_transport_endpoints.is_empty());
+        assert_eq!(view.actions, vec!["radroots transport profile get"]);
     }
 
     #[test]
@@ -2100,12 +2187,26 @@ mod tests {
     #[test]
     fn sync_push_empty_queue_reports_ready_sdk_state() {
         let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path(), Vec::new());
+        let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
 
         let view = sdk_push_view(
             &config,
             PushOutboxReceipt::default(),
-            sdk_status_receipt(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None, &[]),
+            sdk_status_receipt(
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                &["wss://relay.example.com"],
+            ),
         );
 
         assert_eq!(view.state, "ready");
@@ -2226,6 +2327,10 @@ mod tests {
         last_error: Option<String>,
         relays: &[&str],
     ) -> SyncStatusReceipt {
+        assert!(
+            !relays.is_empty(),
+            "sdk_status_receipt must not build ready Nostr status without transport targets"
+        );
         SyncStatusReceipt {
             source: SyncStatusSource::SdkCanonicalStores,
             observed_at_ms: 1_700_000_030_000,
@@ -2876,6 +2981,12 @@ mod tests {
         let mut config = sample_config(root, relays);
         config.transport.profile = TransportProfileKind::Hybrid;
         config.transport.reticulum_preview_behavior = ReticulumPreviewBehavior::DeferDeliveryPlans;
+        config
+    }
+
+    fn nostr_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {
+        let mut config = sample_config(root, relays);
+        config.transport.profile = TransportProfileKind::Nostr;
         config
     }
 
