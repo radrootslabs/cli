@@ -1555,6 +1555,96 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
     }
 }
 
+#[test]
+fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_output() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let view_source =
+        fs::read_to_string(manifest_dir.join("src/view/runtime.rs")).expect("read runtime view");
+    let runtime_source =
+        fs::read_to_string(manifest_dir.join("src/runtime/sync.rs")).expect("read sync runtime");
+
+    for required in [
+        "pub configured_transport_target_count: usize,",
+        "pub configured_transport_targets: Vec<SyncTransportTargetView>,",
+        "pub transport_statuses: Vec<SyncTransportStatusView>,",
+        "pub target_transport_endpoints: Vec<String>,",
+        "pub attempted_transport_endpoints: Vec<String>,",
+        "pub accepted_transport_endpoints: Vec<String>,",
+        "pub failed_transport_targets: Vec<TransportTargetFailureView>,",
+    ] {
+        assert!(
+            view_source.contains(required),
+            "sync view source must retain transport-neutral field witness `{required}`"
+        );
+    }
+
+    for required in [
+        "fn sdk_sync_status_view",
+        "fn sdk_push_action_view",
+        "fn sdk_transport_targets",
+        "fn sdk_push_target_transport_endpoints",
+        "fn sdk_push_failed_transport_targets",
+    ] {
+        assert!(
+            runtime_source.contains(required),
+            "sync runtime source must retain transport-neutral mapping witness `{required}`"
+        );
+    }
+
+    for guarded_source in [
+        source_window(
+            view_source.as_str(),
+            "pub struct SyncStatusView",
+            "impl SyncStatusView",
+        ),
+        source_window(
+            view_source.as_str(),
+            "pub struct SyncActionView",
+            "impl SyncActionView",
+        ),
+        source_window(
+            runtime_source.as_str(),
+            "fn sdk_sync_status_view",
+            "fn sdk_push_dry_run_view",
+        ),
+        source_window(
+            runtime_source.as_str(),
+            "fn sdk_push_action_view",
+            "fn sdk_transport_targets",
+        ),
+    ] {
+        for forbidden in [
+            concat!("configured_nostr", "_relay", "_count"),
+            concat!("configured_nostr", "_relays"),
+            concat!("target", "_relays"),
+            concat!("connected", "_relays"),
+            concat!("acknowledged", "_relays"),
+            concat!("failed", "_relays"),
+            concat!("relay", "_count"),
+        ] {
+            assert!(
+                !guarded_source.contains(forbidden),
+                "generic sync source must not expose retired relay-shaped field `{forbidden}`"
+            );
+        }
+    }
+}
+
+fn source_window<'source>(
+    source: &'source str,
+    start_marker: &str,
+    end_marker: &str,
+) -> &'source str {
+    let start = source
+        .find(start_marker)
+        .unwrap_or_else(|| panic!("failed to find source marker `{start_marker}`"));
+    let after_start = &source[start..];
+    let end = after_start
+        .find(end_marker)
+        .unwrap_or_else(|| panic!("failed to find source marker `{end_marker}`"));
+    &after_start[..end]
+}
+
 fn help_lists(stdout: &str, command: &str) -> bool {
     stdout.lines().any(|line| {
         let line = line.trim_start();
