@@ -3381,9 +3381,9 @@ pub struct RpcStatusView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_signer_modes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bridge_enabled: Option<bool>,
+    pub daemon_proxy_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bridge_ready: Option<bool>,
+    pub daemon_proxy_ready: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]

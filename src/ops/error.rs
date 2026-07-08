@@ -804,7 +804,7 @@ fn looks_like_auth_failure(value: &str) -> bool {
         value,
         &[
             "authentication",
-            "bridge auth",
+            "daemon proxy auth",
             "authorization",
             "authorize",
             "unauthorized",

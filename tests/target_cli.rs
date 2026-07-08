@@ -1439,6 +1439,16 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         }
     }
 
+    for relative_path in ["src/ops/error.rs", "src/view/runtime.rs"] {
+        let source = fs::read_to_string(manifest_dir.join(relative_path)).expect("read source");
+        for forbidden in ["bridge_enabled", "bridge_ready", "bridge auth"] {
+            assert!(
+                !source.contains(forbidden),
+                "{relative_path} must not contain stale transport bridge term `{forbidden}`"
+            );
+        }
+    }
+
     let transport_source =
         fs::read_to_string(manifest_dir.join("src/runtime/transport.rs")).expect("read source");
     for required in [
