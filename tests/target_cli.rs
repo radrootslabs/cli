@@ -1297,9 +1297,24 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
 
     assert_eq!(value["operation_id"], "transport.profile.get");
     assert_eq!(result["profile_id"], "reticulum_preview");
-    assert_eq!(result["transport_kind"], "reticulum");
-    assert_eq!(result["implementation_state"], "preview_unavailable");
-    assert_eq!(result["usable_for_delivery"], false);
+    assert_eq!(result["profile_kind"], "reticulum_preview");
+    assert_eq!(result["profile_delivery_usable"], false);
+    assert!(result.get("transport_kind").is_none());
+    assert!(result.get("implementation_state").is_none());
+    assert_eq!(
+        result["transport_statuses"][0]["transport_kind"],
+        "reticulum"
+    );
+    assert_eq!(
+        result["transport_statuses"][0]["implementation_state"],
+        "preview_unavailable"
+    );
+    assert_eq!(
+        result["transport_statuses"][0]["readiness"],
+        "preview_unavailable"
+    );
+    assert_eq!(result["transport_statuses"][0]["publish_usable"], false);
+    assert_eq!(result["transport_statuses"][0]["fetch_usable"], false);
     assert_eq!(result["reticulum_preview_behavior"], "defer_delivery_plans");
     assert_eq!(result["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     assert!(
@@ -1316,6 +1331,32 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
             .expect("actions json")
             .contains("nostr")
     );
+}
+
+#[test]
+fn transport_profile_local_only_output_uses_profile_and_local_status_fields() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let value = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
+    let result = &value["result"];
+    let statuses = result["transport_statuses"]
+        .as_array()
+        .expect("transport statuses");
+    let local = &statuses[0];
+
+    assert_eq!(value["operation_id"], "transport.profile.get");
+    assert_eq!(result["profile_id"], "local_only");
+    assert_eq!(result["profile_kind"], "local_only");
+    assert_eq!(result["profile_delivery_usable"], false);
+    assert!(result.get("transport_kind").is_none());
+    assert!(result.get("implementation_state").is_none());
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(local["transport_kind"], "local");
+    assert_eq!(local["profile_id"], "local_only");
+    assert_eq!(local["implementation_state"], "available");
+    assert_eq!(local["readiness"], "ready");
+    assert_eq!(local["publish_usable"], false);
+    assert_eq!(local["fetch_usable"], false);
 }
 
 #[test]
@@ -1338,11 +1379,35 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
 
     assert_eq!(value["operation_id"], "transport.profile.set");
     assert_eq!(value["result"]["profile_id"], "hybrid");
-    assert_eq!(value["result"]["transport_kind"], "hybrid");
+    assert_eq!(value["result"]["profile_kind"], "hybrid");
+    assert!(value["result"].get("transport_kind").is_none());
     assert_eq!(value["result"]["state"], "configured");
     assert_eq!(
         value["result"]["nostr_relays"][0],
         "wss://relay.example.com"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["transport_kind"],
+        "nostr"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["implementation_state"],
+        "available"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][1]["transport_kind"],
+        "reticulum"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][1]["readiness"],
+        "preview_unavailable"
     );
     assert_eq!(
         value["result"]["reticulum_preview_behavior"],
@@ -1369,6 +1434,59 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
 }
 
 #[test]
+fn transport_status_hybrid_output_reports_nostr_and_reticulum_rows() {
+    let sandbox = RadrootsCliSandbox::new();
+    sandbox.write_app_config(
+        "[transport]\nprofile = \"hybrid\"\n\n[transport.nostr]\nrelay_urls = [\"wss://relay.example.com\"]\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+    );
+
+    let value = sandbox.json_success(&["--format", "json", "transport", "status"]);
+    let result = &value["result"];
+    let transports = result["transports"].as_array().expect("transports");
+    let nostr = &transports[0];
+    let reticulum = &transports[1];
+
+    assert_eq!(value["operation_id"], "transport.status");
+    assert_eq!(result["active_profile"]["profile_id"], "hybrid");
+    assert_eq!(result["active_profile"]["profile_kind"], "hybrid");
+    assert_eq!(result["active_profile"]["profile_delivery_usable"], true);
+    assert_eq!(transports.len(), 2);
+    assert_eq!(nostr["transport_kind"], "nostr");
+    assert_eq!(nostr["implementation_state"], "available");
+    assert_eq!(nostr["readiness"], "ready");
+    assert_eq!(nostr["publish_usable"], true);
+    assert_eq!(nostr["fetch_usable"], true);
+    assert_eq!(reticulum["transport_kind"], "reticulum");
+    assert_eq!(reticulum["implementation_state"], "preview_unavailable");
+    assert_eq!(reticulum["readiness"], "preview_unavailable");
+    assert_eq!(reticulum["publish_usable"], false);
+    assert_eq!(reticulum["fetch_usable"], false);
+}
+
+#[test]
+fn transport_status_nostr_output_uses_canonical_transport_row() {
+    let sandbox = RadrootsCliSandbox::new();
+    configure_nostr_transport(&sandbox, "wss://relay.example.com");
+
+    let value = sandbox.json_success(&["--format", "json", "transport", "status"]);
+    let result = &value["result"];
+    let transports = result["transports"].as_array().expect("transports");
+    let nostr = &transports[0];
+
+    assert_eq!(value["operation_id"], "transport.status");
+    assert_eq!(result["active_profile"]["profile_id"], "nostr");
+    assert_eq!(result["active_profile"]["profile_kind"], "nostr");
+    assert_eq!(result["active_profile"]["profile_delivery_usable"], true);
+    assert_eq!(transports.len(), 1);
+    assert_eq!(nostr["transport_kind"], "nostr");
+    assert_eq!(nostr["profile_id"], "nostr");
+    assert_eq!(nostr["implementation_state"], "available");
+    assert_eq!(nostr["readiness"], "ready");
+    assert_eq!(nostr["publish_usable"], true);
+    assert_eq!(nostr["fetch_usable"], true);
+}
+
+#[test]
 fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config(
@@ -1383,14 +1501,23 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
     assert_eq!(value["operation_id"], "transport.status");
     assert_eq!(result["state"], "ready");
     assert_eq!(transports.len(), 1);
-    assert_eq!(active["profile_id"], "reticulum_preview");
+    assert_eq!(result["active_profile"]["profile_id"], "reticulum_preview");
+    assert_eq!(
+        result["active_profile"]["profile_kind"],
+        "reticulum_preview"
+    );
+    assert_eq!(result["active_profile"]["profile_delivery_usable"], false);
     assert_eq!(active["transport_kind"], "reticulum");
     assert_eq!(active["implementation_state"], "preview_unavailable");
-    assert_eq!(active["usable_for_delivery"], false);
-    assert_eq!(active["reticulum_preview_behavior"], "defer_delivery_plans");
-    assert_eq!(active["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
+    assert_eq!(active["readiness"], "preview_unavailable");
+    assert_eq!(active["publish_usable"], false);
+    assert_eq!(active["fetch_usable"], false);
+    assert_eq!(
+        active["redacted_message"],
+        RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
+    );
     assert!(
-        !active["message"]
+        !active["redacted_message"]
             .as_str()
             .expect("message")
             .contains("Nostr")
@@ -1503,8 +1630,9 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         fs::read_to_string(manifest_dir.join("src/runtime/transport.rs")).expect("read source");
     for required in [
         "RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE",
-        "if !matches!(",
-        "TransportProfileKind::ReticulumPreview | TransportProfileKind::Hybrid",
+        "RadrootsTransportStatus::new",
+        "RadrootsTransportKind::Reticulum",
+        "transport_runtime_status_view",
         "validate_proxy_token_material",
         "proxy_token_ready(&validation_config)",
         "crate::runtime::sdk::validate_proxy_bearer_token(config)",
@@ -1714,7 +1842,10 @@ fn config_get_exposes_proxy_missing_token_state() {
     assert_eq!(value["result"]["write_plane"]["state"], "unconfigured");
     assert_eq!(value["result"]["transport"]["profile_id"], "proxy");
     assert_eq!(value["result"]["transport"]["state"], "unconfigured");
-    assert_eq!(value["result"]["transport"]["usable_for_delivery"], false);
+    assert_eq!(
+        value["result"]["transport"]["profile_delivery_usable"],
+        false
+    );
     assert_eq!(
         value["result"]["transport"]["proxy_url"],
         "http://127.0.0.1:7070"
@@ -1753,7 +1884,10 @@ fn config_get_proxy_with_token_file_reports_ready_transport() {
     assert_eq!(value["result"]["publish"]["reason"], Value::Null);
     assert_eq!(value["result"]["transport"]["profile_id"], "proxy");
     assert_eq!(value["result"]["transport"]["state"], "configured");
-    assert_eq!(value["result"]["transport"]["usable_for_delivery"], true);
+    assert_eq!(
+        value["result"]["transport"]["profile_delivery_usable"],
+        true
+    );
     assert_eq!(
         value["result"]["transport"]["proxy_token_source"],
         "token_file"
@@ -1791,7 +1925,10 @@ fn config_get_proxy_with_token_secret_id_reports_ready_transport() {
     assert_eq!(value["result"]["publish"]["executable"], true);
     assert_eq!(value["result"]["transport"]["profile_id"], "proxy");
     assert_eq!(value["result"]["transport"]["state"], "configured");
-    assert_eq!(value["result"]["transport"]["usable_for_delivery"], true);
+    assert_eq!(
+        value["result"]["transport"]["profile_delivery_usable"],
+        true
+    );
     assert_eq!(
         value["result"]["transport"]["proxy_token_source"],
         "token_secret_id"
@@ -1913,7 +2050,23 @@ fn transport_profile_set_proxy_persists_token_file_without_printing_token_materi
     assert_eq!(value["operation_id"], "transport.profile.set");
     assert_eq!(value["result"]["profile_id"], "proxy");
     assert_eq!(value["result"]["state"], "configured");
-    assert_eq!(value["result"]["usable_for_delivery"], true);
+    assert_eq!(value["result"]["profile_delivery_usable"], true);
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["transport_kind"],
+        "proxy"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["implementation_state"],
+        "available"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["readiness"],
+        "ready"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["publish_usable"],
+        true
+    );
     assert_eq!(value["result"]["proxy_token_source"], "token_file");
     assert_eq!(
         value["result"]["proxy_token_file"],
@@ -1962,7 +2115,23 @@ fn transport_profile_set_proxy_persists_token_secret_id_without_printing_token_m
     assert_eq!(value["operation_id"], "transport.profile.set");
     assert_eq!(value["result"]["profile_id"], "proxy");
     assert_eq!(value["result"]["state"], "configured");
-    assert_eq!(value["result"]["usable_for_delivery"], true);
+    assert_eq!(value["result"]["profile_delivery_usable"], true);
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["transport_kind"],
+        "proxy"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["implementation_state"],
+        "available"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["readiness"],
+        "ready"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["publish_usable"],
+        true
+    );
     assert_eq!(value["result"]["proxy_token_source"], "token_secret_id");
     assert!(value["result"]["proxy_token_file"].is_null());
     assert_eq!(

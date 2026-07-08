@@ -3272,10 +3272,9 @@ pub struct TransportProfileView {
     pub state: String,
     pub source: String,
     pub profile_id: String,
-    pub transport_kind: String,
+    pub profile_kind: String,
     pub configured_state: String,
-    pub implementation_state: String,
-    pub usable_for_delivery: bool,
+    pub profile_delivery_usable: bool,
     pub message: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nostr_relays: Vec<String>,
@@ -3289,6 +3288,7 @@ pub struct TransportProfileView {
     pub proxy_token_file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_token_secret_id: Option<String>,
+    pub transport_statuses: Vec<TransportRuntimeStatusView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
 }
@@ -3297,7 +3297,32 @@ pub struct TransportProfileView {
 pub struct TransportStatusView {
     pub state: String,
     pub source: String,
-    pub transports: Vec<TransportProfileView>,
+    pub active_profile: TransportProfileSummaryView,
+    pub transports: Vec<TransportRuntimeStatusView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransportProfileSummaryView {
+    pub profile_id: String,
+    pub profile_kind: String,
+    pub configured_state: String,
+    pub profile_delivery_usable: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransportRuntimeStatusView {
+    pub transport_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_uri: Option<String>,
+    pub implementation_state: String,
+    pub readiness: String,
+    pub publish_usable: bool,
+    pub fetch_usable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redacted_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

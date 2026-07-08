@@ -2,7 +2,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use radroots_sdk::{PushOutboxRequest, SyncStatusRequest};
-use radroots_transport::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
+use radroots_transport::{
+    RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
+    RadrootsTransportImplementationState, RadrootsTransportKind, RadrootsTransportReadinessState,
+    RadrootsTransportStatus,
+};
 use serde_json::Value as JsonValue;
 use toml::{Value, map::Map};
 
@@ -11,7 +15,8 @@ use crate::runtime::RuntimeError;
 use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy};
 use crate::view::runtime::{
-    TransportOutboxPushView, TransportOutboxStatusView, TransportProfileView, TransportStatusView,
+    TransportOutboxPushView, TransportOutboxStatusView, TransportProfileSummaryView,
+    TransportProfileView, TransportRuntimeStatusView, TransportStatusView,
 };
 
 const TRANSPORT_SOURCE: &str = "transport profile config";
@@ -118,26 +123,13 @@ pub fn set_profile(
 }
 
 pub fn status(config: &RuntimeConfig) -> TransportStatusView {
-    let mut transports = vec![active_profile_view(config)];
-    if !matches!(
-        config.transport.profile,
-        TransportProfileKind::ReticulumPreview | TransportProfileKind::Hybrid
-    ) {
-        transports.push(profile_view_from_parts(
-            "reticulum_preview",
-            Vec::new(),
-            Some("reject_delivery_attempts".to_owned()),
-            None,
-            None,
-            None,
-            "preview_unavailable",
-        ));
-    }
+    let profile = active_profile_view(config);
 
     TransportStatusView {
         state: "ready".to_owned(),
         source: TRANSPORT_SOURCE.to_owned(),
-        transports,
+        active_profile: profile.summary(),
+        transports: profile.transport_statuses,
     }
 }
 
@@ -314,31 +306,24 @@ fn profile_view_from_parts(
     proxy_token_secret_id: Option<String>,
     configured_state: &str,
 ) -> TransportProfileView {
-    let transport_kind = match profile_id {
-        "nostr" => "nostr",
-        "reticulum_preview" => "reticulum",
-        "hybrid" => "hybrid",
-        "proxy" => "proxy",
-        _ => "local",
-    };
-    let implementation_state = match profile_id {
-        "nostr" => "available",
-        "reticulum_preview" => "preview_unavailable",
-        "hybrid" => "available_with_preview",
-        "proxy" => "delegated",
-        _ => "local_only",
-    };
-    let usable_for_delivery =
-        matches!(profile_id, "nostr" | "hybrid" | "proxy") && configured_state == "configured";
+    let transport_statuses = transport_statuses_from_parts(
+        profile_id,
+        nostr_relays.as_slice(),
+        proxy_url.as_deref(),
+        configured_state,
+    );
+    let profile_delivery_usable = transport_statuses
+        .iter()
+        .any(|status| status.publish_usable);
     let message = match profile_id {
-        "nostr" if usable_for_delivery => "Nostr relay transport is configured for delivery",
+        "nostr" if profile_delivery_usable => "Nostr relay transport is configured for delivery",
         "nostr" => "Nostr transport requires configured Nostr relay targets",
         "reticulum_preview" => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
-        "hybrid" if usable_for_delivery => {
+        "hybrid" if profile_delivery_usable => {
             "Hybrid transport publishes through configured Nostr relays and reports Reticulum preview status"
         }
         "hybrid" => "Hybrid transport requires configured Nostr relay targets",
-        "proxy" if usable_for_delivery => {
+        "proxy" if profile_delivery_usable => {
             "Proxy transport delegates delivery to the configured endpoint"
         }
         "proxy" => "Proxy transport requires a configured token file or token secret id",
@@ -358,10 +343,9 @@ fn profile_view_from_parts(
         state: configured_state.to_owned(),
         source: TRANSPORT_SOURCE.to_owned(),
         profile_id: profile_id.to_owned(),
-        transport_kind: transport_kind.to_owned(),
+        profile_kind: profile_id.to_owned(),
         configured_state: configured_state.to_owned(),
-        implementation_state: implementation_state.to_owned(),
-        usable_for_delivery,
+        profile_delivery_usable,
         message: message.to_owned(),
         nostr_relays,
         reticulum_preview_behavior,
@@ -369,12 +353,147 @@ fn profile_view_from_parts(
         proxy_token_source,
         proxy_token_file,
         proxy_token_secret_id,
-        actions: profile_actions(profile_id, usable_for_delivery),
+        transport_statuses,
+        actions: profile_actions(profile_id, profile_delivery_usable),
     }
 }
 
-fn profile_actions(profile_id: &str, usable_for_delivery: bool) -> Vec<String> {
-    if usable_for_delivery {
+fn transport_statuses_from_parts(
+    profile_id: &str,
+    nostr_relays: &[String],
+    proxy_url: Option<&str>,
+    configured_state: &str,
+) -> Vec<TransportRuntimeStatusView> {
+    match profile_id {
+        "nostr" => vec![transport_runtime_status_view(nostr_transport_status(
+            profile_id,
+            !nostr_relays.is_empty(),
+        ))],
+        "reticulum_preview" => {
+            vec![transport_runtime_status_view(
+                reticulum_preview_transport_status(profile_id),
+            )]
+        }
+        "hybrid" => vec![
+            transport_runtime_status_view(nostr_transport_status(
+                profile_id,
+                !nostr_relays.is_empty(),
+            )),
+            transport_runtime_status_view(reticulum_preview_transport_status(profile_id)),
+        ],
+        "proxy" => vec![transport_runtime_status_view(proxy_transport_status(
+            profile_id,
+            proxy_url,
+            configured_state == "configured",
+        ))],
+        _ => vec![transport_runtime_status_view(local_transport_status(
+            profile_id,
+        ))],
+    }
+}
+
+fn local_transport_status(profile_id: &str) -> RadrootsTransportStatus {
+    RadrootsTransportStatus::new(
+        RadrootsTransportKind::Local,
+        RadrootsTransportImplementationState::Available,
+        RadrootsTransportReadinessState::Ready,
+    )
+    .with_profile_id(profile_id)
+    .with_redacted_message("Local-only profile writes only to local state")
+}
+
+fn nostr_transport_status(profile_id: &str, targets_configured: bool) -> RadrootsTransportStatus {
+    RadrootsTransportStatus::new(
+        RadrootsTransportKind::Nostr,
+        if targets_configured {
+            RadrootsTransportImplementationState::Available
+        } else {
+            RadrootsTransportImplementationState::Misconfigured
+        },
+        if targets_configured {
+            RadrootsTransportReadinessState::Ready
+        } else {
+            RadrootsTransportReadinessState::Misconfigured
+        },
+    )
+    .with_profile_id(profile_id)
+    .with_publish_usable(targets_configured)
+    .with_fetch_usable(targets_configured)
+}
+
+fn reticulum_preview_transport_status(profile_id: &str) -> RadrootsTransportStatus {
+    RadrootsTransportStatus::new(
+        RadrootsTransportKind::Reticulum,
+        RadrootsTransportImplementationState::PreviewUnavailable,
+        RadrootsTransportReadinessState::PreviewUnavailable,
+    )
+    .with_profile_id(profile_id)
+    .with_endpoint_uri(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI)
+    .with_redacted_message(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE)
+}
+
+fn proxy_transport_status(
+    profile_id: &str,
+    proxy_url: Option<&str>,
+    token_ready: bool,
+) -> RadrootsTransportStatus {
+    let mut status = RadrootsTransportStatus::new(
+        RadrootsTransportKind::Proxy,
+        if token_ready {
+            RadrootsTransportImplementationState::Available
+        } else {
+            RadrootsTransportImplementationState::Misconfigured
+        },
+        if token_ready {
+            RadrootsTransportReadinessState::Ready
+        } else {
+            RadrootsTransportReadinessState::Misconfigured
+        },
+    )
+    .with_profile_id(profile_id)
+    .with_publish_usable(token_ready);
+    if let Some(proxy_url) = proxy_url {
+        status = status.with_endpoint_uri(proxy_url);
+    }
+    status
+}
+
+fn transport_runtime_status_view(status: RadrootsTransportStatus) -> TransportRuntimeStatusView {
+    TransportRuntimeStatusView {
+        transport_kind: status.kind.canonical_label(),
+        profile_id: status.profile_id,
+        endpoint_uri: status.endpoint_uri,
+        implementation_state: transport_implementation_state_label(status.implementation_state)
+            .to_owned(),
+        readiness: transport_readiness_state_label(status.readiness).to_owned(),
+        publish_usable: status.publish_usable,
+        fetch_usable: status.fetch_usable,
+        redacted_message: status.redacted_message,
+    }
+}
+
+fn transport_implementation_state_label(
+    state: RadrootsTransportImplementationState,
+) -> &'static str {
+    match state {
+        RadrootsTransportImplementationState::Available => "available",
+        RadrootsTransportImplementationState::Disabled => "disabled",
+        RadrootsTransportImplementationState::Misconfigured => "misconfigured",
+        RadrootsTransportImplementationState::PreviewUnavailable => "preview_unavailable",
+    }
+}
+
+fn transport_readiness_state_label(state: RadrootsTransportReadinessState) -> &'static str {
+    match state {
+        RadrootsTransportReadinessState::Ready => "ready",
+        RadrootsTransportReadinessState::Disabled => "disabled",
+        RadrootsTransportReadinessState::Misconfigured => "misconfigured",
+        RadrootsTransportReadinessState::PreviewUnavailable => "preview_unavailable",
+    }
+}
+
+fn profile_actions(profile_id: &str, profile_delivery_usable: bool) -> Vec<String> {
+    if profile_delivery_usable {
         return Vec::new();
     }
     match profile_id {
@@ -445,12 +564,23 @@ fn validate_proxy_token_material(
 
 trait TransportProfileViewMessage {
     fn with_message(self, message: String) -> Self;
+    fn summary(&self) -> TransportProfileSummaryView;
 }
 
 impl TransportProfileViewMessage for TransportProfileView {
     fn with_message(mut self, message: String) -> Self {
         self.message = message;
         self
+    }
+
+    fn summary(&self) -> TransportProfileSummaryView {
+        TransportProfileSummaryView {
+            profile_id: self.profile_id.clone(),
+            profile_kind: self.profile_kind.clone(),
+            configured_state: self.configured_state.clone(),
+            profile_delivery_usable: self.profile_delivery_usable,
+            message: self.message.clone(),
+        }
     }
 }
 

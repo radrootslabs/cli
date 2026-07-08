@@ -98,15 +98,14 @@ fn transport_profile_document(envelope: &OutputEnvelope, result: &Value) -> Term
     common::push_path_field(&mut document, "State", result, &["state"]);
     common::push_path_field(&mut document, "Source", result, &["source"]);
     common::push_path_field(&mut document, "Profile", result, &["profile_id"]);
-    common::push_path_field(&mut document, "Kind", result, &["transport_kind"]);
+    common::push_path_field(&mut document, "Profile kind", result, &["profile_kind"]);
     common::push_path_field(&mut document, "Configured", result, &["configured_state"]);
-    common::push_path_field(
+    common::push_bool_field(
         &mut document,
-        "Implementation",
+        "Delivery usable",
         result,
-        &["implementation_state"],
+        &["profile_delivery_usable"],
     );
-    common::push_bool_field(&mut document, "Usable", result, &["usable_for_delivery"]);
     common::push_path_field(&mut document, "Message", result, &["message"]);
     common::push_path_field(
         &mut document,
@@ -138,6 +137,7 @@ fn transport_profile_document(envelope: &OutputEnvelope, result: &Value) -> Term
             "No Nostr relays configured",
         ));
     }
+    push_transport_status_table(&mut document, result, &["transport_statuses"]);
     document
 }
 
@@ -146,34 +146,74 @@ fn transport_status_document(envelope: &OutputEnvelope, result: &Value) -> Termi
     let mut document = common::document_with_title(envelope, title);
     common::push_path_field(&mut document, "State", result, &["state"]);
     common::push_path_field(&mut document, "Source", result, &["source"]);
-    let rows = common::array(result, &["transports"])
+    common::push_path_field(
+        &mut document,
+        "Profile",
+        result,
+        &["active_profile", "profile_id"],
+    );
+    common::push_path_field(
+        &mut document,
+        "Profile kind",
+        result,
+        &["active_profile", "profile_kind"],
+    );
+    common::push_path_field(
+        &mut document,
+        "Configured",
+        result,
+        &["active_profile", "configured_state"],
+    );
+    common::push_bool_field(
+        &mut document,
+        "Delivery usable",
+        result,
+        &["active_profile", "profile_delivery_usable"],
+    );
+    common::push_path_field(
+        &mut document,
+        "Message",
+        result,
+        &["active_profile", "message"],
+    );
+    push_transport_status_table(&mut document, result, &["transports"]);
+    document
+}
+
+fn push_transport_status_table(document: &mut TerminalDocument, result: &Value, path: &[&str]) {
+    let rows = common::array(result, path)
         .into_iter()
         .flatten()
         .map(|transport| {
             TerminalTableRow::new(vec![
-                common::string(transport, &["profile_id"]).unwrap_or_default(),
                 common::string(transport, &["transport_kind"]).unwrap_or_default(),
-                common::string(transport, &["configured_state"]).unwrap_or_default(),
+                common::string(transport, &["profile_id"]).unwrap_or_default(),
                 common::string(transport, &["implementation_state"]).unwrap_or_default(),
-                common::bool_path(transport, &["usable_for_delivery"])
+                common::string(transport, &["readiness"]).unwrap_or_default(),
+                common::bool_path(transport, &["publish_usable"])
                     .map(|value| if value { "yes" } else { "no" }.to_owned())
                     .unwrap_or_default(),
+                common::bool_path(transport, &["fetch_usable"])
+                    .map(|value| if value { "yes" } else { "no" }.to_owned())
+                    .unwrap_or_default(),
+                common::string(transport, &["endpoint_uri"]).unwrap_or_default(),
             ])
         })
         .collect::<Vec<_>>();
     document.sections.push(common::table_section(
         "Transports",
         vec![
-            TerminalTableColumn::new("Profile", 7, 18),
             TerminalTableColumn::new("Kind", 4, 12),
-            TerminalTableColumn::new("Configured", 10, 18),
+            TerminalTableColumn::new("Profile", 7, 18),
             TerminalTableColumn::new("Implementation", 14, 24),
-            TerminalTableColumn::new("Usable", 6, 6),
+            TerminalTableColumn::new("Readiness", 9, 20),
+            TerminalTableColumn::new("Publish", 7, 7),
+            TerminalTableColumn::new("Fetch", 5, 5),
+            TerminalTableColumn::new("Endpoint", 8, 32),
         ],
         rows,
         "No transports reported",
     ));
-    document
 }
 
 fn transport_outbox_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
