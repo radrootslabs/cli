@@ -48,7 +48,7 @@ radroots_transport_nostr = { path = "../lib/crates/transport_nostr", default-fea
 ] }
 radroots_runtime = { path = "../lib/crates/runtime" }
 radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
-radroots_sdk = { path = "../sdk/crates/sdk", features = ["local-runtime-radrootsd-proxy", "relay-runtime"] }
+radroots_sdk = { path = "../sdk/crates/sdk", features = ["local-runtime-radrootsd-proxy", "transport-nostr-runtime"] }
 radroots_secret_vault = { path = "../lib/crates/secret_vault", features = ["std", "os-keyring"] }
 radroots_sql_core = { path = "../lib/crates/sql_core", features = ["native"] }
 radroots_sp1_host_trade = { path = "../lib/crates/sp1_host_trade" }
