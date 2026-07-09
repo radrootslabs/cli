@@ -186,7 +186,7 @@ fn push_transport_status_table(document: &mut TerminalDocument, result: &Value, 
         .flatten()
         .map(|transport| {
             TerminalTableRow::new(vec![
-                common::string(transport, &["transport_kind"]).unwrap_or_default(),
+                common::string(transport, &["transport"]).unwrap_or_default(),
                 common::string(transport, &["profile_id"]).unwrap_or_default(),
                 common::bool_path(transport, &["configured"])
                     .map(|value| if value { "yes" } else { "no" }.to_owned())

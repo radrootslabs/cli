@@ -175,7 +175,7 @@ fn trade_satisfaction_policy(mode: PublishMode) -> Result<SatisfactionPolicy, Ru
 }
 
 fn trade_target_policy() -> TargetPolicy {
-    TargetPolicy::use_transport_profile()
+    TargetPolicy::default_profile()
 }
 
 fn trade_privacy_confirmation(confirm_public_note: bool) -> PrivacyPreflightConfirmation {

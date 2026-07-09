@@ -16,12 +16,12 @@ use radroots_nostr_connect::prelude::{
     RadrootsNostrConnectClientTarget, RadrootsNostrConnectError, RadrootsNostrConnectUri,
 };
 use radroots_sdk::{
-    HybridProfile, NostrProfile, NostrRelayUrlPolicy, ProxyProfile, RadrootsClient,
+    HybridProfile, MeshScopeId, NostrProfile, NostrRelayUrlPolicy, ProxyProfile, RadrootsClient,
     RadrootsClientBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
     RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
     RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
-    ReticulumPreviewBehavior as SdkReticulumPreviewBehavior, ReticulumPreviewProfile, TargetPolicy,
-    TransportProfile,
+    ReticulumPreviewAgentEndpoint, ReticulumPreviewBehavior as SdkReticulumPreviewBehavior,
+    ReticulumPreviewProfile, TargetPolicy, TransportProfile,
 };
 use radroots_transport_nostr::{
     RadrootsNostrClientFetchAdapter, RadrootsRelayFetchRequest, RadrootsRelayFetchedEventsReceipt,
@@ -638,7 +638,7 @@ pub fn sdk_nostr_relay_url_policy(config: &RuntimeConfig) -> NostrRelayUrlPolicy
 }
 
 pub fn sdk_target_policy(_config: &RuntimeConfig) -> TargetPolicy {
-    TargetPolicy::use_transport_profile()
+    TargetPolicy::default_profile()
 }
 
 fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, RuntimeError> {
@@ -653,7 +653,7 @@ fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, Run
             Ok(TransportProfile::nostr(profile))
         }
         TransportProfileKind::ReticulumPreview => Ok(TransportProfile::reticulum_preview(
-            sdk_reticulum_preview_profile(config),
+            sdk_reticulum_preview_profile(config)?,
         )),
         TransportProfileKind::Hybrid => {
             let nostr = NostrProfile::new(
@@ -663,7 +663,7 @@ fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, Run
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
             Ok(TransportProfile::hybrid(HybridProfile::new(
                 nostr,
-                sdk_reticulum_preview_profile(config),
+                sdk_reticulum_preview_profile(config)?,
             )))
         }
         TransportProfileKind::Proxy => {
@@ -674,7 +674,9 @@ fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, Run
     }
 }
 
-fn sdk_reticulum_preview_profile(config: &RuntimeConfig) -> ReticulumPreviewProfile {
+fn sdk_reticulum_preview_profile(
+    config: &RuntimeConfig,
+) -> Result<ReticulumPreviewProfile, RuntimeError> {
     let behavior = match config.transport.reticulum_preview_behavior {
         ReticulumPreviewBehavior::RejectDeliveryAttempts => {
             SdkReticulumPreviewBehavior::RejectDeliveryAttempts
@@ -683,7 +685,18 @@ fn sdk_reticulum_preview_profile(config: &RuntimeConfig) -> ReticulumPreviewProf
             SdkReticulumPreviewBehavior::DeferDeliveryPlans
         }
     };
-    ReticulumPreviewProfile::preview_unavailable().with_behavior(behavior)
+    let scope = MeshScopeId::parse(config.transport.reticulum_preview_scope.as_str())
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let mut profile = ReticulumPreviewProfile::preview_unavailable()
+        .with_behavior(behavior)
+        .with_scope(scope);
+    if let Some(agent_endpoint) = config.transport.reticulum_preview_agent_endpoint.as_ref() {
+        profile = profile.with_agent_endpoint(
+            ReticulumPreviewAgentEndpoint::parse(agent_endpoint.as_str())
+                .map_err(|error| RuntimeError::Config(error.to_string()))?,
+        );
+    }
+    Ok(profile)
 }
 
 pub(crate) fn validate_proxy_bearer_token(config: &RuntimeConfig) -> Result<(), RuntimeError> {
@@ -1221,6 +1234,9 @@ mod tests {
         );
         config.transport.profile = TransportProfileKind::Hybrid;
         config.transport.reticulum_preview_behavior = ReticulumPreviewBehavior::DeferDeliveryPlans;
+        config.transport.reticulum_preview_scope = "farmers_market".to_owned();
+        config.transport.reticulum_preview_agent_endpoint =
+            Some("reticulum-agent:local".to_owned());
 
         let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
 
@@ -1234,6 +1250,18 @@ mod tests {
         assert_eq!(
             profile.reticulum_preview().behavior().as_str(),
             "defer_delivery_plans"
+        );
+        assert_eq!(
+            profile.reticulum_preview().scope().as_str(),
+            "farmers_market"
+        );
+        assert_eq!(
+            profile
+                .reticulum_preview()
+                .agent_endpoint()
+                .expect("agent endpoint")
+                .as_str(),
+            "reticulum-agent:local"
         );
     }
 

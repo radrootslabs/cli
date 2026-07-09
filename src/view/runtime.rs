@@ -3281,6 +3281,10 @@ pub struct TransportProfileView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reticulum_preview_behavior: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reticulum_preview_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reticulum_preview_agent_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_token_source: Option<String>,
@@ -3312,7 +3316,7 @@ pub struct TransportProfileSummaryView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TransportRuntimeStatusView {
-    pub transport_kind: String,
+    pub transport: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3551,7 +3555,7 @@ pub struct SyncTransportTargetView {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncTransportStatusView {
-    pub transport_kind: String,
+    pub transport: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

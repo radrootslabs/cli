@@ -6,9 +6,9 @@ use radroots_sdk::{
     SyncStatusRequest,
 };
 use radroots_transport::{
-    RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
-    RadrootsTransportImplementationState, RadrootsTransportKind, RadrootsTransportReadinessState,
-    RadrootsTransportStatus,
+    RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_PREVIEW_SCOPE_ID,
+    RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE, RadrootsTransportImplementationState,
+    RadrootsTransportKind, RadrootsTransportStatus,
 };
 use serde_json::Value as JsonValue;
 use toml::{Value, map::Map};
@@ -53,8 +53,17 @@ pub fn set_profile(
         "reticulum_preview" => {
             let behavior = string_input(input, "reticulum_preview_behavior")
                 .unwrap_or("reject_delivery_attempts");
+            let scope = string_input(input, "reticulum_preview_scope")
+                .unwrap_or(RADROOTS_RETICULUM_PREVIEW_SCOPE_ID);
             let mut preview = Map::new();
             preview.insert("behavior".to_owned(), Value::String(behavior.to_owned()));
+            preview.insert("scope".to_owned(), Value::String(scope.to_owned()));
+            if let Some(agent_endpoint) = string_input(input, "reticulum_preview_agent_endpoint") {
+                preview.insert(
+                    "agent_endpoint".to_owned(),
+                    Value::String(agent_endpoint.to_owned()),
+                );
+            }
             transport.insert("reticulum_preview".to_owned(), Value::Table(preview));
         }
         "hybrid" => {
@@ -66,6 +75,8 @@ pub fn set_profile(
             }
             let behavior = string_input(input, "reticulum_preview_behavior")
                 .unwrap_or("reject_delivery_attempts");
+            let scope = string_input(input, "reticulum_preview_scope")
+                .unwrap_or(RADROOTS_RETICULUM_PREVIEW_SCOPE_ID);
             let mut nostr = Map::new();
             nostr.insert(
                 "relay_urls".to_owned(),
@@ -73,6 +84,13 @@ pub fn set_profile(
             );
             let mut preview = Map::new();
             preview.insert("behavior".to_owned(), Value::String(behavior.to_owned()));
+            preview.insert("scope".to_owned(), Value::String(scope.to_owned()));
+            if let Some(agent_endpoint) = string_input(input, "reticulum_preview_agent_endpoint") {
+                preview.insert(
+                    "agent_endpoint".to_owned(),
+                    Value::String(agent_endpoint.to_owned()),
+                );
+            }
             transport.insert("nostr".to_owned(), Value::Table(nostr));
             transport.insert("reticulum_preview".to_owned(), Value::Table(preview));
         }
@@ -118,6 +136,8 @@ pub fn set_profile(
         kind,
         string_array_input(input, "nostr_relays"),
         string_input(input, "reticulum_preview_behavior").map(str::to_owned),
+        reticulum_preview_scope_for_profile(kind, input),
+        string_input(input, "reticulum_preview_agent_endpoint").map(str::to_owned),
         string_input(input, "proxy_url").map(str::to_owned),
         string_input(input, "proxy_token_file").map(str::to_owned),
         string_input(input, "proxy_token_secret_id").map(str::to_owned),
@@ -272,11 +292,15 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
             None,
             None,
             None,
+            None,
+            None,
             "configured",
         ),
         TransportProfileKind::Nostr => profile_view_from_parts(
             "nostr",
             config.transport.nostr_relay_urls.clone(),
+            None,
+            None,
             None,
             None,
             None,
@@ -297,6 +321,8 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
                     .as_str()
                     .to_owned(),
             ),
+            Some(config.transport.reticulum_preview_scope.clone()),
+            config.transport.reticulum_preview_agent_endpoint.clone(),
             None,
             None,
             None,
@@ -312,6 +338,8 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
                     .as_str()
                     .to_owned(),
             ),
+            Some(config.transport.reticulum_preview_scope.clone()),
+            config.transport.reticulum_preview_agent_endpoint.clone(),
             None,
             None,
             None,
@@ -330,6 +358,8 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
             profile_view_from_parts(
                 "proxy",
                 Vec::new(),
+                None,
+                None,
                 None,
                 Some(config.transport.proxy.url.clone()),
                 config
@@ -357,6 +387,8 @@ fn profile_view_from_parts(
     profile_id: &str,
     nostr_relays: Vec<String>,
     reticulum_preview_behavior: Option<String>,
+    reticulum_preview_scope: Option<String>,
+    reticulum_preview_agent_endpoint: Option<String>,
     proxy_url: Option<String>,
     proxy_token_file: Option<String>,
     proxy_token_secret_id: Option<String>,
@@ -405,6 +437,8 @@ fn profile_view_from_parts(
         message: message.to_owned(),
         nostr_relays,
         reticulum_preview_behavior,
+        reticulum_preview_scope,
+        reticulum_preview_agent_endpoint,
         proxy_url,
         proxy_token_source,
         proxy_token_file,
@@ -451,41 +485,39 @@ fn transport_statuses_from_parts(
 fn local_transport_status(profile_id: &str) -> RadrootsTransportStatus {
     RadrootsTransportStatus::new(
         RadrootsTransportKind::Local,
-        RadrootsTransportImplementationState::Available,
-        RadrootsTransportReadinessState::Ready,
+        true,
+        RadrootsTransportImplementationState::Real,
+        false,
+        "Local-only profile writes only to local state",
     )
     .with_profile_id(profile_id)
-    .with_redacted_message("Local-only profile writes only to local state")
 }
 
 fn nostr_transport_status(profile_id: &str, targets_configured: bool) -> RadrootsTransportStatus {
     RadrootsTransportStatus::new(
         RadrootsTransportKind::Nostr,
+        targets_configured,
+        RadrootsTransportImplementationState::Real,
+        targets_configured,
         if targets_configured {
-            RadrootsTransportImplementationState::Available
+            "Nostr relay transport is configured for delivery"
         } else {
-            RadrootsTransportImplementationState::Misconfigured
-        },
-        if targets_configured {
-            RadrootsTransportReadinessState::Ready
-        } else {
-            RadrootsTransportReadinessState::Misconfigured
+            "Nostr transport requires configured Nostr relay targets"
         },
     )
     .with_profile_id(profile_id)
-    .with_publish_usable(targets_configured)
-    .with_fetch_usable(targets_configured)
 }
 
 fn reticulum_preview_transport_status(profile_id: &str) -> RadrootsTransportStatus {
     RadrootsTransportStatus::new(
         RadrootsTransportKind::Reticulum,
+        true,
         RadrootsTransportImplementationState::PreviewUnavailable,
-        RadrootsTransportReadinessState::PreviewUnavailable,
+        false,
+        RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
     )
     .with_profile_id(profile_id)
     .with_endpoint_uri(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI)
-    .with_redacted_message(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE)
 }
 
 fn proxy_transport_status(
@@ -495,19 +527,16 @@ fn proxy_transport_status(
 ) -> RadrootsTransportStatus {
     let mut status = RadrootsTransportStatus::new(
         RadrootsTransportKind::Proxy,
+        token_ready,
+        RadrootsTransportImplementationState::Real,
+        token_ready,
         if token_ready {
-            RadrootsTransportImplementationState::Available
+            "Proxy transport delegates delivery to the configured endpoint"
         } else {
-            RadrootsTransportImplementationState::Misconfigured
-        },
-        if token_ready {
-            RadrootsTransportReadinessState::Ready
-        } else {
-            RadrootsTransportReadinessState::Misconfigured
+            "Proxy transport requires a configured token file or token secret id"
         },
     )
-    .with_profile_id(profile_id)
-    .with_publish_usable(token_ready);
+    .with_profile_id(profile_id);
     if let Some(proxy_url) = proxy_url {
         status = status.with_endpoint_uri(proxy_url);
     }
@@ -515,61 +544,33 @@ fn proxy_transport_status(
 }
 
 fn transport_runtime_status_view(status: RadrootsTransportStatus) -> TransportRuntimeStatusView {
-    let configured = transport_status_configured(&status);
-    let usable_for_delivery = status.publish_usable;
-    let message = transport_status_message(&status);
     TransportRuntimeStatusView {
-        transport_kind: status.kind.canonical_label(),
+        transport: status.kind.canonical_label(),
         profile_id: status.profile_id,
         endpoint_uri: status.endpoint_uri,
-        configured,
-        implementation: transport_implementation_state_label(status.implementation_state)
-            .to_owned(),
-        usable_for_delivery,
-        message,
+        configured: status.configured,
+        implementation: transport_implementation_label(status.implementation).to_owned(),
+        usable_for_delivery: status.usable_for_delivery,
+        message: status.message,
     }
 }
 
-fn transport_status_configured(status: &RadrootsTransportStatus) -> bool {
-    matches!(
-        status.readiness,
-        RadrootsTransportReadinessState::Ready
-            | RadrootsTransportReadinessState::PreviewUnavailable
-    )
-}
-
-fn transport_status_message(status: &RadrootsTransportStatus) -> String {
-    if let Some(message) = &status.redacted_message {
-        return message.clone();
-    }
-    match status.kind {
-        RadrootsTransportKind::Local => "Local-only profile writes only to local state".to_owned(),
-        RadrootsTransportKind::Nostr if status.publish_usable => {
-            "Nostr relay transport is configured for delivery".to_owned()
-        }
-        RadrootsTransportKind::Nostr => {
-            "Nostr transport requires configured Nostr relay targets".to_owned()
-        }
-        RadrootsTransportKind::Reticulum => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned(),
-        RadrootsTransportKind::Mesh => "Mesh transport status is not available".to_owned(),
-        RadrootsTransportKind::Proxy if status.publish_usable => {
-            "Proxy transport delegates delivery to the configured endpoint".to_owned()
-        }
-        RadrootsTransportKind::Proxy => {
-            "Proxy transport requires a configured token file or token secret id".to_owned()
-        }
-        RadrootsTransportKind::Custom(_) => "Custom transport status is not available".to_owned(),
-    }
-}
-
-fn transport_implementation_state_label(
-    state: RadrootsTransportImplementationState,
-) -> &'static str {
+fn transport_implementation_label(state: RadrootsTransportImplementationState) -> &'static str {
     match state {
-        RadrootsTransportImplementationState::Available => "available",
-        RadrootsTransportImplementationState::Disabled => "disabled",
-        RadrootsTransportImplementationState::Misconfigured => "misconfigured",
+        RadrootsTransportImplementationState::Real => "real",
+        RadrootsTransportImplementationState::Mock => "mock",
         RadrootsTransportImplementationState::PreviewUnavailable => "preview_unavailable",
+    }
+}
+
+fn reticulum_preview_scope_for_profile(profile_id: &str, input: &OperationData) -> Option<String> {
+    match profile_id {
+        "reticulum_preview" | "hybrid" => Some(
+            string_input(input, "reticulum_preview_scope")
+                .unwrap_or(RADROOTS_RETICULUM_PREVIEW_SCOPE_ID)
+                .to_owned(),
+        ),
+        _ => None,
     }
 }
 

@@ -23,8 +23,8 @@ use radroots_sdk::{
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use radroots_transport::{
     RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
-    RadrootsTransportImplementationState, RadrootsTransportKind, RadrootsTransportReadinessState,
-    RadrootsTransportStatus, RadrootsTransportTarget,
+    RadrootsTransportImplementationState, RadrootsTransportKind, RadrootsTransportStatus,
+    RadrootsTransportTarget,
 };
 use radroots_transport_nostr::{
     RadrootsRelayFetchFailure, RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError,
@@ -605,17 +605,13 @@ fn sdk_transport_status_view(
     status: &radroots_sdk::SyncTransportStatusSummary,
 ) -> SyncTransportStatusView {
     SyncTransportStatusView {
-        transport_kind: status.transport_kind.clone(),
+        transport: status.transport.clone(),
         profile_id: status.profile_id.clone(),
         endpoint_uri: status.endpoint_uri.clone(),
-        configured: sync_transport_status_configured(&status.readiness),
-        implementation: status.implementation_state.clone(),
-        usable_for_delivery: status.publish_usable,
-        message: sync_transport_status_message(
-            &status.transport_kind,
-            status.publish_usable,
-            status.redacted_message.as_deref(),
-        ),
+        configured: status.configured,
+        implementation: status.implementation.clone(),
+        usable_for_delivery: status.usable_for_delivery,
+        message: status.message.clone(),
     }
 }
 
@@ -949,8 +945,10 @@ fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusVie
         TransportProfileKind::LocalOnly => vec![sync_transport_status_view(
             RadrootsTransportStatus::new(
                 RadrootsTransportKind::Local,
-                RadrootsTransportImplementationState::Available,
-                RadrootsTransportReadinessState::Ready,
+                true,
+                RadrootsTransportImplementationState::Real,
+                false,
+                "Local-only profile writes only to local state",
             )
             .with_profile_id(profile_id),
         )],
@@ -978,20 +976,17 @@ fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusVie
             vec![sync_transport_status_view(
                 RadrootsTransportStatus::new(
                     RadrootsTransportKind::Proxy,
+                    auth_configured,
+                    RadrootsTransportImplementationState::Real,
+                    auth_configured,
                     if auth_configured {
-                        RadrootsTransportImplementationState::Available
+                        "Proxy transport delegates delivery to the configured endpoint"
                     } else {
-                        RadrootsTransportImplementationState::Misconfigured
-                    },
-                    if auth_configured {
-                        RadrootsTransportReadinessState::Ready
-                    } else {
-                        RadrootsTransportReadinessState::Misconfigured
+                        "Proxy transport requires a configured token file or token secret id"
                     },
                 )
                 .with_profile_id(profile_id)
-                .with_endpoint_uri(config.transport.proxy.url.as_str())
-                .with_publish_usable(auth_configured),
+                .with_endpoint_uri(config.transport.proxy.url.as_str()),
             )]
         }
     }
@@ -1000,99 +995,46 @@ fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusVie
 fn nostr_transport_status(profile_id: &str, targets_configured: bool) -> RadrootsTransportStatus {
     RadrootsTransportStatus::new(
         RadrootsTransportKind::Nostr,
+        targets_configured,
+        RadrootsTransportImplementationState::Real,
+        targets_configured,
         if targets_configured {
-            RadrootsTransportImplementationState::Available
+            "Nostr relay transport is configured for delivery"
         } else {
-            RadrootsTransportImplementationState::Misconfigured
-        },
-        if targets_configured {
-            RadrootsTransportReadinessState::Ready
-        } else {
-            RadrootsTransportReadinessState::Misconfigured
+            "Nostr transport requires configured Nostr relay targets"
         },
     )
     .with_profile_id(profile_id)
-    .with_publish_usable(targets_configured)
-    .with_fetch_usable(targets_configured)
 }
 
 fn reticulum_preview_transport_status(profile_id: &str) -> RadrootsTransportStatus {
     RadrootsTransportStatus::new(
         RadrootsTransportKind::Reticulum,
+        true,
         RadrootsTransportImplementationState::PreviewUnavailable,
-        RadrootsTransportReadinessState::PreviewUnavailable,
+        false,
+        RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
     )
     .with_profile_id(profile_id)
     .with_endpoint_uri(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI)
-    .with_redacted_message(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE)
 }
 
 fn sync_transport_status_view(status: RadrootsTransportStatus) -> SyncTransportStatusView {
-    let configured = transport_status_configured(&status);
-    let usable_for_delivery = status.publish_usable;
-    let message = transport_status_message(&status);
     SyncTransportStatusView {
-        transport_kind: status.kind.canonical_label(),
+        transport: status.kind.canonical_label(),
         profile_id: status.profile_id,
         endpoint_uri: status.endpoint_uri,
-        configured,
-        implementation: transport_implementation_state_label(status.implementation_state)
-            .to_owned(),
-        usable_for_delivery,
-        message,
+        configured: status.configured,
+        implementation: transport_implementation_label(status.implementation).to_owned(),
+        usable_for_delivery: status.usable_for_delivery,
+        message: status.message,
     }
 }
 
-fn transport_status_configured(status: &RadrootsTransportStatus) -> bool {
-    matches!(
-        status.readiness,
-        RadrootsTransportReadinessState::Ready
-            | RadrootsTransportReadinessState::PreviewUnavailable
-    )
-}
-
-fn sync_transport_status_configured(readiness: &str) -> bool {
-    matches!(readiness, "ready" | "preview_unavailable")
-}
-
-fn transport_status_message(status: &RadrootsTransportStatus) -> String {
-    if let Some(message) = &status.redacted_message {
-        return message.clone();
-    }
-    sync_transport_status_message(&status.kind.canonical_label(), status.publish_usable, None)
-}
-
-fn sync_transport_status_message(
-    transport_kind: &str,
-    usable_for_delivery: bool,
-    redacted_message: Option<&str>,
-) -> String {
-    if let Some(message) = redacted_message {
-        return message.to_owned();
-    }
-    match transport_kind {
-        "local" => "Local-only profile writes only to local state".to_owned(),
-        "nostr" if usable_for_delivery => {
-            "Nostr relay transport is configured for delivery".to_owned()
-        }
-        "nostr" => "Nostr transport requires configured Nostr relay targets".to_owned(),
-        "reticulum" => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned(),
-        "mesh" => "Mesh transport status is not available".to_owned(),
-        "proxy" if usable_for_delivery => {
-            "Proxy transport delegates delivery to the configured endpoint".to_owned()
-        }
-        "proxy" => "Proxy transport requires a configured token file or token secret id".to_owned(),
-        _ => "Transport status is not available".to_owned(),
-    }
-}
-
-fn transport_implementation_state_label(
-    state: RadrootsTransportImplementationState,
-) -> &'static str {
+fn transport_implementation_label(state: RadrootsTransportImplementationState) -> &'static str {
     match state {
-        RadrootsTransportImplementationState::Available => "available",
-        RadrootsTransportImplementationState::Disabled => "disabled",
-        RadrootsTransportImplementationState::Misconfigured => "misconfigured",
+        RadrootsTransportImplementationState::Real => "real",
+        RadrootsTransportImplementationState::Mock => "mock",
         RadrootsTransportImplementationState::PreviewUnavailable => "preview_unavailable",
     }
 }
@@ -1927,13 +1869,13 @@ mod tests {
         assert_eq!(view.configured_transport_target_count, 0);
         assert!(view.configured_transport_targets.is_empty());
         assert_eq!(view.transport_statuses.len(), 1);
-        assert_eq!(view.transport_statuses[0].transport_kind, "nostr");
+        assert_eq!(view.transport_statuses[0].transport, "nostr");
         assert_eq!(
             view.transport_statuses[0].profile_id.as_deref(),
             Some("nostr")
         );
         assert!(!view.transport_statuses[0].configured);
-        assert_eq!(view.transport_statuses[0].implementation, "misconfigured");
+        assert_eq!(view.transport_statuses[0].implementation, "real");
         assert!(!view.transport_statuses[0].usable_for_delivery);
         assert!(view.target_transport_endpoints.is_empty());
         assert_eq!(
@@ -1965,9 +1907,9 @@ mod tests {
             "reticulum"
         );
         assert_eq!(view.transport_statuses.len(), 2);
-        assert_eq!(view.transport_statuses[0].transport_kind, "nostr");
+        assert_eq!(view.transport_statuses[0].transport, "nostr");
         assert!(view.transport_statuses[0].usable_for_delivery);
-        assert_eq!(view.transport_statuses[1].transport_kind, "reticulum");
+        assert_eq!(view.transport_statuses[1].transport, "reticulum");
         assert!(view.transport_statuses[1].configured);
         assert_eq!(
             view.transport_statuses[1].implementation,
@@ -2003,15 +1945,15 @@ mod tests {
             "reticulum"
         );
         assert_eq!(view.transport_statuses.len(), 2);
-        assert_eq!(view.transport_statuses[0].transport_kind, "nostr");
+        assert_eq!(view.transport_statuses[0].transport, "nostr");
         assert_eq!(
             view.transport_statuses[0].profile_id.as_deref(),
             Some("hybrid")
         );
         assert!(!view.transport_statuses[0].configured);
-        assert_eq!(view.transport_statuses[0].implementation, "misconfigured");
+        assert_eq!(view.transport_statuses[0].implementation, "real");
         assert!(!view.transport_statuses[0].usable_for_delivery);
-        assert_eq!(view.transport_statuses[1].transport_kind, "reticulum");
+        assert_eq!(view.transport_statuses[1].transport, "reticulum");
         assert!(view.transport_statuses[1].configured);
         assert_eq!(
             view.transport_statuses[1].implementation,
@@ -2034,7 +1976,7 @@ mod tests {
         assert_eq!(snapshot.configured_transport_target_count, 2);
         assert_eq!(snapshot.configured_transport_targets.len(), 2);
         assert_eq!(snapshot.transport_statuses.len(), 2);
-        assert_eq!(snapshot.transport_statuses[1].transport_kind, "reticulum");
+        assert_eq!(snapshot.transport_statuses[1].transport, "reticulum");
         assert_eq!(
             snapshot.transport_statuses[1].implementation,
             "preview_unavailable"
@@ -2154,24 +2096,22 @@ mod tests {
             ],
             transport_statuses: vec![
                 SyncTransportStatusSummary {
-                    transport_kind: "nostr".to_owned(),
+                    transport: "nostr".to_owned(),
                     profile_id: Some("hybrid".to_owned()),
                     endpoint_uri: None,
-                    implementation_state: "available".to_owned(),
-                    readiness: "ready".to_owned(),
-                    publish_usable: true,
-                    fetch_usable: true,
-                    redacted_message: None,
+                    configured: true,
+                    implementation: "real".to_owned(),
+                    usable_for_delivery: true,
+                    message: "Nostr relay transport is configured for delivery".to_owned(),
                 },
                 SyncTransportStatusSummary {
-                    transport_kind: "reticulum".to_owned(),
+                    transport: "reticulum".to_owned(),
                     profile_id: Some("hybrid".to_owned()),
                     endpoint_uri: Some(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned()),
-                    implementation_state: "preview_unavailable".to_owned(),
-                    readiness: "preview_unavailable".to_owned(),
-                    publish_usable: false,
-                    fetch_usable: false,
-                    redacted_message: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
+                    configured: true,
+                    implementation: "preview_unavailable".to_owned(),
+                    usable_for_delivery: false,
+                    message: RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned(),
                 },
             ],
         };
@@ -2539,14 +2479,13 @@ mod tests {
                     })
                     .collect(),
                 transport_statuses: vec![SyncTransportStatusSummary {
-                    transport_kind: "nostr".to_owned(),
+                    transport: "nostr".to_owned(),
                     profile_id: Some("nostr".to_owned()),
                     endpoint_uri: None,
-                    implementation_state: "available".to_owned(),
-                    readiness: "ready".to_owned(),
-                    publish_usable: true,
-                    fetch_usable: true,
-                    redacted_message: None,
+                    configured: true,
+                    implementation: "real".to_owned(),
+                    usable_for_delivery: true,
+                    message: "Nostr relay transport is configured for delivery".to_owned(),
                 }],
             },
         }
@@ -2588,14 +2527,13 @@ mod tests {
                     endpoint_fingerprint: "1".repeat(64),
                 }],
                 transport_statuses: vec![SyncTransportStatusSummary {
-                    transport_kind: "reticulum".to_owned(),
+                    transport: "reticulum".to_owned(),
                     profile_id: Some("reticulum_preview".to_owned()),
                     endpoint_uri: Some(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned()),
-                    implementation_state: "preview_unavailable".to_owned(),
-                    readiness: "preview_unavailable".to_owned(),
-                    publish_usable: false,
-                    fetch_usable: false,
-                    redacted_message: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
+                    configured: true,
+                    implementation: "preview_unavailable".to_owned(),
+                    usable_for_delivery: false,
+                    message: RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned(),
                 }],
             },
         }

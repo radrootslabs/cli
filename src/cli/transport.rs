@@ -35,6 +35,10 @@ pub struct TransportProfileSetArgs {
     pub nostr_relay: Vec<String>,
     #[arg(long = "reticulum-preview-behavior", value_enum)]
     pub reticulum_preview_behavior: Option<ReticulumPreviewBehaviorArg>,
+    #[arg(long = "reticulum-preview-scope")]
+    pub reticulum_preview_scope: Option<String>,
+    #[arg(long = "reticulum-preview-agent-endpoint")]
+    pub reticulum_preview_agent_endpoint: Option<String>,
     #[arg(long = "proxy-url")]
     pub proxy_url: Option<String>,
     #[arg(long = "proxy-token-file", value_name = "PATH")]

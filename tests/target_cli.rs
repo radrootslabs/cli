@@ -93,6 +93,7 @@ fn configure_nostr_transport(sandbox: &RadrootsCliSandbox, relay_url: &str) {
 
 fn assert_no_removed_transport_status_fields(status: &Value) {
     for field in [
+        "transport_kind",
         "implementation_state",
         "readiness",
         "publish_usable",
@@ -1426,10 +1427,7 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
     assert_eq!(result["profile_delivery_usable"], false);
     assert!(result.get("transport_kind").is_none());
     assert!(result.get("implementation_state").is_none());
-    assert_eq!(
-        result["transport_statuses"][0]["transport_kind"],
-        "reticulum"
-    );
+    assert_eq!(result["transport_statuses"][0]["transport"], "reticulum");
     assert_eq!(
         result["transport_statuses"][0]["implementation"],
         "preview_unavailable"
@@ -1445,6 +1443,7 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
     );
     assert_no_removed_transport_status_fields(&result["transport_statuses"][0]);
     assert_eq!(result["reticulum_preview_behavior"], "defer_delivery_plans");
+    assert_eq!(result["reticulum_preview_scope"], "local_preview");
     assert_eq!(result["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     assert!(
         !result["message"]
@@ -1480,9 +1479,9 @@ fn transport_profile_local_only_output_uses_profile_and_local_status_fields() {
     assert!(result.get("transport_kind").is_none());
     assert!(result.get("implementation_state").is_none());
     assert_eq!(statuses.len(), 1);
-    assert_eq!(local["transport_kind"], "local");
+    assert_eq!(local["transport"], "local");
     assert_eq!(local["profile_id"], "local_only");
-    assert_eq!(local["implementation"], "available");
+    assert_eq!(local["implementation"], "real");
     assert_eq!(local["configured"], true);
     assert_eq!(local["usable_for_delivery"], false);
     assert_eq!(
@@ -1508,6 +1507,10 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
         "wss://relay.example.com",
         "--reticulum-preview-behavior",
         "defer-delivery-plans",
+        "--reticulum-preview-scope",
+        "farmers_market",
+        "--reticulum-preview-agent-endpoint",
+        "reticulum-agent:local",
     ]);
 
     assert_eq!(value["operation_id"], "transport.profile.set");
@@ -1527,12 +1530,12 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
         2
     );
     assert_eq!(
-        value["result"]["transport_statuses"][0]["transport_kind"],
+        value["result"]["transport_statuses"][0]["transport"],
         "nostr"
     );
     assert_eq!(
         value["result"]["transport_statuses"][0]["implementation"],
-        "available"
+        "real"
     );
     assert_eq!(value["result"]["transport_statuses"][0]["configured"], true);
     assert_eq!(
@@ -1540,7 +1543,7 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
         true
     );
     assert_eq!(
-        value["result"]["transport_statuses"][1]["transport_kind"],
+        value["result"]["transport_statuses"][1]["transport"],
         "reticulum"
     );
     assert_eq!(
@@ -1558,6 +1561,11 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
         value["result"]["reticulum_preview_behavior"],
         "defer_delivery_plans"
     );
+    assert_eq!(value["result"]["reticulum_preview_scope"], "farmers_market");
+    assert_eq!(
+        value["result"]["reticulum_preview_agent_endpoint"],
+        "reticulum-agent:local"
+    );
 
     let value = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
     assert_eq!(value["result"]["profile_id"], "hybrid");
@@ -1569,6 +1577,11 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
         value["result"]["reticulum_preview_behavior"],
         "defer_delivery_plans"
     );
+    assert_eq!(value["result"]["reticulum_preview_scope"], "farmers_market");
+    assert_eq!(
+        value["result"]["reticulum_preview_agent_endpoint"],
+        "reticulum-agent:local"
+    );
 
     let config = fs::read_to_string(sandbox.root().join("config/apps/cli/config.toml"))
         .expect("read app config");
@@ -1576,6 +1589,8 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
     assert!(config.contains("[transport.nostr]"));
     assert!(config.contains("[transport.reticulum_preview]"));
     assert!(config.contains("behavior = \"defer_delivery_plans\""));
+    assert!(config.contains("scope = \"farmers_market\""));
+    assert!(config.contains("agent_endpoint = \"reticulum-agent:local\""));
 }
 
 #[test]
@@ -1596,11 +1611,11 @@ fn transport_status_hybrid_output_reports_nostr_and_reticulum_rows() {
     assert_eq!(result["active_profile"]["profile_kind"], "hybrid");
     assert_eq!(result["active_profile"]["profile_delivery_usable"], true);
     assert_eq!(transports.len(), 2);
-    assert_eq!(nostr["transport_kind"], "nostr");
-    assert_eq!(nostr["implementation"], "available");
+    assert_eq!(nostr["transport"], "nostr");
+    assert_eq!(nostr["implementation"], "real");
     assert_eq!(nostr["configured"], true);
     assert_eq!(nostr["usable_for_delivery"], true);
-    assert_eq!(reticulum["transport_kind"], "reticulum");
+    assert_eq!(reticulum["transport"], "reticulum");
     assert_eq!(reticulum["implementation"], "preview_unavailable");
     assert_eq!(reticulum["configured"], true);
     assert_eq!(reticulum["usable_for_delivery"], false);
@@ -1624,9 +1639,9 @@ fn transport_status_nostr_output_uses_canonical_transport_row() {
     assert_eq!(result["active_profile"]["profile_kind"], "nostr");
     assert_eq!(result["active_profile"]["profile_delivery_usable"], true);
     assert_eq!(transports.len(), 1);
-    assert_eq!(nostr["transport_kind"], "nostr");
+    assert_eq!(nostr["transport"], "nostr");
     assert_eq!(nostr["profile_id"], "nostr");
-    assert_eq!(nostr["implementation"], "available");
+    assert_eq!(nostr["implementation"], "real");
     assert_eq!(nostr["configured"], true);
     assert_eq!(nostr["usable_for_delivery"], true);
     assert_no_removed_transport_status_fields(nostr);
@@ -1653,7 +1668,7 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
         "reticulum_preview"
     );
     assert_eq!(result["active_profile"]["profile_delivery_usable"], false);
-    assert_eq!(active["transport_kind"], "reticulum");
+    assert_eq!(active["transport"], "reticulum");
     assert_eq!(active["implementation"], "preview_unavailable");
     assert_eq!(active["configured"], true);
     assert_eq!(active["usable_for_delivery"], false);
@@ -1876,6 +1891,7 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         "pub struct TransportOutboxStatusView",
     );
     for required in [
+        "pub transport: String,",
         "pub configured: bool,",
         "pub implementation: String,",
         "pub usable_for_delivery: bool,",
@@ -1887,6 +1903,7 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         );
     }
     for forbidden in [
+        "pub transport_kind:",
         "pub implementation_state:",
         "pub readiness:",
         "pub publish_usable:",
@@ -1951,6 +1968,7 @@ fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_ou
         "pub configured_transport_target_count: usize,",
         "pub configured_transport_targets: Vec<SyncTransportTargetView>,",
         "pub transport_statuses: Vec<SyncTransportStatusView>,",
+        "pub transport: String,",
         "pub configured: bool,",
         "pub implementation: String,",
         "pub usable_for_delivery: bool,",
@@ -1972,6 +1990,7 @@ fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_ou
         "pub struct TransportTargetFailureView",
     );
     for forbidden in [
+        "pub transport_kind:",
         "pub implementation_state:",
         "pub readiness:",
         "pub publish_usable:",
@@ -2330,12 +2349,12 @@ fn transport_profile_set_proxy_persists_token_file_without_printing_token_materi
     assert_eq!(value["result"]["state"], "configured");
     assert_eq!(value["result"]["profile_delivery_usable"], true);
     assert_eq!(
-        value["result"]["transport_statuses"][0]["transport_kind"],
+        value["result"]["transport_statuses"][0]["transport"],
         "proxy"
     );
     assert_eq!(
         value["result"]["transport_statuses"][0]["implementation"],
-        "available"
+        "real"
     );
     assert_eq!(value["result"]["transport_statuses"][0]["configured"], true);
     assert_eq!(
@@ -2393,12 +2412,12 @@ fn transport_profile_set_proxy_persists_token_secret_id_without_printing_token_m
     assert_eq!(value["result"]["state"], "configured");
     assert_eq!(value["result"]["profile_delivery_usable"], true);
     assert_eq!(
-        value["result"]["transport_statuses"][0]["transport_kind"],
+        value["result"]["transport_statuses"][0]["transport"],
         "proxy"
     );
     assert_eq!(
         value["result"]["transport_statuses"][0]["implementation"],
-        "available"
+        "real"
     );
     assert_eq!(value["result"]["transport_statuses"][0]["configured"], true);
     assert_eq!(

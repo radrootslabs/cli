@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use radroots_runtime::{parse_bool_value, parse_strict_env_file, parse_u64_value};
 use radroots_runtime_paths::RadrootsPathResolver;
 use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
+use radroots_transport::{RADROOTS_RETICULUM_PREVIEW_SCOPE_ID, RadrootsTransportMeshScopeId};
 use radroots_transport_nostr::{
     RadrootsRelayTransportError, RadrootsRelayUrl, RadrootsRelayUrlPolicy,
 };
@@ -45,6 +46,10 @@ const ENV_CLI_TRANSPORT_PROFILE: &str = "RADROOTS_CLI_TRANSPORT_PROFILE";
 const ENV_CLI_TRANSPORT_NOSTR_RELAY_URLS: &str = "RADROOTS_CLI_TRANSPORT_NOSTR_RELAY_URLS";
 const ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_BEHAVIOR: &str =
     "RADROOTS_CLI_TRANSPORT_RETICULUM_PREVIEW_BEHAVIOR";
+const ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE: &str =
+    "RADROOTS_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE";
+const ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT: &str =
+    "RADROOTS_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT";
 const ENV_CLI_TRANSPORT_PROXY_URL: &str = "RADROOTS_CLI_TRANSPORT_PROXY_URL";
 const ENV_CLI_TRANSPORT_PROXY_TOKEN_FILE: &str = "RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE";
 const ENV_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID: &str =
@@ -69,6 +74,8 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_CLI_TRANSPORT_PROFILE,
     ENV_CLI_TRANSPORT_NOSTR_RELAY_URLS,
     ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_BEHAVIOR,
+    ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE,
+    ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT,
     ENV_CLI_TRANSPORT_PROXY_URL,
     ENV_CLI_TRANSPORT_PROXY_TOKEN_FILE,
     ENV_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID,
@@ -252,6 +259,8 @@ pub struct TransportConfig {
     pub source: TransportConfigSource,
     pub nostr_relay_urls: Vec<String>,
     pub reticulum_preview_behavior: ReticulumPreviewBehavior,
+    pub reticulum_preview_scope: String,
+    pub reticulum_preview_agent_endpoint: Option<String>,
     pub proxy: ProxyTransportConfig,
 }
 
@@ -262,6 +271,8 @@ impl TransportConfig {
             source: TransportConfigSource::Defaults,
             nostr_relay_urls: Vec::new(),
             reticulum_preview_behavior: ReticulumPreviewBehavior::RejectDeliveryAttempts,
+            reticulum_preview_scope: RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned(),
+            reticulum_preview_agent_endpoint: None,
             proxy: ProxyTransportConfig::default(),
         }
     }
@@ -275,6 +286,8 @@ impl TransportConfig {
             source: TransportConfigSource::Defaults,
             nostr_relay_urls,
             reticulum_preview_behavior: ReticulumPreviewBehavior::RejectDeliveryAttempts,
+            reticulum_preview_scope: RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned(),
+            reticulum_preview_agent_endpoint: None,
             proxy: ProxyTransportConfig::default(),
         }
     }
@@ -538,6 +551,8 @@ struct NostrTransportFileConfig {
 #[serde(default, deny_unknown_fields)]
 struct ReticulumPreviewFileConfig {
     behavior: Option<String>,
+    scope: Option<String>,
+    agent_endpoint: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -986,6 +1001,28 @@ fn resolve_transport_config(
         })
         .transpose()?
         .unwrap_or(ReticulumPreviewBehavior::RejectDeliveryAttempts);
+        let reticulum_preview_scope =
+            env_value(env, env_file, &[ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE])
+                .map(|value| {
+                    parse_reticulum_preview_scope(
+                        ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE,
+                        value.as_str(),
+                    )
+                })
+                .transpose()?
+                .unwrap_or_else(|| RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned());
+        let reticulum_preview_agent_endpoint = env_value(
+            env,
+            env_file,
+            &[ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT],
+        )
+        .map(|value| {
+            parse_reticulum_preview_agent_endpoint(
+                ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT,
+                value.as_str(),
+            )
+        })
+        .transpose()?;
         return Ok(TransportConfig {
             profile,
             source: TransportConfigSource::Environment,
@@ -996,6 +1033,8 @@ fn resolve_transport_config(
                 .transpose()?
                 .unwrap_or_default(),
             reticulum_preview_behavior,
+            reticulum_preview_scope,
+            reticulum_preview_agent_endpoint,
             proxy: resolve_transport_proxy_env(env, env_file)?,
         });
     }
@@ -1021,6 +1060,8 @@ fn resolve_transport_config(
         source: TransportConfigSource::Defaults,
         nostr_relay_urls: Vec::new(),
         reticulum_preview_behavior: ReticulumPreviewBehavior::RejectDeliveryAttempts,
+        reticulum_preview_scope: RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned(),
+        reticulum_preview_agent_endpoint: None,
         proxy: ProxyTransportConfig::default(),
     })
 }
@@ -1044,6 +1085,8 @@ fn resolve_transport_file_config(
             source,
             nostr_relay_urls: Vec::new(),
             reticulum_preview_behavior: ReticulumPreviewBehavior::RejectDeliveryAttempts,
+            reticulum_preview_scope: RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned(),
+            reticulum_preview_agent_endpoint: None,
             proxy: ProxyTransportConfig::default(),
         });
     };
@@ -1068,11 +1111,36 @@ fn resolve_transport_file_config(
         })
         .transpose()?
         .unwrap_or(ReticulumPreviewBehavior::RejectDeliveryAttempts);
+    let reticulum_preview_scope = transport
+        .reticulum_preview
+        .as_ref()
+        .and_then(|preview| preview.scope.as_deref())
+        .map(|value| {
+            parse_reticulum_preview_scope(
+                format!("{source_label}.reticulum_preview.scope").as_str(),
+                value,
+            )
+        })
+        .transpose()?
+        .unwrap_or_else(|| RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned());
+    let reticulum_preview_agent_endpoint = transport
+        .reticulum_preview
+        .as_ref()
+        .and_then(|preview| preview.agent_endpoint.as_deref())
+        .map(|value| {
+            parse_reticulum_preview_agent_endpoint(
+                format!("{source_label}.reticulum_preview.agent_endpoint").as_str(),
+                value,
+            )
+        })
+        .transpose()?;
     Ok(TransportConfig {
         profile,
         source,
         nostr_relay_urls,
         reticulum_preview_behavior,
+        reticulum_preview_scope,
+        reticulum_preview_agent_endpoint,
         proxy: resolve_transport_proxy_file(transport.proxy.as_ref(), source_label)?,
     })
 }
@@ -1907,6 +1975,30 @@ fn parse_reticulum_preview_behavior(
             "{source} must be `reject_delivery_attempts` or `defer_delivery_plans`, got `{other}`"
         ))),
     }
+}
+
+fn parse_reticulum_preview_scope(source: &str, value: &str) -> Result<String, RuntimeError> {
+    RadrootsTransportMeshScopeId::parse(value)
+        .map(|scope| scope.as_str().to_owned())
+        .map_err(|error| RuntimeError::Config(format!("{source} is invalid: {error}")))
+}
+
+fn parse_reticulum_preview_agent_endpoint(
+    source: &str,
+    value: &str,
+) -> Result<String, RuntimeError> {
+    if value.is_empty()
+        || value != value.trim()
+        || value
+            .chars()
+            .any(|ch| ch.is_ascii_control() || ch.is_ascii_whitespace())
+        || value.find(':').is_none()
+    {
+        return Err(RuntimeError::Config(format!(
+            "{source} must be a non-empty URI-like endpoint without whitespace"
+        )));
+    }
+    Ok(value.to_owned())
 }
 
 fn resolve_account_secret_backend(
@@ -2871,7 +2963,7 @@ RADROOTS_CLI_LOGGING_STDOUT=true
         fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
             app_config_dir.join("config.toml"),
-            "[transport]\nprofile = \"hybrid\"\n\n[transport.nostr]\nrelay_urls = [\"wss://relay.user\", \"wss://relay.backup\"]\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+            "[transport]\nprofile = \"hybrid\"\n\n[transport.nostr]\nrelay_urls = [\"wss://relay.user\", \"wss://relay.backup\"]\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\nscope = \"farmers_market\"\nagent_endpoint = \"reticulum-agent:local\"\n",
         )
         .expect("write user config");
 
@@ -2892,6 +2984,14 @@ RADROOTS_CLI_LOGGING_STDOUT=true
         assert_eq!(
             resolved.transport.reticulum_preview_behavior,
             super::ReticulumPreviewBehavior::DeferDeliveryPlans
+        );
+        assert_eq!(resolved.transport.reticulum_preview_scope, "farmers_market");
+        assert_eq!(
+            resolved
+                .transport
+                .reticulum_preview_agent_endpoint
+                .as_deref(),
+            Some("reticulum-agent:local")
         );
     }
 
