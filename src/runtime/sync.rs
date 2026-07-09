@@ -37,7 +37,7 @@ use crate::runtime::RuntimeError;
 use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, fetch_relay_events_via_shared_transport,
-    sdk_nostr_relay_url_policy,
+    sdk_nostr_relay_url_policy, sdk_transport_outcome_kind_label,
 };
 use crate::view::runtime::{
     SyncActionView, SyncFreshnessView, SyncQueueView, SyncRunFreshnessView, SyncStatusView,
@@ -54,7 +54,7 @@ const SYNC_PULL_ACTION: &str = "radroots sync pull";
 const SYNC_PUSH_ACTION: &str = "radroots sync push";
 const SYNC_READY_ACTION: &str = "radroots market product search eggs";
 const MARKET_READY_ACTION: &str = "radroots market product search eggs";
-const INGEST_SOURCE: &str = "shared relay transport fetch · local replica ingest";
+const INGEST_SOURCE: &str = "shared Nostr transport fetch · local replica ingest";
 const RELAY_FETCH_LIMIT: usize = 1_000;
 const RELAY_FETCH_MAX_PAGES: usize = 5;
 const MARKET_FRESHNESS_STALE_AFTER_SECONDS: u64 = 15 * 60;
@@ -236,7 +236,7 @@ where
     if config.output.dry_run {
         let mut view = empty_action_from_snapshot(snapshot, "pull");
         view.state = "ready".to_owned();
-        view.reason = Some("dry run requested; relay fetch skipped".to_owned());
+        view.reason = Some("dry run requested; Nostr fetch skipped".to_owned());
         view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
         view.fetched_count = Some(0);
         view.ingested_count = Some(0);
@@ -256,7 +256,7 @@ where
             let target_transport_endpoints = receipt.target_relays;
             let failed_transport_targets = relay_failures(receipt.failed_relays);
             let reason = relay_failure_reason(&failed_transport_targets);
-            let failure_reason = format!("relay transport fetch failed: {reason}");
+            let failure_reason = format!("Nostr transport fetch failed: {reason}");
             let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
             migrations::run_all_up(&executor)?;
             record_sync_run(
@@ -273,7 +273,7 @@ where
             let mut view = empty_action_from_snapshot(snapshot, "pull");
             view.state = "unavailable".to_owned();
             view.reason = Some(failure_reason);
-            view.reason_code = Some("relay_fetch_failed".to_owned());
+            view.reason_code = Some("nostr_fetch_failed".to_owned());
             view.target_transport_endpoints = target_transport_endpoints;
             view.failed_transport_targets = failed_transport_targets;
             view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
@@ -298,7 +298,7 @@ where
             let mut view = empty_action_from_snapshot(snapshot, "pull");
             view.state = "unavailable".to_owned();
             view.reason = Some(failure_reason);
-            view.reason_code = Some("relay_fetch_failed".to_owned());
+            view.reason_code = Some("nostr_fetch_failed".to_owned());
             view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
             view.freshness = freshness_for_scope_from_executor(config, &executor, scope)?;
             return Ok(view);
@@ -588,6 +588,8 @@ fn sdk_transport_targets(receipt: &SyncStatusReceipt) -> Vec<SyncTransportTarget
             transport_kind: target.transport_kind.clone(),
             endpoint_uri: target.endpoint_uri.clone(),
             endpoint_fingerprint: target.endpoint_fingerprint.clone(),
+            target_scope: target.target_scope.clone(),
+            target_label: target.target_label.clone(),
         })
         .collect()
 }
@@ -834,6 +836,11 @@ fn sdk_push_failed_transport_targets(
         .map(|target| TransportTargetFailureView {
             transport_kind: target.transport_kind.clone(),
             endpoint_uri: target.endpoint_uri.clone(),
+            target_scope: target.target_scope.clone(),
+            target_label: target.target_label.clone(),
+            transport_outcome_kind: target
+                .transport_outcome_kind
+                .map(sdk_transport_outcome_kind_label),
             reason: target
                 .message
                 .clone()
@@ -935,6 +942,8 @@ fn sync_transport_target_view(
         transport_kind: target.kind.canonical_label(),
         endpoint_uri: target.uri.as_str().to_owned(),
         endpoint_fingerprint: target.fingerprint.as_str().to_owned(),
+        target_scope: target.scope.as_ref().map(|scope| scope.as_str().to_owned()),
+        target_label: target.label.as_ref().map(|label| label.as_str().to_owned()),
     })
 }
 
@@ -1554,7 +1563,7 @@ fn relay_ingest_reason_code(
 ) -> Option<&'static str> {
     ingest
         .reason_code()
-        .or_else(|| (!failed_transport_targets.is_empty()).then_some("relay_fetch_partial"))
+        .or_else(|| (!failed_transport_targets.is_empty()).then_some("nostr_fetch_partial"))
 }
 
 fn relay_ingest_reason(
@@ -1688,6 +1697,9 @@ fn relay_failures(failures: Vec<RadrootsRelayFetchFailure>) -> Vec<TransportTarg
         .map(|failure| TransportTargetFailureView {
             transport_kind: "nostr".to_owned(),
             endpoint_uri: failure.relay_url,
+            target_scope: None,
+            target_label: None,
+            transport_outcome_kind: None,
             reason: failure.reason,
         })
         .collect()
@@ -1781,9 +1793,9 @@ mod tests {
     };
     use radroots_sdk::{
         PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
-        PushOutboxTargetOutcomeKind, PushOutboxTargetReceipt, SyncEventStoreStatus,
-        SyncOutboxStatus, SyncStatusReceipt, SyncStatusSource, SyncTransportProfileSummary,
-        SyncTransportStatusSummary, SyncTransportTargetSummary,
+        PushOutboxTargetOutcomeKind, PushOutboxTargetReceipt, PushOutboxTransportOutcomeKind,
+        SyncEventStoreStatus, SyncOutboxStatus, SyncStatusReceipt, SyncStatusSource,
+        SyncTransportProfileSummary, SyncTransportStatusSummary, SyncTransportTargetSummary,
     };
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_transport::{
@@ -2087,11 +2099,15 @@ mod tests {
                     transport_kind: "nostr".to_owned(),
                     endpoint_uri: "wss://relay.example.com".to_owned(),
                     endpoint_fingerprint: "0".repeat(64),
+                    target_scope: None,
+                    target_label: None,
                 },
                 SyncTransportTargetSummary {
                     transport_kind: "reticulum".to_owned(),
                     endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
                     endpoint_fingerprint: "1".repeat(64),
+                    target_scope: Some("local_preview".to_owned()),
+                    target_label: None,
                 },
             ],
             transport_statuses: vec![
@@ -2476,6 +2492,8 @@ mod tests {
                         transport_kind: "nostr".to_owned(),
                         endpoint_uri: (*relay).to_owned(),
                         endpoint_fingerprint: format!("test-fingerprint-{index}"),
+                        target_scope: None,
+                        target_label: None,
                     })
                     .collect(),
                 transport_statuses: vec![SyncTransportStatusSummary {
@@ -2525,6 +2543,8 @@ mod tests {
                     transport_kind: "reticulum".to_owned(),
                     endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
                     endpoint_fingerprint: "1".repeat(64),
+                    target_scope: Some("local_preview".to_owned()),
+                    target_label: None,
                 }],
                 transport_statuses: vec![SyncTransportStatusSummary {
                     transport: "reticulum".to_owned(),
@@ -2582,7 +2602,10 @@ mod tests {
             targets: vec![PushOutboxTargetReceipt {
                 transport_kind: "nostr".to_owned(),
                 endpoint_uri: relay_url.to_owned(),
+                target_scope: None,
+                target_label: None,
                 outcome_kind,
+                transport_outcome_kind: test_transport_outcome_kind(outcome_kind),
                 attempted: true,
                 message,
             }],
@@ -2606,11 +2629,49 @@ mod tests {
             targets: vec![PushOutboxTargetReceipt {
                 transport_kind: "reticulum".to_owned(),
                 endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
+                target_scope: Some("local_preview".to_owned()),
+                target_label: None,
                 outcome_kind,
+                transport_outcome_kind: test_transport_outcome_kind(outcome_kind),
                 attempted: false,
                 message: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
             }],
         }
+    }
+
+    fn test_transport_outcome_kind(
+        kind: PushOutboxTargetOutcomeKind,
+    ) -> Option<PushOutboxTransportOutcomeKind> {
+        Some(match kind {
+            PushOutboxTargetOutcomeKind::Accepted => PushOutboxTransportOutcomeKind::Accepted,
+            PushOutboxTargetOutcomeKind::DuplicateAccepted => {
+                PushOutboxTransportOutcomeKind::DuplicateAccepted
+            }
+            PushOutboxTargetOutcomeKind::DeferredUntilImplemented => {
+                PushOutboxTransportOutcomeKind::DeferredUntilImplemented
+            }
+            PushOutboxTargetOutcomeKind::Timeout => PushOutboxTransportOutcomeKind::Timeout,
+            PushOutboxTargetOutcomeKind::ConnectionFailed => {
+                PushOutboxTransportOutcomeKind::ConnectionFailed
+            }
+            PushOutboxTargetOutcomeKind::PreviewUnavailable => {
+                PushOutboxTransportOutcomeKind::TransportUnavailable
+            }
+            PushOutboxTargetOutcomeKind::AuthRequired
+            | PushOutboxTargetOutcomeKind::Blocked
+            | PushOutboxTargetOutcomeKind::RateLimited
+            | PushOutboxTargetOutcomeKind::Invalid
+            | PushOutboxTargetOutcomeKind::PowRequired
+            | PushOutboxTargetOutcomeKind::Restricted
+            | PushOutboxTargetOutcomeKind::Muted
+            | PushOutboxTargetOutcomeKind::Unsupported
+            | PushOutboxTargetOutcomeKind::PaymentRequired
+            | PushOutboxTargetOutcomeKind::Error
+            | PushOutboxTargetOutcomeKind::TargetUriRejected
+            | PushOutboxTargetOutcomeKind::SkippedAlreadyAccepted
+            | PushOutboxTargetOutcomeKind::Unknown => PushOutboxTransportOutcomeKind::Rejected,
+            _ => PushOutboxTransportOutcomeKind::Rejected,
+        })
     }
 
     #[test]
@@ -2760,7 +2821,7 @@ mod tests {
         );
         assert_eq!(view.failed_transport_targets.len(), 1);
         assert_eq!(view.failed_count, Some(1));
-        assert_eq!(view.reason_code.as_deref(), Some("relay_fetch_partial"));
+        assert_eq!(view.reason_code.as_deref(), Some("nostr_fetch_partial"));
         assert!(
             view.reason
                 .as_deref()

@@ -715,7 +715,9 @@ fn string_array_input(input: &OperationData, key: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use radroots_events::ids::RadrootsEventId;
-    use radroots_sdk::{PushOutboxEventReceipt, PushOutboxTargetReceipt};
+    use radroots_sdk::{
+        PushOutboxEventReceipt, PushOutboxTargetReceipt, PushOutboxTransportOutcomeKind,
+    };
 
     #[test]
     fn transport_outbox_push_reports_reticulum_preview_without_attempts() {
@@ -767,7 +769,18 @@ mod tests {
                 targets: vec![PushOutboxTargetReceipt {
                     transport_kind: "reticulum".to_owned(),
                     endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
+                    target_scope: Some("local_preview".to_owned()),
+                    target_label: None,
                     outcome_kind,
+                    transport_outcome_kind: Some(match outcome_kind {
+                        PushOutboxTargetOutcomeKind::DeferredUntilImplemented => {
+                            PushOutboxTransportOutcomeKind::DeferredUntilImplemented
+                        }
+                        PushOutboxTargetOutcomeKind::PreviewUnavailable => {
+                            PushOutboxTransportOutcomeKind::TransportUnavailable
+                        }
+                        _ => PushOutboxTransportOutcomeKind::TransportUnavailable,
+                    }),
                     attempted: false,
                     message: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
                 }],

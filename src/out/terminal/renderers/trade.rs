@@ -466,19 +466,19 @@ fn push_trade_identity_fields(document: &mut TerminalDocument, result: &Value) {
 }
 
 fn push_relay_field(document: &mut TerminalDocument, result: &Value) {
-    let acknowledged = array_len(result, &["acknowledged_relays"]);
-    let connected = array_len(result, &["connected_relays"]);
-    let failed = array_len(result, &["failed_relays"]);
+    let acknowledged = array_len(result, &["accepted_transport_endpoints"]);
+    let connected = array_len(result, &["attempted_transport_endpoints"]);
+    let failed = array_len(result, &["failed_transport_targets"]);
     if acknowledged > 0 || failed > 0 {
         common::push_field(
             document,
-            "Relays",
+            "Targets",
             relay_summary(acknowledged, failed, "acknowledged"),
         );
     } else if connected > 0 || failed > 0 {
         common::push_field(
             document,
-            "Relays",
+            "Targets",
             relay_summary(connected, failed, "connected"),
         );
     }
@@ -694,7 +694,7 @@ mod tests {
             json!({
                 "state": "not_implemented",
                 "trade_id": "trade_test",
-                "reason": "relay-backed trade event watch is not implemented",
+                "reason": "Nostr-backed trade event watch is not implemented",
                 "actions": ["radroots trade status get trade_test"]
             }),
         );

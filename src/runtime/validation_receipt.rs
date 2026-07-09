@@ -2,7 +2,7 @@ use radroots_sdk::{
     RadrootsSdkError, TradeValidationReceiptEvent, TradeValidationReceiptInspectReceipt,
     TradeValidationReceiptInspectRequest, TradeValidationReceiptInvalidCandidate,
     TradeValidationReceiptListReceipt, TradeValidationReceiptListRequest,
-    TradeValidationReceiptRelayOutcomeKind, TradeValidationReceiptRelayOutcomeReceipt,
+    TradeValidationReceiptNostrRelayOutcomeKind, TradeValidationReceiptNostrRelayOutcomeReceipt,
     TradeValidationReceiptTags, TradeValidationReceiptVerifyRequest,
     TradeValidationReceiptWorkerEvidence,
     TradeValidationReceiptWorkerEvidenceSelection as SdkWorkerEvidenceSelection,
@@ -18,8 +18,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession};
-use crate::view::runtime::{CommandDisposition, RelayFailureView};
+use crate::runtime::sdk::{
+    CliSdkAdapterError, CliSdkSession, sdk_validation_transport_outcome_kind_label,
+};
+use crate::view::runtime::{CommandDisposition, TransportTargetFailureView};
 
 #[derive(Debug, Clone)]
 pub struct ValidationReceiptEventArgs {
@@ -42,9 +44,9 @@ pub struct ValidationReceiptInspectionView {
     pub receipt: Option<RadrootsTradeValidationReceipt>,
     pub receipt_tags: Option<ValidationReceiptTagsView>,
     pub event: Option<ValidationReceiptEventView>,
-    pub target_relays: Vec<String>,
-    pub connected_relays: Vec<String>,
-    pub failed_relays: Vec<RelayFailureView>,
+    pub target_transport_endpoints: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     pub reason_code: Option<String>,
     pub reason: Option<String>,
     pub sdk_error: Option<Value>,
@@ -73,9 +75,9 @@ pub struct ValidationReceiptListView {
     pub invalid_count: usize,
     pub receipts: Vec<ValidationReceiptSummaryView>,
     pub invalid_receipts: Vec<ValidationReceiptInvalidCandidateView>,
-    pub target_relays: Vec<String>,
-    pub connected_relays: Vec<String>,
-    pub failed_relays: Vec<RelayFailureView>,
+    pub target_transport_endpoints: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     pub reason_code: Option<String>,
     pub reason: Option<String>,
     pub sdk_error: Option<Value>,
@@ -334,16 +336,19 @@ fn inspection_from_sdk_receipt(
     intent: ValidationReceiptCommandIntent,
     sdk_receipt: TradeValidationReceiptInspectReceipt,
 ) -> ValidationReceiptInspectionView {
-    let target_relays = sdk_receipt.relay_targets;
-    let connected_relays = connected_relays(&sdk_receipt.relay_evidence.relays);
-    let failed_relays = sdk_relay_failures(&sdk_receipt.relay_evidence.relays);
-    let reason_code = (!failed_relays.is_empty()).then_some("relay_fetch_partial".to_owned());
+    let target_transport_endpoints = sdk_receipt.nostr_relay_urls;
+    let attempted_transport_endpoints =
+        attempted_transport_endpoints(&sdk_receipt.nostr_evidence.nostr_relay_outcomes);
+    let failed_transport_targets =
+        sdk_relay_failures(&sdk_receipt.nostr_evidence.nostr_relay_outcomes);
+    let reason_code =
+        (!failed_transport_targets.is_empty()).then_some("nostr_fetch_partial".to_owned());
     if let Some(invalid) = sdk_receipt.invalid_receipt {
         return invalid_inspected_event_view(
             invalid,
-            target_relays,
-            connected_relays,
-            failed_relays,
+            target_transport_endpoints,
+            attempted_transport_endpoints,
+            failed_transport_targets,
         );
     }
     let Some(receipt) = sdk_receipt.receipt else {
@@ -357,9 +362,9 @@ fn inspection_from_sdk_receipt(
             receipt: None,
             receipt_tags: None,
             event: None,
-            target_relays,
-            connected_relays,
-            failed_relays,
+            target_transport_endpoints,
+            attempted_transport_endpoints,
+            failed_transport_targets,
             reason_code: Some("validation_receipt_not_found".to_owned()),
             reason: Some(format!(
                 "validation receipt event `{receipt_event_id}` was not found on configured Nostr relays"
@@ -372,9 +377,9 @@ fn inspection_from_sdk_receipt(
         receipt,
         success_state,
         intent,
-        target_relays,
-        connected_relays,
-        failed_relays,
+        target_transport_endpoints,
+        attempted_transport_endpoints,
+        failed_transport_targets,
         reason_code,
     )
 }
@@ -383,9 +388,9 @@ fn inspected_event_view(
     sdk_receipt: TradeValidationReceiptEvent,
     success_state: &str,
     intent: ValidationReceiptCommandIntent,
-    target_relays: Vec<String>,
-    connected_relays: Vec<String>,
-    failed_relays: Vec<RelayFailureView>,
+    target_transport_endpoints: Vec<String>,
+    attempted_transport_endpoints: Vec<String>,
+    failed_transport_targets: Vec<TransportTargetFailureView>,
     relay_reason_code: Option<String>,
 ) -> ValidationReceiptInspectionView {
     let event_id = sdk_receipt.event.id.clone();
@@ -414,9 +419,9 @@ fn inspected_event_view(
             receipt: Some(sdk_receipt.receipt),
             receipt_tags: Some(tags_view(&sdk_receipt.tags)),
             event: Some(event_view(sdk_receipt.event)),
-            target_relays,
-            connected_relays,
-            failed_relays,
+            target_transport_endpoints,
+            attempted_transport_endpoints,
+            failed_transport_targets,
             reason_code: proof_verification.reason_code.clone(),
             reason: proof_verification.reason.clone(),
             sdk_error: None,
@@ -433,9 +438,9 @@ fn inspected_event_view(
         receipt: Some(sdk_receipt.receipt),
         receipt_tags: Some(tags_view(&sdk_receipt.tags)),
         event: Some(event_view(sdk_receipt.event)),
-        target_relays,
-        connected_relays,
-        failed_relays,
+        target_transport_endpoints,
+        attempted_transport_endpoints,
+        failed_transport_targets,
         reason_code: relay_reason_code,
         reason: None,
         sdk_error: None,
@@ -445,9 +450,9 @@ fn inspected_event_view(
 
 fn invalid_inspected_event_view(
     invalid: TradeValidationReceiptInvalidCandidate,
-    target_relays: Vec<String>,
-    connected_relays: Vec<String>,
-    failed_relays: Vec<RelayFailureView>,
+    target_transport_endpoints: Vec<String>,
+    attempted_transport_endpoints: Vec<String>,
+    failed_transport_targets: Vec<TransportTargetFailureView>,
 ) -> ValidationReceiptInspectionView {
     ValidationReceiptInspectionView {
         state: "invalid".to_owned(),
@@ -459,9 +464,9 @@ fn invalid_inspected_event_view(
         receipt: None,
         receipt_tags: None,
         event: Some(event_view(invalid.event)),
-        target_relays,
-        connected_relays,
-        failed_relays,
+        target_transport_endpoints,
+        attempted_transport_endpoints,
+        failed_transport_targets,
         reason_code: Some(invalid.reason_code),
         reason: Some(invalid.reason),
         sdk_error: None,
@@ -472,9 +477,11 @@ fn invalid_inspected_event_view(
 fn list_from_sdk_receipt(
     sdk_receipt: TradeValidationReceiptListReceipt,
 ) -> ValidationReceiptListView {
-    let target_relays = sdk_receipt.relay_targets;
-    let connected_relays = connected_relays(&sdk_receipt.relay_evidence.relays);
-    let failed_relays = sdk_relay_failures(&sdk_receipt.relay_evidence.relays);
+    let target_transport_endpoints = sdk_receipt.nostr_relay_urls;
+    let attempted_transport_endpoints =
+        attempted_transport_endpoints(&sdk_receipt.nostr_evidence.nostr_relay_outcomes);
+    let failed_transport_targets =
+        sdk_relay_failures(&sdk_receipt.nostr_evidence.nostr_relay_outcomes);
     let mut invalid_receipts = sdk_receipt
         .invalid_receipts
         .into_iter()
@@ -522,8 +529,8 @@ fn list_from_sdk_receipt(
     };
     let reason_code = if invalid_count > 0 {
         Some("validation_receipt_candidates_invalid".to_owned())
-    } else if !failed_relays.is_empty() {
-        Some("relay_fetch_partial".to_owned())
+    } else if !failed_transport_targets.is_empty() {
+        Some("nostr_fetch_partial".to_owned())
     } else {
         None
     };
@@ -545,9 +552,9 @@ fn list_from_sdk_receipt(
         invalid_count,
         receipts,
         invalid_receipts,
-        target_relays,
-        connected_relays,
-        failed_relays,
+        target_transport_endpoints,
+        attempted_transport_endpoints,
+        failed_transport_targets,
         reason_code,
         reason,
         sdk_error: None,
@@ -570,9 +577,9 @@ fn inspection_sdk_error_view(
         receipt: None,
         receipt_tags: None,
         event: None,
-        target_relays: Vec::new(),
-        connected_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: Vec::new(),
+        attempted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         reason_code: Some(mapped.reason_code),
         reason: Some(mapped.reason),
         sdk_error: mapped.sdk_error,
@@ -590,9 +597,9 @@ fn list_sdk_error_view(order_id: &str, error: CliSdkAdapterError) -> ValidationR
         invalid_count: 0,
         receipts: Vec::new(),
         invalid_receipts: Vec::new(),
-        target_relays: Vec::new(),
-        connected_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: Vec::new(),
+        attempted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         reason_code: Some(mapped.reason_code),
         reason: Some(mapped.reason),
         sdk_error: mapped.sdk_error,
@@ -623,7 +630,7 @@ fn validation_receipt_sdk_error_parts(error: CliSdkAdapterError) -> ValidationRe
 
 fn sdk_error_parts(error: RadrootsSdkError) -> ValidationReceiptSdkErrorParts {
     let state = match error.code() {
-        "empty_target_relays" => "unconfigured",
+        "empty_transport_targets" => "unconfigured",
         _ => match error.class() {
             radroots_sdk::RadrootsSdkErrorClass::Configuration
             | radroots_sdk::RadrootsSdkErrorClass::Unsupported => "unconfigured",
@@ -636,7 +643,7 @@ fn sdk_error_parts(error: RadrootsSdkError) -> ValidationReceiptSdkErrorParts {
             _ => "network_unavailable",
         },
     };
-    let actions = if error.code() == "empty_target_relays" {
+    let actions = if error.code() == "empty_transport_targets" {
         vec![
             "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
                 .to_owned(),
@@ -668,9 +675,9 @@ fn invalid_inspection_view(
         receipt: None,
         receipt_tags: None,
         event: None,
-        target_relays: Vec::new(),
-        connected_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: Vec::new(),
+        attempted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         reason_code: Some(reason_code.to_owned()),
         reason: Some(reason.into()),
         sdk_error: None,
@@ -691,9 +698,9 @@ fn invalid_list_view(
         invalid_count: 0,
         receipts: Vec::new(),
         invalid_receipts: Vec::new(),
-        target_relays: Vec::new(),
-        connected_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: Vec::new(),
+        attempted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         reason_code: Some(reason_code.to_owned()),
         reason: Some(reason.into()),
         sdk_error: None,
@@ -1222,22 +1229,30 @@ fn worker_evidence_view(
     }
 }
 
-fn connected_relays(relays: &[TradeValidationReceiptRelayOutcomeReceipt]) -> Vec<String> {
+fn attempted_transport_endpoints(
+    relays: &[TradeValidationReceiptNostrRelayOutcomeReceipt],
+) -> Vec<String> {
     relays
         .iter()
-        .filter(|relay| relay.outcome_kind == TradeValidationReceiptRelayOutcomeKind::Eose)
-        .map(|relay| relay.relay_url.clone())
+        .filter(|relay| relay.outcome_kind == TradeValidationReceiptNostrRelayOutcomeKind::Eose)
+        .map(|relay| relay.nostr_relay_url.clone())
         .collect()
 }
 
 fn sdk_relay_failures(
-    relays: &[TradeValidationReceiptRelayOutcomeReceipt],
-) -> Vec<RelayFailureView> {
+    relays: &[TradeValidationReceiptNostrRelayOutcomeReceipt],
+) -> Vec<TransportTargetFailureView> {
     relays
         .iter()
-        .filter(|relay| relay.outcome_kind != TradeValidationReceiptRelayOutcomeKind::Eose)
-        .map(|relay| RelayFailureView {
-            relay: relay.relay_url.clone(),
+        .filter(|relay| relay.outcome_kind != TradeValidationReceiptNostrRelayOutcomeKind::Eose)
+        .map(|relay| TransportTargetFailureView {
+            transport_kind: "nostr".to_owned(),
+            endpoint_uri: relay.nostr_relay_url.clone(),
+            target_scope: None,
+            target_label: None,
+            transport_outcome_kind: relay
+                .transport_outcome_kind
+                .map(sdk_validation_transport_outcome_kind_label),
             reason: relay
                 .message
                 .clone()
@@ -1246,11 +1261,11 @@ fn sdk_relay_failures(
         .collect()
 }
 
-fn sdk_relay_outcome_kind(kind: TradeValidationReceiptRelayOutcomeKind) -> &'static str {
+fn sdk_relay_outcome_kind(kind: TradeValidationReceiptNostrRelayOutcomeKind) -> &'static str {
     match kind {
-        TradeValidationReceiptRelayOutcomeKind::Eose => "eose",
-        TradeValidationReceiptRelayOutcomeKind::Closed => "closed",
-        TradeValidationReceiptRelayOutcomeKind::Notice => "notice",
+        TradeValidationReceiptNostrRelayOutcomeKind::Eose => "eose",
+        TradeValidationReceiptNostrRelayOutcomeKind::Closed => "closed",
+        TradeValidationReceiptNostrRelayOutcomeKind::Notice => "notice",
         _ => "unknown",
     }
 }

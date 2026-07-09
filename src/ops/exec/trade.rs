@@ -28,7 +28,7 @@ use crate::view::runtime::{
     OrderSubmitView,
 };
 
-const TRADE_EVENT_WATCH_DEFERRED_REASON: &str = "relay-backed trade event watch is not implemented";
+const TRADE_EVENT_WATCH_DEFERRED_REASON: &str = "Nostr-backed trade event watch is not implemented";
 
 pub struct TradeOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -502,7 +502,9 @@ where
                 .unwrap_or_else(|| format!("order decision finished with state `{}`", view.state));
             if disposition == CommandDisposition::ExternalUnavailable {
                 let detail = order_decision_error_detail(view);
-                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                if !view.failed_transport_targets.is_empty()
+                    && view.attempted_transport_endpoints.is_empty()
+                {
                     Err(OperationAdapterError::network_unavailable_with_detail(
                         operation_id,
                         message,
@@ -555,10 +557,10 @@ fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
         "seller_pubkey": &view.seller_pubkey,
         "decision": &view.decision,
         "dry_run": view.dry_run,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "acknowledged_relays": &view.acknowledged_relays,
-        "failed_relays": &view.failed_relays,
+        "target_transport_endpoints": &view.target_transport_endpoints,
+        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
+        "accepted_transport_endpoints": &view.accepted_transport_endpoints,
+        "failed_transport_targets": &view.failed_transport_targets,
         "fetched_count": view.fetched_count,
         "decoded_count": view.decoded_count,
         "skipped_count": view.skipped_count,
@@ -595,7 +597,9 @@ where
                 .unwrap_or_else(|| format!("order cancel finished with state `{}`", view.state));
             if disposition == CommandDisposition::ExternalUnavailable {
                 let detail = order_cancellation_error_detail(view);
-                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                if !view.failed_transport_targets.is_empty()
+                    && view.attempted_transport_endpoints.is_empty()
+                {
                     Err(OperationAdapterError::network_unavailable_with_detail(
                         operation_id,
                         message,
@@ -641,10 +645,10 @@ fn order_cancellation_error_detail(view: &OrderCancellationView) -> Value {
         "seller_pubkey": &view.seller_pubkey,
         "cancellation_reason": &view.cancellation_reason,
         "dry_run": view.dry_run,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "acknowledged_relays": &view.acknowledged_relays,
-        "failed_relays": &view.failed_relays,
+        "target_transport_endpoints": &view.target_transport_endpoints,
+        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
+        "accepted_transport_endpoints": &view.accepted_transport_endpoints,
+        "failed_transport_targets": &view.failed_transport_targets,
         "fetched_count": view.fetched_count,
         "decoded_count": view.decoded_count,
         "skipped_count": view.skipped_count,
@@ -686,7 +690,9 @@ where
             });
             if disposition == CommandDisposition::ExternalUnavailable {
                 let detail = order_revision_proposal_error_detail(view);
-                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                if !view.failed_transport_targets.is_empty()
+                    && view.attempted_transport_endpoints.is_empty()
+                {
                     Err(OperationAdapterError::network_unavailable_with_detail(
                         operation_id,
                         message,
@@ -735,10 +741,10 @@ fn order_revision_proposal_error_detail(view: &OrderRevisionProposalView) -> Val
         "buyer_pubkey": &view.buyer_pubkey,
         "seller_pubkey": &view.seller_pubkey,
         "dry_run": view.dry_run,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "acknowledged_relays": &view.acknowledged_relays,
-        "failed_relays": &view.failed_relays,
+        "target_transport_endpoints": &view.target_transport_endpoints,
+        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
+        "accepted_transport_endpoints": &view.accepted_transport_endpoints,
+        "failed_transport_targets": &view.failed_transport_targets,
         "fetched_count": view.fetched_count,
         "decoded_count": view.decoded_count,
         "skipped_count": view.skipped_count,
@@ -782,7 +788,9 @@ where
             });
             if disposition == CommandDisposition::ExternalUnavailable {
                 let detail = order_revision_decision_error_detail(view);
-                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                if !view.failed_transport_targets.is_empty()
+                    && view.attempted_transport_endpoints.is_empty()
+                {
                     Err(OperationAdapterError::network_unavailable_with_detail(
                         operation_id,
                         message,
@@ -832,10 +840,10 @@ fn order_revision_decision_error_detail(view: &OrderRevisionDecisionView) -> Val
         "buyer_pubkey": &view.buyer_pubkey,
         "seller_pubkey": &view.seller_pubkey,
         "dry_run": view.dry_run,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "acknowledged_relays": &view.acknowledged_relays,
-        "failed_relays": &view.failed_relays,
+        "target_transport_endpoints": &view.target_transport_endpoints,
+        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
+        "accepted_transport_endpoints": &view.accepted_transport_endpoints,
+        "failed_transport_targets": &view.failed_transport_targets,
         "fetched_count": view.fetched_count,
         "decoded_count": view.decoded_count,
         "skipped_count": view.skipped_count,
@@ -862,7 +870,9 @@ where
                 .unwrap_or_else(|| format!("order status finished with state `{}`", view.state));
             if disposition == CommandDisposition::ExternalUnavailable {
                 let detail = order_status_error_detail(view);
-                if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                if !view.failed_transport_targets.is_empty()
+                    && view.attempted_transport_endpoints.is_empty()
+                {
                     Err(OperationAdapterError::network_unavailable_with_detail(
                         operation_id,
                         message,
@@ -910,9 +920,9 @@ fn order_status_error_detail(view: &OrderStatusView) -> Value {
         "lifecycle": &view.lifecycle,
         "sdk_receipt": &view.sdk_receipt,
         "reducer_issues": &view.reducer_issues,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "failed_relays": &view.failed_relays,
+        "target_transport_endpoints": &view.target_transport_endpoints,
+        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
+        "failed_transport_targets": &view.failed_transport_targets,
         "fetched_count": view.fetched_count,
         "decoded_count": view.decoded_count,
         "skipped_count": view.skipped_count,
@@ -964,7 +974,9 @@ where
                     ))
                 }
                 CommandDisposition::ExternalUnavailable => {
-                    if !view.failed_relays.is_empty() && view.connected_relays.is_empty() {
+                    if !view.failed_transport_targets.is_empty()
+                        && view.attempted_transport_endpoints.is_empty()
+                    {
                         Err(OperationAdapterError::network_unavailable_with_detail(
                             operation_id,
                             message,
@@ -1108,10 +1120,10 @@ fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
         "event_kind": view.event_kind,
         "dry_run": view.dry_run,
         "deduplicated": view.deduplicated,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "acknowledged_relays": &view.acknowledged_relays,
-        "failed_relays": &view.failed_relays,
+        "target_transport_endpoints": &view.target_transport_endpoints,
+        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
+        "accepted_transport_endpoints": &view.accepted_transport_endpoints,
+        "failed_transport_targets": &view.failed_transport_targets,
         "idempotency_key": &view.idempotency_key,
         "signer_mode": &view.signer_mode,
         "issues": &view.issues,
@@ -1160,9 +1172,9 @@ fn order_event_list_error_detail(view: &crate::view::runtime::OrderEventListView
     json!({
         "state": &view.state,
         "seller_pubkey": &view.seller_pubkey,
-        "target_relays": &view.target_relays,
-        "connected_relays": &view.connected_relays,
-        "failed_relays": &view.failed_relays,
+        "target_transport_endpoints": &view.target_transport_endpoints,
+        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
+        "failed_transport_targets": &view.failed_transport_targets,
         "fetched_count": view.fetched_count,
         "decoded_count": view.decoded_count,
         "skipped_count": view.skipped_count,
@@ -1397,7 +1409,12 @@ mod tests {
         assert_eq!(detail["state"], "unconfigured");
         assert_eq!(detail["trade_id"], "ord_pending");
         assert_eq!(detail["decision"], "accepted");
-        assert!(detail["target_relays"].as_array().unwrap().is_empty());
+        assert!(
+            detail["target_transport_endpoints"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1868,10 +1885,10 @@ mod tests {
             event_kind: Some(3423),
             inventory: None,
             dry_run: false,
-            target_relays: vec!["ws://relay.test".to_owned()],
-            connected_relays: vec!["ws://relay.test".to_owned()],
-            acknowledged_relays: Vec::new(),
-            failed_relays: Vec::new(),
+            target_transport_endpoints: vec!["ws://relay.test".to_owned()],
+            attempted_transport_endpoints: vec!["ws://relay.test".to_owned()],
+            accepted_transport_endpoints: Vec::new(),
+            failed_transport_targets: Vec::new(),
             fetched_count: 2,
             decoded_count: 2,
             skipped_count: 0,

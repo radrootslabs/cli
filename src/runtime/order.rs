@@ -83,6 +83,7 @@ use crate::runtime::local_events::{
 };
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, fetch_relay_events_via_shared_transport,
+    sdk_transport_outcome_kind_label,
 };
 use crate::runtime::sync::{RelayIngestScope, relay_provenance_relays_for_scope};
 use crate::view::runtime::{
@@ -90,7 +91,7 @@ use crate::view::runtime::{
     OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
     OrderEventListView, OrderGetView, OrderIssueView, OrderListView, OrderNewView, OrderRebindView,
     OrderRevisionDecisionView, OrderRevisionProposalView, OrderStatusView, OrderSubmitView,
-    OrderSummaryView, OrderTradeLocatorView, RelayFailureView,
+    OrderSummaryView, OrderTradeLocatorView, TransportTargetFailureView,
 };
 
 use self::sdk_status::sdk_order_status_view;
@@ -103,7 +104,7 @@ const ORDER_DECISION_SOURCE: &str = "SDK trade decision · local key";
 const ORDER_REVISION_PROPOSAL_SOURCE: &str = "SDK trade revision proposal · local key";
 const ORDER_REVISION_DECISION_SOURCE: &str = "SDK trade revision decision · local key";
 const ORDER_CANCELLATION_SOURCE: &str = "SDK trade cancellation · local key";
-const ORDER_EVENT_LIST_SOURCE: &str = "shared relay transport fetch · selected seller identity";
+const ORDER_EVENT_LIST_SOURCE: &str = "shared Nostr transport fetch · selected seller identity";
 const ORDER_STATUS_SDK_SOURCE: &str = "SDK local trade projection";
 const ORDER_EVENT_LIST_RELAY_ACTION: &str =
     "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com";
@@ -165,7 +166,7 @@ fn trade_publish_mode(config: &RuntimeConfig) -> PublishMode {
 fn trade_satisfaction_policy(mode: PublishMode) -> Result<SatisfactionPolicy, RuntimeError> {
     Ok(match mode {
         PublishMode::DryRun | PublishMode::EnqueueOnly => SatisfactionPolicy::NoWait,
-        PublishMode::EnqueueAndPublish => SatisfactionPolicy::AtLeastOneTarget,
+        PublishMode::EnqueueAndPublish => SatisfactionPolicy::AnyAccepted,
         _ => {
             return Err(RuntimeError::Config(
                 "unsupported SDK publish mode for CLI trade workflow".to_owned(),
@@ -897,10 +898,10 @@ pub fn submit(
                     event_kind: None,
                     dry_run: config.output.dry_run,
                     deduplicated: false,
-                    target_relays: Vec::new(),
-                    connected_relays: Vec::new(),
-                    acknowledged_relays: Vec::new(),
-                    failed_relays: Vec::new(),
+                    target_transport_endpoints: Vec::new(),
+                    attempted_transport_endpoints: Vec::new(),
+                    accepted_transport_endpoints: Vec::new(),
+                    failed_transport_targets: Vec::new(),
                     idempotency_key: args.idempotency_key.clone(),
                     signer_mode: None,
                     reason: Some(reason),
@@ -933,10 +934,10 @@ pub fn submit(
             event_kind: None,
             dry_run: config.output.dry_run,
             deduplicated: false,
-            target_relays: Vec::new(),
-            connected_relays: Vec::new(),
-            acknowledged_relays: Vec::new(),
-            failed_relays: Vec::new(),
+            target_transport_endpoints: Vec::new(),
+            attempted_transport_endpoints: Vec::new(),
+            accepted_transport_endpoints: Vec::new(),
+            failed_transport_targets: Vec::new(),
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             reason: Some(format!("trade draft `{}` was not found", args.key)),
@@ -980,10 +981,10 @@ pub fn submit(
             event_kind: None,
             dry_run: config.output.dry_run,
             deduplicated: false,
-            target_relays: Vec::new(),
-            connected_relays: Vec::new(),
-            acknowledged_relays: Vec::new(),
-            failed_relays: Vec::new(),
+            target_transport_endpoints: Vec::new(),
+            attempted_transport_endpoints: Vec::new(),
+            accepted_transport_endpoints: Vec::new(),
+            failed_transport_targets: Vec::new(),
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             reason: Some("trade draft is not ready for submit".to_owned()),
@@ -1592,7 +1593,7 @@ fn sdk_trade_decision_outcome_view(
             view.prev_event_id = Some(plan.request_event_id.to_string());
             view.event_id = Some(plan.expected_event_id.to_string());
             view.event_kind = Some(KIND_ORDER_DECISION);
-            view.target_relays = config.transport.nostr_relay_urls.clone();
+            view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
             view.reason = Some(format!(
                 "dry run requested; seller trade {} publication skipped",
                 args.decision.command()
@@ -1634,7 +1635,7 @@ fn sdk_trade_revision_outcome_view(
                 })
                 .collect();
             view.economics = Some(revision.economics);
-            view.target_relays = config.transport.nostr_relay_urls.clone();
+            view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
             view.reason =
                 Some("dry run requested; seller revision proposal publication skipped".to_owned());
             view.actions = vec![format!("radroots trade status get {}", status.order_id)];
@@ -1669,7 +1670,7 @@ fn sdk_trade_revision_decision_outcome_view(
             view.prev_event_id = Some(plan.previous_event_id.to_string());
             view.event_id = Some(plan.expected_event_id.to_string());
             view.event_kind = Some(KIND_ORDER_REVISION_DECISION);
-            view.target_relays = config.transport.nostr_relay_urls.clone();
+            view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
             view.reason = Some(format!(
                 "dry run requested; buyer revision {} publication skipped",
                 args.decision.command()
@@ -1700,7 +1701,7 @@ fn sdk_trade_cancellation_outcome_view(
             view.prev_event_id = Some(plan.previous_event_id.to_string());
             view.event_id = Some(plan.expected_event_id.to_string());
             view.event_kind = Some(KIND_ORDER_CANCELLATION);
-            view.target_relays = config.transport.nostr_relay_urls.clone();
+            view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
             view.reason =
                 Some("dry run requested; buyer trade cancellation publication skipped".to_owned());
             view.actions = vec![format!("radroots trade status get {}", status.order_id)];
@@ -1789,7 +1790,7 @@ fn order_event_list_unconfigured(
     seller_pubkey: Option<String>,
     actor_context_source: &'static str,
     reason: String,
-    target_relays: Vec<String>,
+    target_transport_endpoints: Vec<String>,
     actions: Vec<String>,
 ) -> OrderEventListView {
     OrderEventListView {
@@ -1797,9 +1798,9 @@ fn order_event_list_unconfigured(
         source: ORDER_EVENT_LIST_SOURCE.to_owned(),
         actor_context_source: actor_context_source.to_owned(),
         seller_pubkey,
-        target_relays,
-        connected_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints,
+        attempted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         fetched_count: 0,
         decoded_count: 0,
         skipped_count: 0,
@@ -1814,22 +1815,22 @@ fn order_event_list_unavailable(
     seller_pubkey: String,
     actor_context_source: &'static str,
     reason: String,
-    target_relays: Vec<String>,
-    failed_relays: Vec<RadrootsRelayFetchFailure>,
+    target_transport_endpoints: Vec<String>,
+    failed_transport_targets: Vec<RadrootsRelayFetchFailure>,
 ) -> OrderEventListView {
     OrderEventListView {
         state: "unavailable".to_owned(),
         source: ORDER_EVENT_LIST_SOURCE.to_owned(),
         actor_context_source: actor_context_source.to_owned(),
         seller_pubkey: Some(seller_pubkey),
-        target_relays,
-        connected_relays: Vec::new(),
-        failed_relays: relay_failures(failed_relays),
+        target_transport_endpoints,
+        attempted_transport_endpoints: Vec::new(),
+        failed_transport_targets: relay_failures(failed_transport_targets),
         fetched_count: 0,
         decoded_count: 0,
         skipped_count: 0,
         count: 0,
-        reason: Some(format!("relay transport fetch failed: {reason}")),
+        reason: Some(format!("Nostr transport fetch failed: {reason}")),
         orders: Vec::new(),
         actions: Vec::new(),
     }
@@ -1875,9 +1876,9 @@ fn order_event_list_from_receipt(
     let reason = if orders.is_empty() {
         Some(match order_id {
             Some(order_id) => {
-                format!("no relay-backed order request events matched `{order_id}`")
+                format!("no Nostr-backed order request events matched `{order_id}`")
             }
-            None => "no relay-backed order request events matched the selected seller".to_owned(),
+            None => "no Nostr-backed order request events matched the selected seller".to_owned(),
         })
     } else {
         None
@@ -1888,9 +1889,9 @@ fn order_event_list_from_receipt(
         source: ORDER_EVENT_LIST_SOURCE.to_owned(),
         actor_context_source: actor_context_source.to_owned(),
         seller_pubkey: Some(seller_pubkey),
-        target_relays,
-        connected_relays,
-        failed_relays: relay_failures(failed_relays),
+        target_transport_endpoints: target_relays,
+        attempted_transport_endpoints: connected_relays,
+        failed_transport_targets: relay_failures(failed_relays),
         fetched_count,
         decoded_count,
         skipped_count,
@@ -1924,10 +1925,10 @@ fn order_decision_base_view(
         event_kind: None,
         inventory: None,
         dry_run,
-        target_relays: config.transport.nostr_relay_urls.clone(),
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: config.transport.nostr_relay_urls.clone(),
+        attempted_transport_endpoints: Vec::new(),
+        accepted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         fetched_count: 0,
         decoded_count: 0,
         skipped_count: 0,
@@ -1964,10 +1965,10 @@ fn order_revision_base_view(
         economics: None,
         inventory: None,
         dry_run,
-        target_relays: config.transport.nostr_relay_urls.clone(),
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: config.transport.nostr_relay_urls.clone(),
+        attempted_transport_endpoints: Vec::new(),
+        accepted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         fetched_count: 0,
         decoded_count: 0,
         skipped_count: 0,
@@ -2005,10 +2006,10 @@ fn order_revision_decision_base_view(
         economics: None,
         inventory: None,
         dry_run,
-        target_relays: config.transport.nostr_relay_urls.clone(),
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: config.transport.nostr_relay_urls.clone(),
+        attempted_transport_endpoints: Vec::new(),
+        accepted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         fetched_count: 0,
         decoded_count: 0,
         skipped_count: 0,
@@ -2042,10 +2043,10 @@ fn order_cancellation_base_view(
         event_kind: None,
         cancellation_reason: Some(args.reason.clone()),
         dry_run,
-        target_relays: config.transport.nostr_relay_urls.clone(),
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: config.transport.nostr_relay_urls.clone(),
+        attempted_transport_endpoints: Vec::new(),
+        accepted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         fetched_count: 0,
         decoded_count: 0,
         skipped_count: 0,
@@ -2067,9 +2068,9 @@ fn apply_order_cancellation_status(view: &mut OrderCancellationView, status: &Or
     view.decision_event_id = status.decision_event_id.clone();
     view.root_event_id = status.request_event_id.clone();
     view.prev_event_id = order_cancellation_prev_event_id(status);
-    view.target_relays = status.target_relays.clone();
-    view.connected_relays = status.connected_relays.clone();
-    view.failed_relays = status.failed_relays.clone();
+    view.target_transport_endpoints = status.target_transport_endpoints.clone();
+    view.attempted_transport_endpoints = status.attempted_transport_endpoints.clone();
+    view.failed_transport_targets = status.failed_transport_targets.clone();
     view.fetched_count = status.fetched_count;
     view.decoded_count = status.decoded_count;
     view.skipped_count = status.skipped_count;
@@ -2097,9 +2098,9 @@ fn apply_order_decision_status(view: &mut OrderDecisionView, status: &OrderStatu
     view.listing_event_id = status.listing_event_id.clone();
     view.root_event_id = status.request_event_id.clone();
     view.prev_event_id = status.last_event_id.clone();
-    view.target_relays = status.target_relays.clone();
-    view.connected_relays = status.connected_relays.clone();
-    view.failed_relays = status.failed_relays.clone();
+    view.target_transport_endpoints = status.target_transport_endpoints.clone();
+    view.attempted_transport_endpoints = status.attempted_transport_endpoints.clone();
+    view.failed_transport_targets = status.failed_transport_targets.clone();
     view.fetched_count = status.fetched_count;
     view.decoded_count = status.decoded_count;
     view.skipped_count = status.skipped_count;
@@ -2119,9 +2120,9 @@ fn apply_order_revision_status(view: &mut OrderRevisionProposalView, status: &Or
     view.prev_event_id = status.last_event_id.clone();
     view.economics = status.economics.clone();
     view.inventory = status.inventory.clone();
-    view.target_relays = status.target_relays.clone();
-    view.connected_relays = status.connected_relays.clone();
-    view.failed_relays = status.failed_relays.clone();
+    view.target_transport_endpoints = status.target_transport_endpoints.clone();
+    view.attempted_transport_endpoints = status.attempted_transport_endpoints.clone();
+    view.failed_transport_targets = status.failed_transport_targets.clone();
     view.fetched_count = status.fetched_count;
     view.decoded_count = status.decoded_count;
     view.skipped_count = status.skipped_count;
@@ -2144,9 +2145,9 @@ fn apply_order_revision_decision_status(
     view.prev_event_id = status.last_event_id.clone();
     view.economics = status.economics.clone();
     view.inventory = status.inventory.clone();
-    view.target_relays = status.target_relays.clone();
-    view.connected_relays = status.connected_relays.clone();
-    view.failed_relays = status.failed_relays.clone();
+    view.target_transport_endpoints = status.target_transport_endpoints.clone();
+    view.attempted_transport_endpoints = status.attempted_transport_endpoints.clone();
+    view.failed_transport_targets = status.failed_transport_targets.clone();
     view.fetched_count = status.fetched_count;
     view.decoded_count = status.decoded_count;
     view.skipped_count = status.skipped_count;
@@ -2408,16 +2409,18 @@ fn sdk_enqueued_order_decision_view(
     view.prev_event_id = Some(enqueue.request_event_id.to_string());
     view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
     view.event_kind = Some(KIND_ORDER_DECISION);
-    view.target_relays = push_event
-        .map(sdk_push_target_relays)
+    view.target_transport_endpoints = push_event
+        .map(sdk_push_target_transport_endpoints)
         .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
-    view.connected_relays = push_event
-        .map(sdk_push_connected_relays)
+    view.attempted_transport_endpoints = push_event
+        .map(sdk_push_attempted_transport_endpoints)
         .unwrap_or_default();
-    view.acknowledged_relays = push_event
-        .map(sdk_push_acknowledged_relays)
+    view.accepted_transport_endpoints = push_event
+        .map(sdk_push_accepted_transport_endpoints)
         .unwrap_or_default();
-    view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    view.failed_transport_targets = push_event
+        .map(sdk_push_failed_transport_targets)
+        .unwrap_or_default();
     view.reason = sdk_order_decision_reason(&enqueue.workflow, push_event);
     view.actions = sdk_order_decision_actions(push_event);
     view
@@ -2453,17 +2456,17 @@ fn sdk_order_decision_reason(
     match push_event.map(|event| event.final_state) {
         Some(PushOutboxEventState::Published) => None,
         Some(PushOutboxEventState::PublishRetryable) => Some(format!(
-            "{}; SDK relay publish did not reach accepted quorum; outbox event remains retryable; {}",
+            "{}; SDK transport publish did not reach accepted quorum; outbox event remains retryable; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
         Some(PushOutboxEventState::FailedTerminal) => Some(format!(
-            "{}; SDK relay publish failed terminally; {}",
+            "{}; SDK transport publish failed terminally; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
         Some(state) => Some(format!(
-            "{}; SDK relay push left event in state `{state:?}`; {}",
+            "{}; SDK transport push left event in state `{state:?}`; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
@@ -2517,16 +2520,18 @@ fn sdk_enqueued_order_revision_view(
     view.economics = Some(revision.economics);
     view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
     view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
-    view.target_relays = push_event
-        .map(sdk_push_target_relays)
+    view.target_transport_endpoints = push_event
+        .map(sdk_push_target_transport_endpoints)
         .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
-    view.connected_relays = push_event
-        .map(sdk_push_connected_relays)
+    view.attempted_transport_endpoints = push_event
+        .map(sdk_push_attempted_transport_endpoints)
         .unwrap_or_default();
-    view.acknowledged_relays = push_event
-        .map(sdk_push_acknowledged_relays)
+    view.accepted_transport_endpoints = push_event
+        .map(sdk_push_accepted_transport_endpoints)
         .unwrap_or_default();
-    view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    view.failed_transport_targets = push_event
+        .map(sdk_push_failed_transport_targets)
+        .unwrap_or_default();
     view.reason =
         sdk_order_lifecycle_reason("trade revision proposal", &enqueue.workflow, push_event);
     view.actions = sdk_order_lifecycle_actions(push_event);
@@ -2560,16 +2565,18 @@ fn sdk_enqueued_order_revision_decision_view(
     if args.decision == TradeRevisionDecisionArg::Accept {
         view.agreement_event_id = Some(enqueue.signed_event_id.as_str().to_owned());
     }
-    view.target_relays = push_event
-        .map(sdk_push_target_relays)
+    view.target_transport_endpoints = push_event
+        .map(sdk_push_target_transport_endpoints)
         .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
-    view.connected_relays = push_event
-        .map(sdk_push_connected_relays)
+    view.attempted_transport_endpoints = push_event
+        .map(sdk_push_attempted_transport_endpoints)
         .unwrap_or_default();
-    view.acknowledged_relays = push_event
-        .map(sdk_push_acknowledged_relays)
+    view.accepted_transport_endpoints = push_event
+        .map(sdk_push_accepted_transport_endpoints)
         .unwrap_or_default();
-    view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    view.failed_transport_targets = push_event
+        .map(sdk_push_failed_transport_targets)
+        .unwrap_or_default();
     view.reason =
         sdk_order_lifecycle_reason("trade revision decision", &enqueue.workflow, push_event);
     view.actions = sdk_order_lifecycle_actions(push_event);
@@ -2597,16 +2604,18 @@ fn sdk_enqueued_order_cancellation_view(
     view.prev_event_id = Some(enqueue.previous_event_id.to_string());
     view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
     view.event_kind = Some(KIND_ORDER_CANCELLATION);
-    view.target_relays = push_event
-        .map(sdk_push_target_relays)
+    view.target_transport_endpoints = push_event
+        .map(sdk_push_target_transport_endpoints)
         .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
-    view.connected_relays = push_event
-        .map(sdk_push_connected_relays)
+    view.attempted_transport_endpoints = push_event
+        .map(sdk_push_attempted_transport_endpoints)
         .unwrap_or_default();
-    view.acknowledged_relays = push_event
-        .map(sdk_push_acknowledged_relays)
+    view.accepted_transport_endpoints = push_event
+        .map(sdk_push_accepted_transport_endpoints)
         .unwrap_or_default();
-    view.failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    view.failed_transport_targets = push_event
+        .map(sdk_push_failed_transport_targets)
+        .unwrap_or_default();
     view.reason = sdk_order_lifecycle_reason("trade cancellation", &enqueue.workflow, push_event);
     view.actions = sdk_order_lifecycle_actions(push_event);
     view
@@ -2641,17 +2650,17 @@ fn sdk_order_lifecycle_reason(
     match push_event.map(|event| event.final_state) {
         Some(PushOutboxEventState::Published) => None,
         Some(PushOutboxEventState::PublishRetryable) => Some(format!(
-            "{}; SDK relay publish for {workflow} did not reach accepted quorum; outbox event remains retryable; {}",
+            "{}; SDK transport publish for {workflow} did not reach accepted quorum; outbox event remains retryable; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
         Some(PushOutboxEventState::FailedTerminal) => Some(format!(
-            "{}; SDK relay publish for {workflow} failed terminally; {}",
+            "{}; SDK transport publish for {workflow} failed terminally; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
         Some(state) => Some(format!(
-            "{}; SDK relay push for {workflow} left event in state `{state:?}`; {}",
+            "{}; SDK transport push for {workflow} left event in state `{state:?}`; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
@@ -4642,10 +4651,10 @@ fn order_submit_app_signed_evidence_view(
             event_kind: Some(KIND_ORDER_REQUEST),
             dry_run: config.output.dry_run,
             deduplicated: true,
-            target_relays: Vec::new(),
-            connected_relays: Vec::new(),
-            acknowledged_relays: Vec::new(),
-            failed_relays: Vec::new(),
+            target_transport_endpoints: Vec::new(),
+            attempted_transport_endpoints: Vec::new(),
+            accepted_transport_endpoints: Vec::new(),
+            failed_transport_targets: Vec::new(),
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             reason: Some(
@@ -4678,10 +4687,10 @@ fn order_submit_app_signed_evidence_view(
             event_kind: Some(KIND_ORDER_REQUEST),
             dry_run: config.output.dry_run,
             deduplicated: false,
-            target_relays: Vec::new(),
-            connected_relays: Vec::new(),
-            acknowledged_relays: Vec::new(),
-            failed_relays: Vec::new(),
+            target_transport_endpoints: Vec::new(),
+            attempted_transport_endpoints: Vec::new(),
+            accepted_transport_endpoints: Vec::new(),
+            failed_transport_targets: Vec::new(),
             idempotency_key: args.idempotency_key.clone(),
             signer_mode: None,
             reason: Some(
@@ -4758,7 +4767,7 @@ fn order_submit_dry_run_view(
     loaded: &LoadedOrderDraft,
     args: &TradeSubmitArgs,
     plan: TradeSubmitPlan,
-    target_relays: Vec<String>,
+    target_transport_endpoints: Vec<String>,
 ) -> OrderSubmitView {
     OrderSubmitView {
         state: "dry_run".to_owned(),
@@ -4786,13 +4795,13 @@ fn order_submit_dry_run_view(
         event_kind: Some(KIND_ORDER_REQUEST),
         dry_run: true,
         deduplicated: false,
-        target_relays,
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints,
+        attempted_transport_endpoints: Vec::new(),
+        accepted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         idempotency_key: args.idempotency_key.clone(),
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        reason: Some("dry run requested; SDK enqueue and relay push skipped".to_owned()),
+        reason: Some("dry run requested; SDK enqueue and transport push skipped".to_owned()),
         job: None,
         issues: Vec::new(),
         actions: vec![format!(
@@ -4953,16 +4962,18 @@ fn sdk_enqueued_order_submit_view(
         event_kind: Some(KIND_ORDER_REQUEST),
         dry_run: false,
         deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
-        target_relays: push_event
-            .map(sdk_push_target_relays)
+        target_transport_endpoints: push_event
+            .map(sdk_push_target_transport_endpoints)
             .unwrap_or_else(|| config.transport.nostr_relay_urls.clone()),
-        connected_relays: push_event
-            .map(sdk_push_connected_relays)
+        attempted_transport_endpoints: push_event
+            .map(sdk_push_attempted_transport_endpoints)
             .unwrap_or_default(),
-        acknowledged_relays: push_event
-            .map(sdk_push_acknowledged_relays)
+        accepted_transport_endpoints: push_event
+            .map(sdk_push_accepted_transport_endpoints)
             .unwrap_or_default(),
-        failed_relays: push_event.map(sdk_push_failed_relays).unwrap_or_default(),
+        failed_transport_targets: push_event
+            .map(sdk_push_failed_transport_targets)
+            .unwrap_or_default(),
         idempotency_key: args.idempotency_key.clone(),
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
         reason: sdk_order_submit_reason(&enqueue.workflow, push_event),
@@ -4999,17 +5010,17 @@ fn sdk_order_submit_reason(
     match push_event.map(|event| event.final_state) {
         Some(PushOutboxEventState::Published) => None,
         Some(PushOutboxEventState::PublishRetryable) => Some(format!(
-            "{}; SDK relay publish did not reach accepted quorum; outbox event remains retryable; {}",
+            "{}; SDK transport publish did not reach accepted quorum; outbox event remains retryable; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
         Some(PushOutboxEventState::FailedTerminal) => Some(format!(
-            "{}; SDK relay publish failed terminally; {}",
+            "{}; SDK transport publish failed terminally; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
         Some(state) => Some(format!(
-            "{}; SDK relay push left event in state `{state:?}`; {}",
+            "{}; SDK transport push left event in state `{state:?}`; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
@@ -5031,7 +5042,7 @@ fn sdk_order_submit_actions(push_event: Option<&PushOutboxEventReceipt>) -> Vec<
     Vec::new()
 }
 
-fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+fn sdk_push_target_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
         .targets
         .iter()
@@ -5039,7 +5050,7 @@ fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
         .collect()
 }
 
-fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+fn sdk_push_attempted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
         .targets
         .iter()
@@ -5048,7 +5059,7 @@ fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
         .collect()
 }
 
-fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+fn sdk_push_accepted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
         .targets
         .iter()
@@ -5063,7 +5074,9 @@ fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
         .collect()
 }
 
-fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureView> {
+fn sdk_push_failed_transport_targets(
+    event: &PushOutboxEventReceipt,
+) -> Vec<TransportTargetFailureView> {
     event
         .targets
         .iter()
@@ -5074,8 +5087,14 @@ fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureVie
                     | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )
         })
-        .map(|target| RelayFailureView {
-            relay: target.endpoint_uri.clone(),
+        .map(|target| TransportTargetFailureView {
+            transport_kind: target.transport_kind.clone(),
+            endpoint_uri: target.endpoint_uri.clone(),
+            target_scope: target.target_scope.clone(),
+            target_label: target.target_label.clone(),
+            transport_outcome_kind: target
+                .transport_outcome_kind
+                .map(sdk_transport_outcome_kind_label),
             reason: target
                 .message
                 .clone()
@@ -5243,22 +5262,26 @@ fn order_relay_fetch_error(error: RadrootsRelayTransportError) -> RuntimeError {
     RuntimeError::Network(error.to_string())
 }
 
-fn relay_fetch_failure_reason(failed_relays: &[RadrootsRelayFetchFailure]) -> String {
-    if failed_relays.is_empty() {
+fn relay_fetch_failure_reason(failed_transport_targets: &[RadrootsRelayFetchFailure]) -> String {
+    if failed_transport_targets.is_empty() {
         return "no relay acknowledged the fetch".to_owned();
     }
-    failed_relays
+    failed_transport_targets
         .iter()
         .map(|failure| format!("{}: {}", failure.relay_url, failure.reason))
         .collect::<Vec<_>>()
         .join("; ")
 }
 
-fn relay_failures(failures: Vec<RadrootsRelayFetchFailure>) -> Vec<RelayFailureView> {
+fn relay_failures(failures: Vec<RadrootsRelayFetchFailure>) -> Vec<TransportTargetFailureView> {
     failures
         .into_iter()
-        .map(|failure| RelayFailureView {
-            relay: failure.relay_url,
+        .map(|failure| TransportTargetFailureView {
+            transport_kind: "nostr".to_owned(),
+            endpoint_uri: failure.relay_url,
+            target_scope: None,
+            target_label: None,
+            transport_outcome_kind: None,
             reason: failure.reason,
         })
         .collect()

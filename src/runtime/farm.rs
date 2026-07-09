@@ -35,7 +35,7 @@ use crate::runtime::farm_config::{
 use crate::runtime::local_events::append_local_work;
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_policy,
-    validate_configured_signer_for_actor,
+    sdk_transport_outcome_kind_label, validate_configured_signer_for_actor,
 };
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::view::runtime::{
@@ -43,7 +43,7 @@ use crate::view::runtime::{
     FarmPrivateExactLocationView, FarmPrivateLocationCandidateView, FarmPrivateLocationView,
     FarmPrivatePublicLocalityView, FarmPublicationView, FarmPublishComponentView,
     FarmPublishEventView, FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView,
-    FarmSetupView, FarmStatusView, RelayFailureView,
+    FarmSetupView, FarmStatusView, TransportTargetFailureView,
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
@@ -998,10 +998,10 @@ fn preview_component(
         rpc_method: rpc_method.to_owned(),
         event_kind,
         deduplicated: false,
-        target_relays: Vec::new(),
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: Vec::new(),
+        attempted_transport_endpoints: Vec::new(),
+        accepted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         job_id: None,
         job_status: None,
         signer_mode: None,
@@ -1107,7 +1107,7 @@ fn sdk_prepared_publish_view(
         ),
         FarmPublishComponentView {
             state: "not_submitted".to_owned(),
-            reason: Some("dry run requested; SDK enqueue and relay push skipped".to_owned()),
+            reason: Some("dry run requested; SDK enqueue and transport push skipped".to_owned()),
             signer_mode: Some(config.signer.backend.as_str().to_owned()),
             event_id: Some(plan.expected_event_id.as_str().to_owned()),
             event_addr: Some(plan.farm_addr.as_str().to_owned()),
@@ -1120,7 +1120,7 @@ fn sdk_prepared_publish_view(
                 None,
             )
         },
-        Some("dry run requested; SDK enqueue and relay push skipped".to_owned()),
+        Some("dry run requested; SDK enqueue and transport push skipped".to_owned()),
         vec!["radroots farm publish".to_owned()],
     )
 }
@@ -1154,16 +1154,18 @@ fn sdk_enqueued_publish_view(
         FarmPublishComponentView {
             state,
             deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
-            target_relays: push_event
-                .map(sdk_push_target_relays)
+            target_transport_endpoints: push_event
+                .map(sdk_push_target_transport_endpoints)
                 .unwrap_or_else(|| config.transport.nostr_relay_urls.clone()),
-            connected_relays: push_event
-                .map(sdk_push_connected_relays)
+            attempted_transport_endpoints: push_event
+                .map(sdk_push_attempted_transport_endpoints)
                 .unwrap_or_default(),
-            acknowledged_relays: push_event
-                .map(sdk_push_acknowledged_relays)
+            accepted_transport_endpoints: push_event
+                .map(sdk_push_accepted_transport_endpoints)
                 .unwrap_or_default(),
-            failed_relays: push_event.map(sdk_push_failed_relays).unwrap_or_default(),
+            failed_transport_targets: push_event
+                .map(sdk_push_failed_transport_targets)
+                .unwrap_or_default(),
             signer_mode: Some(config.signer.backend.as_str().to_owned()),
             event_id: Some(enqueue.signed_event_id.as_str().to_owned()),
             event_addr: Some(enqueue.farm_addr.as_str().to_owned()),
@@ -1211,13 +1213,15 @@ fn sdk_publish_reason(push_event: Option<&PushOutboxEventReceipt>) -> Option<Str
     match push_event.map(|event| event.final_state) {
         Some(PushOutboxEventState::Published) => None,
         Some(PushOutboxEventState::PublishRetryable) => Some(
-            "SDK relay publish did not reach accepted quorum; outbox event remains retryable"
+            "SDK transport publish did not reach accepted quorum; outbox event remains retryable"
                 .to_owned(),
         ),
         Some(PushOutboxEventState::FailedTerminal) => {
-            Some("SDK relay publish failed terminally".to_owned())
+            Some("SDK transport publish failed terminally".to_owned())
         }
-        Some(state) => Some(format!("SDK relay push left event in state `{state:?}`")),
+        Some(state) => Some(format!(
+            "SDK transport push left event in state `{state:?}`"
+        )),
         None => Some(
             "farm publish queued in SDK outbox; no ready SDK outbox event was pushed".to_owned(),
         ),
@@ -1234,7 +1238,7 @@ fn sdk_publish_actions(push_event: Option<&PushOutboxEventReceipt>) -> Vec<Strin
     Vec::new()
 }
 
-fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+fn sdk_push_target_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
         .targets
         .iter()
@@ -1242,7 +1246,7 @@ fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
         .collect()
 }
 
-fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+fn sdk_push_attempted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
         .targets
         .iter()
@@ -1251,7 +1255,7 @@ fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
         .collect()
 }
 
-fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+fn sdk_push_accepted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
         .targets
         .iter()
@@ -1266,7 +1270,9 @@ fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
         .collect()
 }
 
-fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureView> {
+fn sdk_push_failed_transport_targets(
+    event: &PushOutboxEventReceipt,
+) -> Vec<TransportTargetFailureView> {
     event
         .targets
         .iter()
@@ -1277,8 +1283,14 @@ fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureVie
                     | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )
         })
-        .map(|target| RelayFailureView {
-            relay: target.endpoint_uri.clone(),
+        .map(|target| TransportTargetFailureView {
+            transport_kind: target.transport_kind.clone(),
+            endpoint_uri: target.endpoint_uri.clone(),
+            target_scope: target.target_scope.clone(),
+            target_label: target.target_label.clone(),
+            transport_outcome_kind: target
+                .transport_outcome_kind
+                .map(sdk_transport_outcome_kind_label),
             reason: target
                 .message
                 .clone()

@@ -1447,7 +1447,7 @@ fn local_farm_publish_reports_sdk_push_failure_without_profile_publish() {
     assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "SDK relay publish did not reach accepted quorum",
+        "SDK transport publish did not reach accepted quorum",
     );
     let detail = &value["errors"][0]["detail"];
     assert_eq!(detail["source"], "SDK farm publish · configured signer");
@@ -1465,8 +1465,11 @@ fn local_farm_publish_reports_sdk_push_failure_without_profile_publish() {
     assert_eq!(detail["profile"]["idempotency_key"], "farm_partial:profile");
     assert_eq!(detail["farm"]["idempotency_key"], "farm_partial:farm");
     assert_eq!(detail["actions"][0], "radroots sync push");
-    assert_eq!(detail["farm"]["target_relays"][0], relay_url);
-    assert_relay_url(&detail["farm"]["failed_relays"][0]["relay"], relay_url);
+    assert_eq!(detail["farm"]["target_transport_endpoints"][0], relay_url);
+    assert_relay_url(
+        &detail["farm"]["failed_transport_targets"][0]["endpoint_uri"],
+        relay_url,
+    );
     assert_no_removed_command_reference(&value, &["farm", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish"]);
 
@@ -2167,18 +2170,18 @@ fn local_seller_publish_commands_attempt_configured_relay() {
     assert_eq!(farm_value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &farm_value["errors"][0]["message"],
-        "SDK relay publish did not reach accepted quorum",
+        "SDK transport publish did not reach accepted quorum",
     );
     assert_eq!(
         farm_value["errors"][0]["detail"]["source"],
         "SDK farm publish · configured signer"
     );
     assert_eq!(
-        farm_value["errors"][0]["detail"]["farm"]["target_relays"][0],
+        farm_value["errors"][0]["detail"]["farm"]["target_transport_endpoints"][0],
         relay
     );
     assert_eq!(
-        farm_value["errors"][0]["detail"]["farm"]["failed_relays"][0]["relay"],
+        farm_value["errors"][0]["detail"]["farm"]["failed_transport_targets"][0]["endpoint_uri"],
         relay
     );
     assert_no_removed_command_reference(&farm_value, &["farm", "publish"]);
@@ -2204,23 +2207,23 @@ fn local_seller_publish_commands_attempt_configured_relay() {
     assert_eq!(publish_value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &publish_value["errors"][0]["message"],
-        "SDK relay publish did not reach accepted quorum",
+        "SDK transport publish did not reach accepted quorum",
     );
     assert_no_removed_command_reference(&publish_value, &["listing", "publish"]);
     assert_no_daemon_runtime_reference(&publish_value, &["listing", "publish"]);
     assert_eq!(
-        publish_value["errors"][0]["detail"]["target_relays"][0],
+        publish_value["errors"][0]["detail"]["target_transport_endpoints"][0],
         relay
     );
     assert_eq!(
-        publish_value["errors"][0]["detail"]["connected_relays"]
+        publish_value["errors"][0]["detail"]["attempted_transport_endpoints"]
             .as_array()
             .expect("connected relays")
             .len(),
         1
     );
     assert_eq!(
-        publish_value["errors"][0]["detail"]["failed_relays"]
+        publish_value["errors"][0]["detail"]["failed_transport_targets"]
             .as_array()
             .expect("failed relays")
             .len(),
@@ -2243,23 +2246,23 @@ fn local_seller_publish_commands_attempt_configured_relay() {
     assert_eq!(archive_value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &archive_value["errors"][0]["message"],
-        "SDK relay publish did not reach accepted quorum",
+        "SDK transport publish did not reach accepted quorum",
     );
     assert_no_removed_command_reference(&archive_value, &["listing", "archive"]);
     assert_no_daemon_runtime_reference(&archive_value, &["listing", "archive"]);
     assert_eq!(
-        archive_value["errors"][0]["detail"]["target_relays"][0],
+        archive_value["errors"][0]["detail"]["target_transport_endpoints"][0],
         relay
     );
     assert_eq!(
-        archive_value["errors"][0]["detail"]["connected_relays"]
+        archive_value["errors"][0]["detail"]["attempted_transport_endpoints"]
             .as_array()
             .expect("connected relays")
             .len(),
         1
     );
     assert_eq!(
-        archive_value["errors"][0]["detail"]["failed_relays"]
+        archive_value["errors"][0]["detail"]["failed_transport_targets"]
             .as_array()
             .expect("failed relays")
             .len(),
@@ -2324,7 +2327,7 @@ fn local_seller_publish_commands_attempt_configured_relay() {
 }
 
 #[test]
-fn local_order_event_list_attempts_configured_shared_relay_transport() {
+fn local_order_event_list_attempts_configured_shared_nostr_transport() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let relay = "ws://127.0.0.1:9";
@@ -2333,25 +2336,28 @@ fn local_order_event_list_attempts_configured_shared_relay_transport() {
     let (output, value) = sandbox.json_output(&["--format", "json", "trade", "event", "list"]);
 
     assert!(!output.status.success());
-    assert_relay_transport_fetch_failure(&value, "trade.event.list", &["trade", "event", "list"]);
+    assert_transport_fetch_failure(&value, "trade.event.list", &["trade", "event", "list"]);
     assert_eq!(value["errors"][0]["detail"]["state"], "unavailable");
-    assert_eq!(value["errors"][0]["detail"]["target_relays"][0], relay);
     assert_eq!(
-        value["errors"][0]["detail"]["connected_relays"]
+        value["errors"][0]["detail"]["target_transport_endpoints"][0],
+        relay
+    );
+    assert_eq!(
+        value["errors"][0]["detail"]["attempted_transport_endpoints"]
             .as_array()
             .expect("connected relays")
             .len(),
         0
     );
     assert_eq!(
-        value["errors"][0]["detail"]["failed_relays"]
+        value["errors"][0]["detail"]["failed_transport_targets"]
             .as_array()
             .expect("failed relays")
             .len(),
         1
     );
     assert_contains(
-        &value["errors"][0]["detail"]["failed_relays"][0]["relay"],
+        &value["errors"][0]["detail"]["failed_transport_targets"][0]["endpoint_uri"],
         "127.0.0.1:9",
     );
     assert_eq!(value["errors"][0]["detail"]["fetched_count"], 0);
@@ -2662,11 +2668,7 @@ fn configure_myc_mode(sandbox: &RadrootsCliSandbox, executable: &Path) {
     ));
 }
 
-fn assert_relay_transport_fetch_failure(
-    value: &serde_json::Value,
-    operation_id: &str,
-    args: &[&str],
-) {
+fn assert_transport_fetch_failure(value: &serde_json::Value, operation_id: &str, args: &[&str]) {
     assert_eq!(value["operation_id"], operation_id);
     assert_eq!(value["result"], serde_json::Value::Null);
     assert_eq!(value["errors"][0]["code"], "network_unavailable");
@@ -2674,7 +2676,7 @@ fn assert_relay_transport_fetch_failure(
     assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "relay transport fetch failed",
+        "Nostr transport fetch failed",
     );
     assert_no_removed_command_reference(value, args);
     assert_no_daemon_runtime_reference(value, args);

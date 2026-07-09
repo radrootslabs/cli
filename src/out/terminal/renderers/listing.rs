@@ -277,12 +277,12 @@ fn push_issues_section(document: &mut TerminalDocument, result: &Value) {
 
 fn push_relay_field(document: &mut TerminalDocument, result: &Value) {
     if let Some(summary) = relay_field_summary(result) {
-        common::push_field(document, "Relays", summary);
+        common::push_field(document, "Targets", summary);
     }
 }
 
 fn relay_field_summary(result: &Value) -> Option<String> {
-    let acknowledged = common::array(result, &["acknowledged_relays"])
+    let acknowledged = common::array(result, &["accepted_transport_endpoints"])
         .map(Vec::len)
         .or_else(|| {
             common::number_path(result, &["publish", "acknowledged_count"])
@@ -293,7 +293,7 @@ fn relay_field_summary(result: &Value) -> Option<String> {
                 .and_then(|value| usize::try_from(value).ok())
         })
         .unwrap_or(0);
-    let failed = common::array(result, &["failed_relays"])
+    let failed = common::array(result, &["failed_transport_targets"])
         .map(Vec::len)
         .or_else(|| {
             common::number_path(result, &["publish", "failed_count"])
@@ -304,7 +304,7 @@ fn relay_field_summary(result: &Value) -> Option<String> {
                 .and_then(|value| usize::try_from(value).ok())
         })
         .unwrap_or(0);
-    let target = common::array(result, &["target_relays"])
+    let target = common::array(result, &["target_transport_endpoints"])
         .map(Vec::len)
         .unwrap_or(0);
     (acknowledged > 0 || failed > 0 || target > 0)
@@ -339,8 +339,8 @@ mod tests {
                 "state": "published",
                 "listing_id": "AAAAAAAAAAAAAAAAAAAAAg",
                 "source": "SDK listing publish · configured signer",
-                "acknowledged_relays": ["wss://relay.example"],
-                "failed_relays": [],
+                "accepted_transport_endpoints": ["wss://relay.example"],
+                "failed_transport_targets": [],
                 "event_id": "9f3ac129f3ac129f3ac129f3ac129f3ac129f3ac129f3ac129f3ac129f3ac12",
                 "actions": ["radroots listing get AAAAAAAAAAAAAAAAAAAAAg"]
             }),
@@ -351,7 +351,7 @@ mod tests {
 
         assert!(rendered.contains("✓ Listing published"));
         assert!(rendered.contains("Listing"));
-        assert!(rendered.contains("Relays"));
+        assert!(rendered.contains("Targets"));
         assert!(rendered.contains("Event"));
         assert!(!rendered.contains("Proof"));
         assert!(!rendered.contains("verified"));

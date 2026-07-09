@@ -995,13 +995,13 @@ pub struct FarmPublishComponentView {
     pub event_kind: u32,
     pub deduplicated: bool,
     #[serde(default)]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default)]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default)]
-    pub acknowledged_relays: Vec<String>,
+    pub accepted_transport_endpoints: Vec<String>,
     #[serde(default)]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1061,12 +1061,6 @@ pub struct FarmPublishEventView {
     pub event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_addr: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RelayFailureView {
-    pub relay: String,
-    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1771,13 +1765,13 @@ pub struct OrderSubmitView {
     #[serde(default)]
     pub deduplicated: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub acknowledged_relays: Vec<String>,
+    pub accepted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1879,13 +1873,13 @@ pub struct OrderDecisionView {
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub acknowledged_relays: Vec<String>,
+    pub accepted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(default)]
     pub fetched_count: usize,
     #[serde(default)]
@@ -1947,13 +1941,13 @@ pub struct OrderCancellationView {
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub acknowledged_relays: Vec<String>,
+    pub accepted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(default)]
     pub fetched_count: usize,
     #[serde(default)]
@@ -2023,13 +2017,13 @@ pub struct OrderRevisionProposalView {
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub acknowledged_relays: Vec<String>,
+    pub accepted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(default)]
     pub fetched_count: usize,
     #[serde(default)]
@@ -2100,13 +2094,13 @@ pub struct OrderRevisionDecisionView {
     #[serde(default)]
     pub dry_run: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub acknowledged_relays: Vec<String>,
+    pub accepted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(default)]
     pub fetched_count: usize,
     #[serde(default)]
@@ -2178,11 +2172,11 @@ pub struct OrderStatusView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reducer_issues: Vec<OrderIssueView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(default)]
     pub fetched_count: usize,
     #[serde(default)]
@@ -2364,11 +2358,11 @@ pub struct OrderEventListView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller_pubkey: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(default)]
     pub fetched_count: usize,
     #[serde(default)]
@@ -2919,13 +2913,13 @@ pub struct ListingMutationView {
     #[serde(default)]
     pub deduplicated: bool,
     #[serde(default)]
-    pub target_relays: Vec<String>,
+    pub target_transport_endpoints: Vec<String>,
     #[serde(default)]
-    pub connected_relays: Vec<String>,
+    pub attempted_transport_endpoints: Vec<String>,
     #[serde(default)]
-    pub acknowledged_relays: Vec<String>,
+    pub accepted_transport_endpoints: Vec<String>,
     #[serde(default)]
-    pub failed_relays: Vec<RelayFailureView>,
+    pub failed_transport_targets: Vec<TransportTargetFailureView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3551,6 +3545,10 @@ pub struct SyncTransportTargetView {
     pub transport_kind: String,
     pub endpoint_uri: String,
     pub endpoint_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3570,6 +3568,12 @@ pub struct SyncTransportStatusView {
 pub struct TransportTargetFailureView {
     pub transport_kind: String,
     pub endpoint_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport_outcome_kind: Option<String>,
     pub reason: String,
 }
 

@@ -16,12 +16,13 @@ use radroots_nostr_connect::prelude::{
     RadrootsNostrConnectClientTarget, RadrootsNostrConnectError, RadrootsNostrConnectUri,
 };
 use radroots_sdk::{
-    HybridProfile, MeshScopeId, NostrProfile, NostrRelayUrlPolicy, ProxyProfile, RadrootsClient,
-    RadrootsClientBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
-    RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
-    RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
-    ReticulumPreviewAgentEndpoint, ReticulumPreviewBehavior as SdkReticulumPreviewBehavior,
-    ReticulumPreviewProfile, TargetPolicy, TransportProfile,
+    HybridProfile, MeshScopeId, NostrProfile, NostrRelayUrlPolicy, ProxyProfile,
+    PushOutboxTransportOutcomeKind, RadrootsClient, RadrootsClientBuilder, RadrootsSdkError,
+    RadrootsSdkLocalKeySigner, RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer,
+    RadrootsSdkNip46Transport, RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider,
+    RadrootsSdkStorageConfig, ReticulumPreviewAgentEndpoint,
+    ReticulumPreviewBehavior as SdkReticulumPreviewBehavior, ReticulumPreviewProfile, TargetPolicy,
+    TradeValidationReceiptNostrRelayTransportOutcomeKind, TransportProfile,
 };
 use radroots_transport_nostr::{
     RadrootsNostrClientFetchAdapter, RadrootsRelayFetchRequest, RadrootsRelayFetchedEventsReceipt,
@@ -49,6 +50,24 @@ pub enum CliSdkAdapterError {
     Runtime(#[from] RuntimeError),
     #[error("{0}")]
     Sdk(#[from] RadrootsSdkError),
+}
+
+pub fn sdk_transport_outcome_kind_label(kind: PushOutboxTransportOutcomeKind) -> String {
+    sdk_enum_label(kind)
+}
+
+pub fn sdk_validation_transport_outcome_kind_label(
+    kind: TradeValidationReceiptNostrRelayTransportOutcomeKind,
+) -> String {
+    sdk_enum_label(kind)
+}
+
+fn sdk_enum_label<T: serde::Serialize>(value: T) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(value)) => value,
+        Ok(value) => panic!("SDK enum serialized to non-string JSON value `{value}`"),
+        Err(error) => panic!("SDK enum serialization failed: {error}"),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1160,7 +1179,7 @@ mod tests {
         "ReplicaSql::new",
         "SqliteExecutor::open(&config.local.replica_db_path)",
         "outbox_idempotency_digest",
-        "canonical_target_relays",
+        "canonical_target_transport_endpoints",
         "radroots_sdk::protocol::order",
         "build_order_request_draft",
         "build_order_decision_draft",

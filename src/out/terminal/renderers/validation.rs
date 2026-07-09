@@ -161,12 +161,12 @@ fn push_invalid_receipts_section(document: &mut TerminalDocument, result: &Value
 }
 
 fn push_relay_field(document: &mut TerminalDocument, result: &Value) {
-    let connected = array_len(result, &["connected_relays"]);
-    let failed = array_len(result, &["failed_relays"]);
+    let connected = array_len(result, &["attempted_transport_endpoints"]);
+    let failed = array_len(result, &["failed_transport_targets"]);
     if connected > 0 || failed > 0 {
         common::push_field(
             document,
-            "Relays",
+            "Targets",
             relay_summary(connected, failed, "connected"),
         );
     }

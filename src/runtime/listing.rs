@@ -49,7 +49,7 @@ use crate::runtime::local_events::{
 };
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_policy,
-    validate_configured_signer_for_actor,
+    sdk_transport_outcome_kind_label, validate_configured_signer_for_actor,
 };
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
@@ -59,7 +59,7 @@ use crate::view::runtime::{
     ListingAppRecordListView, ListingAppRecordSummaryView, ListingGetView, ListingListView,
     ListingMutationEventView, ListingMutationView, ListingNewView, ListingRebindView,
     ListingSummaryView, ListingValidateView, ListingValidationIssueView, MarketReadinessView,
-    RelayFailureView,
+    TransportTargetFailureView,
 };
 
 const DRAFT_KIND: &str = "listing_draft_v1";
@@ -1869,10 +1869,10 @@ fn sdk_prepared_publish_view(
         event_kind: KIND_LISTING,
         dry_run: true,
         deduplicated: false,
-        target_relays: Vec::new(),
-        connected_relays: Vec::new(),
-        acknowledged_relays: Vec::new(),
-        failed_relays: Vec::new(),
+        target_transport_endpoints: Vec::new(),
+        attempted_transport_endpoints: Vec::new(),
+        accepted_transport_endpoints: Vec::new(),
+        failed_transport_targets: Vec::new(),
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
@@ -1880,7 +1880,7 @@ fn sdk_prepared_publish_view(
         event_addr: Some(listing_addr),
         idempotency_key: args.idempotency_key.clone(),
         local_replica: None,
-        reason: Some("dry run requested; SDK enqueue and relay push skipped".to_owned()),
+        reason: Some("dry run requested; SDK enqueue and transport push skipped".to_owned()),
         job: None,
         event: args.print_event.then_some(event),
         actions: vec![format!("radroots listing publish {}", args.file.display())],
@@ -1900,16 +1900,18 @@ fn sdk_enqueued_publish_view(
         .and_then(|receipt| sdk_push_event_for_listing(&enqueue, receipt));
     let state = sdk_publish_state(args, push_event);
     let reason = sdk_publish_reason(args, push_event);
-    let target_relays = push_event
-        .map(sdk_push_target_relays)
+    let target_transport_endpoints = push_event
+        .map(sdk_push_target_transport_endpoints)
         .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
-    let connected_relays = push_event
-        .map(sdk_push_connected_relays)
+    let attempted_transport_endpoints = push_event
+        .map(sdk_push_attempted_transport_endpoints)
         .unwrap_or_default();
-    let acknowledged_relays = push_event
-        .map(sdk_push_acknowledged_relays)
+    let accepted_transport_endpoints = push_event
+        .map(sdk_push_accepted_transport_endpoints)
         .unwrap_or_default();
-    let failed_relays = push_event.map(sdk_push_failed_relays).unwrap_or_default();
+    let failed_transport_targets = push_event
+        .map(sdk_push_failed_transport_targets)
+        .unwrap_or_default();
     let event_id = enqueue.signed_event_id.as_str().to_owned();
     let listing_addr = enqueue.public_listing_addr.as_str().to_owned();
     ListingMutationView {
@@ -1925,10 +1927,10 @@ fn sdk_enqueued_publish_view(
         event_kind: KIND_LISTING,
         dry_run: false,
         deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
-        target_relays,
-        connected_relays,
-        acknowledged_relays,
-        failed_relays,
+        target_transport_endpoints,
+        attempted_transport_endpoints,
+        accepted_transport_endpoints,
+        failed_transport_targets,
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
@@ -1987,15 +1989,18 @@ fn sdk_publish_reason(
     match push_event.map(|event| event.final_state) {
         Some(PushOutboxEventState::Published) => None,
         Some(PushOutboxEventState::PublishRetryable) => Some(
-            "SDK relay publish did not reach accepted quorum; outbox event remains retryable"
+            "SDK transport publish did not reach accepted quorum; outbox event remains retryable"
                 .to_owned(),
         ),
         Some(PushOutboxEventState::FailedTerminal) => {
-            Some("SDK relay publish failed terminally".to_owned())
+            Some("SDK transport publish failed terminally".to_owned())
         }
-        Some(state) => Some(format!("SDK relay push left event in state `{state:?}`")),
+        Some(state) => Some(format!(
+            "SDK transport push left event in state `{state:?}`"
+        )),
         None if args.offline => Some(
-            "listing publish queued in SDK outbox; relay push skipped for offline mode".to_owned(),
+            "listing publish queued in SDK outbox; transport push skipped for offline mode"
+                .to_owned(),
         ),
         None => Some(
             "listing publish queued in SDK outbox; no ready SDK outbox event was pushed".to_owned(),
@@ -2018,7 +2023,7 @@ fn sdk_publish_actions(
     Vec::new()
 }
 
-fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+fn sdk_push_target_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
         .targets
         .iter()
@@ -2026,7 +2031,7 @@ fn sdk_push_target_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
         .collect()
 }
 
-fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+fn sdk_push_attempted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
         .targets
         .iter()
@@ -2035,7 +2040,7 @@ fn sdk_push_connected_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
         .collect()
 }
 
-fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
+fn sdk_push_accepted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
     event
         .targets
         .iter()
@@ -2050,7 +2055,9 @@ fn sdk_push_acknowledged_relays(event: &PushOutboxEventReceipt) -> Vec<String> {
         .collect()
 }
 
-fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureView> {
+fn sdk_push_failed_transport_targets(
+    event: &PushOutboxEventReceipt,
+) -> Vec<TransportTargetFailureView> {
     event
         .targets
         .iter()
@@ -2061,8 +2068,14 @@ fn sdk_push_failed_relays(event: &PushOutboxEventReceipt) -> Vec<RelayFailureVie
                     | PushOutboxTargetOutcomeKind::DuplicateAccepted
             )
         })
-        .map(|target| RelayFailureView {
-            relay: target.endpoint_uri.clone(),
+        .map(|target| TransportTargetFailureView {
+            transport_kind: target.transport_kind.clone(),
+            endpoint_uri: target.endpoint_uri.clone(),
+            target_scope: target.target_scope.clone(),
+            target_label: target.target_label.clone(),
+            transport_outcome_kind: target
+                .transport_outcome_kind
+                .map(sdk_transport_outcome_kind_label),
             reason: target
                 .message
                 .clone()
@@ -3142,15 +3155,15 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 mod tests {
     use super::{
         DRAFT_KIND, ListingDraftDocument, encode_base64url_no_pad, generate_d_tag,
-        sdk_publish_actions, sdk_publish_reason, sdk_publish_state, sdk_push_acknowledged_relays,
-        sdk_push_failed_relays,
+        sdk_publish_actions, sdk_publish_reason, sdk_publish_state,
+        sdk_push_accepted_transport_endpoints, sdk_push_failed_transport_targets,
     };
     use crate::cli::global::ListingMutationArgs;
     use radroots_events::ids::RadrootsEventId;
     use radroots_events_codec::d_tag::is_d_tag_base64url;
     use radroots_sdk::{
         PushOutboxEventReceipt, PushOutboxEventState, PushOutboxTargetOutcomeKind,
-        PushOutboxTargetReceipt,
+        PushOutboxTargetReceipt, PushOutboxTransportOutcomeKind,
     };
 
     #[test]
@@ -3179,17 +3192,17 @@ mod tests {
         assert!(sdk_publish_reason(&args, Some(&accepted)).is_none());
         assert!(sdk_publish_actions(&args, Some(&accepted)).is_empty());
         assert_eq!(
-            sdk_push_acknowledged_relays(&accepted),
+            sdk_push_accepted_transport_endpoints(&accepted),
             vec!["ws://127.0.0.1:19000".to_owned()]
         );
-        assert!(sdk_push_failed_relays(&accepted).is_empty());
+        assert!(sdk_push_failed_transport_targets(&accepted).is_empty());
 
         let auth_required = sdk_push_event(
             PushOutboxEventState::PublishRetryable,
             PushOutboxTargetOutcomeKind::AuthRequired,
             Some("auth required".to_owned()),
         );
-        let failed = sdk_push_failed_relays(&auth_required);
+        let failed = sdk_push_failed_transport_targets(&auth_required);
 
         assert_eq!(
             sdk_publish_state(&args, Some(&auth_required)),
@@ -3201,7 +3214,7 @@ mod tests {
                 .contains("accepted quorum")
         );
         assert_eq!(failed.len(), 1);
-        assert_eq!(failed[0].relay, "ws://127.0.0.1:19000");
+        assert_eq!(failed[0].endpoint_uri, "ws://127.0.0.1:19000");
         assert_eq!(failed[0].reason, "auth required");
         assert_eq!(
             sdk_publish_actions(&args, Some(&auth_required)),
@@ -3376,11 +3389,45 @@ mod tests {
             targets: vec![PushOutboxTargetReceipt {
                 transport_kind: "nostr".to_owned(),
                 endpoint_uri: "ws://127.0.0.1:19000".to_owned(),
+                target_scope: None,
+                target_label: None,
                 outcome_kind,
+                transport_outcome_kind: test_transport_outcome_kind(outcome_kind),
                 attempted: true,
                 message,
             }],
         }
+    }
+
+    fn test_transport_outcome_kind(
+        kind: PushOutboxTargetOutcomeKind,
+    ) -> Option<PushOutboxTransportOutcomeKind> {
+        Some(match kind {
+            PushOutboxTargetOutcomeKind::Accepted => PushOutboxTransportOutcomeKind::Accepted,
+            PushOutboxTargetOutcomeKind::DuplicateAccepted => {
+                PushOutboxTransportOutcomeKind::DuplicateAccepted
+            }
+            PushOutboxTargetOutcomeKind::Timeout => PushOutboxTransportOutcomeKind::Timeout,
+            PushOutboxTargetOutcomeKind::ConnectionFailed => {
+                PushOutboxTransportOutcomeKind::ConnectionFailed
+            }
+            PushOutboxTargetOutcomeKind::AuthRequired
+            | PushOutboxTargetOutcomeKind::Blocked
+            | PushOutboxTargetOutcomeKind::RateLimited
+            | PushOutboxTargetOutcomeKind::Invalid
+            | PushOutboxTargetOutcomeKind::PowRequired
+            | PushOutboxTargetOutcomeKind::Restricted
+            | PushOutboxTargetOutcomeKind::Muted
+            | PushOutboxTargetOutcomeKind::Unsupported
+            | PushOutboxTargetOutcomeKind::PaymentRequired
+            | PushOutboxTargetOutcomeKind::Error
+            | PushOutboxTargetOutcomeKind::TargetUriRejected
+            | PushOutboxTargetOutcomeKind::SkippedAlreadyAccepted
+            | PushOutboxTargetOutcomeKind::DeferredUntilImplemented
+            | PushOutboxTargetOutcomeKind::PreviewUnavailable
+            | PushOutboxTargetOutcomeKind::Unknown => PushOutboxTransportOutcomeKind::Rejected,
+            _ => PushOutboxTransportOutcomeKind::Rejected,
+        })
     }
 
     fn listing_mutation_args(offline: bool) -> ListingMutationArgs {

@@ -350,8 +350,8 @@ fn farm_private_location_set_result(
 
 fn farm_publish_relay_unavailable(view: &FarmPublishView) -> bool {
     view.state == "partial"
-        || !view.profile.failed_relays.is_empty()
-        || !view.farm.failed_relays.is_empty()
+        || !view.profile.failed_transport_targets.is_empty()
+        || !view.farm.failed_transport_targets.is_empty()
 }
 
 fn require_relay_target<P>(

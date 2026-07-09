@@ -3156,7 +3156,7 @@ fn proxy_listing_publish_update_and_archive_dry_run_without_direct_publish_relay
         );
         assert_eq!(value["result"]["dry_run"], true);
         assert_eq!(
-            value["result"]["target_relays"]
+            value["result"]["target_transport_endpoints"]
                 .as_array()
                 .expect("relays")
                 .len(),
@@ -3164,7 +3164,7 @@ fn proxy_listing_publish_update_and_archive_dry_run_without_direct_publish_relay
         );
         assert_contains(
             &value["result"]["reason"],
-            "SDK enqueue and relay push skipped",
+            "SDK enqueue and transport push skipped",
         );
     }
 }
@@ -3395,7 +3395,10 @@ relay_urls = ["{}"]
         value["result"]["source"],
         "SDK listing publish · configured signer"
     );
-    assert_eq!(value["result"]["target_relays"][0], relay_endpoint);
+    assert_eq!(
+        value["result"]["target_transport_endpoints"][0],
+        relay_endpoint
+    );
     assert!(report.connection_count >= 1);
     assert!(report.req_count >= 1);
     assert_eq!(report.sign_request_count, 1);
@@ -3583,7 +3586,7 @@ fn listing_update_publish_attempts_direct_publish_with_approval() {
     assert_eq!(value["errors"][0]["detail"]["class"], "network");
     assert_contains(
         &value["errors"][0]["message"],
-        "SDK relay publish did not reach accepted quorum",
+        "SDK transport publish did not reach accepted quorum",
     );
     assert!(
         !value["errors"][0]["message"]
@@ -4117,7 +4120,7 @@ fn quiet_terminal_failure_keeps_reason_and_suppresses_optional_body() {
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
 
     assert!(stderr.starts_with("✕ Command failed\n"));
-    assert!(stderr.contains("Reason  relay-backed trade event watch is not implemented"));
+    assert!(stderr.contains("Reason  Nostr-backed trade event watch is not implemented"));
     assert!(!stderr.contains("State   not implemented"));
     assert!(!stderr.contains("Next\n"));
     assert!(serde_json::from_str::<Value>(&stderr).is_err());
@@ -4310,7 +4313,7 @@ fn terminal_failure_output_renders_structured_error_detail() {
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
 
     assert!(stderr.starts_with("✕ Command failed\n"));
-    assert!(stderr.contains("Reason  relay-backed trade event watch is not implemented"));
+    assert!(stderr.contains("Reason  Nostr-backed trade event watch is not implemented"));
     assert!(stderr.contains("State   not implemented"));
     assert!(stderr.contains("Next\n  radroots trade status get ord_missing"));
     assert!(serde_json::from_str::<Value>(&stderr).is_err());
@@ -4651,7 +4654,7 @@ fn offline_listing_publish_enqueues_sdk_outbox_without_direct_publish_push() {
         publish["result"]["source"],
         "SDK listing publish · configured signer"
     );
-    assert_eq!(publish["result"]["target_relays"][0], relay);
+    assert_eq!(publish["result"]["target_transport_endpoints"][0], relay);
     assert_eq!(publish["result"]["actions"][0], "radroots sync push");
     assert_eq!(
         publish["result"]["event_id"]
@@ -6489,7 +6492,7 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
     assert_eq!(submit["result"]["state"], "dry_run");
     assert_eq!(submit["result"]["source"], "SDK trade submit · local key");
     assert_eq!(submit["result"]["event_kind"], 3422);
-    assert!(submit["result"]["target_relays"].is_null());
+    assert!(submit["result"]["target_transport_endpoints"].is_null());
     assert_eq!(
         submit["result"]["event_id"]
             .as_str()
@@ -7104,8 +7107,11 @@ fn farm_publish_uses_sdk_outbox_without_legacy_signed_event_records() {
     assert_eq!(detail["profile"]["state"], "not_submitted");
     assert_eq!(detail["profile"]["event_id"], serde_json::Value::Null);
     assert_eq!(detail["farm"]["state"], "unavailable");
-    assert_eq!(detail["farm"]["target_relays"][0], relay_url);
-    assert_eq!(detail["farm"]["failed_relays"][0]["relay"], relay_url);
+    assert_eq!(detail["farm"]["target_transport_endpoints"][0], relay_url);
+    assert_eq!(
+        detail["farm"]["failed_transport_targets"][0]["endpoint_uri"],
+        relay_url
+    );
     assert_eq!(
         detail["farm"]["event_id"]
             .as_str()
@@ -7173,11 +7179,11 @@ fn listing_publish_failure_uses_sdk_outbox_without_legacy_local_event_record() {
     );
     assert_eq!(publish["errors"][0]["detail"]["state"], "unavailable");
     assert_eq!(
-        publish["errors"][0]["detail"]["target_relays"][0],
+        publish["errors"][0]["detail"]["target_transport_endpoints"][0],
         relay_url
     );
     assert_eq!(
-        publish["errors"][0]["detail"]["failed_relays"][0]["relay"],
+        publish["errors"][0]["detail"]["failed_transport_targets"][0]["endpoint_uri"],
         relay_url
     );
     assert_eq!(
@@ -8093,7 +8099,7 @@ fn buyer_target_flow_acceptance_uses_target_operations() {
     assert_eq!(submit["result"]["source"], "SDK trade submit · local key");
     assert_eq!(submit["result"]["event_kind"], 3422);
     assert_eq!(
-        submit["result"]["target_relays"][0],
+        submit["result"]["target_transport_endpoints"][0],
         ORDERABLE_LISTING_RELAY
     );
     assert_eq!(
@@ -9290,7 +9296,7 @@ fn ready_order_submit_dry_run_validates_local_buyer_authority() {
     assert_eq!(dry_run["result"]["source"], "SDK trade submit · local key");
     assert_eq!(dry_run["result"]["event_kind"], 3422);
     assert_eq!(
-        dry_run["result"]["target_relays"][0],
+        dry_run["result"]["target_transport_endpoints"][0],
         ORDERABLE_LISTING_RELAY
     );
     assert_no_daemon_runtime_reference(&dry_run, &["trade", "submit", "--dry-run"]);

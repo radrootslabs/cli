@@ -339,10 +339,10 @@ fn listing_relay_unavailable(view: &ListingMutationView) -> bool {
     ) && (view.reason.as_deref().is_some_and(|reason| {
         reason.contains("configured Nostr relay")
             || reason.contains("Nostr transport connection failed")
-            || reason.contains("SDK relay publish")
-    }) || !view.target_relays.is_empty()
-        || !view.connected_relays.is_empty()
-        || !view.failed_relays.is_empty())
+            || reason.contains("SDK transport publish")
+    }) || !view.target_transport_endpoints.is_empty()
+        || !view.attempted_transport_endpoints.is_empty()
+        || !view.failed_transport_targets.is_empty())
 }
 
 fn listing_app_record_export_result<R>(

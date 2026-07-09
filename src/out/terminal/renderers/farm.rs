@@ -172,14 +172,14 @@ fn farm_publish_document(envelope: &OutputEnvelope, result: &Value) -> TerminalD
     common::push_path_field(&mut document, "Farm publish", result, &["farm", "state"]);
     push_publish_component_fields(
         &mut document,
-        "Profile relays",
+        "Profile targets",
         "Profile event",
         result,
         &["profile"],
     );
     push_publish_component_fields(
         &mut document,
-        "Farm relays",
+        "Farm targets",
         "Farm event",
         result,
         &["farm"],
@@ -289,7 +289,7 @@ fn push_missing_section(document: &mut TerminalDocument, result: &Value) {
 
 fn push_publish_component_fields(
     document: &mut TerminalDocument,
-    relay_label: &str,
+    target_label: &str,
     event_label: &str,
     result: &Value,
     path: &[&str],
@@ -298,7 +298,7 @@ fn push_publish_component_fields(
         return;
     };
     if let Some(summary) = relay_component_summary(component) {
-        common::push_field(document, relay_label, summary);
+        common::push_field(document, target_label, summary);
     }
     common::push_path_field(document, event_label, component, &["event_id"]);
     common::push_path_field(document, "Job", component, &["job_id"]);
@@ -324,7 +324,7 @@ fn push_publish_components_section(document: &mut TerminalDocument, result: &Val
         vec![
             TerminalTableColumn::new("Part", 4, 8),
             TerminalTableColumn::new("State", 5, 16),
-            TerminalTableColumn::new("Relays", 8, 28),
+            TerminalTableColumn::new("Targets", 8, 28),
         ],
         rows,
         "No publish components",
@@ -332,13 +332,13 @@ fn push_publish_components_section(document: &mut TerminalDocument, result: &Val
 }
 
 fn relay_component_summary(value: &Value) -> Option<String> {
-    let acknowledged = common::array(value, &["acknowledged_relays"])
+    let acknowledged = common::array(value, &["accepted_transport_endpoints"])
         .map(Vec::len)
         .unwrap_or(0);
-    let failed = common::array(value, &["failed_relays"])
+    let failed = common::array(value, &["failed_transport_targets"])
         .map(Vec::len)
         .unwrap_or(0);
-    let target = common::array(value, &["target_relays"])
+    let target = common::array(value, &["target_transport_endpoints"])
         .map(Vec::len)
         .unwrap_or(0);
     (acknowledged > 0 || failed > 0 || target > 0)
