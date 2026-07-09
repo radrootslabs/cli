@@ -41,9 +41,9 @@ pub fn status(config: &RuntimeConfig) -> MeshStatusView {
         state: "ready".to_owned(),
         source: MESH_SOURCE.to_owned(),
         scope: scope.to_owned(),
-        transport_kind: "reticulum".to_owned(),
-        configured_state: scope.to_owned(),
-        implementation_state: "preview_unavailable".to_owned(),
+        transport: "reticulum".to_owned(),
+        configured: scope != "disabled",
+        implementation: "preview_unavailable".to_owned(),
         usable_for_delivery: false,
         message: "Reticulum mesh preview is explicit and unavailable for real delivery".to_owned(),
     }
@@ -55,7 +55,7 @@ pub fn policy_check(config: &RuntimeConfig) -> MeshPolicyCheckView {
         source: MESH_SOURCE.to_owned(),
         scope: config.mesh.scope.as_str().to_owned(),
         policy: "reticulum_preview_delivery".to_owned(),
-        transport_kind: "reticulum".to_owned(),
+        transport: "reticulum".to_owned(),
         usable_for_delivery: false,
         decision: "reject_delivery_attempt".to_owned(),
         message: "Reticulum preview never falls back to Nostr and cannot deliver real events"
@@ -68,7 +68,7 @@ fn scope_view(scope: &str, state: &str) -> MeshScopeView {
         state: state.to_owned(),
         source: MESH_SOURCE.to_owned(),
         scope: scope.to_owned(),
-        implementation_state: "preview_unavailable".to_owned(),
+        implementation: "preview_unavailable".to_owned(),
         message: "Mesh delivery is disabled unless a preview scope is explicitly configured"
             .to_owned(),
         actions: vec!["radroots mesh policy check".to_owned()],

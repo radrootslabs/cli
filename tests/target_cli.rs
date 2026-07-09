@@ -1812,9 +1812,11 @@ fn mesh_status_reports_reticulum_preview_unusable_state_without_fallback() {
     let result = &value["result"];
 
     assert_eq!(value["operation_id"], "mesh.status");
-    assert_eq!(result["transport_kind"], "reticulum");
-    assert_eq!(result["implementation_state"], "preview_unavailable");
+    assert_eq!(result["transport"], "reticulum");
+    assert_eq!(result["configured"], false);
+    assert_eq!(result["implementation"], "preview_unavailable");
     assert_eq!(result["usable_for_delivery"], false);
+    assert_no_removed_transport_status_fields(result);
     assert_contains(&result["message"], "Reticulum mesh preview is explicit");
     assert!(
         !result["message"]
@@ -1915,6 +1917,62 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
             "transport status view must not expose removed field `{forbidden}`"
         );
     }
+
+    let mesh_scope_view_source = source_window(
+        view_source.as_str(),
+        "pub struct MeshScopeView",
+        "pub struct MeshStatusView",
+    );
+    assert!(
+        mesh_scope_view_source.contains("pub implementation: String,"),
+        "mesh scope view must retain canonical implementation field"
+    );
+    assert!(
+        !mesh_scope_view_source.contains("pub implementation_state:"),
+        "mesh scope view must not expose removed implementation_state field"
+    );
+
+    let mesh_status_view_source = source_window(
+        view_source.as_str(),
+        "pub struct MeshStatusView",
+        "pub struct MeshPolicyCheckView",
+    );
+    for required in [
+        "pub transport: String,",
+        "pub configured: bool,",
+        "pub implementation: String,",
+        "pub usable_for_delivery: bool,",
+        "pub message: String,",
+    ] {
+        assert!(
+            mesh_status_view_source.contains(required),
+            "mesh status view must retain canonical field `{required}`"
+        );
+    }
+    for forbidden in [
+        "pub transport_kind:",
+        "pub configured_state:",
+        "pub implementation_state:",
+    ] {
+        assert!(
+            !mesh_status_view_source.contains(forbidden),
+            "mesh status view must not expose removed field `{forbidden}`"
+        );
+    }
+
+    let mesh_policy_view_source = source_window(
+        view_source.as_str(),
+        "pub struct MeshPolicyCheckView",
+        "pub struct RpcStatusView",
+    );
+    assert!(
+        mesh_policy_view_source.contains("pub transport: String,"),
+        "mesh policy view must retain canonical transport field"
+    );
+    assert!(
+        !mesh_policy_view_source.contains("pub transport_kind:"),
+        "mesh policy view must not expose removed transport_kind field"
+    );
 
     let sdk_source = fs::read_to_string(manifest_dir.join("src/runtime/sdk.rs")).expect("read sdk");
     for required in [

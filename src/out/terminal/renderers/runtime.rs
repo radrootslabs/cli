@@ -264,12 +264,7 @@ fn mesh_scope_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDoc
     let mut document = common::document_with_title(envelope, title);
     common::push_path_field(&mut document, "State", result, &["state"]);
     common::push_path_field(&mut document, "Scope", result, &["scope"]);
-    common::push_path_field(
-        &mut document,
-        "Implementation",
-        result,
-        &["implementation_state"],
-    );
+    common::push_path_field(&mut document, "Implementation", result, &["implementation"]);
     common::push_path_field(&mut document, "Message", result, &["message"]);
     document
 }
@@ -279,14 +274,9 @@ fn mesh_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDo
     let mut document = common::document_with_title(envelope, title);
     common::push_path_field(&mut document, "State", result, &["state"]);
     common::push_path_field(&mut document, "Scope", result, &["scope"]);
-    common::push_path_field(&mut document, "Kind", result, &["transport_kind"]);
-    common::push_path_field(&mut document, "Configured", result, &["configured_state"]);
-    common::push_path_field(
-        &mut document,
-        "Implementation",
-        result,
-        &["implementation_state"],
-    );
+    common::push_path_field(&mut document, "Transport", result, &["transport"]);
+    common::push_bool_field(&mut document, "Configured", result, &["configured"]);
+    common::push_path_field(&mut document, "Implementation", result, &["implementation"]);
     common::push_bool_field(&mut document, "Usable", result, &["usable_for_delivery"]);
     common::push_path_field(&mut document, "Decision", result, &["decision"]);
     common::push_path_field(&mut document, "Message", result, &["message"]);
