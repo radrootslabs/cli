@@ -597,17 +597,26 @@ fn sdk_transport_statuses(receipt: &SyncStatusReceipt) -> Vec<SyncTransportStatu
         .transport_profile
         .transport_statuses
         .iter()
-        .map(|status| SyncTransportStatusView {
-            transport_kind: status.transport_kind.clone(),
-            profile_id: status.profile_id.clone(),
-            endpoint_uri: status.endpoint_uri.clone(),
-            implementation_state: status.implementation_state.clone(),
-            readiness: status.readiness.clone(),
-            publish_usable: status.publish_usable,
-            fetch_usable: status.fetch_usable,
-            redacted_message: status.redacted_message.clone(),
-        })
+        .map(sdk_transport_status_view)
         .collect()
+}
+
+fn sdk_transport_status_view(
+    status: &radroots_sdk::SyncTransportStatusSummary,
+) -> SyncTransportStatusView {
+    SyncTransportStatusView {
+        transport_kind: status.transport_kind.clone(),
+        profile_id: status.profile_id.clone(),
+        endpoint_uri: status.endpoint_uri.clone(),
+        configured: sync_transport_status_configured(&status.readiness),
+        implementation: status.implementation_state.clone(),
+        usable_for_delivery: status.publish_usable,
+        message: sync_transport_status_message(
+            &status.transport_kind,
+            status.publish_usable,
+            status.redacted_message.as_deref(),
+        ),
+    }
 }
 
 fn sdk_sync_status_actions(receipt: &SyncStatusReceipt) -> Vec<String> {
@@ -1019,16 +1028,61 @@ fn reticulum_preview_transport_status(profile_id: &str) -> RadrootsTransportStat
 }
 
 fn sync_transport_status_view(status: RadrootsTransportStatus) -> SyncTransportStatusView {
+    let configured = transport_status_configured(&status);
+    let usable_for_delivery = status.publish_usable;
+    let message = transport_status_message(&status);
     SyncTransportStatusView {
         transport_kind: status.kind.canonical_label(),
         profile_id: status.profile_id,
         endpoint_uri: status.endpoint_uri,
-        implementation_state: transport_implementation_state_label(status.implementation_state)
+        configured,
+        implementation: transport_implementation_state_label(status.implementation_state)
             .to_owned(),
-        readiness: transport_readiness_state_label(status.readiness).to_owned(),
-        publish_usable: status.publish_usable,
-        fetch_usable: status.fetch_usable,
-        redacted_message: status.redacted_message,
+        usable_for_delivery,
+        message,
+    }
+}
+
+fn transport_status_configured(status: &RadrootsTransportStatus) -> bool {
+    matches!(
+        status.readiness,
+        RadrootsTransportReadinessState::Ready
+            | RadrootsTransportReadinessState::PreviewUnavailable
+    )
+}
+
+fn sync_transport_status_configured(readiness: &str) -> bool {
+    matches!(readiness, "ready" | "preview_unavailable")
+}
+
+fn transport_status_message(status: &RadrootsTransportStatus) -> String {
+    if let Some(message) = &status.redacted_message {
+        return message.clone();
+    }
+    sync_transport_status_message(&status.kind.canonical_label(), status.publish_usable, None)
+}
+
+fn sync_transport_status_message(
+    transport_kind: &str,
+    usable_for_delivery: bool,
+    redacted_message: Option<&str>,
+) -> String {
+    if let Some(message) = redacted_message {
+        return message.to_owned();
+    }
+    match transport_kind {
+        "local" => "Local-only profile writes only to local state".to_owned(),
+        "nostr" if usable_for_delivery => {
+            "Nostr relay transport is configured for delivery".to_owned()
+        }
+        "nostr" => "Nostr transport requires configured Nostr relay targets".to_owned(),
+        "reticulum" => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned(),
+        "mesh" => "Mesh transport status is not available".to_owned(),
+        "proxy" if usable_for_delivery => {
+            "Proxy transport delegates delivery to the configured endpoint".to_owned()
+        }
+        "proxy" => "Proxy transport requires a configured token file or token secret id".to_owned(),
+        _ => "Transport status is not available".to_owned(),
     }
 }
 
@@ -1040,15 +1094,6 @@ fn transport_implementation_state_label(
         RadrootsTransportImplementationState::Disabled => "disabled",
         RadrootsTransportImplementationState::Misconfigured => "misconfigured",
         RadrootsTransportImplementationState::PreviewUnavailable => "preview_unavailable",
-    }
-}
-
-fn transport_readiness_state_label(state: RadrootsTransportReadinessState) -> &'static str {
-    match state {
-        RadrootsTransportReadinessState::Ready => "ready",
-        RadrootsTransportReadinessState::Disabled => "disabled",
-        RadrootsTransportReadinessState::Misconfigured => "misconfigured",
-        RadrootsTransportReadinessState::PreviewUnavailable => "preview_unavailable",
     }
 }
 
@@ -1887,13 +1932,9 @@ mod tests {
             view.transport_statuses[0].profile_id.as_deref(),
             Some("nostr")
         );
-        assert_eq!(
-            view.transport_statuses[0].implementation_state,
-            "misconfigured"
-        );
-        assert_eq!(view.transport_statuses[0].readiness, "misconfigured");
-        assert!(!view.transport_statuses[0].publish_usable);
-        assert!(!view.transport_statuses[0].fetch_usable);
+        assert!(!view.transport_statuses[0].configured);
+        assert_eq!(view.transport_statuses[0].implementation, "misconfigured");
+        assert!(!view.transport_statuses[0].usable_for_delivery);
         assert!(view.target_transport_endpoints.is_empty());
         assert_eq!(
             view.actions,
@@ -1925,10 +1966,14 @@ mod tests {
         );
         assert_eq!(view.transport_statuses.len(), 2);
         assert_eq!(view.transport_statuses[0].transport_kind, "nostr");
-        assert!(view.transport_statuses[0].fetch_usable);
+        assert!(view.transport_statuses[0].usable_for_delivery);
         assert_eq!(view.transport_statuses[1].transport_kind, "reticulum");
-        assert_eq!(view.transport_statuses[1].readiness, "preview_unavailable");
-        assert!(!view.transport_statuses[1].fetch_usable);
+        assert!(view.transport_statuses[1].configured);
+        assert_eq!(
+            view.transport_statuses[1].implementation,
+            "preview_unavailable"
+        );
+        assert!(!view.transport_statuses[1].usable_for_delivery);
         assert_eq!(
             view.target_transport_endpoints,
             vec!["wss://relay.example.com"]
@@ -1963,16 +2008,16 @@ mod tests {
             view.transport_statuses[0].profile_id.as_deref(),
             Some("hybrid")
         );
-        assert_eq!(
-            view.transport_statuses[0].implementation_state,
-            "misconfigured"
-        );
-        assert_eq!(view.transport_statuses[0].readiness, "misconfigured");
-        assert!(!view.transport_statuses[0].publish_usable);
-        assert!(!view.transport_statuses[0].fetch_usable);
+        assert!(!view.transport_statuses[0].configured);
+        assert_eq!(view.transport_statuses[0].implementation, "misconfigured");
+        assert!(!view.transport_statuses[0].usable_for_delivery);
         assert_eq!(view.transport_statuses[1].transport_kind, "reticulum");
-        assert_eq!(view.transport_statuses[1].readiness, "preview_unavailable");
-        assert!(!view.transport_statuses[1].fetch_usable);
+        assert!(view.transport_statuses[1].configured);
+        assert_eq!(
+            view.transport_statuses[1].implementation,
+            "preview_unavailable"
+        );
+        assert!(!view.transport_statuses[1].usable_for_delivery);
         assert!(view.target_transport_endpoints.is_empty());
         assert_eq!(view.actions, vec!["radroots transport profile get"]);
     }
@@ -1991,7 +2036,7 @@ mod tests {
         assert_eq!(snapshot.transport_statuses.len(), 2);
         assert_eq!(snapshot.transport_statuses[1].transport_kind, "reticulum");
         assert_eq!(
-            snapshot.transport_statuses[1].readiness,
+            snapshot.transport_statuses[1].implementation,
             "preview_unavailable"
         );
     }
@@ -2013,7 +2058,12 @@ mod tests {
             view.configured_transport_targets[0].transport_kind,
             "reticulum"
         );
-        assert_eq!(view.transport_statuses[0].readiness, "preview_unavailable");
+        assert!(view.transport_statuses[0].configured);
+        assert_eq!(
+            view.transport_statuses[0].implementation,
+            "preview_unavailable"
+        );
+        assert!(!view.transport_statuses[0].usable_for_delivery);
         assert_eq!(view.fetched_count, None);
         assert!(view.target_transport_endpoints.is_empty());
         assert!(
@@ -2136,8 +2186,11 @@ mod tests {
             "reticulum"
         );
         assert_eq!(view.transport_statuses.len(), 2);
-        assert_eq!(view.transport_statuses[1].readiness, "preview_unavailable");
-        assert!(!view.transport_statuses[1].fetch_usable);
+        assert_eq!(
+            view.transport_statuses[1].implementation,
+            "preview_unavailable"
+        );
+        assert!(!view.transport_statuses[1].usable_for_delivery);
     }
 
     #[test]

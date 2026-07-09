@@ -188,12 +188,11 @@ fn push_transport_status_table(document: &mut TerminalDocument, result: &Value, 
             TerminalTableRow::new(vec![
                 common::string(transport, &["transport_kind"]).unwrap_or_default(),
                 common::string(transport, &["profile_id"]).unwrap_or_default(),
-                common::string(transport, &["implementation_state"]).unwrap_or_default(),
-                common::string(transport, &["readiness"]).unwrap_or_default(),
-                common::bool_path(transport, &["publish_usable"])
+                common::bool_path(transport, &["configured"])
                     .map(|value| if value { "yes" } else { "no" }.to_owned())
                     .unwrap_or_default(),
-                common::bool_path(transport, &["fetch_usable"])
+                common::string(transport, &["implementation"]).unwrap_or_default(),
+                common::bool_path(transport, &["usable_for_delivery"])
                     .map(|value| if value { "yes" } else { "no" }.to_owned())
                     .unwrap_or_default(),
                 common::string(transport, &["endpoint_uri"]).unwrap_or_default(),
@@ -205,10 +204,9 @@ fn push_transport_status_table(document: &mut TerminalDocument, result: &Value, 
         vec![
             TerminalTableColumn::new("Kind", 4, 12),
             TerminalTableColumn::new("Profile", 7, 18),
+            TerminalTableColumn::new("Configured", 10, 10),
             TerminalTableColumn::new("Implementation", 14, 24),
-            TerminalTableColumn::new("Readiness", 9, 20),
-            TerminalTableColumn::new("Publish", 7, 7),
-            TerminalTableColumn::new("Fetch", 5, 5),
+            TerminalTableColumn::new("Usable", 6, 6),
             TerminalTableColumn::new("Endpoint", 8, 32),
         ],
         rows,

@@ -91,6 +91,21 @@ fn configure_nostr_transport(sandbox: &RadrootsCliSandbox, relay_url: &str) {
     sandbox.write_nostr_transport_profile(&[relay_url]);
 }
 
+fn assert_no_removed_transport_status_fields(status: &Value) {
+    for field in [
+        "implementation_state",
+        "readiness",
+        "publish_usable",
+        "fetch_usable",
+        "redacted_message",
+    ] {
+        assert!(
+            status.get(field).is_none(),
+            "{field} must not be serialized"
+        );
+    }
+}
+
 fn write_proxy_transport_config(sandbox: &RadrootsCliSandbox, body: &str) -> PathBuf {
     sandbox.write_app_config(
         format!("[transport]\nprofile = \"proxy\"\n\n[transport.proxy]\n{body}").as_str(),
@@ -1416,15 +1431,19 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
         "reticulum"
     );
     assert_eq!(
-        result["transport_statuses"][0]["implementation_state"],
+        result["transport_statuses"][0]["implementation"],
         "preview_unavailable"
+    );
+    assert_eq!(result["transport_statuses"][0]["configured"], true);
+    assert_eq!(
+        result["transport_statuses"][0]["usable_for_delivery"],
+        false
     );
     assert_eq!(
-        result["transport_statuses"][0]["readiness"],
-        "preview_unavailable"
+        result["transport_statuses"][0]["message"],
+        RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
     );
-    assert_eq!(result["transport_statuses"][0]["publish_usable"], false);
-    assert_eq!(result["transport_statuses"][0]["fetch_usable"], false);
+    assert_no_removed_transport_status_fields(&result["transport_statuses"][0]);
     assert_eq!(result["reticulum_preview_behavior"], "defer_delivery_plans");
     assert_eq!(result["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     assert!(
@@ -1463,10 +1482,14 @@ fn transport_profile_local_only_output_uses_profile_and_local_status_fields() {
     assert_eq!(statuses.len(), 1);
     assert_eq!(local["transport_kind"], "local");
     assert_eq!(local["profile_id"], "local_only");
-    assert_eq!(local["implementation_state"], "available");
-    assert_eq!(local["readiness"], "ready");
-    assert_eq!(local["publish_usable"], false);
-    assert_eq!(local["fetch_usable"], false);
+    assert_eq!(local["implementation"], "available");
+    assert_eq!(local["configured"], true);
+    assert_eq!(local["usable_for_delivery"], false);
+    assert_eq!(
+        local["message"],
+        "Local-only profile writes only to local state"
+    );
+    assert_no_removed_transport_status_fields(local);
 }
 
 #[test]
@@ -1508,17 +1531,29 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
         "nostr"
     );
     assert_eq!(
-        value["result"]["transport_statuses"][0]["implementation_state"],
+        value["result"]["transport_statuses"][0]["implementation"],
         "available"
+    );
+    assert_eq!(value["result"]["transport_statuses"][0]["configured"], true);
+    assert_eq!(
+        value["result"]["transport_statuses"][0]["usable_for_delivery"],
+        true
     );
     assert_eq!(
         value["result"]["transport_statuses"][1]["transport_kind"],
         "reticulum"
     );
     assert_eq!(
-        value["result"]["transport_statuses"][1]["readiness"],
+        value["result"]["transport_statuses"][1]["implementation"],
         "preview_unavailable"
     );
+    assert_eq!(value["result"]["transport_statuses"][1]["configured"], true);
+    assert_eq!(
+        value["result"]["transport_statuses"][1]["usable_for_delivery"],
+        false
+    );
+    assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][0]);
+    assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][1]);
     assert_eq!(
         value["result"]["reticulum_preview_behavior"],
         "defer_delivery_plans"
@@ -1562,15 +1597,16 @@ fn transport_status_hybrid_output_reports_nostr_and_reticulum_rows() {
     assert_eq!(result["active_profile"]["profile_delivery_usable"], true);
     assert_eq!(transports.len(), 2);
     assert_eq!(nostr["transport_kind"], "nostr");
-    assert_eq!(nostr["implementation_state"], "available");
-    assert_eq!(nostr["readiness"], "ready");
-    assert_eq!(nostr["publish_usable"], true);
-    assert_eq!(nostr["fetch_usable"], true);
+    assert_eq!(nostr["implementation"], "available");
+    assert_eq!(nostr["configured"], true);
+    assert_eq!(nostr["usable_for_delivery"], true);
     assert_eq!(reticulum["transport_kind"], "reticulum");
-    assert_eq!(reticulum["implementation_state"], "preview_unavailable");
-    assert_eq!(reticulum["readiness"], "preview_unavailable");
-    assert_eq!(reticulum["publish_usable"], false);
-    assert_eq!(reticulum["fetch_usable"], false);
+    assert_eq!(reticulum["implementation"], "preview_unavailable");
+    assert_eq!(reticulum["configured"], true);
+    assert_eq!(reticulum["usable_for_delivery"], false);
+    assert_eq!(reticulum["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
+    assert_no_removed_transport_status_fields(nostr);
+    assert_no_removed_transport_status_fields(reticulum);
 }
 
 #[test]
@@ -1590,10 +1626,10 @@ fn transport_status_nostr_output_uses_canonical_transport_row() {
     assert_eq!(transports.len(), 1);
     assert_eq!(nostr["transport_kind"], "nostr");
     assert_eq!(nostr["profile_id"], "nostr");
-    assert_eq!(nostr["implementation_state"], "available");
-    assert_eq!(nostr["readiness"], "ready");
-    assert_eq!(nostr["publish_usable"], true);
-    assert_eq!(nostr["fetch_usable"], true);
+    assert_eq!(nostr["implementation"], "available");
+    assert_eq!(nostr["configured"], true);
+    assert_eq!(nostr["usable_for_delivery"], true);
+    assert_no_removed_transport_status_fields(nostr);
 }
 
 #[test]
@@ -1618,20 +1654,17 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
     );
     assert_eq!(result["active_profile"]["profile_delivery_usable"], false);
     assert_eq!(active["transport_kind"], "reticulum");
-    assert_eq!(active["implementation_state"], "preview_unavailable");
-    assert_eq!(active["readiness"], "preview_unavailable");
-    assert_eq!(active["publish_usable"], false);
-    assert_eq!(active["fetch_usable"], false);
-    assert_eq!(
-        active["redacted_message"],
-        RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
-    );
+    assert_eq!(active["implementation"], "preview_unavailable");
+    assert_eq!(active["configured"], true);
+    assert_eq!(active["usable_for_delivery"], false);
+    assert_eq!(active["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     assert!(
-        !active["redacted_message"]
+        !active["message"]
             .as_str()
             .expect("message")
             .contains("Nostr")
     );
+    assert_no_removed_transport_status_fields(active);
     assert!(
         !serde_json::to_string(&active["actions"])
             .expect("actions json")
@@ -1820,6 +1853,8 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
 
     let transport_source =
         fs::read_to_string(manifest_dir.join("src/runtime/transport.rs")).expect("read source");
+    let view_source =
+        fs::read_to_string(manifest_dir.join("src/view/runtime.rs")).expect("read runtime view");
     for required in [
         "RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE",
         "RadrootsTransportStatus::new",
@@ -1832,6 +1867,35 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         assert!(
             transport_source.contains(required),
             "src/runtime/transport.rs must retain transport status/message witness `{required}`"
+        );
+    }
+
+    let transport_status_view_source = source_window(
+        view_source.as_str(),
+        "pub struct TransportRuntimeStatusView",
+        "pub struct TransportOutboxStatusView",
+    );
+    for required in [
+        "pub configured: bool,",
+        "pub implementation: String,",
+        "pub usable_for_delivery: bool,",
+        "pub message: String,",
+    ] {
+        assert!(
+            transport_status_view_source.contains(required),
+            "transport status view must retain canonical field `{required}`"
+        );
+    }
+    for forbidden in [
+        "pub implementation_state:",
+        "pub readiness:",
+        "pub publish_usable:",
+        "pub fetch_usable:",
+        "pub redacted_message:",
+    ] {
+        assert!(
+            !transport_status_view_source.contains(forbidden),
+            "transport status view must not expose removed field `{forbidden}`"
         );
     }
 
@@ -1887,6 +1951,10 @@ fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_ou
         "pub configured_transport_target_count: usize,",
         "pub configured_transport_targets: Vec<SyncTransportTargetView>,",
         "pub transport_statuses: Vec<SyncTransportStatusView>,",
+        "pub configured: bool,",
+        "pub implementation: String,",
+        "pub usable_for_delivery: bool,",
+        "pub message: String,",
         "pub target_transport_endpoints: Vec<String>,",
         "pub attempted_transport_endpoints: Vec<String>,",
         "pub accepted_transport_endpoints: Vec<String>,",
@@ -1895,6 +1963,24 @@ fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_ou
         assert!(
             view_source.contains(required),
             "sync view source must retain transport-neutral field witness `{required}`"
+        );
+    }
+
+    let sync_status_view_source = source_window(
+        view_source.as_str(),
+        "pub struct SyncTransportStatusView",
+        "pub struct TransportTargetFailureView",
+    );
+    for forbidden in [
+        "pub implementation_state:",
+        "pub readiness:",
+        "pub publish_usable:",
+        "pub fetch_usable:",
+        "pub redacted_message:",
+    ] {
+        assert!(
+            !sync_status_view_source.contains(forbidden),
+            "sync transport status view must not expose removed field `{forbidden}`"
         );
     }
 
@@ -2248,17 +2334,15 @@ fn transport_profile_set_proxy_persists_token_file_without_printing_token_materi
         "proxy"
     );
     assert_eq!(
-        value["result"]["transport_statuses"][0]["implementation_state"],
+        value["result"]["transport_statuses"][0]["implementation"],
         "available"
     );
+    assert_eq!(value["result"]["transport_statuses"][0]["configured"], true);
     assert_eq!(
-        value["result"]["transport_statuses"][0]["readiness"],
-        "ready"
-    );
-    assert_eq!(
-        value["result"]["transport_statuses"][0]["publish_usable"],
+        value["result"]["transport_statuses"][0]["usable_for_delivery"],
         true
     );
+    assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][0]);
     assert_eq!(value["result"]["proxy_token_source"], "token_file");
     assert_eq!(
         value["result"]["proxy_token_file"],
@@ -2313,17 +2397,15 @@ fn transport_profile_set_proxy_persists_token_secret_id_without_printing_token_m
         "proxy"
     );
     assert_eq!(
-        value["result"]["transport_statuses"][0]["implementation_state"],
+        value["result"]["transport_statuses"][0]["implementation"],
         "available"
     );
+    assert_eq!(value["result"]["transport_statuses"][0]["configured"], true);
     assert_eq!(
-        value["result"]["transport_statuses"][0]["readiness"],
-        "ready"
-    );
-    assert_eq!(
-        value["result"]["transport_statuses"][0]["publish_usable"],
+        value["result"]["transport_statuses"][0]["usable_for_delivery"],
         true
     );
+    assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][0]);
     assert_eq!(value["result"]["proxy_token_source"], "token_secret_id");
     assert!(value["result"]["proxy_token_file"].is_null());
     assert_eq!(

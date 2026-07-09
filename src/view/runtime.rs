@@ -3317,12 +3317,10 @@ pub struct TransportRuntimeStatusView {
     pub profile_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint_uri: Option<String>,
-    pub implementation_state: String,
-    pub readiness: String,
-    pub publish_usable: bool,
-    pub fetch_usable: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub redacted_message: Option<String>,
+    pub configured: bool,
+    pub implementation: String,
+    pub usable_for_delivery: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3558,12 +3556,10 @@ pub struct SyncTransportStatusView {
     pub profile_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint_uri: Option<String>,
-    pub implementation_state: String,
-    pub readiness: String,
-    pub publish_usable: bool,
-    pub fetch_usable: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub redacted_message: Option<String>,
+    pub configured: bool,
+    pub implementation: String,
+    pub usable_for_delivery: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

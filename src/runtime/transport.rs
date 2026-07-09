@@ -370,7 +370,7 @@ fn profile_view_from_parts(
     );
     let profile_delivery_usable = transport_statuses
         .iter()
-        .any(|status| status.publish_usable);
+        .any(|status| status.usable_for_delivery);
     let message = match profile_id {
         "nostr" if profile_delivery_usable => "Nostr relay transport is configured for delivery",
         "nostr" => "Nostr transport requires configured Nostr relay targets",
@@ -515,16 +515,50 @@ fn proxy_transport_status(
 }
 
 fn transport_runtime_status_view(status: RadrootsTransportStatus) -> TransportRuntimeStatusView {
+    let configured = transport_status_configured(&status);
+    let usable_for_delivery = status.publish_usable;
+    let message = transport_status_message(&status);
     TransportRuntimeStatusView {
         transport_kind: status.kind.canonical_label(),
         profile_id: status.profile_id,
         endpoint_uri: status.endpoint_uri,
-        implementation_state: transport_implementation_state_label(status.implementation_state)
+        configured,
+        implementation: transport_implementation_state_label(status.implementation_state)
             .to_owned(),
-        readiness: transport_readiness_state_label(status.readiness).to_owned(),
-        publish_usable: status.publish_usable,
-        fetch_usable: status.fetch_usable,
-        redacted_message: status.redacted_message,
+        usable_for_delivery,
+        message,
+    }
+}
+
+fn transport_status_configured(status: &RadrootsTransportStatus) -> bool {
+    matches!(
+        status.readiness,
+        RadrootsTransportReadinessState::Ready
+            | RadrootsTransportReadinessState::PreviewUnavailable
+    )
+}
+
+fn transport_status_message(status: &RadrootsTransportStatus) -> String {
+    if let Some(message) = &status.redacted_message {
+        return message.clone();
+    }
+    match status.kind {
+        RadrootsTransportKind::Local => "Local-only profile writes only to local state".to_owned(),
+        RadrootsTransportKind::Nostr if status.publish_usable => {
+            "Nostr relay transport is configured for delivery".to_owned()
+        }
+        RadrootsTransportKind::Nostr => {
+            "Nostr transport requires configured Nostr relay targets".to_owned()
+        }
+        RadrootsTransportKind::Reticulum => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned(),
+        RadrootsTransportKind::Mesh => "Mesh transport status is not available".to_owned(),
+        RadrootsTransportKind::Proxy if status.publish_usable => {
+            "Proxy transport delegates delivery to the configured endpoint".to_owned()
+        }
+        RadrootsTransportKind::Proxy => {
+            "Proxy transport requires a configured token file or token secret id".to_owned()
+        }
+        RadrootsTransportKind::Custom(_) => "Custom transport status is not available".to_owned(),
     }
 }
 
@@ -536,15 +570,6 @@ fn transport_implementation_state_label(
         RadrootsTransportImplementationState::Disabled => "disabled",
         RadrootsTransportImplementationState::Misconfigured => "misconfigured",
         RadrootsTransportImplementationState::PreviewUnavailable => "preview_unavailable",
-    }
-}
-
-fn transport_readiness_state_label(state: RadrootsTransportReadinessState) -> &'static str {
-    match state {
-        RadrootsTransportReadinessState::Ready => "ready",
-        RadrootsTransportReadinessState::Disabled => "disabled",
-        RadrootsTransportReadinessState::Misconfigured => "misconfigured",
-        RadrootsTransportReadinessState::PreviewUnavailable => "preview_unavailable",
     }
 }
 
