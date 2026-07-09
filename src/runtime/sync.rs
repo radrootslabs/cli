@@ -17,8 +17,8 @@ use radroots_replica_sync::{
     radroots_replica_sync_status,
 };
 use radroots_sdk::{
-    PushOutboxEventReceipt, PushOutboxReceipt, PushOutboxRequest, PushOutboxTargetOutcomeKind,
-    PushOutboxTargetReceipt, SyncStatusReceipt, SyncStatusRequest,
+    PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt, PushOutboxRequest,
+    PushOutboxTargetOutcomeKind, PushOutboxTargetReceipt, SyncStatusReceipt, SyncStatusRequest,
 };
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use radroots_transport::{
@@ -507,17 +507,7 @@ fn sdk_push_view(
     status: SyncStatusReceipt,
 ) -> SyncActionView {
     let failed_count = receipt.retryable_events + receipt.terminal_events;
-    let state = if receipt.attempted_events == 0 {
-        "ready"
-    } else if receipt.published_events > 0 && failed_count > 0 {
-        "partial"
-    } else if failed_count > 0 {
-        "unavailable"
-    } else if receipt.published_events > 0 {
-        "published"
-    } else {
-        "ready"
-    };
+    let state = sdk_push_state(&receipt, failed_count);
     let reason = sdk_push_reason(&receipt, failed_count);
     sdk_push_action_view(
         config,
@@ -633,7 +623,9 @@ fn sdk_sync_status_actions(receipt: &SyncStatusReceipt) -> Vec<String> {
 
 fn sdk_sync_push_actions(state: &str, retryable: bool) -> Vec<String> {
     match state {
-        "published" | "ready" => vec!["radroots sync status get".to_owned()],
+        "published" | "ready" | "preview_unavailable" | "deferred_until_implemented" => {
+            vec!["radroots sync status get".to_owned()]
+        }
         "dry_run" | "partial" | "unavailable" if retryable => {
             vec![
                 SYNC_PUSH_ACTION.to_owned(),
@@ -649,12 +641,62 @@ fn sdk_sync_push_reason_code(state: &str) -> Option<&'static str> {
         "dry_run" => Some("dry_run"),
         "partial" => Some("sdk_outbox_push_partial"),
         "unavailable" => Some("sdk_outbox_push_failed"),
+        "preview_unavailable" => Some("sdk_outbox_push_preview_unavailable"),
+        "deferred_until_implemented" => Some("sdk_outbox_push_deferred_until_implemented"),
         _ => None,
     }
 }
 
+fn sdk_push_state(receipt: &PushOutboxReceipt, failed_count: usize) -> &'static str {
+    if receipt.attempted_events == 0 {
+        return sdk_push_reported_preview_state(receipt).unwrap_or("ready");
+    }
+    if receipt.published_events > 0 && failed_count > 0 {
+        "partial"
+    } else if failed_count > 0 {
+        "unavailable"
+    } else if receipt.published_events > 0 {
+        "published"
+    } else {
+        "ready"
+    }
+}
+
+fn sdk_push_reported_preview_state(receipt: &PushOutboxReceipt) -> Option<&'static str> {
+    let mut deferred = false;
+    for event in &receipt.events {
+        match event.final_state {
+            PushOutboxEventState::PreviewUnavailable => return Some("preview_unavailable"),
+            PushOutboxEventState::DeferredUntilImplemented => deferred = true,
+            _ => {}
+        }
+        for target in &event.targets {
+            match target.outcome_kind {
+                PushOutboxTargetOutcomeKind::PreviewUnavailable => {
+                    return Some("preview_unavailable");
+                }
+                PushOutboxTargetOutcomeKind::DeferredUntilImplemented => deferred = true,
+                _ => {}
+            }
+        }
+    }
+    deferred.then_some("deferred_until_implemented")
+}
+
 fn sdk_push_reason(receipt: &PushOutboxReceipt, failed_count: usize) -> Option<String> {
     if receipt.attempted_events == 0 {
+        if let Some(state) = sdk_push_reported_preview_state(receipt) {
+            return Some(match state {
+                "preview_unavailable" => {
+                    "SDK outbox push reported Reticulum preview work as preview unavailable without network delivery"
+                }
+                "deferred_until_implemented" => {
+                    "SDK outbox push reported Reticulum preview work as deferred until implemented without network delivery"
+                }
+                _ => "SDK outbox push reported Reticulum preview work without network delivery",
+            }
+            .to_owned());
+        }
         return Some("SDK outbox had no ready signed events to push".to_owned());
     }
     if failed_count > 0 && receipt.published_events > 0 {
@@ -816,6 +858,8 @@ fn sdk_target_outcome_kind(kind: PushOutboxTargetOutcomeKind) -> &'static str {
         PushOutboxTargetOutcomeKind::Timeout => "timeout",
         PushOutboxTargetOutcomeKind::ConnectionFailed => "connection_failed",
         PushOutboxTargetOutcomeKind::TargetUriRejected => "target_uri_rejected",
+        PushOutboxTargetOutcomeKind::DeferredUntilImplemented => "deferred_until_implemented",
+        PushOutboxTargetOutcomeKind::PreviewUnavailable => "preview_unavailable",
         PushOutboxTargetOutcomeKind::Unknown => "unknown",
         _ => "unknown",
     }
@@ -2221,6 +2265,81 @@ mod tests {
     }
 
     #[test]
+    fn sync_push_reticulum_preview_reports_non_attempted_preview_work() {
+        let cases = [
+            (
+                PushOutboxEventState::PreviewUnavailable,
+                PushOutboxTargetOutcomeKind::PreviewUnavailable,
+                "preview_unavailable",
+                "sdk_outbox_push_preview_unavailable",
+                "SDK outbox push reported Reticulum preview work as preview unavailable without network delivery",
+                1,
+                0,
+            ),
+            (
+                PushOutboxEventState::DeferredUntilImplemented,
+                PushOutboxTargetOutcomeKind::DeferredUntilImplemented,
+                "deferred_until_implemented",
+                "sdk_outbox_push_deferred_until_implemented",
+                "SDK outbox push reported Reticulum preview work as deferred until implemented without network delivery",
+                0,
+                1,
+            ),
+        ];
+
+        for (
+            final_state,
+            outcome_kind,
+            expected_state,
+            expected_reason_code,
+            expected_reason,
+            preview_count,
+            deferred_count,
+        ) in cases
+        {
+            let dir = tempdir().expect("tempdir");
+            let config = reticulum_preview_config(dir.path());
+            let receipt = PushOutboxReceipt {
+                attempted_events: 0,
+                published_events: 0,
+                retryable_events: 0,
+                terminal_events: 0,
+                events: vec![sdk_reticulum_preview_push_event(final_state, outcome_kind)],
+            };
+
+            let view = sdk_push_view(
+                &config,
+                receipt,
+                sdk_reticulum_preview_status_receipt(preview_count, deferred_count),
+            );
+
+            assert_eq!(view.state, expected_state);
+            assert_eq!(view.publishable_count, Some(0));
+            assert_eq!(view.published_count, Some(0));
+            assert_eq!(view.failed_count, Some(0));
+            assert_eq!(view.reason_code.as_deref(), Some(expected_reason_code));
+            assert_eq!(view.reason.as_deref(), Some(expected_reason));
+            assert_eq!(
+                view.target_transport_endpoints,
+                vec![RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned()]
+            );
+            assert!(view.attempted_transport_endpoints.is_empty());
+            assert!(view.accepted_transport_endpoints.is_empty());
+            assert_eq!(view.failed_transport_targets.len(), 1);
+            assert_eq!(view.failed_transport_targets[0].transport_kind, "reticulum");
+            assert_eq!(
+                view.failed_transport_targets[0].endpoint_uri,
+                RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI
+            );
+            assert_eq!(
+                view.failed_transport_targets[0].reason,
+                RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
+            );
+            assert_eq!(view.actions, vec!["radroots sync status get"]);
+        }
+    }
+
+    #[test]
     fn sync_push_maps_published_and_auth_required_sdk_receipts() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(
@@ -2380,6 +2499,55 @@ mod tests {
         }
     }
 
+    fn sdk_reticulum_preview_status_receipt(
+        preview_unavailable_events: i64,
+        deferred_until_implemented_events: i64,
+    ) -> SyncStatusReceipt {
+        SyncStatusReceipt {
+            source: SyncStatusSource::SdkCanonicalStores,
+            observed_at_ms: 1_700_000_030_000,
+            event_store: SyncEventStoreStatus {
+                total_events: 1,
+                projection_eligible_events: 1,
+                transport_observations: 0,
+                last_event_seq: Some(1),
+                last_event_updated_at_ms: Some(1_700_000_000_000),
+            },
+            outbox: SyncOutboxStatus {
+                total_events: 1,
+                pending_events: 0,
+                retryable_events: 0,
+                terminal_events: 0,
+                failed_terminal_events: 0,
+                preview_unavailable_events,
+                deferred_until_implemented_events,
+                ready_signed_events: 0,
+                publishing_events: 0,
+                last_attempt_at_ms: None,
+                last_error: None,
+            },
+            transport_profile: SyncTransportProfileSummary {
+                transport_profile_id: "reticulum_preview".to_owned(),
+                configured_transport_target_count: 1,
+                configured_transport_targets: vec![SyncTransportTargetSummary {
+                    transport_kind: "reticulum".to_owned(),
+                    endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
+                    endpoint_fingerprint: "1".repeat(64),
+                }],
+                transport_statuses: vec![SyncTransportStatusSummary {
+                    transport_kind: "reticulum".to_owned(),
+                    profile_id: Some("reticulum_preview".to_owned()),
+                    endpoint_uri: Some(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned()),
+                    implementation_state: "preview_unavailable".to_owned(),
+                    readiness: "preview_unavailable".to_owned(),
+                    publish_usable: false,
+                    fetch_usable: false,
+                    redacted_message: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
+                }],
+            },
+        }
+    }
+
     fn sdk_push_event(
         event_id_prefix: &str,
         final_state: PushOutboxEventState,
@@ -2426,6 +2594,30 @@ mod tests {
                 outcome_kind,
                 attempted: true,
                 message,
+            }],
+        }
+    }
+
+    fn sdk_reticulum_preview_push_event(
+        final_state: PushOutboxEventState,
+        outcome_kind: PushOutboxTargetOutcomeKind,
+    ) -> PushOutboxEventReceipt {
+        PushOutboxEventReceipt {
+            event_id: RadrootsEventId::parse("c".repeat(64).as_str()).expect("event id"),
+            outbox_event_id: 9,
+            final_state,
+            attempted_count: 0,
+            accepted_count: 0,
+            retryable_count: 0,
+            terminal_count: 0,
+            quorum: 1,
+            quorum_met: false,
+            targets: vec![PushOutboxTargetReceipt {
+                transport_kind: "reticulum".to_owned(),
+                endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
+                outcome_kind,
+                attempted: false,
+                message: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
             }],
         }
     }

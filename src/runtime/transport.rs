@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use radroots_sdk::{PushOutboxRequest, SyncStatusRequest};
+use radroots_sdk::{
+    PushOutboxEventState, PushOutboxReceipt, PushOutboxRequest, PushOutboxTargetOutcomeKind,
+    SyncStatusRequest,
+};
 use radroots_transport::{
     RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
     RadrootsTransportImplementationState, RadrootsTransportKind, RadrootsTransportReadinessState,
@@ -191,18 +194,7 @@ pub fn outbox_push(config: &RuntimeConfig) -> Result<TransportOutboxPushView, Cl
         .flat_map(|event| event.targets.iter())
         .count();
     let failed_count = receipt.retryable_events + receipt.terminal_events;
-    let state = if receipt.attempted_events == 0 {
-        "ready"
-    } else if receipt.published_events > 0 && failed_count > 0 {
-        "partial"
-    } else if failed_count > 0 {
-        "unavailable"
-    } else if receipt.published_events > 0 {
-        "published"
-    } else {
-        "ready"
-    }
-    .to_owned();
+    let state = transport_outbox_push_state(&receipt, failed_count).to_owned();
     Ok(TransportOutboxPushView {
         state,
         source: "SDK transport outbox".to_owned(),
@@ -211,10 +203,64 @@ pub fn outbox_push(config: &RuntimeConfig) -> Result<TransportOutboxPushView, Cl
         retryable_events: receipt.retryable_events,
         terminal_events: receipt.terminal_events,
         target_count,
-        reason: (receipt.attempted_events == 0)
-            .then_some("SDK outbox had no ready signed events to push".to_owned()),
+        reason: transport_outbox_push_reason(&receipt),
         actions: vec!["radroots transport outbox status".to_owned()],
     })
+}
+
+fn transport_outbox_push_state(receipt: &PushOutboxReceipt, failed_count: usize) -> &'static str {
+    if receipt.attempted_events == 0 {
+        return transport_outbox_reported_preview_state(receipt).unwrap_or("ready");
+    }
+    if receipt.published_events > 0 && failed_count > 0 {
+        "partial"
+    } else if failed_count > 0 {
+        "unavailable"
+    } else if receipt.published_events > 0 {
+        "published"
+    } else {
+        "ready"
+    }
+}
+
+fn transport_outbox_reported_preview_state(receipt: &PushOutboxReceipt) -> Option<&'static str> {
+    let mut deferred = false;
+    for event in &receipt.events {
+        match event.final_state {
+            PushOutboxEventState::PreviewUnavailable => return Some("preview_unavailable"),
+            PushOutboxEventState::DeferredUntilImplemented => deferred = true,
+            _ => {}
+        }
+        for target in &event.targets {
+            match target.outcome_kind {
+                PushOutboxTargetOutcomeKind::PreviewUnavailable => {
+                    return Some("preview_unavailable");
+                }
+                PushOutboxTargetOutcomeKind::DeferredUntilImplemented => deferred = true,
+                _ => {}
+            }
+        }
+    }
+    deferred.then_some("deferred_until_implemented")
+}
+
+fn transport_outbox_push_reason(receipt: &PushOutboxReceipt) -> Option<String> {
+    if receipt.attempted_events == 0 {
+        if let Some(state) = transport_outbox_reported_preview_state(receipt) {
+            return Some(match state {
+                "preview_unavailable" => {
+                    "SDK outbox push reported Reticulum preview work as preview unavailable without network delivery"
+                }
+                "deferred_until_implemented" => {
+                    "SDK outbox push reported Reticulum preview work as deferred until implemented without network delivery"
+                }
+                _ => "SDK outbox push reported Reticulum preview work without network delivery",
+            }
+            .to_owned());
+        }
+        return Some("SDK outbox had no ready signed events to push".to_owned());
+    }
+    None
 }
 
 fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
@@ -637,4 +683,69 @@ fn string_array_input(input: &OperationData, key: &str) -> Vec<String> {
         .filter_map(JsonValue::as_str)
         .map(str::to_owned)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use radroots_events::ids::RadrootsEventId;
+    use radroots_sdk::{PushOutboxEventReceipt, PushOutboxTargetReceipt};
+
+    #[test]
+    fn transport_outbox_push_reports_reticulum_preview_without_attempts() {
+        let cases = [
+            (
+                PushOutboxEventState::PreviewUnavailable,
+                PushOutboxTargetOutcomeKind::PreviewUnavailable,
+                "preview_unavailable",
+                "SDK outbox push reported Reticulum preview work as preview unavailable without network delivery",
+            ),
+            (
+                PushOutboxEventState::DeferredUntilImplemented,
+                PushOutboxTargetOutcomeKind::DeferredUntilImplemented,
+                "deferred_until_implemented",
+                "SDK outbox push reported Reticulum preview work as deferred until implemented without network delivery",
+            ),
+        ];
+
+        for (final_state, outcome_kind, expected_state, expected_reason) in cases {
+            let receipt = reticulum_preview_receipt(final_state, outcome_kind);
+
+            assert_eq!(transport_outbox_push_state(&receipt, 0), expected_state);
+            assert_eq!(
+                transport_outbox_push_reason(&receipt).as_deref(),
+                Some(expected_reason)
+            );
+        }
+    }
+
+    fn reticulum_preview_receipt(
+        final_state: PushOutboxEventState,
+        outcome_kind: PushOutboxTargetOutcomeKind,
+    ) -> PushOutboxReceipt {
+        PushOutboxReceipt {
+            attempted_events: 0,
+            published_events: 0,
+            retryable_events: 0,
+            terminal_events: 0,
+            events: vec![PushOutboxEventReceipt {
+                event_id: RadrootsEventId::parse("d".repeat(64).as_str()).expect("event id"),
+                outbox_event_id: 11,
+                final_state,
+                attempted_count: 0,
+                accepted_count: 0,
+                retryable_count: 0,
+                terminal_count: 0,
+                quorum: 1,
+                quorum_met: false,
+                targets: vec![PushOutboxTargetReceipt {
+                    transport_kind: "reticulum".to_owned(),
+                    endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
+                    outcome_kind,
+                    attempted: false,
+                    message: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
+                }],
+            }],
+        }
+    }
 }
