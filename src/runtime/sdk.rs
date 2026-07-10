@@ -812,6 +812,12 @@ mod tests {
         required_tokens: &'static [&'static str],
     }
 
+    struct SdkOutcomeLabelHelperGuard {
+        label: &'static str,
+        start: &'static str,
+        end: &'static str,
+    }
+
     const DIRECT_RR_RS_DEPENDENCIES: &[DirectRrRsDependency] = &[
         DirectRrRsDependency {
             section: "dependencies",
@@ -998,6 +1004,29 @@ mod tests {
             concat!("fn sdk_relay", "_outcome_kind("),
             "local SDK validation receipt relay label helper",
         ),
+    ];
+
+    const SDK_OUTCOME_LABEL_HELPER_GUARDS: &[SdkOutcomeLabelHelperGuard] = &[
+        SdkOutcomeLabelHelperGuard {
+            label: "push outbox transport outcome label helper",
+            start: "pub fn sdk_transport_outcome_kind_label(",
+            end: "pub fn sdk_target_outcome_kind_label(",
+        },
+        SdkOutcomeLabelHelperGuard {
+            label: "push outbox target outcome label helper",
+            start: "pub fn sdk_target_outcome_kind_label(",
+            end: "pub fn sdk_validation_transport_outcome_kind_label(",
+        },
+        SdkOutcomeLabelHelperGuard {
+            label: "validation transport outcome label helper",
+            start: "pub fn sdk_validation_transport_outcome_kind_label(",
+            end: "pub fn sdk_validation_relay_outcome_kind_label(",
+        },
+        SdkOutcomeLabelHelperGuard {
+            label: "validation relay outcome label helper",
+            start: "pub fn sdk_validation_relay_outcome_kind_label(",
+            end: "#[derive(Debug, Clone, PartialEq, Eq)]",
+        },
     ];
 
     const MIGRATED_CLI_PATH_GUARDS: &[MigratedCliPathGuard] = &[
@@ -1778,6 +1807,7 @@ mod tests {
                 match production_source_without_tests(&relative_path, &source) {
                     Ok(production_source) => sdk_outcome_label_contract_findings(
                         &relative_path,
+                        source.as_str(),
                         production_source.as_str(),
                     ),
                     Err(error) => vec![error],
@@ -1788,6 +1818,63 @@ mod tests {
         assert!(
             findings.is_empty(),
             "CLI production sources violate the SDK outcome label contract:\n{}",
+            findings.join("\n")
+        );
+    }
+
+    #[test]
+    fn sdk_outcome_label_guard_rejects_wildcard_unknown_inside_helper_span() {
+        let source = sdk_outcome_label_helper_source(
+            concat!(
+                "    match kind {\n",
+                "        PushOutboxTransportOutcomeKind::Accepted => \"accepted\".to_owned(),\n",
+                "        _ => \"unknown\".to_owned(),\n",
+                "    }\n"
+            ),
+            "",
+        );
+        let production_source =
+            production_source_without_tests("fixture.rs", source.as_str()).expect("source");
+        let findings =
+            sdk_outcome_label_contract_findings("fixture.rs", source.as_str(), &production_source);
+
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.contains("does not delegate to SDK enum as_str labels")),
+            "SDK outcome label guard must reject local helper rendering:\n{}",
+            findings.join("\n")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.contains("uses a wildcard outcome label arm")),
+            "SDK outcome label guard must reject wildcard unknown helper rendering:\n{}",
+            findings.join("\n")
+        );
+    }
+
+    #[test]
+    fn sdk_outcome_label_guard_allows_unrelated_unknown_fallbacks_outside_helper_spans() {
+        let source = sdk_outcome_label_helper_source(
+            "    kind.as_str().to_owned()\n",
+            concat!(
+                "fn unrelated_status_label(value: Option<&str>) -> &str {\n",
+                "    match value {\n",
+                "        Some(value) => value,\n",
+                "        _ => \"unknown\",\n",
+                "    }\n",
+                "}\n"
+            ),
+        );
+        let production_source =
+            production_source_without_tests("fixture.rs", source.as_str()).expect("source");
+        let findings =
+            sdk_outcome_label_contract_findings("fixture.rs", source.as_str(), &production_source);
+
+        assert!(
+            findings.is_empty(),
+            "SDK outcome label guard must ignore unrelated unknown fallbacks:\n{}",
             findings.join("\n")
         );
     }
@@ -2175,32 +2262,109 @@ mod tests {
             .collect()
     }
 
-    fn sdk_outcome_label_contract_findings(label: &str, source: &str) -> Vec<String> {
+    fn sdk_outcome_label_contract_findings(
+        label: &str,
+        raw_source: &str,
+        production_source: &str,
+    ) -> Vec<String> {
         let mut findings = SDK_OUTCOME_LABEL_SOURCE_DISALLOWED_TOKENS
             .iter()
             .flat_map(|(token, reason)| {
-                source.match_indices(token).map(move |(index, _)| {
+                production_source.match_indices(token).map(move |(index, _)| {
                     format!(
                         "{label}:{} uses forbidden SDK outcome label token `{token}` for {reason}",
-                        line_number(source, index)
+                        line_number(production_source, index)
                     )
                 })
             })
             .collect::<Vec<_>>();
 
-        let wildcard_unknown = concat!("_ =>", " \"unknown\"");
-        for enum_name in [
-            "PushOutboxTargetOutcomeKind::",
-            "TradeValidationReceiptNostrRelayOutcomeKind::",
-        ] {
-            if source.contains(enum_name) && source.contains(wildcard_unknown) {
+        findings.extend(sdk_outcome_label_helper_findings(label, raw_source));
+
+        findings
+    }
+
+    fn sdk_outcome_label_helper_findings(label: &str, source: &str) -> Vec<String> {
+        let mut findings = Vec::new();
+        for guard in SDK_OUTCOME_LABEL_HELPER_GUARDS {
+            let (start_index, end_index) =
+                match optional_source_segment_bounds(source, guard.start, guard.end) {
+                    Ok(Some(bounds)) => bounds,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        findings.push(format!("{label}: {error}"));
+                        continue;
+                    }
+                };
+            let raw_segment = &source[start_index..end_index];
+            let code_segment =
+                rust_code_without_non_code(label, raw_segment).expect("SDK label helper source");
+            if !code_segment.contains("kind.as_str().to_owned()") {
                 findings.push(format!(
-                    "{label} degrades known `{enum_name}` variants through wildcard unknown label rendering"
+                    "{label}:{} {helper} does not delegate to SDK enum as_str labels",
+                    line_number(source, start_index),
+                    helper = guard.label
+                ));
+            }
+            if let Some(index) = code_segment.find("match kind") {
+                findings.push(format!(
+                    "{label}:{} {helper} matches SDK outcome variants locally",
+                    line_number(source, start_index + index),
+                    helper = guard.label
+                ));
+            }
+            if let Some(index) = code_segment.find("_ =>") {
+                findings.push(format!(
+                    "{label}:{} {helper} uses a wildcard outcome label arm",
+                    line_number(source, start_index + index),
+                    helper = guard.label
                 ));
             }
         }
-
         findings
+    }
+
+    fn sdk_outcome_label_helper_source(transport_body: &str, extra_source: &str) -> String {
+        format!(
+            "pub fn sdk_transport_outcome_kind_label(kind: PushOutboxTransportOutcomeKind) -> String {{\n\
+{transport_body}\
+}}\n\
+pub fn sdk_target_outcome_kind_label(kind: PushOutboxTargetOutcomeKind) -> String {{\n\
+    kind.as_str().to_owned()\n\
+}}\n\
+pub fn sdk_validation_transport_outcome_kind_label(\n\
+    kind: TradeValidationReceiptNostrRelayTransportOutcomeKind,\n\
+) -> String {{\n\
+    kind.as_str().to_owned()\n\
+}}\n\
+pub fn sdk_validation_relay_outcome_kind_label(\n\
+    kind: TradeValidationReceiptNostrRelayOutcomeKind,\n\
+) -> String {{\n\
+    kind.as_str().to_owned()\n\
+}}\n\
+#[derive(Debug, Clone, PartialEq, Eq)]\n\
+struct FixtureConfig;\n\
+{extra_source}"
+        )
+    }
+
+    fn optional_source_segment_bounds(
+        source: &str,
+        start: &str,
+        end: &str,
+    ) -> Result<Option<(usize, usize)>, String> {
+        let Some(start_index) = source.find(start) else {
+            return Ok(None);
+        };
+        let Some(end_index) = source[start_index..]
+            .find(end)
+            .map(|index| start_index + index)
+        else {
+            return Err(format!(
+                "SDK outcome label helper source segment starting `{start}` is missing end marker `{end}`"
+            ));
+        };
+        Ok(Some((start_index, end_index)))
     }
 
     fn production_source_without_tests(path: &str, source: &str) -> Result<String, String> {
