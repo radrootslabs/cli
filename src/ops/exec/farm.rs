@@ -236,7 +236,7 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
             self.config.transport.profile,
             TransportProfileKind::Nostr | TransportProfileKind::Hybrid
         ) {
-            require_relay_target(&request, self.config)?;
+            require_nostr_delivery_target(&request, self.config)?;
         }
 
         let view = crate::runtime::farm::publish(self.config, &args).map_err(|error| {
@@ -300,7 +300,9 @@ fn farm_publish_result(
 ) -> Result<OperationResult<FarmPublishResult>, OperationAdapterError> {
     match view.disposition() {
         CommandDisposition::Success => serialized_operation_result::<FarmPublishResult, _>(view),
-        CommandDisposition::ExternalUnavailable if farm_publish_relay_unavailable(view) => {
+        CommandDisposition::ExternalUnavailable
+            if farm_publish_transport_delivery_unavailable(view) =>
+        {
             Err(OperationAdapterError::network_unavailable_with_detail(
                 operation_id,
                 view.reason.clone().unwrap_or_else(|| {
@@ -348,13 +350,13 @@ fn farm_private_location_set_result(
     }
 }
 
-fn farm_publish_relay_unavailable(view: &FarmPublishView) -> bool {
+fn farm_publish_transport_delivery_unavailable(view: &FarmPublishView) -> bool {
     view.state == "partial"
         || !view.profile.failed_transport_targets.is_empty()
         || !view.farm.failed_transport_targets.is_empty()
 }
 
-fn require_relay_target<P>(
+fn require_nostr_delivery_target<P>(
     request: &OperationRequest<P>,
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError>

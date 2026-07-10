@@ -30,7 +30,7 @@ use radroots_cli::out::terminal::renderer::{
 };
 use radroots_cli::registry::{
     ApprovalPolicy, NetworkRequirement, OPERATION_REGISTRY, network_requirement,
-    requires_local_signer_mode,
+    requires_delivery_capable_transport_profile, requires_local_signer_mode,
 };
 use radroots_cli::runtime::config::{
     OutputFormat as RuntimeOutputFormat, RuntimeConfig, SignerBackend, TransportProfileKind,
@@ -477,7 +477,7 @@ fn requires_local_signer_mode_for_transport_profile(
 }
 
 fn requires_pre_runtime_transport_target(operation_id: &str) -> bool {
-    !is_transport_profile_routed_operation(operation_id)
+    !requires_delivery_capable_transport_profile(operation_id)
 }
 
 fn allows_offline_local_mutation(operation_id: &str) -> bool {
@@ -489,7 +489,7 @@ fn validate_transport_profile_contract(
     config: &RuntimeConfig,
 ) -> Result<(), OperationAdapterError> {
     let spec = request.spec();
-    if !is_transport_profile_routed_operation(spec.operation_id) {
+    if !requires_delivery_capable_transport_profile(spec.operation_id) {
         return Ok(());
     }
     if request.context().dry_run
@@ -540,17 +540,6 @@ fn validate_transport_profile_contract(
         });
     }
     Ok(())
-}
-
-fn is_transport_profile_routed_operation(operation_id: &str) -> bool {
-    matches!(
-        operation_id,
-        "farm.publish"
-            | "listing.publish"
-            | "listing.update"
-            | "listing.archive"
-            | "transport.outbox.push"
-    )
 }
 
 fn transport_profile_delivery_unavailable_reason(config: &RuntimeConfig) -> Option<String> {

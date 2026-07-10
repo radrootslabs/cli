@@ -1868,6 +1868,75 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         }
     }
 
+    let registry_source =
+        fs::read_to_string(manifest_dir.join("src/registry/mod.rs")).expect("read registry source");
+    let main_source = fs::read_to_string(manifest_dir.join("src/main.rs")).expect("read main");
+    let farm_exec_source =
+        fs::read_to_string(manifest_dir.join("src/ops/exec/farm.rs")).expect("read farm ops");
+    let listing_exec_source =
+        fs::read_to_string(manifest_dir.join("src/ops/exec/listing.rs")).expect("read listing ops");
+    let farm_runtime_source =
+        fs::read_to_string(manifest_dir.join("src/runtime/farm.rs")).expect("read farm runtime");
+    for (relative_path, source) in [
+        ("src/registry/mod.rs", registry_source.as_str()),
+        ("src/main.rs", main_source.as_str()),
+        ("src/ops/exec/farm.rs", farm_exec_source.as_str()),
+        ("src/ops/exec/listing.rs", listing_exec_source.as_str()),
+        ("src/runtime/farm.rs", farm_runtime_source.as_str()),
+    ] {
+        for forbidden in [
+            "requires_nostr_transport_profile",
+            "registry_nostr_publish_requirements_are_explicit",
+            "is_transport_profile_routed_operation",
+            "farm_publish_relay_unavailable",
+            "require_relay_target",
+            "listing_relay_unavailable",
+            "relay_farm_publish_readiness",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{relative_path} must not retain stale transport-profile helper name `{forbidden}`"
+            );
+        }
+    }
+    for (relative_path, source, required) in [
+        (
+            "src/registry/mod.rs",
+            registry_source.as_str(),
+            "requires_delivery_capable_transport_profile",
+        ),
+        (
+            "src/main.rs",
+            main_source.as_str(),
+            "requires_delivery_capable_transport_profile",
+        ),
+        (
+            "src/ops/exec/farm.rs",
+            farm_exec_source.as_str(),
+            "farm_publish_transport_delivery_unavailable",
+        ),
+        (
+            "src/ops/exec/farm.rs",
+            farm_exec_source.as_str(),
+            "require_nostr_delivery_target",
+        ),
+        (
+            "src/ops/exec/listing.rs",
+            listing_exec_source.as_str(),
+            "listing_transport_delivery_unavailable",
+        ),
+        (
+            "src/runtime/farm.rs",
+            farm_runtime_source.as_str(),
+            "transport_farm_publish_readiness",
+        ),
+    ] {
+        assert!(
+            source.contains(required),
+            "{relative_path} must retain delivery-capable transport-profile witness `{required}`"
+        );
+    }
+
     let transport_source =
         fs::read_to_string(manifest_dir.join("src/runtime/transport.rs")).expect("read source");
     let view_source =

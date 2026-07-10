@@ -307,7 +307,7 @@ where
 {
     match view.disposition() {
         CommandDisposition::Success => serialized_operation_result::<R, _>(view),
-        CommandDisposition::ExternalUnavailable if listing_relay_unavailable(view) => {
+        CommandDisposition::ExternalUnavailable if listing_transport_delivery_unavailable(view) => {
             Err(OperationAdapterError::network_unavailable_with_detail(
                 operation_id,
                 view.reason.clone().unwrap_or_else(|| {
@@ -332,7 +332,7 @@ where
     }
 }
 
-fn listing_relay_unavailable(view: &ListingMutationView) -> bool {
+fn listing_transport_delivery_unavailable(view: &ListingMutationView) -> bool {
     matches!(
         view.source.as_str(),
         "Nostr transport publish · local key" | "SDK listing publish · configured signer"

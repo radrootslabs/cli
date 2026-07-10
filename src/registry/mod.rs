@@ -235,22 +235,14 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
     )
 }
 
-pub fn requires_nostr_transport_profile(operation_id: &str) -> bool {
+pub fn requires_delivery_capable_transport_profile(operation_id: &str) -> bool {
     matches!(
         operation_id,
-        "sync.push"
-            | "transport.outbox.push"
+        "transport.outbox.push"
             | "farm.publish"
             | "listing.publish"
             | "listing.update"
             | "listing.archive"
-            | "trade.submit"
-            | "trade.accept"
-            | "trade.decline"
-            | "trade.cancel"
-            | "trade.revision.propose"
-            | "trade.revision.accept"
-            | "trade.revision.decline"
     )
 }
 
@@ -269,8 +261,8 @@ mod tests {
 
     use super::{
         ApprovalPolicy, NetworkRequirement, OPERATION_REGISTRY, OperationRole, RiskLevel,
-        get_operation, network_requirement, requires_local_signer_mode,
-        requires_nostr_transport_profile,
+        get_operation, network_requirement, requires_delivery_capable_transport_profile,
+        requires_local_signer_mode,
     };
 
     const EXPECTED_OPERATION_IDS: &[&str] = &[
@@ -622,26 +614,18 @@ mod tests {
     }
 
     #[test]
-    fn registry_nostr_publish_requirements_are_explicit() {
+    fn registry_delivery_capable_transport_profile_requirements_are_explicit() {
         let publish = OPERATION_REGISTRY
             .iter()
-            .filter(|operation| requires_nostr_transport_profile(operation.operation_id))
+            .filter(|operation| requires_delivery_capable_transport_profile(operation.operation_id))
             .map(|operation| operation.operation_id)
             .collect::<BTreeSet<_>>();
         let expected = [
-            "sync.push",
             "transport.outbox.push",
             "farm.publish",
             "listing.publish",
             "listing.update",
             "listing.archive",
-            "trade.submit",
-            "trade.accept",
-            "trade.decline",
-            "trade.cancel",
-            "trade.revision.propose",
-            "trade.revision.accept",
-            "trade.revision.decline",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

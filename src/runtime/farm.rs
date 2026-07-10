@@ -614,10 +614,10 @@ fn farm_publish_readiness(
     config: &RuntimeConfig,
     account: &AccountRecordView,
 ) -> FarmPublishReadiness {
-    relay_farm_publish_readiness(config, account)
+    transport_farm_publish_readiness(config, account)
 }
 
-fn relay_farm_publish_readiness(
+fn transport_farm_publish_readiness(
     config: &RuntimeConfig,
     account: &AccountRecordView,
 ) -> FarmPublishReadiness {
