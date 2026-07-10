@@ -37,7 +37,7 @@ use crate::runtime::RuntimeError;
 use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, fetch_relay_events_via_shared_transport,
-    sdk_nostr_relay_url_policy, sdk_transport_outcome_kind_label,
+    sdk_nostr_relay_url_policy, sdk_target_outcome_kind_label, sdk_transport_outcome_kind_label,
 };
 use crate::view::runtime::{
     SyncActionView, SyncFreshnessView, SyncQueueView, SyncRunFreshnessView, SyncStatusView,
@@ -844,7 +844,7 @@ fn sdk_push_failed_transport_targets(
             reason: target
                 .message
                 .clone()
-                .unwrap_or_else(|| sdk_target_outcome_kind(target.outcome_kind).to_owned()),
+                .unwrap_or_else(|| sdk_target_outcome_kind_label(target.outcome_kind)),
         })
         .collect()
 }
@@ -854,27 +854,6 @@ fn sdk_target_accepted(kind: PushOutboxTargetOutcomeKind) -> bool {
         kind,
         PushOutboxTargetOutcomeKind::Accepted | PushOutboxTargetOutcomeKind::DuplicateAccepted
     )
-}
-
-fn sdk_target_outcome_kind(kind: PushOutboxTargetOutcomeKind) -> &'static str {
-    match kind {
-        PushOutboxTargetOutcomeKind::Accepted => "accepted",
-        PushOutboxTargetOutcomeKind::DuplicateAccepted => "duplicate_accepted",
-        PushOutboxTargetOutcomeKind::Blocked => "blocked",
-        PushOutboxTargetOutcomeKind::RateLimited => "rate_limited",
-        PushOutboxTargetOutcomeKind::Invalid => "invalid",
-        PushOutboxTargetOutcomeKind::PowRequired => "pow_required",
-        PushOutboxTargetOutcomeKind::Restricted => "restricted",
-        PushOutboxTargetOutcomeKind::AuthRequired => "auth_required",
-        PushOutboxTargetOutcomeKind::Error => "error",
-        PushOutboxTargetOutcomeKind::Timeout => "timeout",
-        PushOutboxTargetOutcomeKind::ConnectionFailed => "connection_failed",
-        PushOutboxTargetOutcomeKind::TargetUriRejected => "target_uri_rejected",
-        PushOutboxTargetOutcomeKind::DeferredUntilImplemented => "deferred_until_implemented",
-        PushOutboxTargetOutcomeKind::PreviewUnavailable => "preview_unavailable",
-        PushOutboxTargetOutcomeKind::Unknown => "unknown",
-        _ => "unknown",
-    }
 }
 
 fn usize_from_i64(value: i64) -> usize {

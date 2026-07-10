@@ -17,11 +17,12 @@ use radroots_nostr_connect::prelude::{
 };
 use radroots_sdk::{
     HybridProfile, MeshScopeId, NostrProfile, NostrRelayUrlPolicy, ProxyProfile,
-    PushOutboxTransportOutcomeKind, RadrootsClient, RadrootsClientBuilder, RadrootsSdkError,
-    RadrootsSdkLocalKeySigner, RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer,
-    RadrootsSdkNip46Transport, RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider,
-    RadrootsSdkStorageConfig, ReticulumPreviewAgentEndpoint,
-    ReticulumPreviewBehavior as SdkReticulumPreviewBehavior, ReticulumPreviewProfile, TargetPolicy,
+    PushOutboxTargetOutcomeKind, PushOutboxTransportOutcomeKind, RadrootsClient,
+    RadrootsClientBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
+    RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
+    RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
+    ReticulumPreviewAgentEndpoint, ReticulumPreviewBehavior as SdkReticulumPreviewBehavior,
+    ReticulumPreviewProfile, TargetPolicy, TradeValidationReceiptNostrRelayOutcomeKind,
     TradeValidationReceiptNostrRelayTransportOutcomeKind, TransportProfile,
 };
 use radroots_transport_nostr::{
@@ -53,21 +54,23 @@ pub enum CliSdkAdapterError {
 }
 
 pub fn sdk_transport_outcome_kind_label(kind: PushOutboxTransportOutcomeKind) -> String {
-    sdk_enum_label(kind)
+    kind.as_str().to_owned()
+}
+
+pub fn sdk_target_outcome_kind_label(kind: PushOutboxTargetOutcomeKind) -> String {
+    kind.as_str().to_owned()
 }
 
 pub fn sdk_validation_transport_outcome_kind_label(
     kind: TradeValidationReceiptNostrRelayTransportOutcomeKind,
 ) -> String {
-    sdk_enum_label(kind)
+    kind.as_str().to_owned()
 }
 
-fn sdk_enum_label<T: serde::Serialize>(value: T) -> String {
-    match serde_json::to_value(value) {
-        Ok(serde_json::Value::String(value)) => value,
-        Ok(value) => panic!("SDK enum serialized to non-string JSON value `{value}`"),
-        Err(error) => panic!("SDK enum serialization failed: {error}"),
-    }
+pub fn sdk_validation_relay_outcome_kind_label(
+    kind: TradeValidationReceiptNostrRelayOutcomeKind,
+) -> String {
+    kind.as_str().to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -778,7 +781,11 @@ mod tests {
     use std::time::Duration;
 
     use radroots_authority::RadrootsEventSigner;
-    use radroots_sdk::{ProxyAuth, SdkStorageKind, StorageStatusRequest};
+    use radroots_sdk::{
+        ProxyAuth, PushOutboxTargetOutcomeKind, PushOutboxTransportOutcomeKind, SdkStorageKind,
+        StorageStatusRequest, TradeValidationReceiptNostrRelayOutcomeKind,
+        TradeValidationReceiptNostrRelayTransportOutcomeKind,
+    };
     use radroots_secret_vault::RadrootsSecretBackend;
     use tempfile::tempdir;
 
@@ -968,6 +975,29 @@ mod tests {
         "fetch_events_from_relays",
         "fetch_events_from_relays_with_timeout",
         ".fetch_events(",
+    ];
+
+    const SDK_OUTCOME_LABEL_SOURCE_DISALLOWED_TOKENS: &[(&str, &str)] = &[
+        (
+            concat!("sdk_enum", "_label"),
+            "serde-backed SDK enum label extraction",
+        ),
+        (
+            concat!("serde_json::to_value", "(kind)"),
+            "serde-backed SDK enum label extraction",
+        ),
+        (
+            concat!("panic!", "(\"SDK enum"),
+            "production SDK enum label panic",
+        ),
+        (
+            concat!("fn sdk_target", "_outcome_kind("),
+            "local SDK target outcome label helper",
+        ),
+        (
+            concat!("fn sdk_relay", "_outcome_kind("),
+            "local SDK validation receipt relay label helper",
+        ),
     ];
 
     const MIGRATED_CLI_PATH_GUARDS: &[MigratedCliPathGuard] = &[
@@ -1480,6 +1510,184 @@ mod tests {
     }
 
     #[test]
+    fn sync_order_transport_label_helpers_cover_public_outcomes() {
+        for (kind, label) in [
+            (PushOutboxTargetOutcomeKind::Accepted, "accepted"),
+            (
+                PushOutboxTargetOutcomeKind::DuplicateAccepted,
+                "duplicate_accepted",
+            ),
+            (PushOutboxTargetOutcomeKind::Blocked, "blocked"),
+            (PushOutboxTargetOutcomeKind::RateLimited, "rate_limited"),
+            (PushOutboxTargetOutcomeKind::Invalid, "invalid"),
+            (PushOutboxTargetOutcomeKind::PowRequired, "pow_required"),
+            (PushOutboxTargetOutcomeKind::Restricted, "restricted"),
+            (PushOutboxTargetOutcomeKind::AuthRequired, "auth_required"),
+            (PushOutboxTargetOutcomeKind::Muted, "muted"),
+            (PushOutboxTargetOutcomeKind::Unsupported, "unsupported"),
+            (
+                PushOutboxTargetOutcomeKind::PaymentRequired,
+                "payment_required",
+            ),
+            (PushOutboxTargetOutcomeKind::Error, "error"),
+            (PushOutboxTargetOutcomeKind::Timeout, "timeout"),
+            (
+                PushOutboxTargetOutcomeKind::ConnectionFailed,
+                "connection_failed",
+            ),
+            (
+                PushOutboxTargetOutcomeKind::TargetUriRejected,
+                "target_uri_rejected",
+            ),
+            (
+                PushOutboxTargetOutcomeKind::SkippedAlreadyAccepted,
+                "skipped_already_accepted",
+            ),
+            (
+                PushOutboxTargetOutcomeKind::DeferredUntilImplemented,
+                "deferred_until_implemented",
+            ),
+            (
+                PushOutboxTargetOutcomeKind::PreviewUnavailable,
+                "preview_unavailable",
+            ),
+            (PushOutboxTargetOutcomeKind::Unknown, "unknown"),
+        ] {
+            assert_eq!(sdk_target_outcome_kind_label(kind), label);
+        }
+
+        for (kind, label) in [
+            (PushOutboxTransportOutcomeKind::Accepted, "accepted"),
+            (
+                PushOutboxTransportOutcomeKind::DuplicateAccepted,
+                "duplicate_accepted",
+            ),
+            (PushOutboxTransportOutcomeKind::Delivered, "delivered"),
+            (PushOutboxTransportOutcomeKind::Forwarded, "forwarded"),
+            (
+                PushOutboxTransportOutcomeKind::StoredByGateway,
+                "stored_by_gateway",
+            ),
+            (PushOutboxTransportOutcomeKind::Seen, "seen"),
+            (
+                PushOutboxTransportOutcomeKind::DeferredUntilImplemented,
+                "deferred_until_implemented",
+            ),
+            (PushOutboxTransportOutcomeKind::Rejected, "rejected"),
+            (
+                PushOutboxTransportOutcomeKind::RouteUnavailable,
+                "route_unavailable",
+            ),
+            (
+                PushOutboxTransportOutcomeKind::PayloadTooLarge,
+                "payload_too_large",
+            ),
+            (
+                PushOutboxTransportOutcomeKind::PolicyDenied,
+                "policy_denied",
+            ),
+            (PushOutboxTransportOutcomeKind::Timeout, "timeout"),
+            (
+                PushOutboxTransportOutcomeKind::ConnectionFailed,
+                "connection_failed",
+            ),
+            (
+                PushOutboxTransportOutcomeKind::TransportUnavailable,
+                "transport_unavailable",
+            ),
+        ] {
+            assert_eq!(sdk_transport_outcome_kind_label(kind), label);
+        }
+
+        for (kind, label) in [
+            (TradeValidationReceiptNostrRelayOutcomeKind::Eose, "eose"),
+            (
+                TradeValidationReceiptNostrRelayOutcomeKind::Closed,
+                "closed",
+            ),
+            (
+                TradeValidationReceiptNostrRelayOutcomeKind::Notice,
+                "notice",
+            ),
+        ] {
+            assert_eq!(sdk_validation_relay_outcome_kind_label(kind), label);
+        }
+
+        for (kind, label) in [
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::Accepted,
+                "accepted",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::DuplicateAccepted,
+                "duplicate_accepted",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::Blocked,
+                "blocked",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::RateLimited,
+                "rate_limited",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::Invalid,
+                "invalid",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::PowRequired,
+                "pow_required",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::Restricted,
+                "restricted",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::AuthRequired,
+                "auth_required",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::Muted,
+                "muted",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::Unsupported,
+                "unsupported",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::PaymentRequired,
+                "payment_required",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::Error,
+                "error",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::Timeout,
+                "timeout",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::ConnectionFailed,
+                "connection_failed",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::RelayUrlRejected,
+                "relay_url_rejected",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::SkippedAlreadyAccepted,
+                "skipped_already_accepted",
+            ),
+            (
+                TradeValidationReceiptNostrRelayTransportOutcomeKind::Unknown,
+                "unknown",
+            ),
+        ] {
+            assert_eq!(sdk_validation_transport_outcome_kind_label(kind), label);
+        }
+    }
+
+    #[test]
     fn cli_direct_rr_rs_dependencies_are_classified() {
         let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         let manifest = fs::read_to_string(&manifest_path).expect("read manifest");
@@ -1551,6 +1759,35 @@ mod tests {
         assert!(
             findings.is_empty(),
             "CLI production sources contain dead-code suppressions:\n{}",
+            findings.join("\n")
+        );
+    }
+
+    #[test]
+    fn sync_order_transport_cli_production_sources_use_sdk_outcome_label_contract() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        collect_rs_files(manifest_dir.join("src").as_path(), &mut files);
+        files.sort();
+
+        let findings = files
+            .iter()
+            .flat_map(|file| {
+                let source = fs::read_to_string(file).expect("read cli source");
+                let relative_path = relative_source_path(manifest_dir, file.as_path());
+                match production_source_without_tests(&relative_path, &source) {
+                    Ok(production_source) => sdk_outcome_label_contract_findings(
+                        &relative_path,
+                        production_source.as_str(),
+                    ),
+                    Err(error) => vec![error],
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            findings.is_empty(),
+            "CLI production sources violate the SDK outcome label contract:\n{}",
             findings.join("\n")
         );
     }
@@ -1936,6 +2173,34 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    fn sdk_outcome_label_contract_findings(label: &str, source: &str) -> Vec<String> {
+        let mut findings = SDK_OUTCOME_LABEL_SOURCE_DISALLOWED_TOKENS
+            .iter()
+            .flat_map(|(token, reason)| {
+                source.match_indices(token).map(move |(index, _)| {
+                    format!(
+                        "{label}:{} uses forbidden SDK outcome label token `{token}` for {reason}",
+                        line_number(source, index)
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let wildcard_unknown = concat!("_ =>", " \"unknown\"");
+        for enum_name in [
+            "PushOutboxTargetOutcomeKind::",
+            "TradeValidationReceiptNostrRelayOutcomeKind::",
+        ] {
+            if source.contains(enum_name) && source.contains(wildcard_unknown) {
+                findings.push(format!(
+                    "{label} degrades known `{enum_name}` variants through wildcard unknown label rendering"
+                ));
+            }
+        }
+
+        findings
     }
 
     fn production_source_without_tests(path: &str, source: &str) -> Result<String, String> {

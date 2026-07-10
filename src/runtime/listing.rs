@@ -48,8 +48,8 @@ use crate::runtime::local_events::{
     shared_local_events_db_path,
 };
 use crate::runtime::sdk::{
-    CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_policy,
-    sdk_transport_outcome_kind_label, validate_configured_signer_for_actor,
+    CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_outcome_kind_label,
+    sdk_target_policy, sdk_transport_outcome_kind_label, validate_configured_signer_for_actor,
 };
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
@@ -2079,28 +2079,9 @@ fn sdk_push_failed_transport_targets(
             reason: target
                 .message
                 .clone()
-                .unwrap_or_else(|| sdk_target_outcome_kind(target.outcome_kind).to_owned()),
+                .unwrap_or_else(|| sdk_target_outcome_kind_label(target.outcome_kind)),
         })
         .collect()
-}
-
-fn sdk_target_outcome_kind(kind: PushOutboxTargetOutcomeKind) -> &'static str {
-    match kind {
-        PushOutboxTargetOutcomeKind::Accepted => "accepted",
-        PushOutboxTargetOutcomeKind::DuplicateAccepted => "duplicate_accepted",
-        PushOutboxTargetOutcomeKind::Blocked => "blocked",
-        PushOutboxTargetOutcomeKind::RateLimited => "rate_limited",
-        PushOutboxTargetOutcomeKind::Invalid => "invalid",
-        PushOutboxTargetOutcomeKind::PowRequired => "pow_required",
-        PushOutboxTargetOutcomeKind::Restricted => "restricted",
-        PushOutboxTargetOutcomeKind::AuthRequired => "auth_required",
-        PushOutboxTargetOutcomeKind::Error => "error",
-        PushOutboxTargetOutcomeKind::Timeout => "timeout",
-        PushOutboxTargetOutcomeKind::ConnectionFailed => "connection_failed",
-        PushOutboxTargetOutcomeKind::TargetUriRejected => "target_uri_rejected",
-        PushOutboxTargetOutcomeKind::Unknown => "unknown",
-        _ => "unknown",
-    }
 }
 
 pub fn update(

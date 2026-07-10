@@ -19,7 +19,8 @@ use serde_json::Value;
 
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::sdk::{
-    CliSdkAdapterError, CliSdkSession, sdk_validation_transport_outcome_kind_label,
+    CliSdkAdapterError, CliSdkSession, sdk_validation_relay_outcome_kind_label,
+    sdk_validation_transport_outcome_kind_label,
 };
 use crate::view::runtime::{CommandDisposition, TransportTargetFailureView};
 
@@ -1256,18 +1257,9 @@ fn sdk_relay_failures(
             reason: relay
                 .message
                 .clone()
-                .unwrap_or_else(|| sdk_relay_outcome_kind(relay.outcome_kind).to_owned()),
+                .unwrap_or_else(|| sdk_validation_relay_outcome_kind_label(relay.outcome_kind)),
         })
         .collect()
-}
-
-fn sdk_relay_outcome_kind(kind: TradeValidationReceiptNostrRelayOutcomeKind) -> &'static str {
-    match kind {
-        TradeValidationReceiptNostrRelayOutcomeKind::Eose => "eose",
-        TradeValidationReceiptNostrRelayOutcomeKind::Closed => "closed",
-        TradeValidationReceiptNostrRelayOutcomeKind::Notice => "notice",
-        _ => "unknown",
-    }
 }
 
 fn summary_view(
