@@ -870,6 +870,13 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
+            name: "radroots_mesh",
+            owner: "cli-mesh-preview-policy",
+            reason: "canonical Reticulum preview admission policy and structured delivery denial reporting",
+            lifecycle: "retain while CLI exposes mesh preview status and policy inspection",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
             name: "radroots_nostr",
             owner: "cli-signer-and-event-runtime",
             reason: "remote signer relay transport, account event conversion, and direct publish command transport",

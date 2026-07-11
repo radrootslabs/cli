@@ -34,6 +34,7 @@ radroots_events_codec = { path = "../lib/crates/events_codec", features = ["nost
 radroots_identity = { path = "../lib/crates/identity" }
 radroots_local_events = { path = "../lib/crates/local_events" }
 radroots_log = { path = "../lib/crates/log" }
+radroots_mesh = { path = "../lib/crates/mesh", default-features = false }
 radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts", features = ["os-keyring"] }
 radroots_nostr = { path = "../lib/crates/nostr", features = ["client", "events"] }
 radroots_nostr_connect = { path = "../lib/crates/nostr_connect" }

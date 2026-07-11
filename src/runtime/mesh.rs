@@ -1,3 +1,7 @@
+use radroots_mesh::{
+    RADROOTS_MESH_PREVIEW_DENIAL_MESSAGE, RadrootsMeshAdmissionInput, RadrootsMeshPayloadPolicy,
+    RadrootsMeshPrivacyClass, RadrootsMeshScope,
+};
 use serde_json::Value as JsonValue;
 use toml::{Value, map::Map};
 
@@ -45,21 +49,37 @@ pub fn status(config: &RuntimeConfig) -> MeshStatusView {
         configured: scope != "disabled",
         implementation: "preview_unavailable".to_owned(),
         usable_for_delivery: false,
-        message: "Reticulum mesh preview is explicit and unavailable for real delivery".to_owned(),
+        message: RADROOTS_MESH_PREVIEW_DENIAL_MESSAGE.to_owned(),
     }
 }
 
 pub fn policy_check(config: &RuntimeConfig) -> MeshPolicyCheckView {
+    let policy = RadrootsMeshPayloadPolicy::preview_unavailable();
+    let privacy_class = RadrootsMeshPrivacyClass::PublicEvent;
+    let input = RadrootsMeshAdmissionInput::new(RadrootsMeshScope::Local, privacy_class, 1, 1);
+    let decision = policy.evaluate(&input);
+    let deny_reason = decision
+        .deny_reason()
+        .map(|reason| reason.label())
+        .unwrap_or("none");
+
     MeshPolicyCheckView {
         state: "ready".to_owned(),
         source: MESH_SOURCE.to_owned(),
         scope: config.mesh.scope.as_str().to_owned(),
-        policy: "reticulum_preview_delivery".to_owned(),
+        policy: policy.policy_id().to_owned(),
         transport: "reticulum".to_owned(),
-        usable_for_delivery: false,
-        decision: "reject_delivery_attempt".to_owned(),
-        message: "Reticulum preview never falls back to Nostr and cannot deliver real events"
-            .to_owned(),
+        usable_for_delivery: decision.usable_for_delivery(),
+        decision: decision.label().to_owned(),
+        deny_reason: deny_reason.to_owned(),
+        privacy_class: privacy_class.label().to_owned(),
+        payload_bytes: input.payload_bytes,
+        frame_bytes: input.frame_bytes,
+        max_payload_bytes: policy.max_payload_bytes,
+        max_frame_bytes: policy.max_frame_bytes,
+        compression: policy.compression.label().to_owned(),
+        custom_scopes_enabled: policy.custom_scopes_enabled,
+        message: decision.message().to_owned(),
     }
 }
 

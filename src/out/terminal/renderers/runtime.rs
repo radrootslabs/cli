@@ -279,6 +279,8 @@ fn mesh_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDo
     common::push_path_field(&mut document, "Implementation", result, &["implementation"]);
     common::push_bool_field(&mut document, "Usable", result, &["usable_for_delivery"]);
     common::push_path_field(&mut document, "Decision", result, &["decision"]);
+    common::push_path_field(&mut document, "Deny Reason", result, &["deny_reason"]);
+    common::push_path_field(&mut document, "Compression", result, &["compression"]);
     common::push_path_field(&mut document, "Message", result, &["message"]);
     document
 }

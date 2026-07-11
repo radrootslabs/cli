@@ -1827,6 +1827,36 @@ fn mesh_status_reports_reticulum_preview_unusable_state_without_fallback() {
 }
 
 #[test]
+fn mesh_policy_check_reports_structured_preview_denial() {
+    let sandbox = RadrootsCliSandbox::new();
+
+    let value = sandbox.json_success(&["--format", "json", "mesh", "policy", "check"]);
+    let result = &value["result"];
+
+    assert_eq!(value["operation_id"], "mesh.policy.check");
+    assert_eq!(result["scope"], "disabled");
+    assert_eq!(result["policy"], "reticulum_preview_delivery");
+    assert_eq!(result["transport"], "reticulum");
+    assert_eq!(result["usable_for_delivery"], false);
+    assert_eq!(result["decision"], "denied");
+    assert_eq!(result["deny_reason"], "preview_unavailable");
+    assert_eq!(result["privacy_class"], "public_event");
+    assert_eq!(result["payload_bytes"], 1);
+    assert_eq!(result["frame_bytes"], 1);
+    assert_eq!(result["max_payload_bytes"], 0);
+    assert_eq!(result["max_frame_bytes"], 0);
+    assert_eq!(result["compression"], "disabled");
+    assert_eq!(result["custom_scopes_enabled"], false);
+    assert_contains(&result["message"], "Reticulum mesh preview is explicit");
+    assert!(
+        !result["message"]
+            .as_str()
+            .expect("message")
+            .contains("Nostr")
+    );
+}
+
+#[test]
 fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
 

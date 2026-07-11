@@ -3625,6 +3625,7 @@ dependencies = [
  "radroots_identity",
  "radroots_local_events",
  "radroots_log",
+ "radroots_mesh",
  "radroots_nostr",
  "radroots_nostr_accounts",
  "radroots_nostr_connect",
@@ -3749,6 +3750,13 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "radroots_mesh"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "radroots_transport",
 ]
 
 [[package]]

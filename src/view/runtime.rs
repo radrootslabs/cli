@@ -3389,6 +3389,14 @@ pub struct MeshPolicyCheckView {
     pub transport: String,
     pub usable_for_delivery: bool,
     pub decision: String,
+    pub deny_reason: String,
+    pub privacy_class: String,
+    pub payload_bytes: u64,
+    pub frame_bytes: u64,
+    pub max_payload_bytes: u64,
+    pub max_frame_bytes: u64,
+    pub compression: String,
+    pub custom_scopes_enabled: bool,
     pub message: String,
 }
 
