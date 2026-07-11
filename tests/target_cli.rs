@@ -13,19 +13,15 @@ use std::time::{Duration, Instant};
 
 use nostr::nips::nip44::{self, Version};
 use nostr::{EventBuilder, Keys, Kind, PublicKey, SecretKey, Tag};
-use radroots_events::RadrootsEventPtr;
-use radroots_events::draft::RadrootsEventDraft;
-use radroots_events::ids::{
+use radroots_event::RadrootsEventPtr;
+use radroots_event::draft::RadrootsEventDraft;
+use radroots_event::ids::{
     RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId, RadrootsPublicKey,
 };
-use radroots_events::kinds::{KIND_LISTING, KIND_ORDER_REQUEST, KIND_POST};
-use radroots_events::order::{RadrootsOrderEconomics, RadrootsOrderItem, RadrootsOrderRequest};
-use radroots_events_codec::order::order_request_event_build;
+use radroots_event::kinds::{KIND_LISTING, KIND_ORDER_REQUEST, KIND_POST};
+use radroots_event::order::{RadrootsOrderEconomics, RadrootsOrderItem, RadrootsOrderRequest};
+use radroots_event_codec::order::order_request_event_build;
 use radroots_identity::RadrootsIdentity;
-use radroots_local_events::{
-    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecordInput, LocalEventsStore,
-    LocalRecordFamily, LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
-};
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrKeys, radroots_nostr_build_event,
     radroots_nostr_sign_frozen_draft,
@@ -41,6 +37,10 @@ use radroots_outbox::{
 use radroots_replica_db::{farm, migrations};
 use radroots_replica_db_schema::farm::IFarmFields;
 use radroots_replica_sync::radroots_replica_pending_publish_batch;
+use radroots_runtime_store::{
+    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, PublishOutboxStatus, RuntimeStore,
+    RuntimeStoreRecordFamily, RuntimeStoreRecordInput, RuntimeStoreRecordStatus, SourceRuntime,
+};
 use radroots_sql_core::SqliteExecutor;
 use radroots_transport::{
     RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
@@ -776,10 +776,10 @@ fn seed_app_farm_record(
     farm_d_tag: &str,
 ) {
     append_app_local_record(
-        LocalEventRecordInput {
+        RuntimeStoreRecordInput {
             record_id: format!("app:local_work:farm:{farm_d_tag}:test"),
-            family: LocalRecordFamily::LocalWork,
-            status: LocalRecordStatus::LocalSaved,
+            family: RuntimeStoreRecordFamily::LocalWork,
+            status: RuntimeStoreRecordStatus::LocalSaved,
             source_runtime: SourceRuntime::App,
             created_at_ms: 1_779_000_001_000,
             inserted_at_ms: 1_779_000_001_000,
@@ -831,6 +831,8 @@ fn seed_app_farm_record(
             event_sig: None,
             raw_event_json: None,
             outbox_status: PublishOutboxStatus::None,
+            relay_set_fingerprint: None,
+            relay_delivery_json: None,
         },
         sandbox,
     );
@@ -992,10 +994,10 @@ fn seed_app_listing_record_identity_variant(
         payload["exportability"] = exportability;
     }
     append_app_local_record(
-        LocalEventRecordInput {
+        RuntimeStoreRecordInput {
             record_id: record_id.clone(),
-            family: LocalRecordFamily::LocalWork,
-            status: LocalRecordStatus::LocalSaved,
+            family: RuntimeStoreRecordFamily::LocalWork,
+            status: RuntimeStoreRecordStatus::LocalSaved,
             source_runtime: SourceRuntime::App,
             created_at_ms: 1_779_000_002_000,
             inserted_at_ms: 1_779_000_002_000,
@@ -1016,19 +1018,21 @@ fn seed_app_listing_record_identity_variant(
             event_sig: None,
             raw_event_json: None,
             outbox_status: PublishOutboxStatus::None,
+            relay_set_fingerprint: None,
+            relay_delivery_json: None,
         },
         sandbox,
     );
     record_id
 }
 
-fn append_app_local_record(input: LocalEventRecordInput, sandbox: &RadrootsCliSandbox) {
-    let database_path = sandbox.local_events_db_path();
-    fs::create_dir_all(database_path.parent().expect("local events parent"))
-        .expect("local events parent");
-    let executor = SqliteExecutor::open(database_path).expect("open local events");
-    let store = LocalEventsStore::new(executor);
-    store.migrate_up().expect("migrate local events");
+fn append_app_local_record(input: RuntimeStoreRecordInput, sandbox: &RadrootsCliSandbox) {
+    let database_path = sandbox.runtime_store_db_path();
+    fs::create_dir_all(database_path.parent().expect("runtime store parent"))
+        .expect("runtime store parent");
+    let executor = SqliteExecutor::open(database_path).expect("open runtime store");
+    let store = RuntimeStore::new(executor);
+    store.migrate_up().expect("migrate runtime store");
     store
         .append_record(&input)
         .expect("append app local event record");
@@ -1202,10 +1206,10 @@ fn seed_app_order_record_variant_with_record_id(
         },
     });
     append_app_local_record(
-        LocalEventRecordInput {
+        RuntimeStoreRecordInput {
             record_id: record_id.clone(),
-            family: LocalRecordFamily::LocalWork,
-            status: LocalRecordStatus::LocalSaved,
+            family: RuntimeStoreRecordFamily::LocalWork,
+            status: RuntimeStoreRecordStatus::LocalSaved,
             source_runtime: SourceRuntime::App,
             created_at_ms: 1_779_000_010_000,
             inserted_at_ms: 1_779_000_010_000,
@@ -1223,6 +1227,8 @@ fn seed_app_order_record_variant_with_record_id(
             event_sig: None,
             raw_event_json: None,
             outbox_status: PublishOutboxStatus::None,
+            relay_set_fingerprint: None,
+            relay_delivery_json: None,
         },
         sandbox,
     );
@@ -1319,10 +1325,10 @@ fn append_app_signed_order_request_record(
         .collect::<Vec<_>>();
     let record_id = format!("app:signed_event:{event_id}");
     append_app_local_record(
-        LocalEventRecordInput {
+        RuntimeStoreRecordInput {
             record_id: record_id.clone(),
-            family: LocalRecordFamily::SignedEvent,
-            status: LocalRecordStatus::Published,
+            family: RuntimeStoreRecordFamily::SignedEvent,
+            status: RuntimeStoreRecordStatus::Published,
             source_runtime: SourceRuntime::App,
             created_at_ms: i64::try_from(event.created_at.as_secs()).expect("event created_at")
                 * 1_000,
@@ -1351,6 +1357,8 @@ fn append_app_signed_order_request_record(
                 "sig": event.sig.to_string(),
             })),
             outbox_status: PublishOutboxStatus::Acknowledged,
+            relay_set_fingerprint: None,
+            relay_delivery_json: None,
         },
         sandbox,
     );
@@ -4755,7 +4763,7 @@ fn offline_listing_publish_enqueues_sdk_outbox_without_direct_publish_push() {
     let listing_file = create_listing_draft(&sandbox, "offline-sdk-enqueue");
     make_listing_publishable(&listing_file, farm_d_tag);
     let relay = "ws://127.0.0.1:9";
-    let local_event_records_before_publish = sandbox.local_event_records().len();
+    let runtime_store_records_before_publish = sandbox.runtime_store_records().len();
     configure_nostr_transport(&sandbox, relay);
 
     let publish = sandbox.json_success(&[
@@ -4791,8 +4799,8 @@ fn offline_listing_publish_enqueues_sdk_outbox_without_direct_publish_push() {
             .exists()
     );
     assert_eq!(
-        sandbox.local_event_records().len(),
-        local_event_records_before_publish
+        sandbox.runtime_store_records().len(),
+        runtime_store_records_before_publish
     );
 }
 
@@ -5795,7 +5803,7 @@ fn seller_dry_runs_do_not_write_shared_local_work_records() {
         "--delivery-method",
         "pickup",
     ]);
-    assert!(sandbox.local_event_records().is_empty());
+    assert!(sandbox.runtime_store_records().is_empty());
 
     let listing_path = sandbox.root().join("dry-run-local-work.toml");
     let listing_path_arg = listing_path.to_string_lossy();
@@ -5832,7 +5840,7 @@ fn seller_dry_runs_do_not_write_shared_local_work_records() {
         "--available",
         "10",
     ]);
-    assert!(sandbox.local_event_records().is_empty());
+    assert!(sandbox.runtime_store_records().is_empty());
 }
 
 #[test]
@@ -5867,7 +5875,7 @@ fn seller_local_writes_append_shared_local_work_records() {
         .expect("seller pubkey");
     let listing_file = create_listing_draft(&sandbox, "shared-local-eggs");
 
-    let records = sandbox.local_event_records();
+    let records = sandbox.runtime_store_records();
     assert_eq!(records.len(), 2);
 
     let farm_record = records
@@ -5880,8 +5888,8 @@ fn seller_local_writes_append_shared_local_work_records() {
                 == Some("farm_config_v1")
         })
         .expect("farm local work record");
-    assert_eq!(farm_record.family, LocalRecordFamily::LocalWork);
-    assert_eq!(farm_record.status, LocalRecordStatus::LocalSaved);
+    assert_eq!(farm_record.family, RuntimeStoreRecordFamily::LocalWork);
+    assert_eq!(farm_record.status, RuntimeStoreRecordStatus::LocalSaved);
     assert_eq!(farm_record.source_runtime, SourceRuntime::Cli);
     assert_eq!(farm_record.outbox_status, PublishOutboxStatus::None);
     assert_eq!(farm_record.owner_account_id.as_deref(), Some(account_id));
@@ -5905,8 +5913,8 @@ fn seller_local_writes_append_shared_local_work_records() {
                 == Some("listing_draft_v1")
         })
         .expect("listing local work record");
-    assert_eq!(listing_record.family, LocalRecordFamily::LocalWork);
-    assert_eq!(listing_record.status, LocalRecordStatus::LocalSaved);
+    assert_eq!(listing_record.family, RuntimeStoreRecordFamily::LocalWork);
+    assert_eq!(listing_record.status, RuntimeStoreRecordStatus::LocalSaved);
     assert_eq!(listing_record.source_runtime, SourceRuntime::Cli);
     assert_eq!(listing_record.outbox_status, PublishOutboxStatus::None);
     assert_eq!(listing_record.owner_account_id.as_deref(), Some(account_id));
@@ -5957,7 +5965,7 @@ fn seller_local_writes_append_shared_local_work_records() {
         farm_d_tag,
     ]);
 
-    let updated_records = sandbox.local_event_records();
+    let updated_records = sandbox.runtime_store_records();
     assert_eq!(updated_records.len(), 4);
     let latest_farm_payload = updated_records
         .iter()
@@ -6552,7 +6560,7 @@ fn order_app_records_list_export_get_and_submit_supported_app_order() {
     );
     assert_eq!(
         orders["result"]["trades"][0]["file"],
-        format!("shared-local-events/{record_id}")
+        format!("shared-runtime-store/{record_id}")
     );
     assert_no_removed_command_reference(&orders, &["trade", "list"]);
     assert_no_daemon_runtime_reference(&orders, &["trade", "list"]);
@@ -7206,7 +7214,7 @@ fn farm_publish_uses_sdk_outbox_without_legacy_signed_event_records() {
         "pickup",
     ]);
     let relay_url = "ws://127.0.0.1:9";
-    let local_event_records_before_publish = sandbox.local_event_records().len();
+    let runtime_store_records_before_publish = sandbox.runtime_store_records().len();
     configure_nostr_transport(&sandbox, relay_url);
 
     let (output, publish) = sandbox.json_output(&[
@@ -7241,17 +7249,17 @@ fn farm_publish_uses_sdk_outbox_without_legacy_signed_event_records() {
         64
     );
 
-    let records = sandbox.local_event_records();
-    assert_eq!(records.len(), local_event_records_before_publish);
+    let records = sandbox.runtime_store_records();
+    assert_eq!(records.len(), runtime_store_records_before_publish);
     let signed_records = records
         .iter()
-        .filter(|record| record.family == LocalRecordFamily::SignedEvent)
+        .filter(|record| record.family == RuntimeStoreRecordFamily::SignedEvent)
         .collect::<Vec<_>>();
     assert!(signed_records.is_empty());
 }
 
 #[test]
-fn listing_publish_failure_uses_sdk_outbox_without_legacy_local_event_record() {
+fn listing_publish_failure_uses_sdk_outbox_without_legacy_runtime_store_record() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     let farm = sandbox.json_success(&[
@@ -7278,7 +7286,7 @@ fn listing_publish_failure_uses_sdk_outbox_without_legacy_local_event_record() {
     let listing_file = create_listing_draft(&sandbox, "failed-outbox-eggs");
     make_listing_publishable(&listing_file, farm_d_tag);
     let relay_url = "ws://127.0.0.1:9";
-    let local_event_records_before_publish = sandbox.local_event_records().len();
+    let runtime_store_records_before_publish = sandbox.runtime_store_records().len();
     configure_nostr_transport(&sandbox, relay_url);
 
     let (output, publish) = sandbox.json_output(&[
@@ -7319,8 +7327,8 @@ fn listing_publish_failure_uses_sdk_outbox_without_legacy_local_event_record() {
         64
     );
     assert_eq!(
-        sandbox.local_event_records().len(),
-        local_event_records_before_publish
+        sandbox.runtime_store_records().len(),
+        runtime_store_records_before_publish
     );
 }
 

@@ -1,6 +1,6 @@
-use radroots_events::ids::RadrootsEventId;
+use radroots_event::ids::RadrootsEventId;
 #[cfg(test)]
-use radroots_events::ids::RadrootsOrderId;
+use radroots_event::ids::RadrootsOrderId;
 use radroots_sdk::{
     SdkTradeStatusIssue, TradeStatusAmbiguityCandidate, TradeStatusEligibility,
     TradeStatusEvidenceSummary, TradeStatusKind, TradeStatusNextActionKind, TradeStatusReceipt,

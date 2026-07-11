@@ -12,29 +12,24 @@ use radroots_core::{
     RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney, RadrootsCoreUnit,
     convert_unit_decimal,
 };
-use radroots_events::RadrootsEventPtr;
-use radroots_events::contract::RadrootsActorRole;
-use radroots_events::ids::{
+use radroots_event::RadrootsEventPtr;
+use radroots_event::contract::RadrootsActorRole;
+use radroots_event::ids::{
     RadrootsEventId, RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId,
     RadrootsOrderQuoteId, RadrootsOrderRevisionId, RadrootsPublicKey,
 };
-use radroots_events::kinds::{
+use radroots_event::kinds::{
     KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
     KIND_ORDER_REVISION_DECISION, KIND_ORDER_REVISION_PROPOSAL,
 };
-use radroots_events::order::{
+use radroots_event::order::{
     RadrootsOrderEconomicActor, RadrootsOrderEconomicEffect, RadrootsOrderEconomicItem,
     RadrootsOrderEconomicLine, RadrootsOrderEconomicLineKind, RadrootsOrderEconomics,
     RadrootsOrderEventType, RadrootsOrderInventoryCommitment, RadrootsOrderItem,
     RadrootsOrderPricingBasis, RadrootsOrderRequest, RadrootsOrderRevisionOutcome,
 };
-use radroots_events_codec::d_tag::is_d_tag_base64url;
-use radroots_events_codec::order::{order_event_context_from_tags, order_request_from_event};
-use radroots_local_events::{
-    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, LocalEventRecord, LocalRecordFamily,
-    LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
-    validate_supported_buyer_order_request_local_work_payload,
-};
+use radroots_event_codec::d_tag::is_d_tag_base64url;
+use radroots_event_codec::order::{order_event_context_from_tags, order_request_from_event};
 use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
     radroots_nostr_kind,
@@ -47,6 +42,11 @@ use radroots_replica_db_schema::nostr_event_head::{
 };
 use radroots_replica_db_schema::trade_product::{
     ITradeProductFieldsFilter, ITradeProductFindMany, TradeProduct,
+};
+use radroots_runtime_store::{
+    BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, PublishOutboxStatus, RuntimeStoreRecord,
+    RuntimeStoreRecordFamily, RuntimeStoreRecordStatus, SourceRuntime,
+    validate_supported_buyer_order_request_local_work_payload,
 };
 use radroots_sdk::{
     PrivacyPreflightConfirmation, ProductSensitivityField, PublishMode, PushOutboxEventReceipt,
@@ -77,9 +77,9 @@ use crate::cli::global::{
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::local_events::{
+use crate::runtime::runtime_store::{
     get_shared_record, list_shared_records_before, list_shared_records_latest,
-    shared_local_events_db_path,
+    shared_runtime_store_db_path,
 };
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, fetch_relay_events_via_shared_transport,
@@ -314,7 +314,7 @@ struct LoadedAppOrderRecord {
 
 #[derive(Debug, Clone)]
 struct AppOrderRecordListEntry {
-    record: LocalEventRecord,
+    record: RuntimeStoreRecord,
     superseded_count: usize,
 }
 
@@ -711,7 +711,7 @@ pub fn list(config: &RuntimeConfig) -> Result<OrderListView, RuntimeError> {
 }
 
 pub fn app_record_list(config: &RuntimeConfig) -> Result<OrderAppRecordListView, RuntimeError> {
-    let database_path = shared_local_events_db_path(config)?;
+    let database_path = shared_runtime_store_db_path(config)?;
     let mut entries = current_app_order_record_entries(app_order_local_records(config)?);
     let has_more = entries.len() > ORDER_APP_RECORD_LIST_LIMIT as usize;
     if has_more {
@@ -743,7 +743,7 @@ pub fn app_record_list(config: &RuntimeConfig) -> Result<OrderAppRecordListView,
         has_more,
         next_before_change_seq: next_cursor.map(|(change_seq, _)| change_seq),
         next_before_seq: next_cursor.map(|(_, seq)| seq),
-        local_events_db: database_path.display().to_string(),
+        runtime_store_db: database_path.display().to_string(),
         records,
         actions,
     })
@@ -3441,7 +3441,9 @@ fn summary_for_invalid_file(path: &Path, reason: String) -> OrderSummaryView {
     }
 }
 
-fn app_order_local_records(config: &RuntimeConfig) -> Result<Vec<LocalEventRecord>, RuntimeError> {
+fn app_order_local_records(
+    config: &RuntimeConfig,
+) -> Result<Vec<RuntimeStoreRecord>, RuntimeError> {
     let mut app_records = Vec::new();
     let mut before_cursor = None::<(i64, i64)>;
     loop {
@@ -3471,15 +3473,15 @@ fn app_order_local_records(config: &RuntimeConfig) -> Result<Vec<LocalEventRecor
     Ok(app_records)
 }
 
-fn is_app_order_local_record(record: &LocalEventRecord) -> bool {
+fn is_app_order_local_record(record: &RuntimeStoreRecord) -> bool {
     record.source_runtime == SourceRuntime::App
-        && record.family == LocalRecordFamily::LocalWork
-        && record.status == LocalRecordStatus::LocalSaved
+        && record.family == RuntimeStoreRecordFamily::LocalWork
+        && record.status == RuntimeStoreRecordStatus::LocalSaved
         && local_record_kind(record).as_deref() == Some(BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND)
 }
 
 fn current_app_order_record_entries(
-    mut records: Vec<LocalEventRecord>,
+    mut records: Vec<RuntimeStoreRecord>,
 ) -> Vec<AppOrderRecordListEntry> {
     records.sort_by(|left, right| {
         right
@@ -3508,8 +3510,8 @@ fn current_app_order_record_entries(
 
 fn current_app_order_record_for(
     config: &RuntimeConfig,
-    record: &LocalEventRecord,
-) -> Result<Option<LocalEventRecord>, RuntimeError> {
+    record: &RuntimeStoreRecord,
+) -> Result<Option<RuntimeStoreRecord>, RuntimeError> {
     let key = app_order_record_current_key(record);
     Ok(app_order_local_records(config)?
         .into_iter()
@@ -3523,7 +3525,7 @@ fn current_app_order_record_for(
 
 fn app_order_conflicting_record_ids_for(
     config: &RuntimeConfig,
-    record: &LocalEventRecord,
+    record: &RuntimeStoreRecord,
 ) -> Result<Vec<String>, RuntimeError> {
     if app_order_record_order_id(record).is_none() {
         return Ok(Vec::new());
@@ -3559,7 +3561,7 @@ fn load_app_order_record_for_lookup(
 
 fn load_app_order_record_from_record(
     config: &RuntimeConfig,
-    record: LocalEventRecord,
+    record: RuntimeStoreRecord,
 ) -> Result<LoadedAppOrderRecord, RuntimeError> {
     let mut source_issues = app_order_record_source_issues(config, &record)?;
     let payload = record.local_work_json.clone().unwrap_or(Value::Null);
@@ -3585,7 +3587,7 @@ fn load_app_order_record_from_record(
         }
     };
     let loaded = LoadedOrderDraft {
-        file: PathBuf::from(format!("shared-local-events/{}", record.record_id)),
+        file: PathBuf::from(format!("shared-runtime-store/{}", record.record_id)),
         updated_at_unix: u64::try_from(record.updated_at_ms / 1000).unwrap_or_default(),
         document,
     };
@@ -3599,7 +3601,7 @@ fn load_app_order_record_from_record(
 
 fn app_order_record_source_issues(
     config: &RuntimeConfig,
-    record: &LocalEventRecord,
+    record: &RuntimeStoreRecord,
 ) -> Result<Vec<OrderIssueView>, RuntimeError> {
     let mut issues = Vec::new();
     if record.source_runtime != SourceRuntime::App {
@@ -3609,14 +3611,14 @@ fn app_order_record_source_issues(
             "trade record must come from radroots_studio_app",
         ));
     }
-    if record.family != LocalRecordFamily::LocalWork {
+    if record.family != RuntimeStoreRecordFamily::LocalWork {
         issues.push(issue_with_code(
             "app_order_unsupported",
             "family",
             "trade record must be shared local work",
         ));
     }
-    if record.status != LocalRecordStatus::LocalSaved {
+    if record.status != RuntimeStoreRecordStatus::LocalSaved {
         issues.push(issue_with_code(
             "app_order_unsupported",
             "status",
@@ -3796,7 +3798,7 @@ fn app_order_signed_evidence_issues(
 fn visible_signed_order_request_records(
     config: &RuntimeConfig,
     order_id: &str,
-) -> Result<Vec<LocalEventRecord>, RuntimeError> {
+) -> Result<Vec<RuntimeStoreRecord>, RuntimeError> {
     let mut records = Vec::new();
     let mut before_cursor = None::<(i64, i64)>;
     loop {
@@ -3830,9 +3832,9 @@ fn visible_signed_order_request_records(
     Ok(records)
 }
 
-fn is_visible_signed_order_request_record(record: &LocalEventRecord, order_id: &str) -> bool {
-    record.family == LocalRecordFamily::SignedEvent
-        && record.status == LocalRecordStatus::Published
+fn is_visible_signed_order_request_record(record: &RuntimeStoreRecord, order_id: &str) -> bool {
+    record.family == RuntimeStoreRecordFamily::SignedEvent
+        && record.status == RuntimeStoreRecordStatus::Published
         && record.outbox_status == PublishOutboxStatus::Acknowledged
         && record.event_kind == Some(i64::from(KIND_ORDER_REQUEST))
         && signed_record_tag_values(record, "d")
@@ -3841,7 +3843,7 @@ fn is_visible_signed_order_request_record(record: &LocalEventRecord, order_id: &
 }
 
 fn signed_order_request_from_record(
-    record: &LocalEventRecord,
+    record: &RuntimeStoreRecord,
 ) -> Result<RadrootsNostrEvent, RuntimeError> {
     let raw_event_json = record.raw_event_json.as_ref().ok_or_else(|| {
         RuntimeError::Config(format!(
@@ -3857,7 +3859,7 @@ fn signed_order_request_from_record(
     })
 }
 
-fn signed_record_tag_values(record: &LocalEventRecord, key: &str) -> Vec<String> {
+fn signed_record_tag_values(record: &RuntimeStoreRecord, key: &str) -> Vec<String> {
     record
         .event_tags_json
         .as_ref()
@@ -3881,7 +3883,7 @@ fn signed_record_tag_values(record: &LocalEventRecord, key: &str) -> Vec<String>
         .unwrap_or_default()
 }
 
-fn signed_record_event_id(record: &LocalEventRecord) -> String {
+fn signed_record_event_id(record: &RuntimeStoreRecord) -> String {
     record
         .event_id
         .clone()
@@ -3902,7 +3904,7 @@ fn source_and_document_issues(
 
 fn app_order_record_summary(
     config: &RuntimeConfig,
-    record: &LocalEventRecord,
+    record: &RuntimeStoreRecord,
     superseded_count: usize,
 ) -> Result<OrderAppRecordSummaryView, RuntimeError> {
     let record_kind = local_record_kind(record).unwrap_or_else(|| "unknown".to_owned());
@@ -3964,13 +3966,13 @@ fn app_order_record_summary(
     })
 }
 
-fn app_order_record_current_key(record: &LocalEventRecord) -> String {
+fn app_order_record_current_key(record: &RuntimeStoreRecord) -> String {
     app_order_record_order_id(record)
         .map(|order_id| format!("order:{order_id}"))
         .unwrap_or_else(|| format!("record:{}", record.record_id))
 }
 
-fn app_order_record_order_id(record: &LocalEventRecord) -> Option<String> {
+fn app_order_record_order_id(record: &RuntimeStoreRecord) -> Option<String> {
     record
         .local_work_json
         .as_ref()
@@ -3980,7 +3982,7 @@ fn app_order_record_order_id(record: &LocalEventRecord) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn placeholder_app_order_document(record: &LocalEventRecord) -> OrderDraftDocument {
+fn placeholder_app_order_document(record: &RuntimeStoreRecord) -> OrderDraftDocument {
     OrderDraftDocument {
         version: 0,
         kind: "invalid_app_order_record".to_owned(),
@@ -4077,7 +4079,7 @@ fn validate_order_export_output_target(output_path: &Path) -> Result<(), Runtime
     Ok(())
 }
 
-fn local_record_kind(record: &LocalEventRecord) -> Option<String> {
+fn local_record_kind(record: &RuntimeStoreRecord) -> Option<String> {
     record
         .local_work_json
         .as_ref()

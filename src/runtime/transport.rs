@@ -714,7 +714,7 @@ fn string_array_input(input: &OperationData, key: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use radroots_events::ids::RadrootsEventId;
+    use radroots_event::ids::RadrootsEventId;
     use radroots_sdk::{
         PushOutboxEventReceipt, PushOutboxTargetReceipt, PushOutboxTransportOutcomeKind,
     };

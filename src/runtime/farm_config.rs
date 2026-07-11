@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use radroots_events::farm::RadrootsFarm;
-use radroots_events::listing::{RadrootsListingDeliveryMethod, RadrootsListingPublicLocation};
-use radroots_events::profile::RadrootsProfile;
-use radroots_events_codec::d_tag::is_d_tag_base64url;
+use radroots_event::farm::RadrootsFarm;
+use radroots_event::listing::{RadrootsListingDeliveryMethod, RadrootsListingPublicLocation};
+use radroots_event::profile::RadrootsProfile;
+use radroots_event_codec::d_tag::is_d_tag_base64url;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::RuntimeError;
@@ -388,7 +388,7 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use radroots_events::farm::RadrootsFarmPublicLocation;
+    use radroots_event::farm::RadrootsFarmPublicLocation;
     use tempfile::tempdir;
 
     fn sample_paths(profile: &str, root: &Path) -> PathsConfig {

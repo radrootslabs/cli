@@ -835,14 +835,14 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
-            name: "radroots_events",
+            name: "radroots_event",
             owner: "cli-drafts-and-non-migrated-workflows",
             reason: "event DTOs for local drafts, views, relay reads, and validation receipt surfaces",
             lifecycle: "retain until the remaining event-authoring and inspection surfaces migrate",
         },
         DirectRrRsDependency {
             section: "dependencies",
-            name: "radroots_events_codec",
+            name: "radroots_event_codec",
             owner: "cli-drafts-and-non-migrated-workflows",
             reason: "event encoding and decoding for farm, listing draft, order, sync pull, and validation inspection",
             lifecycle: "retain until those command families are SDK-backed",
@@ -856,10 +856,10 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
-            name: "radroots_local_events",
+            name: "radroots_runtime_store",
             owner: "cli-app-interop",
             reason: "shared local work and signed-event interop with the desktop app",
-            lifecycle: "retain until a shared local-events SDK boundary replaces direct CLI access",
+            lifecycle: "retain until a shared runtime-store SDK boundary replaces direct CLI access",
         },
         DirectRrRsDependency {
             section: "dependencies",
@@ -976,8 +976,8 @@ mod tests {
         DirectRrRsDependency {
             section: "dependencies",
             name: "radroots_sql_core",
-            owner: "derived-projection-and-local-events",
-            reason: "SQLite executor for derived projection and shared local-events storage",
+            owner: "derived-projection-and-runtime-store",
+            reason: "SQLite executor for derived projection and shared runtime-store storage",
             lifecycle: "transitional until those storage surfaces move behind SDK or shared runtime APIs",
         },
         DirectRrRsDependency {

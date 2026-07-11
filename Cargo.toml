@@ -29,10 +29,10 @@ clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
 radroots_authority = { path = "../lib/crates/authority", default-features = false, features = ["std", "local_signer"] }
 radroots_core = { path = "../lib/crates/core", features = ["std", "serde"] }
-radroots_events = { path = "../lib/crates/events" }
-radroots_events_codec = { path = "../lib/crates/events_codec", features = ["nostr", "serde_json"] }
+radroots_event = { path = "../lib/crates/event" }
+radroots_event_codec = { path = "../lib/crates/event_codec", features = ["nostr", "serde_json"] }
 radroots_identity = { path = "../lib/crates/identity" }
-radroots_local_events = { path = "../lib/crates/local_events" }
+radroots_runtime_store = { path = "../lib/crates/runtime_store" }
 radroots_log = { path = "../lib/crates/log" }
 radroots_mesh = { path = "../lib/crates/mesh", default-features = false }
 radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts", features = ["os-keyring"] }

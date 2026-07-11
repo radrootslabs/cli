@@ -716,7 +716,7 @@ fn validation_receipt_resource(id: &str) -> ValidationReceiptResourceView {
     }
 }
 
-fn event_view(event: radroots_events::RadrootsEventEnvelope) -> ValidationReceiptEventView {
+fn event_view(event: radroots_event::RadrootsEventEnvelope) -> ValidationReceiptEventView {
     ValidationReceiptEventView {
         id: event.id,
         author: event.author,
@@ -1263,7 +1263,7 @@ fn sdk_relay_failures(
 }
 
 fn summary_view(
-    event: &radroots_events::RadrootsEventEnvelope,
+    event: &radroots_event::RadrootsEventEnvelope,
     receipt: &RadrootsTradeValidationReceipt,
     tags: &TradeValidationReceiptTags,
     proof_verification: &ValidationReceiptProofVerificationView,

@@ -4,16 +4,16 @@ use std::process::{Command, Output};
 use std::sync::Mutex;
 
 use assert_cmd::prelude::*;
-use radroots_events::RadrootsEventEnvelope;
-use radroots_events::ids::RadrootsListingAddress;
-use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
+use radroots_event::RadrootsEventEnvelope;
+use radroots_event::ids::RadrootsListingAddress;
+use radroots_event::kinds::{KIND_FARM, KIND_LISTING};
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
-use radroots_local_events::{
-    LocalEventRecord, LocalEventRecordInput, LocalEventsStore, LocalRecordFamily,
-    LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
-};
 use radroots_protected_store::RadrootsProtectedFileSecretVault;
 use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
+use radroots_runtime_store::{
+    PublishOutboxStatus, RuntimeStore, RuntimeStoreRecord, RuntimeStoreRecordFamily,
+    RuntimeStoreRecordInput, RuntimeStoreRecordStatus, SourceRuntime,
+};
 use radroots_secret_vault::RadrootsSecretVault;
 use radroots_sql_core::{SqlExecutor, SqliteExecutor};
 use serde_json::{Value, json};
@@ -129,20 +129,20 @@ impl RadrootsCliSandbox {
             .join("data/apps/cli/replica/replica.sqlite")
     }
 
-    pub fn local_events_db_path(&self) -> PathBuf {
+    pub fn runtime_store_db_path(&self) -> PathBuf {
         self.root
             .path()
-            .join("data/shared/local_events/local_events.sqlite")
+            .join("data/shared/runtime_store/runtime_store.sqlite")
     }
 
-    pub fn local_event_records(&self) -> Vec<LocalEventRecord> {
-        let path = self.local_events_db_path();
+    pub fn runtime_store_records(&self) -> Vec<RuntimeStoreRecord> {
+        let path = self.runtime_store_db_path();
         if !path.exists() {
             return Vec::new();
         }
-        let executor = SqliteExecutor::open(path).expect("open local events db");
-        let store = LocalEventsStore::new(executor);
-        store.migrate_up().expect("migrate local events db");
+        let executor = SqliteExecutor::open(path).expect("open runtime store db");
+        let store = RuntimeStore::new(executor);
+        store.migrate_up().expect("migrate runtime store db");
         store
             .list_records_after_seq(0, 200)
             .expect("list local event records")
@@ -174,8 +174,8 @@ const _: () = {
     let _ = RadrootsCliSandbox::write_nostr_transport_profile
         as fn(&RadrootsCliSandbox, &[&str]) -> PathBuf;
     let _ = RadrootsCliSandbox::replica_db_path as fn(&RadrootsCliSandbox) -> PathBuf;
-    let _ =
-        RadrootsCliSandbox::local_event_records as fn(&RadrootsCliSandbox) -> Vec<LocalEventRecord>;
+    let _ = RadrootsCliSandbox::runtime_store_records
+        as fn(&RadrootsCliSandbox) -> Vec<RuntimeStoreRecord>;
     #[cfg(unix)]
     let _ = RadrootsCliSandbox::write_fake_myc as fn(&RadrootsCliSandbox, &str, &str) -> PathBuf;
     let _ = assert_hex_len as fn(&Value, usize);
@@ -429,17 +429,17 @@ fn seed_orderable_listing_signed_event(
     event: &RadrootsEventEnvelope,
     listing_addr: &str,
 ) {
-    let database_path = sandbox.local_events_db_path();
-    fs::create_dir_all(database_path.parent().expect("local events parent"))
-        .expect("local events parent");
-    let executor = SqliteExecutor::open(database_path).expect("open local events");
-    let store = LocalEventsStore::new(executor);
-    store.migrate_up().expect("migrate local events");
+    let database_path = sandbox.runtime_store_db_path();
+    fs::create_dir_all(database_path.parent().expect("runtime store parent"))
+        .expect("runtime store parent");
+    let executor = SqliteExecutor::open(database_path).expect("open runtime store");
+    let store = RuntimeStore::new(executor);
+    store.migrate_up().expect("migrate runtime store");
     store
-        .append_record(&LocalEventRecordInput {
+        .append_record(&RuntimeStoreRecordInput {
             record_id: format!("test:signed_listing:{}", event.id),
-            family: LocalRecordFamily::SignedEvent,
-            status: LocalRecordStatus::Published,
+            family: RuntimeStoreRecordFamily::SignedEvent,
+            status: RuntimeStoreRecordStatus::Published,
             source_runtime: SourceRuntime::Cli,
             created_at_ms: 1_779_000_001_000,
             inserted_at_ms: 1_779_000_001_000,
@@ -457,6 +457,8 @@ fn seed_orderable_listing_signed_event(
             event_sig: Some(event.sig.clone()),
             raw_event_json: Some(json!(event)),
             outbox_status: PublishOutboxStatus::Acknowledged,
+            relay_set_fingerprint: None,
+            relay_delivery_json: None,
         })
         .expect("append listing signed event record");
 }

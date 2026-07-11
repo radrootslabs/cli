@@ -3,13 +3,13 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use radroots_local_events::{
-    LocalEventRecord, LocalEventRecordInput, LocalEventsStore, LocalRecordFamily,
-    LocalRecordStatus, PublishOutboxStatus, SourceRuntime,
-};
 use radroots_runtime_paths::{
-    default_shared_local_events_database_path_from_shared_accounts_data_root,
-    default_shared_local_events_root_from_shared_accounts_data_root,
+    default_shared_runtime_store_database_path_from_shared_accounts_data_root,
+    default_shared_runtime_store_root_from_shared_accounts_data_root,
+};
+use radroots_runtime_store::{
+    PublishOutboxStatus, RuntimeStore, RuntimeStoreRecord, RuntimeStoreRecordFamily,
+    RuntimeStoreRecordInput, RuntimeStoreRecordStatus, SourceRuntime,
 };
 use radroots_sql_core::SqliteExecutor;
 use serde_json::Value;
@@ -27,13 +27,13 @@ pub fn append_local_work(
     farm_id: Option<String>,
     listing_addr: Option<String>,
     payload: Value,
-) -> Result<LocalEventRecord, RuntimeError> {
+) -> Result<RuntimeStoreRecord, RuntimeError> {
     let timestamp = current_time_ms()?;
     let sequence = RECORD_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let input = LocalEventRecordInput {
+    let input = RuntimeStoreRecordInput {
         record_id: format!("cli:local_work:{subject}:{timestamp}:{sequence}"),
-        family: LocalRecordFamily::LocalWork,
-        status: LocalRecordStatus::LocalSaved,
+        family: RuntimeStoreRecordFamily::LocalWork,
+        status: RuntimeStoreRecordStatus::LocalSaved,
         source_runtime: SourceRuntime::Cli,
         created_at_ms: timestamp,
         inserted_at_ms: timestamp,
@@ -51,34 +51,36 @@ pub fn append_local_work(
         event_sig: None,
         raw_event_json: None,
         outbox_status: PublishOutboxStatus::None,
+        relay_set_fingerprint: None,
+        relay_delivery_json: None,
     };
     let store = open_store(config)?;
     Ok(store.append_record(&input)?)
 }
 
-pub fn shared_local_events_db_path(config: &RuntimeConfig) -> Result<PathBuf, RuntimeError> {
-    shared_local_events_db_path_from_paths(&config.paths)
+pub fn shared_runtime_store_db_path(config: &RuntimeConfig) -> Result<PathBuf, RuntimeError> {
+    shared_runtime_store_db_path_from_paths(&config.paths)
 }
 
-fn shared_local_events_db_path_from_paths(paths: &PathsConfig) -> Result<PathBuf, RuntimeError> {
-    default_shared_local_events_database_path_from_shared_accounts_data_root(
+fn shared_runtime_store_db_path_from_paths(paths: &PathsConfig) -> Result<PathBuf, RuntimeError> {
+    default_shared_runtime_store_database_path_from_shared_accounts_data_root(
         &paths.shared_accounts_data_root,
     )
     .map_err(|err| {
-        RuntimeError::Config(format!("resolve shared local-events database path: {err}"))
+        RuntimeError::Config(format!("resolve shared runtime-store database path: {err}"))
     })
 }
 
 pub fn list_shared_records_latest(
     config: &RuntimeConfig,
     limit: u32,
-) -> Result<Vec<LocalEventRecord>, RuntimeError> {
-    let database_path = shared_local_events_db_path(config)?;
+) -> Result<Vec<RuntimeStoreRecord>, RuntimeError> {
+    let database_path = shared_runtime_store_db_path(config)?;
     if !database_path.exists() {
         return Ok(Vec::new());
     }
     let executor = SqliteExecutor::open(database_path)?;
-    let store = LocalEventsStore::new(executor);
+    let store = RuntimeStore::new(executor);
     Ok(store.list_records_changed_latest(limit)?)
 }
 
@@ -87,64 +89,64 @@ pub fn list_shared_records_before(
     before_change_seq: i64,
     before_seq: i64,
     limit: u32,
-) -> Result<Vec<LocalEventRecord>, RuntimeError> {
-    let database_path = shared_local_events_db_path(config)?;
+) -> Result<Vec<RuntimeStoreRecord>, RuntimeError> {
+    let database_path = shared_runtime_store_db_path(config)?;
     if !database_path.exists() {
         return Ok(Vec::new());
     }
     let executor = SqliteExecutor::open(database_path)?;
-    let store = LocalEventsStore::new(executor);
+    let store = RuntimeStore::new(executor);
     Ok(store.list_records_changed_before(before_change_seq, before_seq, limit)?)
 }
 
 pub fn get_shared_record(
     config: &RuntimeConfig,
     record_id: &str,
-) -> Result<Option<LocalEventRecord>, RuntimeError> {
-    let database_path = shared_local_events_db_path(config)?;
+) -> Result<Option<RuntimeStoreRecord>, RuntimeError> {
+    let database_path = shared_runtime_store_db_path(config)?;
     if !database_path.exists() {
         return Ok(None);
     }
     let executor = SqliteExecutor::open(database_path)?;
-    let store = LocalEventsStore::new(executor);
+    let store = RuntimeStore::new(executor);
     Ok(store.get_record(record_id)?)
 }
 
-fn open_store(config: &RuntimeConfig) -> Result<LocalEventsStore<SqliteExecutor>, RuntimeError> {
-    let root = shared_local_events_root_from_paths(&config.paths)?;
+fn open_store(config: &RuntimeConfig) -> Result<RuntimeStore<SqliteExecutor>, RuntimeError> {
+    let root = shared_runtime_store_root_from_paths(&config.paths)?;
     fs::create_dir_all(&root)?;
-    let executor = SqliteExecutor::open(shared_local_events_db_path_from_paths(&config.paths)?)?;
-    let store = LocalEventsStore::new(executor);
+    let executor = SqliteExecutor::open(shared_runtime_store_db_path_from_paths(&config.paths)?)?;
+    let store = RuntimeStore::new(executor);
     store.migrate_up()?;
     Ok(store)
 }
 
-fn shared_local_events_root_from_paths(paths: &PathsConfig) -> Result<PathBuf, RuntimeError> {
-    default_shared_local_events_root_from_shared_accounts_data_root(
+fn shared_runtime_store_root_from_paths(paths: &PathsConfig) -> Result<PathBuf, RuntimeError> {
+    default_shared_runtime_store_root_from_shared_accounts_data_root(
         &paths.shared_accounts_data_root,
     )
-    .map_err(|err| RuntimeError::Config(format!("resolve shared local-events root: {err}")))
+    .map_err(|err| RuntimeError::Config(format!("resolve shared runtime-store root: {err}")))
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{shared_local_events_db_path_from_paths, shared_local_events_root_from_paths};
+    use super::{shared_runtime_store_db_path_from_paths, shared_runtime_store_root_from_paths};
     use crate::runtime::config::PathsConfig;
 
     #[test]
-    fn shared_local_events_paths_use_shared_runtime_contract() {
+    fn shared_runtime_store_paths_use_shared_runtime_contract() {
         let paths = paths_config("/repo/infra/local/runtime/radroots/data/shared/accounts");
 
         assert_eq!(
-            shared_local_events_root_from_paths(&paths).expect("shared local-events root"),
-            PathBuf::from("/repo/infra/local/runtime/radroots/data/shared/local_events")
+            shared_runtime_store_root_from_paths(&paths).expect("shared runtime-store root"),
+            PathBuf::from("/repo/infra/local/runtime/radroots/data/shared/runtime_store")
         );
         assert_eq!(
-            shared_local_events_db_path_from_paths(&paths).expect("shared local-events database"),
+            shared_runtime_store_db_path_from_paths(&paths).expect("shared runtime-store database"),
             PathBuf::from(
-                "/repo/infra/local/runtime/radroots/data/shared/local_events/local_events.sqlite"
+                "/repo/infra/local/runtime/radroots/data/shared/runtime_store/runtime_store.sqlite"
             )
         );
     }

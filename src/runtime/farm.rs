@@ -2,14 +2,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_authority::RadrootsActorContext;
-use radroots_events::contract::RadrootsActorRole;
-use radroots_events::farm::{RadrootsFarm, RadrootsFarmPublicLocation};
-use radroots_events::ids::RadrootsAddressableCoordinate;
-use radroots_events::kinds::{KIND_FARM, KIND_PROFILE};
-use radroots_events::listing::RadrootsListingPublicLocation;
-use radroots_events::profile::{RadrootsProfile, RadrootsProfileType};
-use radroots_events_codec::d_tag::is_d_tag_base64url;
-use radroots_events_codec::profile::encode::to_wire_parts_with_profile_type;
+use radroots_event::contract::RadrootsActorRole;
+use radroots_event::farm::{RadrootsFarm, RadrootsFarmPublicLocation};
+use radroots_event::ids::RadrootsAddressableCoordinate;
+use radroots_event::kinds::{KIND_FARM, KIND_PROFILE};
+use radroots_event::listing::RadrootsListingPublicLocation;
+use radroots_event::profile::{RadrootsProfile, RadrootsProfileType};
+use radroots_event_codec::d_tag::is_d_tag_base64url;
+use radroots_event_codec::profile::encode::to_wire_parts_with_profile_type;
 use radroots_sdk::{
     FarmEnqueuePublishRequest, FarmEnqueueReceipt, FarmPreparePublishRequest,
     FarmPrivateLocationClearRequest, FarmPrivateLocationInput, FarmPrivateLocationLookupCandidate,
@@ -32,7 +32,7 @@ use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
     FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
 };
-use crate::runtime::local_events::append_local_work;
+use crate::runtime::runtime_store::append_local_work;
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_outcome_kind_label,
     sdk_target_policy, sdk_transport_outcome_kind_label, validate_configured_signer_for_actor,
@@ -2258,7 +2258,7 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 #[cfg(test)]
 mod tests {
     use super::generate_d_tag;
-    use radroots_events_codec::d_tag::is_d_tag_base64url;
+    use radroots_event_codec::d_tag::is_d_tag_base64url;
 
     #[test]
     fn generated_farm_d_tag_is_valid_base64url() {

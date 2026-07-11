@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use radroots_events::order::RadrootsOrderEconomics;
+use radroots_event::order::RadrootsOrderEconomics;
 use radroots_replica_db::{ReplicaSql, trade_product};
 use radroots_replica_db_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
 use radroots_sql_core::SqliteExecutor;
@@ -1314,9 +1314,9 @@ fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use radroots_events::RadrootsEventEnvelope;
-    use radroots_events::ids::RadrootsListingAddress;
-    use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
+    use radroots_event::RadrootsEventEnvelope;
+    use radroots_event::ids::RadrootsListingAddress;
+    use radroots_event::kinds::{KIND_FARM, KIND_LISTING};
     use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_sql_core::{SqlExecutor, SqliteExecutor};

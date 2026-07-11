@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use radroots_events::kinds::{
+use radroots_event::kinds::{
     KIND_FARM, KIND_LIST_SET_APP_CURATION, KIND_LIST_SET_BOOKMARK, KIND_LIST_SET_CALENDAR,
     KIND_LIST_SET_CURATION, KIND_LIST_SET_EMOJI, KIND_LIST_SET_FOLLOW, KIND_LIST_SET_GENERIC,
     KIND_LIST_SET_INTEREST, KIND_LIST_SET_KIND_MUTE, KIND_LIST_SET_MEDIA_STARTER_PACK,
@@ -1754,18 +1754,18 @@ fn relative_age(age_seconds: u64) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use radroots_events::farm::{RadrootsFarm, RadrootsFarmRef};
-    use radroots_events::ids::RadrootsEventId;
-    use radroots_events::kinds::{KIND_FARM, KIND_LIST_SET_GENERIC, KIND_LISTING, KIND_POST};
-    use radroots_events::list::RadrootsListEntry;
-    use radroots_events::list_set::RadrootsListSet;
-    use radroots_events::plot::RadrootsPlot;
-    use radroots_events::profile::{RadrootsProfile, RadrootsProfileType};
-    use radroots_events_codec::farm::encode as farm_encode;
-    use radroots_events_codec::list_set::encode as list_set_encode;
-    use radroots_events_codec::plot::encode as plot_encode;
-    use radroots_events_codec::profile::encode as profile_encode;
-    use radroots_events_codec::wire::WireEventParts;
+    use radroots_event::farm::{RadrootsFarm, RadrootsFarmRef};
+    use radroots_event::ids::RadrootsEventId;
+    use radroots_event::kinds::{KIND_FARM, KIND_LIST_SET_GENERIC, KIND_LISTING, KIND_POST};
+    use radroots_event::list::RadrootsListEntry;
+    use radroots_event::list_set::RadrootsListSet;
+    use radroots_event::plot::RadrootsPlot;
+    use radroots_event::profile::{RadrootsProfile, RadrootsProfileType};
+    use radroots_event_codec::farm::encode as farm_encode;
+    use radroots_event_codec::list_set::encode as list_set_encode;
+    use radroots_event_codec::plot::encode as plot_encode;
+    use radroots_event_codec::profile::encode as profile_encode;
+    use radroots_event_codec::wire::WireEventParts;
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{
         RadrootsNostrEvent, RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_nostr_build_event,

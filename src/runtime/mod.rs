@@ -5,12 +5,12 @@ pub mod farm_config;
 pub mod find;
 pub mod hyf;
 pub mod listing;
-pub mod local_events;
 pub mod logging;
 pub mod mesh;
 pub mod order;
 pub mod paths;
 pub mod provider;
+pub mod runtime_store;
 pub mod sdk;
 pub mod signer;
 pub mod store;
@@ -34,8 +34,8 @@ pub enum RuntimeError {
     Sql(#[from] radroots_replica_db::SqlError),
     #[error("replica sync error: {0}")]
     ReplicaSync(#[from] radroots_replica_sync::RadrootsReplicaEventsError),
-    #[error("local events error: {0}")]
-    LocalEvents(#[from] radroots_local_events::LocalEventsError),
+    #[error("runtime store error: {0}")]
+    RuntimeStore(#[from] radroots_runtime_store::RuntimeStoreError),
     #[error("network error: {0}")]
     Network(String),
     #[error("failed to serialize json output: {0}")]
@@ -52,7 +52,7 @@ impl RuntimeError {
             | Self::Accounts(_)
             | Self::Sql(_)
             | Self::ReplicaSync(_)
-            | Self::LocalEvents(_)
+            | Self::RuntimeStore(_)
             | Self::Network(_)
             | Self::Json(_)
             | Self::Io(_) => ExitCode::from(1),

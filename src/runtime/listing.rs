@@ -10,21 +10,21 @@ use radroots_core::{
     RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney,
     RadrootsCorePercent, RadrootsCoreQuantity, RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
-use radroots_events::RadrootsEventEnvelope;
-use radroots_events::contract::RadrootsActorRole;
-use radroots_events::farm::RadrootsFarmRef;
-use radroots_events::ids::{RadrootsDTag, RadrootsInventoryBinId};
-use radroots_events::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
-use radroots_events::listing::{
+use radroots_event::RadrootsEventEnvelope;
+use radroots_event::contract::RadrootsActorRole;
+use radroots_event::farm::RadrootsFarmRef;
+use radroots_event::ids::{RadrootsDTag, RadrootsInventoryBinId};
+use radroots_event::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
+use radroots_event::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingBin,
     RadrootsListingDeliveryMethod, RadrootsListingProduct, RadrootsListingPublicLocation,
     RadrootsListingStatus,
 };
-use radroots_events::trade_validation::RadrootsTradeValidationListingError;
-use radroots_events_codec::d_tag::is_d_tag_base64url;
-use radroots_events_codec::listing::encode::to_wire_parts_with_kind;
-use radroots_local_events::{LocalEventRecord, LocalRecordFamily, SourceRuntime};
+use radroots_event::trade_validation::RadrootsTradeValidationListingError;
+use radroots_event_codec::d_tag::is_d_tag_base64url;
+use radroots_event_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_replica_db::ReplicaSql;
+use radroots_runtime_store::{RuntimeStoreRecord, RuntimeStoreRecordFamily, SourceRuntime};
 use radroots_sdk::{
     ListingEnqueuePublishRequest, ListingEnqueueReceipt, ListingPreparePublishRequest,
     ListingPublishPlan, PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
@@ -43,9 +43,9 @@ use crate::runtime::RuntimeError;
 use crate::runtime::account;
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::farm_config;
-use crate::runtime::local_events::{
+use crate::runtime::runtime_store::{
     append_local_work, get_shared_record, list_shared_records_before, list_shared_records_latest,
-    shared_local_events_db_path,
+    shared_runtime_store_db_path,
 };
 use crate::runtime::sdk::{
     CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_outcome_kind_label,
@@ -65,7 +65,7 @@ use crate::view::runtime::{
 const DRAFT_KIND: &str = "listing_draft_v1";
 const LISTING_SOURCE: &str = "local draft · local first";
 const LISTING_READ_SOURCE: &str = "local replica · local first";
-const LISTING_APP_RECORD_SOURCE: &str = "shared local events · app";
+const LISTING_APP_RECORD_SOURCE: &str = "shared runtime store · app";
 const SDK_LISTING_WRITE_SOURCE: &str = "SDK listing publish · configured signer";
 const LISTING_DRAFTS_DIR: &str = "listings/drafts";
 const LISTING_SELLER_ACTOR_SOURCE_FARM_CONFIG: &str = "farm_config";
@@ -686,7 +686,7 @@ pub fn list(config: &RuntimeConfig) -> Result<ListingListView, RuntimeError> {
 }
 
 pub fn app_record_list(config: &RuntimeConfig) -> Result<ListingAppRecordListView, RuntimeError> {
-    let database_path = shared_local_events_db_path(config)?;
+    let database_path = shared_runtime_store_db_path(config)?;
     let mut entries = current_app_record_entries(app_local_records(config)?);
     let has_more = entries.len() > APP_RECORD_LIST_LIMIT as usize;
     if has_more {
@@ -718,7 +718,7 @@ pub fn app_record_list(config: &RuntimeConfig) -> Result<ListingAppRecordListVie
         has_more,
         next_before_change_seq: next_cursor.map(|(change_seq, _)| change_seq),
         next_before_seq: next_cursor.map(|(_, seq)| seq),
-        local_events_db: database_path.display().to_string(),
+        runtime_store_db: database_path.display().to_string(),
         records,
         actions,
     })
@@ -1192,11 +1192,11 @@ fn summary_for_invalid_file(path: &Path, issue: ListingValidationIssueView) -> L
 
 #[derive(Debug, Clone)]
 struct AppRecordListEntry {
-    record: LocalEventRecord,
+    record: RuntimeStoreRecord,
     superseded_count: usize,
 }
 
-fn app_local_records(config: &RuntimeConfig) -> Result<Vec<LocalEventRecord>, RuntimeError> {
+fn app_local_records(config: &RuntimeConfig) -> Result<Vec<RuntimeStoreRecord>, RuntimeError> {
     let mut app_records = Vec::new();
     let mut before_cursor = None::<(i64, i64)>;
     loop {
@@ -1230,16 +1230,16 @@ fn app_local_records(config: &RuntimeConfig) -> Result<Vec<LocalEventRecord>, Ru
     Ok(app_records)
 }
 
-fn is_supported_app_local_record(record: &LocalEventRecord) -> bool {
+fn is_supported_app_local_record(record: &RuntimeStoreRecord) -> bool {
     record.source_runtime == SourceRuntime::App
-        && record.family == LocalRecordFamily::LocalWork
+        && record.family == RuntimeStoreRecordFamily::LocalWork
         && matches!(
             local_record_kind(record).as_deref(),
             Some("farm_config_v1" | DRAFT_KIND)
         )
 }
 
-fn current_app_record_entries(mut records: Vec<LocalEventRecord>) -> Vec<AppRecordListEntry> {
+fn current_app_record_entries(mut records: Vec<RuntimeStoreRecord>) -> Vec<AppRecordListEntry> {
     records.sort_by(|left, right| {
         right
             .change_seq
@@ -1267,8 +1267,8 @@ fn current_app_record_entries(mut records: Vec<LocalEventRecord>) -> Vec<AppReco
 
 fn current_app_record_for(
     config: &RuntimeConfig,
-    record: &LocalEventRecord,
-) -> Result<Option<LocalEventRecord>, RuntimeError> {
+    record: &RuntimeStoreRecord,
+) -> Result<Option<RuntimeStoreRecord>, RuntimeError> {
     let key = app_record_current_key(record);
     Ok(app_local_records(config)?
         .into_iter()
@@ -1281,7 +1281,7 @@ fn current_app_record_for(
 }
 
 fn app_record_summary(
-    record: &LocalEventRecord,
+    record: &RuntimeStoreRecord,
     superseded_count: usize,
 ) -> ListingAppRecordSummaryView {
     let record_kind = local_record_kind(record).unwrap_or_else(|| "unknown".to_owned());
@@ -1348,7 +1348,7 @@ fn app_record_summary(
     }
 }
 
-fn app_record_current_key(record: &LocalEventRecord) -> String {
+fn app_record_current_key(record: &RuntimeStoreRecord) -> String {
     match local_record_kind(record).as_deref() {
         Some(DRAFT_KIND) => {
             if let Some(listing_addr) = record
@@ -1400,7 +1400,7 @@ fn canonical_hex_pubkey(value: &str) -> Option<String> {
     }
 }
 
-fn app_record_canonical_owner_pubkey(record: &LocalEventRecord) -> Option<String> {
+fn app_record_canonical_owner_pubkey(record: &RuntimeStoreRecord) -> Option<String> {
     record
         .owner_pubkey
         .as_deref()
@@ -1408,7 +1408,7 @@ fn app_record_canonical_owner_pubkey(record: &LocalEventRecord) -> Option<String
 }
 
 fn app_listing_display_parts(
-    record: &LocalEventRecord,
+    record: &RuntimeStoreRecord,
 ) -> (Option<String>, Option<String>, Option<String>) {
     let document = record
         .local_work_json
@@ -1432,7 +1432,7 @@ fn app_listing_display_parts(
     (listing_id, title, farm_d_tag)
 }
 
-fn app_record_exportability_reason(record: &LocalEventRecord) -> Option<String> {
+fn app_record_exportability_reason(record: &RuntimeStoreRecord) -> Option<String> {
     if local_record_kind(record).as_deref() == Some(DRAFT_KIND)
         && app_record_canonical_owner_pubkey(record).is_none()
     {
@@ -1464,7 +1464,7 @@ fn app_record_exportability_reason(record: &LocalEventRecord) -> Option<String> 
 }
 
 fn app_listing_draft_from_record(
-    record: &LocalEventRecord,
+    record: &RuntimeStoreRecord,
 ) -> Result<ListingDraftDocument, String> {
     if record.source_runtime != SourceRuntime::App {
         return Err(format!(
@@ -1472,7 +1472,7 @@ fn app_listing_draft_from_record(
             record.source_runtime.as_str()
         ));
     }
-    if record.family != LocalRecordFamily::LocalWork {
+    if record.family != RuntimeStoreRecordFamily::LocalWork {
         return Err(format!(
             "record family `{}` is not local_work",
             record.family.as_str()
@@ -1593,7 +1593,7 @@ fn app_record_listing_addr(draft: &ListingDraftDocument) -> Option<String> {
     }
 }
 
-fn local_record_kind(record: &LocalEventRecord) -> Option<String> {
+fn local_record_kind(record: &RuntimeStoreRecord) -> Option<String> {
     record
         .local_work_json
         .as_ref()
@@ -3140,8 +3140,8 @@ mod tests {
         sdk_push_accepted_transport_endpoints, sdk_push_failed_transport_targets,
     };
     use crate::cli::global::ListingMutationArgs;
-    use radroots_events::ids::RadrootsEventId;
-    use radroots_events_codec::d_tag::is_d_tag_base64url;
+    use radroots_event::ids::RadrootsEventId;
+    use radroots_event_codec::d_tag::is_d_tag_base64url;
     use radroots_sdk::{
         PushOutboxEventReceipt, PushOutboxEventState, PushOutboxTargetOutcomeKind,
         PushOutboxTargetReceipt, PushOutboxTransportOutcomeKind,
