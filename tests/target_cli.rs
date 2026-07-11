@@ -2064,14 +2064,71 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         "pub struct MeshPolicyCheckView",
         "pub struct RpcStatusView",
     );
-    assert!(
-        mesh_policy_view_source.contains("pub transport: String,"),
-        "mesh policy view must retain canonical transport field"
-    );
+    for required in [
+        "pub transport: String,",
+        "pub usable_for_delivery: bool,",
+        "pub decision: String,",
+        "pub deny_reason: String,",
+        "pub payload_bytes: u64,",
+        "pub frame_bytes: u64,",
+        "pub max_payload_bytes: u64,",
+        "pub max_frame_bytes: u64,",
+        "pub compression: String,",
+        "pub custom_scopes_enabled: bool,",
+    ] {
+        assert!(
+            mesh_policy_view_source.contains(required),
+            "mesh policy view must retain structured denial field `{required}`"
+        );
+    }
     assert!(
         !mesh_policy_view_source.contains("pub transport_kind:"),
         "mesh policy view must not expose removed transport_kind field"
     );
+    for forbidden in [
+        "pub accepted:",
+        "pub delivered:",
+        "pub forwarded:",
+        "pub stored:",
+        "pub seen:",
+    ] {
+        assert!(
+            !mesh_policy_view_source.contains(forbidden),
+            "mesh policy view must not expose preview-success field `{forbidden}`"
+        );
+    }
+
+    let mesh_runtime_source =
+        fs::read_to_string(manifest_dir.join("src/runtime/mesh.rs")).expect("read mesh runtime");
+    for required in [
+        "RadrootsMeshPayloadPolicy::preview_unavailable()",
+        "policy.evaluate(&input)",
+        "decision.usable_for_delivery()",
+        "deny_reason",
+        "policy.max_payload_bytes",
+        "policy.max_frame_bytes",
+        "policy.compression.label()",
+        "policy.custom_scopes_enabled",
+    ] {
+        assert!(
+            mesh_runtime_source.contains(required),
+            "src/runtime/mesh.rs must derive structured preview denial from mesh policy witness `{required}`"
+        );
+    }
+    for forbidden in [
+        "fallback to Nostr",
+        "falls back to Nostr",
+        "accepted delivery",
+        "delivered delivery",
+        "forwarded delivery",
+        "stored delivery",
+        "seen delivery",
+    ] {
+        assert!(
+            !mesh_runtime_source.contains(forbidden),
+            "src/runtime/mesh.rs must not imply Reticulum preview success or fallback `{forbidden}`"
+        );
+    }
 
     let sdk_source = fs::read_to_string(manifest_dir.join("src/runtime/sdk.rs")).expect("read sdk");
     for required in [
