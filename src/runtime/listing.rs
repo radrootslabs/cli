@@ -10,7 +10,7 @@ use radroots_core::{
     RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney,
     RadrootsCorePercent, RadrootsCoreQuantity, RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
-use radroots_events::RadrootsNostrEvent;
+use radroots_events::RadrootsEventEnvelope;
 use radroots_events::contract::RadrootsActorRole;
 use radroots_events::farm::RadrootsFarmRef;
 use radroots_events::ids::{RadrootsDTag, RadrootsInventoryBinId};
@@ -588,7 +588,7 @@ pub fn validate(
                     issue,
                 ));
             }
-            let event = RadrootsNostrEvent {
+            let event = RadrootsEventEnvelope {
                 id: String::new(),
                 author: canonical.seller_pubkey.clone(),
                 created_at: 0,
@@ -1157,7 +1157,7 @@ fn listing_ready_issues(
             }];
         }
     };
-    let event = RadrootsNostrEvent {
+    let event = RadrootsEventEnvelope {
         id: String::new(),
         author: canonical.seller_pubkey.clone(),
         created_at: 0,

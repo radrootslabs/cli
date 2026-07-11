@@ -2469,7 +2469,7 @@ mod tests {
             RadrootsSecretBackend::HostVault(RadrootsHostVaultPolicy::desktop())
         );
         assert_eq!(resolved.signer.backend, SignerBackend::Local);
-        assert_eq!(resolved.transport.profile, TransportProfileKind::Nostr);
+        assert_eq!(resolved.transport.profile, TransportProfileKind::LocalOnly);
         assert_eq!(resolved.transport.nostr_relay_urls, Vec::<String>::new());
         assert_eq!(resolved.myc.executable, PathBuf::from("myc"));
         assert_eq!(

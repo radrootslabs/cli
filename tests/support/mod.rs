@@ -4,7 +4,7 @@ use std::process::{Command, Output};
 use std::sync::Mutex;
 
 use assert_cmd::prelude::*;
-use radroots_events::RadrootsNostrEvent;
+use radroots_events::RadrootsEventEnvelope;
 use radroots_events::ids::RadrootsListingAddress;
 use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
@@ -274,7 +274,7 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
         .expect("replica db path from store init");
     let (seller_pubkey, listing_id) = listing_addr_parts(listing_addr);
     let event_id = "2".repeat(64);
-    let event = RadrootsNostrEvent {
+    let event = RadrootsEventEnvelope {
         id: event_id.clone(),
         author: seller_pubkey.clone(),
         created_at: 1,
@@ -426,7 +426,7 @@ fn relay_set_fingerprint(relays: &[String]) -> String {
 
 fn seed_orderable_listing_signed_event(
     sandbox: &RadrootsCliSandbox,
-    event: &RadrootsNostrEvent,
+    event: &RadrootsEventEnvelope,
     listing_addr: &str,
 ) {
     let database_path = sandbox.local_events_db_path();

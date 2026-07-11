@@ -12,7 +12,7 @@ use radroots_core::{
     RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney, RadrootsCoreUnit,
     convert_unit_decimal,
 };
-use radroots_events::RadrootsNostrEventPtr;
+use radroots_events::RadrootsEventPtr;
 use radroots_events::contract::RadrootsActorRole;
 use radroots_events::ids::{
     RadrootsEventId, RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId,
@@ -4851,11 +4851,11 @@ fn canonical_order_request_payload_from_loaded(
 
 fn order_submit_listing_event_ptr(
     loaded: &LoadedOrderDraft,
-) -> Result<RadrootsNostrEventPtr, RuntimeError> {
+) -> Result<RadrootsEventPtr, RuntimeError> {
     let listing_relays =
         normalize_listing_relay_set(loaded.document.order.listing_relays.iter())
             .map_err(|error| RuntimeError::Config(format!("listing provenance relays: {error}")))?;
-    Ok(RadrootsNostrEventPtr {
+    Ok(RadrootsEventPtr {
         id: loaded.document.order.listing_event_id.clone(),
         relays: listing_relays.first().cloned(),
     })

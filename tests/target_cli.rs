@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 
 use nostr::nips::nip44::{self, Version};
 use nostr::{EventBuilder, Keys, Kind, PublicKey, SecretKey, Tag};
-use radroots_events::RadrootsNostrEventPtr;
-use radroots_events::draft::RadrootsFrozenEventDraft;
+use radroots_events::RadrootsEventPtr;
+use radroots_events::draft::RadrootsEventDraft;
 use radroots_events::ids::{
     RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId, RadrootsPublicKey,
 };
@@ -119,8 +119,8 @@ fn sdk_outbox_path(sandbox: &RadrootsCliSandbox) -> PathBuf {
         .join("data/apps/cli/replica/sdk/outbox.sqlite")
 }
 
-fn post_outbox_draft(public_key_hex: &str, content: &str) -> RadrootsFrozenEventDraft {
-    RadrootsFrozenEventDraft::new(
+fn post_outbox_draft(public_key_hex: &str, content: &str) -> RadrootsEventDraft {
+    RadrootsEventDraft::new(
         "radroots.social.post.v1",
         KIND_POST,
         1_700_000_000,
@@ -1292,7 +1292,7 @@ fn signed_app_order_request_event(
         economics: app_order_economics(order_id, bin_count),
     };
     let parts = order_request_event_build(
-        &RadrootsNostrEventPtr {
+        &RadrootsEventPtr {
             id: listing_event_id.to_owned(),
             relays: None,
         },
@@ -3008,54 +3008,27 @@ fn health_status_distinguishes_relay_ready_from_missing_signed_write_account() {
 }
 
 #[test]
-fn health_check_exposes_publish_readiness() {
+fn health_check_rejects_proxy_profile_without_token_material() {
     let sandbox = RadrootsCliSandbox::new();
     write_proxy_transport_config(&sandbox, "");
 
-    let value = sandbox.json_success(&["--format", "json", "health", "check", "run"]);
+    let (output, value) = sandbox.json_output(&["--format", "json", "health", "check", "run"]);
 
+    assert!(!output.status.success());
     assert_eq!(value["operation_id"], "health.check.run");
-    assert_eq!(value["result"]["state"], "needs_attention");
-    assert_eq!(
-        value["result"]["account_resolution"]["status"],
-        "unresolved"
-    );
-    assert_eq!(value["result"]["account_resolution"]["source"], "none");
-    assert_eq!(value["result"]["checks"]["publish"]["transport"], "proxy");
-    assert_eq!(
-        value["result"]["checks"]["publish"]["state"],
-        "unconfigured"
-    );
-    assert_eq!(value["result"]["checks"]["publish"]["executable"], false);
+    assert_eq!(value["result"], Value::Null);
+    assert_eq!(value["errors"][0]["code"], "runtime_error");
     assert_contains(
-        &value["result"]["checks"]["publish"]["reason"],
-        "configured token file or token secret id",
-    );
-    assert_eq!(value["result"]["checks"]["store"]["state"], "ready");
-    assert_eq!(
-        value["result"]["checks"]["store"]["source"],
-        "SDK canonical event store and outbox"
-    );
-    assert_eq!(value["result"]["checks"]["store"]["canonical_store"], "sdk");
-    assert_eq!(value["result"]["checks"]["signer"]["state"], "unconfigured");
-    assert_eq!(value["result"]["actions"][0], "radroots account create");
-    assert_eq!(
-        value["result"]["actions"][1],
-        "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID"
+        &value["errors"][0]["message"],
+        "proxy transport profile requires a configured token file or token secret id",
     );
     assert_eq!(
-        value["next_actions"][0]["command"],
-        "radroots account create"
+        value["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .len(),
+        0
     );
-    assert_eq!(
-        value["next_actions"][1]["description"],
-        "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID"
-    );
-    assert_eq!(
-        value["next_actions"][1]["env_var"],
-        "RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE"
-    );
-    assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
 }
 
 #[test]
@@ -3124,13 +3097,9 @@ fn farm_readiness_check_reports_mode_specific_publish_gates() {
     } else {
         &relay_value["result"]
     };
-    assert_eq!(relay_detail["transport_profile"], "nostr");
-    assert_eq!(relay_detail["publish_state"], "unconfigured");
-    assert_eq!(relay_detail["publish_executable"], false);
-    assert_eq!(
-        relay_detail["missing"][0],
-        "Configured Nostr transport profile"
-    );
+    assert_eq!(relay_detail["transport_profile"], "local_only");
+    assert_eq!(relay_detail["publish_state"], "ready");
+    assert_eq!(relay_detail["publish_executable"], true);
 
     let proxy_token_path = proxy_token_file(&sandbox);
     sandbox.write_app_config(&format!(
@@ -4077,11 +4046,7 @@ fn next_actions_mirror_result_actions_for_json_and_ndjson() {
         "radroots store init"
     );
 
-    for args in [
-        &["--format", "ndjson", "config", "get"][..],
-        &["--format", "ndjson", "health", "status", "get"][..],
-        &["--format", "ndjson", "health", "check", "run"][..],
-    ] {
+    for args in [&["--format", "ndjson", "config", "get"][..]] {
         let proxy = RadrootsCliSandbox::new();
         write_proxy_transport_config(&proxy, "");
         let output = proxy.command().args(args).output().expect("run ndjson");
@@ -8018,7 +7983,7 @@ fn signed_order_request_event_for_quote(
         economics,
     };
     let parts = order_request_event_build(
-        &RadrootsNostrEventPtr {
+        &RadrootsEventPtr {
             id: listing_event_id.to_owned(),
             relays: None,
         },

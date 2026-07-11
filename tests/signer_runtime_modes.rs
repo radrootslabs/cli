@@ -1220,7 +1220,7 @@ fn local_farm_publish_dry_run_validates_secret_backed_account() {
 }
 
 #[test]
-fn local_farm_publish_dry_run_fails_without_configured_relay() {
+fn local_farm_publish_dry_run_plans_without_configured_relay() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
     sandbox.json_success(&[
@@ -1242,19 +1242,12 @@ fn local_farm_publish_dry_run_fails_without_configured_relay() {
         "pickup",
     ]);
 
-    let (output, value) =
-        sandbox.json_output(&["--format", "json", "--dry-run", "farm", "publish"]);
+    let value = sandbox.json_success(&["--format", "json", "--dry-run", "farm", "publish"]);
 
-    assert!(!output.status.success());
     assert_eq!(value["operation_id"], "farm.publish");
     assert_eq!(value["dry_run"], true);
-    assert_eq!(value["result"], serde_json::Value::Null);
-    assert_eq!(value["errors"][0]["code"], "network_unavailable");
-    assert_eq!(value["errors"][0]["detail"]["class"], "network");
-    assert_contains(
-        &value["errors"][0]["message"],
-        "requires at least one configured Nostr relay in the active transport profile",
-    );
+    assert_eq!(value["result"]["state"], "dry_run");
+    assert_eq!(value["result"]["dry_run"], true);
     assert_no_removed_command_reference(&value, &["farm", "publish", "--dry-run"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish", "--dry-run"]);
 }
@@ -1305,7 +1298,7 @@ fn local_farm_publish_fails_without_configured_relay() {
 }
 
 #[test]
-fn farm_setup_actions_offer_publish_only_when_relay_publish_executable() {
+fn farm_setup_actions_offer_publish_before_and_after_delivery_configuration() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
 
@@ -1329,7 +1322,7 @@ fn farm_setup_actions_offer_publish_only_when_relay_publish_executable() {
     ]);
 
     assert_action_present(&unconfigured, "radroots farm readiness check");
-    assert_action_absent(&unconfigured, "radroots farm publish");
+    assert_action_present(&unconfigured, "radroots farm publish");
 
     sandbox.write_nostr_transport_profile(&["ws://127.0.0.1:9"]);
     let configured = sandbox.json_success(&[

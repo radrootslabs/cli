@@ -877,6 +877,13 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
+            name: "radroots_transport",
+            owner: "cli-transport-config",
+            reason: "canonical transport scope identifiers and fail-closed transport profile configuration",
+            lifecycle: "retain while CLI owns runtime transport config parsing",
+        },
+        DirectRrRsDependency {
+            section: "dependencies",
             name: "radroots_transport_nostr",
             owner: "cli-nostr-transport-read-boundary",
             reason: "shared fail-closed Nostr relay fetch receipts for trade event list, sync pull, and market refresh",
@@ -972,6 +979,13 @@ mod tests {
             owner: "cli-drafts-and-validation",
             reason: "listing draft validation, order economics, order reducer helpers, and validation receipt parsing",
             lifecycle: "retain until remaining trade validation and draft behavior migrates",
+        },
+        DirectRrRsDependency {
+            section: "dev-dependencies",
+            name: "radroots_outbox",
+            owner: "cli-test-fixtures",
+            reason: "test-only outbox fixture assertions for CLI transport and SDK workflow coverage",
+            lifecycle: "retain while CLI integration tests assert local outbox side effects directly",
         },
     ];
 

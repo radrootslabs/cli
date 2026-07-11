@@ -1314,7 +1314,7 @@ fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use radroots_events::RadrootsNostrEvent;
+    use radroots_events::RadrootsEventEnvelope;
     use radroots_events::ids::RadrootsListingAddress;
     use radroots_events::kinds::{KIND_FARM, KIND_LISTING};
     use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
@@ -1769,7 +1769,7 @@ mod tests {
     fn seed_current_listing(config: &RuntimeConfig) {
         crate::runtime::store::init(config).expect("store init");
         let (seller_pubkey, listing_id) = listing_addr_parts(LISTING_ADDR);
-        let event = RadrootsNostrEvent {
+        let event = RadrootsEventEnvelope {
             id: "2".repeat(64),
             author: seller_pubkey.clone(),
             created_at: 1,
