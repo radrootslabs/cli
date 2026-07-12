@@ -19,7 +19,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
 
 [features]
 default = ["sp1-verify"]
-sp1-verify = ["radroots_sp1_host_trade/sp1_verify"]
+sp1-verify = ["radroots_trade_sp1_host/sp1_verify"]
 test-fixture-geonames-asset = ["radroots_sdk/test-fixture-geonames-asset"]
 
 [dependencies]
@@ -40,8 +40,8 @@ radroots_nostr = { path = "../lib/crates/nostr", features = ["client", "events"]
 radroots_nostr_connect = { path = "../lib/crates/nostr_connect" }
 radroots_nostr_signer = { path = "../lib/crates/nostr_signer" }
 radroots_protected_store = { path = "../lib/crates/protected_store", features = ["std"] }
-radroots_replica_db = { path = "../lib/crates/replica_db" }
-radroots_replica_db_schema = { path = "../lib/crates/replica_db_schema" }
+radroots_replica_store = { path = "../lib/crates/replica_store" }
+radroots_replica_schema = { path = "../lib/crates/replica_schema" }
 radroots_replica_sync = { path = "../lib/crates/replica_sync" }
 radroots_transport = { path = "../lib/crates/transport", default-features = false }
 radroots_transport_nostr = { path = "../lib/crates/transport_nostr", default-features = false, features = [
@@ -52,7 +52,7 @@ radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
 radroots_sdk = { path = "../sdk/crates/sdk", features = ["local-runtime-radrootsd-proxy", "transport-nostr-runtime"] }
 radroots_secret_vault = { path = "../lib/crates/secret_vault", features = ["std", "os-keyring"] }
 radroots_sql_core = { path = "../lib/crates/sql_core", features = ["native"] }
-radroots_sp1_host_trade = { path = "../lib/crates/sp1_host_trade" }
+radroots_trade_sp1_host = { path = "../lib/crates/trade_sp1_host" }
 radroots_trade = { path = "../lib/crates/trade" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

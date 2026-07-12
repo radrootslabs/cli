@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use radroots_replica_db::export::{ReplicaDbExportManifestRs, export_manifest};
-use radroots_replica_db::migrations;
+use radroots_replica_store::export::{ReplicaStoreExportManifestRs, export_manifest};
+use radroots_replica_store::migrations;
 use radroots_replica_sync::radroots_replica_sync_status;
 use radroots_sdk::{
     BackupReceipt, BackupRequest, IntegrityReceipt, IntegrityRequest, RadrootsClient,
@@ -34,9 +34,9 @@ const SDK_EVENT_STORE_FILE: &str = "event_store.sqlite";
 const SDK_OUTBOX_FILE: &str = "outbox.sqlite";
 
 pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
-    let existed = config.local.replica_db_path.exists();
+    let existed = config.local.replica_store_path.exists();
     ensure_local_roots(config)?;
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     ensure_sync_run_table(&executor)?;
     let manifest = export_manifest(&executor)?;
@@ -49,26 +49,26 @@ pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
         },
         source: DERIVED_PROJECTION_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
-        replica_db: "ready".to_owned(),
-        path: config.local.replica_db_path.display().to_string(),
-        replica_db_version: manifest.replica_db_version,
+        replica_store: "ready".to_owned(),
+        path: config.local.replica_store_path.display().to_string(),
+        replica_store_version: manifest.replica_store_version,
         backup_format_version: manifest.backup_format_version,
     })
 }
 
 pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
     validate_local_roots(config)?;
-    if config.local.replica_db_path.exists() {
-        let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    if config.local.replica_store_path.exists() {
+        let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
         ensure_sync_run_table(&executor)?;
         let manifest = export_manifest(&executor)?;
         return Ok(LocalInitView {
             state: "ready".to_owned(),
             source: DERIVED_PROJECTION_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
-            replica_db: "ready".to_owned(),
-            path: config.local.replica_db_path.display().to_string(),
-            replica_db_version: manifest.replica_db_version,
+            replica_store: "ready".to_owned(),
+            path: config.local.replica_store_path.display().to_string(),
+            replica_store_version: manifest.replica_store_version,
             backup_format_version: manifest.backup_format_version,
         });
     }
@@ -77,9 +77,9 @@ pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeEr
         state: "dry_run".to_owned(),
         source: DERIVED_PROJECTION_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
-        replica_db: "missing".to_owned(),
-        path: config.local.replica_db_path.display().to_string(),
-        replica_db_version: String::new(),
+        replica_store: "missing".to_owned(),
+        path: config.local.replica_store_path.display().to_string(),
+        replica_store_version: String::new(),
         backup_format_version: String::new(),
     })
 }
@@ -104,13 +104,13 @@ pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterEr
 fn derived_projection_status(
     config: &RuntimeConfig,
 ) -> Result<LocalDerivedProjectionStatusView, RuntimeError> {
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Ok(LocalDerivedProjectionStatusView {
             state: "unconfigured".to_owned(),
             source: DERIVED_PROJECTION_SOURCE.to_owned(),
-            replica_db: "missing".to_owned(),
-            path: config.local.replica_db_path.display().to_string(),
-            replica_db_version: String::new(),
+            replica_store: "missing".to_owned(),
+            path: config.local.replica_store_path.display().to_string(),
+            replica_store_version: String::new(),
             backup_format_version: String::new(),
             schema_hash: String::new(),
             counts: LocalReplicaCountsView {
@@ -129,7 +129,7 @@ fn derived_projection_status(
         });
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     ensure_sync_run_table(&executor)?;
     let manifest = export_manifest(&executor)?;
     let sync = radroots_replica_sync_status(&executor)?;
@@ -137,9 +137,9 @@ fn derived_projection_status(
     Ok(LocalDerivedProjectionStatusView {
         state: "ready".to_owned(),
         source: DERIVED_PROJECTION_SOURCE.to_owned(),
-        replica_db: "ready".to_owned(),
-        path: config.local.replica_db_path.display().to_string(),
-        replica_db_version: manifest.replica_db_version.clone(),
+        replica_store: "ready".to_owned(),
+        path: config.local.replica_store_path.display().to_string(),
+        replica_store_version: manifest.replica_store_version.clone(),
         backup_format_version: manifest.backup_format_version.clone(),
         schema_hash: manifest.schema_hash.clone(),
         counts: manifest_counts(&manifest),
@@ -215,7 +215,7 @@ pub fn export(
     format: LocalExportFormatArg,
     output: &Path,
 ) -> Result<LocalExportView, RuntimeError> {
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Ok(LocalExportView {
             state: "unconfigured".to_owned(),
             source: DERIVED_PROJECTION_SOURCE.to_owned(),
@@ -232,7 +232,7 @@ pub fn export(
     ensure_safe_output_path(config, output)?;
     create_parent_dir(output)?;
 
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     let manifest = export_manifest(&executor)?;
     let sync = radroots_replica_sync_status(&executor)?;
     let records = match format {
@@ -240,7 +240,7 @@ pub fn export(
             let export = json!({
                 "kind": "local_export_manifest_v1",
                 "source": DERIVED_PROJECTION_SOURCE,
-                "replica_db_version": manifest.replica_db_version,
+                "replica_store_version": manifest.replica_store_version,
                 "backup_format_version": manifest.backup_format_version,
                 "export_version": manifest.export_version,
                 "schema_hash": manifest.schema_hash,
@@ -259,7 +259,7 @@ pub fn export(
                 json!({
                     "kind": "local_export_manifest",
                     "source": DERIVED_PROJECTION_SOURCE,
-                    "replica_db_version": manifest.replica_db_version,
+                    "replica_store_version": manifest.replica_store_version,
                     "backup_format_version": manifest.backup_format_version,
                     "export_version": manifest.export_version,
                     "schema_hash": manifest.schema_hash,
@@ -473,7 +473,7 @@ fn ensure_safe_sdk_backup_destination(
     let sdk_outbox_path = sdk_root.join(SDK_OUTBOX_FILE);
     let forbidden_paths = [
         sdk_root.as_path(),
-        config.local.replica_db_path.as_path(),
+        config.local.replica_store_path.as_path(),
         sdk_event_store_path.as_path(),
         sdk_outbox_path.as_path(),
     ];
@@ -501,7 +501,7 @@ fn ensure_safe_sdk_restore_destination(
     let sdk_outbox_path = sdk_root.join(SDK_OUTBOX_FILE);
     let forbidden_paths = [
         config.local.root.as_path(),
-        config.local.replica_db_path.as_path(),
+        config.local.replica_store_path.as_path(),
         sdk_event_store_path.as_path(),
         sdk_outbox_path.as_path(),
     ];
@@ -514,7 +514,7 @@ fn ensure_safe_sdk_restore_destination(
             destination.display()
         )));
     }
-    if config.local.replica_db_path.starts_with(destination)
+    if config.local.replica_store_path.starts_with(destination)
         || config.local.backups_dir.starts_with(destination)
         || config.local.exports_dir.starts_with(destination)
     {
@@ -668,7 +668,7 @@ fn create_parent_dir(path: &Path) -> Result<(), RuntimeError> {
 }
 
 fn ensure_safe_output_path(config: &RuntimeConfig, output: &Path) -> Result<(), RuntimeError> {
-    if output == config.local.replica_db_path.as_path() {
+    if output == config.local.replica_store_path.as_path() {
         return Err(RuntimeError::Config(format!(
             "output path {} would overwrite the local replica database",
             output.display()
@@ -677,7 +677,7 @@ fn ensure_safe_output_path(config: &RuntimeConfig, output: &Path) -> Result<(), 
     Ok(())
 }
 
-fn manifest_counts(manifest: &ReplicaDbExportManifestRs) -> LocalReplicaCountsView {
+fn manifest_counts(manifest: &ReplicaStoreExportManifestRs) -> LocalReplicaCountsView {
     LocalReplicaCountsView {
         farms: table_row_count(manifest, "farm"),
         listings: table_row_count(manifest, "trade_product"),
@@ -687,7 +687,7 @@ fn manifest_counts(manifest: &ReplicaDbExportManifestRs) -> LocalReplicaCountsVi
     }
 }
 
-fn table_row_count(manifest: &ReplicaDbExportManifestRs, name: &str) -> u64 {
+fn table_row_count(manifest: &ReplicaStoreExportManifestRs, name: &str) -> u64 {
     manifest
         .table_counts
         .iter()

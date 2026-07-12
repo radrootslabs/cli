@@ -11,7 +11,7 @@ use radroots_event::kinds::{
 use radroots_nostr::prelude::{
     RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_event_from_nostr, radroots_nostr_kind,
 };
-use radroots_replica_db::{ReplicaSql, migrations};
+use radroots_replica_store::{ReplicaSql, migrations};
 use radroots_replica_sync::{
     RadrootsReplicaEventsError, RadrootsReplicaIngestOutcome, radroots_replica_ingest_event,
     radroots_replica_sync_status,
@@ -88,7 +88,7 @@ struct SyncSnapshot {
     state: String,
     source: String,
     local_root: String,
-    replica_db: String,
+    replica_store: String,
     configured_transport_target_count: usize,
     configured_transport_targets: Vec<SyncTransportTargetView>,
     transport_statuses: Vec<SyncTransportStatusView>,
@@ -257,7 +257,7 @@ where
             let failed_transport_targets = relay_failures(receipt.failed_relays);
             let reason = relay_failure_reason(&failed_transport_targets);
             let failure_reason = format!("Nostr transport fetch failed: {reason}");
-            let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+            let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
             migrations::run_all_up(&executor)?;
             record_sync_run(
                 &executor,
@@ -282,7 +282,7 @@ where
         Ok(receipt) => receipt,
         Err(error) => {
             let failure_reason = error.to_string();
-            let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+            let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
             migrations::run_all_up(&executor)?;
             record_sync_run(
                 &executor,
@@ -305,7 +305,7 @@ where
         }
     };
 
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     let ingest = ingest_events(&executor, &receipt, scope)?;
     record_sync_run(
@@ -331,7 +331,7 @@ where
         state: "ready".to_owned(),
         source: INGEST_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
-        replica_db: "ready".to_owned(),
+        replica_store: "ready".to_owned(),
         configured_transport_target_count: snapshot.configured_transport_target_count,
         configured_transport_targets: snapshot.configured_transport_targets,
         transport_statuses: snapshot.transport_statuses,
@@ -414,7 +414,7 @@ fn empty_action_from_snapshot(snapshot: SyncSnapshot, direction: &str) -> SyncAc
         state: snapshot.state,
         source: snapshot.source,
         local_root: snapshot.local_root,
-        replica_db: snapshot.replica_db,
+        replica_store: snapshot.replica_store,
         configured_transport_target_count: snapshot.configured_transport_target_count,
         configured_transport_targets: snapshot.configured_transport_targets,
         transport_statuses: snapshot.transport_statuses,
@@ -449,7 +449,7 @@ fn sdk_sync_status_view(config: &RuntimeConfig, receipt: SyncStatusReceipt) -> S
         state: "ready".to_owned(),
         source: SDK_SYNC_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
-        replica_db: "derived_projection_not_checked".to_owned(),
+        replica_store: "derived_projection_not_checked".to_owned(),
         configured_transport_target_count,
         configured_transport_targets,
         transport_statuses,
@@ -554,7 +554,7 @@ fn sdk_push_action_view(
         state: state.to_owned(),
         source: SDK_PUSH_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
-        replica_db: "derived_projection_not_checked".to_owned(),
+        replica_store: "derived_projection_not_checked".to_owned(),
         configured_transport_target_count,
         configured_transport_targets,
         transport_statuses,
@@ -1029,12 +1029,12 @@ fn transport_implementation_label(state: RadrootsTransportImplementationState) -
 
 fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
     let transport_metadata = sync_transport_metadata(config)?;
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Ok(SyncSnapshot {
             state: "unconfigured".to_owned(),
             source: SYNC_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
-            replica_db: "missing".to_owned(),
+            replica_store: "missing".to_owned(),
             configured_transport_target_count: transport_metadata.configured_transport_target_count,
             configured_transport_targets: transport_metadata.configured_transport_targets,
             transport_statuses: transport_metadata.transport_statuses,
@@ -1046,7 +1046,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
         });
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     let queue = radroots_replica_sync_status(&executor)?;
     let freshness =
@@ -1077,7 +1077,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
             state: state.to_owned(),
             source: SYNC_SOURCE.to_owned(),
             local_root: config.local.root.display().to_string(),
-            replica_db: "ready".to_owned(),
+            replica_store: "ready".to_owned(),
             configured_transport_target_count: transport_metadata.configured_transport_target_count,
             configured_transport_targets: transport_metadata.configured_transport_targets,
             transport_statuses: transport_metadata.transport_statuses,
@@ -1098,7 +1098,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
         state: "ready".to_owned(),
         source: SYNC_SOURCE.to_owned(),
         local_root: config.local.root.display().to_string(),
-        replica_db: "ready".to_owned(),
+        replica_store: "ready".to_owned(),
         configured_transport_target_count: transport_metadata.configured_transport_target_count,
         configured_transport_targets: transport_metadata.configured_transport_targets,
         transport_statuses: transport_metadata.transport_statuses,
@@ -1125,7 +1125,7 @@ pub(crate) fn freshness_for_scope(
     config: &RuntimeConfig,
     scope: RelayIngestScope,
 ) -> Result<SyncFreshnessView, RuntimeError> {
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     freshness_for_scope_from_executor(config, &executor, scope)
 }
@@ -1134,10 +1134,10 @@ pub(crate) fn relay_provenance_relays_for_scope(
     config: &RuntimeConfig,
     scope: RelayIngestScope,
 ) -> Result<Vec<String>, RuntimeError> {
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Ok(Vec::new());
     }
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     ensure_sync_run_table(&executor)?;
     let current_fingerprint = relay_set_fingerprint(&config.transport.nostr_relay_urls);
@@ -2039,7 +2039,7 @@ mod tests {
 
         assert_eq!(view.state, "ready");
         assert_eq!(view.source, "SDK canonical event store and outbox");
-        assert_eq!(view.replica_db, "derived_projection_not_checked");
+        assert_eq!(view.replica_store, "derived_projection_not_checked");
         assert_eq!(view.configured_transport_target_count, 2);
         assert_eq!(view.queue.total_count, Some(0));
         assert_eq!(view.queue.pending_count, 0);
@@ -2196,7 +2196,7 @@ mod tests {
 
         assert_eq!(view.state, "dry_run");
         assert_eq!(view.source, "SDK outbox push");
-        assert_eq!(view.replica_db, "derived_projection_not_checked");
+        assert_eq!(view.replica_store, "derived_projection_not_checked");
         assert_eq!(
             view.target_transport_endpoints,
             vec!["wss://relay.example.com"]
@@ -3177,7 +3177,7 @@ mod tests {
             ),
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
-                replica_db_path: data.join("apps/cli/replica/replica.sqlite"),
+                replica_store_path: data.join("apps/cli/replica/replica.sqlite"),
                 backups_dir: data.join("apps/cli/replica/backups"),
                 exports_dir: data.join("apps/cli/replica/exports"),
             },

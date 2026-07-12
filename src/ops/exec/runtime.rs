@@ -401,7 +401,7 @@ mod tests {
             "SDK canonical event store and outbox"
         );
         assert_eq!(
-            envelope.result["replica_db"],
+            envelope.result["replica_store"],
             "derived_projection_not_checked"
         );
         assert_eq!(envelope.result["queue"]["pending_count"], 0);
@@ -476,7 +476,7 @@ mod tests {
             ),
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
-                replica_db_path: data.join("apps/cli/replica/replica.sqlite"),
+                replica_store_path: data.join("apps/cli/replica/replica.sqlite"),
                 backups_dir: data.join("apps/cli/replica/backups"),
                 exports_dir: data.join("apps/cli/replica/exports"),
             },

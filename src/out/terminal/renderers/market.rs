@@ -48,7 +48,7 @@ fn market_refresh_document(envelope: &OutputEnvelope, result: &Value) -> Termina
     common::push_count_field(&mut document, "Ingested", result, &["ingested_count"]);
     common::push_count_field(&mut document, "Skipped", result, &["skipped_count"]);
     common::push_count_field(&mut document, "Failed", result, &["failed_count"]);
-    common::push_path_field(&mut document, "Replica", result, &["replica_db"]);
+    common::push_path_field(&mut document, "Replica", result, &["replica_store"]);
     common::push_path_field(&mut document, "Reason", result, &["reason"]);
     document
 }

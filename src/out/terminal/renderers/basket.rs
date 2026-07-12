@@ -331,7 +331,7 @@ mod tests {
                 "adjustment_count": 0,
                 "issues": [{
                     "code": "basket_market_replica_missing",
-                    "field": "local.replica_db",
+                    "field": "local.replica_store",
                     "message": "current local replica data is required before quote creation"
                 }],
                 "actions": ["radroots basket get basket_test"]
@@ -343,7 +343,7 @@ mod tests {
 
         assert!(rendered.contains("Issues"));
         assert!(rendered.contains("basket_market_replica_missing"));
-        assert!(rendered.contains("local.replica_db"));
+        assert!(rendered.contains("local.replica_store"));
     }
 
     #[test]

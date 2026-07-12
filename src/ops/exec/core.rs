@@ -91,7 +91,7 @@ impl OperationService<WorkspaceGetRequest> for CoreOperationService<'_> {
             "shared_cache_root": self.config.paths.shared_cache_root.display().to_string(),
             "app_logs_root": self.config.paths.app_logs_root.display().to_string(),
             "local_root": self.config.local.root.display().to_string(),
-            "replica_db_path": self.config.local.replica_db_path.display().to_string(),
+            "replica_store_path": self.config.local.replica_store_path.display().to_string(),
         }))
     }
 }
@@ -249,7 +249,7 @@ impl OperationService<ConfigGetRequest> for CoreOperationService<'_> {
             },
             "local": {
                 "root": self.config.local.root.display().to_string(),
-                "replica_db_path": self.config.local.replica_db_path.display().to_string(),
+                "replica_store_path": self.config.local.replica_store_path.display().to_string(),
                 "backups_dir": self.config.local.backups_dir.display().to_string(),
                 "exports_dir": self.config.local.exports_dir.display().to_string(),
             },
@@ -1263,8 +1263,8 @@ mod tests {
         assert_eq!(envelope.request_id, "req_workspace");
         assert_eq!(envelope.result["profile"], "interactive_user");
         assert_eq!(
-            envelope.result["replica_db_path"],
-            config.local.replica_db_path.display().to_string()
+            envelope.result["replica_store_path"],
+            config.local.replica_store_path.display().to_string()
         );
     }
 
@@ -1485,7 +1485,7 @@ mod tests {
             transport: crate::runtime::config::TransportConfig::local_only(),
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
-                replica_db_path: data.join("apps/cli/replica/replica.sqlite"),
+                replica_store_path: data.join("apps/cli/replica/replica.sqlite"),
                 backups_dir: data.join("apps/cli/replica/backups"),
                 exports_dir: data.join("apps/cli/replica/exports"),
             },

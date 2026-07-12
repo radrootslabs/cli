@@ -78,7 +78,7 @@ fn market_refresh_view(mut view: SyncActionView) -> SyncActionView {
         "unavailable" => vec!["radroots sync status get".to_owned()],
         "unconfigured" => {
             let mut actions = Vec::new();
-            if view.replica_db == "missing" {
+            if view.replica_store == "missing" {
                 actions.push("radroots store init".to_owned());
             }
             if view.configured_transport_target_count == 0 {
@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(envelope.operation_id, "market.refresh");
         assert_eq!(envelope.dry_run, true);
         assert_eq!(envelope.result["state"], "unconfigured");
-        assert_eq!(envelope.result["replica_db"], "missing");
+        assert_eq!(envelope.result["replica_store"], "missing");
         assert_eq!(envelope.result["direction"], "pull");
     }
 
@@ -430,7 +430,7 @@ mod tests {
             query: "eggs".to_owned(),
             count: 1,
             relay_count: 1,
-            replica_db: "ready".to_owned(),
+            replica_store: "ready".to_owned(),
             freshness: freshness(),
             results: vec![FindResultView {
                 id: "listing_eggs".to_owned(),
@@ -498,7 +498,7 @@ mod tests {
             query: "eggs".to_owned(),
             count: 1,
             relay_count: 1,
-            replica_db: "ready".to_owned(),
+            replica_store: "ready".to_owned(),
             freshness: freshness(),
             results: vec![FindResultView {
                 id: "listing_eggs".to_owned(),
@@ -672,7 +672,7 @@ mod tests {
             transport: crate::runtime::config::TransportConfig::local_only(),
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
-                replica_db_path: data.join("apps/cli/replica/replica.sqlite"),
+                replica_store_path: data.join("apps/cli/replica/replica.sqlite"),
                 backups_dir: data.join("apps/cli/replica/backups"),
                 exports_dir: data.join("apps/cli/replica/exports"),
             },

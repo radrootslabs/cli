@@ -338,7 +338,7 @@ mod tests {
             transport: crate::runtime::config::TransportConfig::local_only(),
             local: LocalConfig {
                 root: PathBuf::from("/tmp/local"),
-                replica_db_path: PathBuf::from("/tmp/local/replica.sqlite"),
+                replica_store_path: PathBuf::from("/tmp/local/replica.sqlite"),
                 backups_dir: PathBuf::from("/tmp/local/backups"),
                 exports_dir: PathBuf::from("/tmp/local/exports"),
             },

@@ -34,8 +34,8 @@ use radroots_outbox::{
     RadrootsOutbox, RadrootsOutboxDeliveryPlanInput, RadrootsOutboxReticulumPreviewBehavior,
     RadrootsOutboxSignedOperationInput,
 };
-use radroots_replica_db::{farm, migrations};
-use radroots_replica_db_schema::farm::IFarmFields;
+use radroots_replica_schema::farm::IFarmFields;
+use radroots_replica_store::{farm, migrations};
 use radroots_replica_sync::radroots_replica_pending_publish_batch;
 use radroots_runtime_store::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, PublishOutboxStatus, RuntimeStore,
@@ -748,7 +748,7 @@ fn read_relay_req_subscription_id(websocket: &mut tungstenite::WebSocket<TcpStre
 }
 
 fn seed_derived_projection_sync_farm(sandbox: &RadrootsCliSandbox, d_tag: &str, pubkey: &str) {
-    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
+    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica");
     migrations::run_all_up(&executor).expect("replica migrations");
     farm::create(
         &executor,
@@ -5569,7 +5569,7 @@ fn core_account_store_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(workspace["operation_id"], "workspace.init");
     assert_eq!(workspace["dry_run"], true);
     assert_eq!(workspace["result"]["state"], "dry_run");
-    assert_eq!(workspace["result"]["local"]["replica_db"], "missing");
+    assert_eq!(workspace["result"]["local"]["replica_store"], "missing");
     assert!(!Path::new(workspace_db).exists());
 
     let store = sandbox.json_success(&["--format", "json", "--dry-run", "store", "init"]);
@@ -5577,7 +5577,7 @@ fn core_account_store_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(store["operation_id"], "store.init");
     assert_eq!(store["dry_run"], true);
     assert_eq!(store["result"]["state"], "dry_run");
-    assert_eq!(store["result"]["replica_db"], "missing");
+    assert_eq!(store["result"]["replica_store"], "missing");
     assert!(!Path::new(store_db).exists());
 
     let account_create =
@@ -7380,7 +7380,7 @@ fn sync_push_sdk_outbox_failure_reports_network_unavailable() {
         "SDK canonical event store and outbox"
     );
     assert_eq!(
-        status["result"]["replica_db"],
+        status["result"]["replica_store"],
         "derived_projection_not_checked"
     );
     assert_eq!(status["result"]["queue"]["pending_count"], 1);
@@ -7402,7 +7402,7 @@ fn sync_push_sdk_outbox_failure_reports_network_unavailable() {
     assert_eq!(value["errors"][0]["detail"]["state"], "unavailable");
     assert_eq!(value["errors"][0]["detail"]["source"], "SDK outbox push");
     assert_eq!(
-        value["errors"][0]["detail"]["replica_db"],
+        value["errors"][0]["detail"]["replica_store"],
         "derived_projection_not_checked"
     );
     assert_eq!(
@@ -7442,7 +7442,7 @@ fn sync_push_ignores_derived_projection_pending_queue_for_sdk_canonical_push() {
         DERIVED_PROJECTION_SYNC_PUSH_FARM_D_TAG,
         selected_pubkey,
     );
-    let executor = SqliteExecutor::open(sandbox.replica_db_path()).expect("open replica");
+    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica");
     let derived_projection_batch = radroots_replica_pending_publish_batch(&executor)
         .expect("derived projection pending batch");
     assert!(derived_projection_batch.pending_count > 0);
@@ -7460,7 +7460,7 @@ fn sync_push_ignores_derived_projection_pending_queue_for_sdk_canonical_push() {
     assert_eq!(value["result"]["state"], "ready");
     assert_eq!(value["result"]["source"], "SDK outbox push");
     assert_eq!(
-        value["result"]["replica_db"],
+        value["result"]["replica_store"],
         "derived_projection_not_checked"
     );
     assert_eq!(value["result"]["queue"]["pending_count"], 0);
@@ -7485,7 +7485,7 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(market["operation_id"], "market.refresh");
     assert_eq!(market["dry_run"], true);
     assert_eq!(market["result"]["state"], "unconfigured");
-    assert_eq!(market["result"]["replica_db"], "missing");
+    assert_eq!(market["result"]["replica_store"], "missing");
 
     let (sync_pull_output, sync_pull) =
         sandbox.json_output(&["--format", "json", "--dry-run", "sync", "pull"]);
@@ -7494,7 +7494,7 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(sync_pull["dry_run"], true);
     assert_eq!(sync_pull["errors"][0]["code"], "operation_unavailable");
     assert_eq!(sync_pull["errors"][0]["detail"]["state"], "unconfigured");
-    assert_eq!(sync_pull["errors"][0]["detail"]["replica_db"], "missing");
+    assert_eq!(sync_pull["errors"][0]["detail"]["replica_store"], "missing");
 
     let sync_push = sandbox.json_success(&["--format", "json", "--dry-run", "sync", "push"]);
     assert_eq!(sync_push["operation_id"], "sync.push");
@@ -7502,7 +7502,7 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(sync_push["result"]["state"], "ready");
     assert_eq!(sync_push["result"]["source"], "SDK outbox push");
     assert_eq!(
-        sync_push["result"]["replica_db"],
+        sync_push["result"]["replica_store"],
         "derived_projection_not_checked"
     );
     assert_eq!(sync_push["result"]["queue"]["pending_count"], 0);
@@ -7530,7 +7530,7 @@ fn buyer_market_sync_basket_dry_runs_preflight_without_mutating_local_state() {
     assert_eq!(sync_push_ready["result"]["state"], "ready");
     assert_eq!(sync_push_ready["result"]["source"], "SDK outbox push");
     assert_eq!(
-        sync_push_ready["result"]["replica_db"],
+        sync_push_ready["result"]["replica_store"],
         "derived_projection_not_checked"
     );
     assert_eq!(
@@ -8937,7 +8937,7 @@ fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft()
 fn order_submit_non_dry_run_uses_sdk_relay_validation_without_replica_freshness_gate() {
     let sandbox = RadrootsCliSandbox::new();
     let order_id = create_ready_order(&sandbox, "freshness_missing_db");
-    fs::remove_file(sandbox.replica_db_path()).expect("remove replica db");
+    fs::remove_file(sandbox.replica_store_path()).expect("remove replica db");
     configure_nostr_transport(&sandbox, "ws://127.0.0.1:9");
 
     let (output, value) = sandbox.json_output(&[
@@ -8962,7 +8962,7 @@ fn order_submit_non_dry_run_uses_sdk_relay_validation_without_replica_freshness_
 fn order_submit_dry_run_does_not_require_local_replica_freshness() {
     let sandbox = RadrootsCliSandbox::new();
     let order_id = create_ready_order(&sandbox, "dry_freshness_missing_db");
-    fs::remove_file(sandbox.replica_db_path()).expect("remove replica db");
+    fs::remove_file(sandbox.replica_store_path()).expect("remove replica db");
 
     let value = sandbox.json_success(&[
         "--format",

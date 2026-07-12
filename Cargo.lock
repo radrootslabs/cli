@@ -3623,7 +3623,6 @@ dependencies = [
  "radroots_event",
  "radroots_event_codec",
  "radroots_identity",
- "radroots_runtime_store",
  "radroots_log",
  "radroots_mesh",
  "radroots_nostr",
@@ -3632,16 +3631,17 @@ dependencies = [
  "radroots_nostr_signer",
  "radroots_outbox",
  "radroots_protected_store",
- "radroots_replica_db",
- "radroots_replica_db_schema",
+ "radroots_replica_schema",
+ "radroots_replica_store",
  "radroots_replica_sync",
  "radroots_runtime",
  "radroots_runtime_paths",
+ "radroots_runtime_store",
  "radroots_sdk",
  "radroots_secret_vault",
- "radroots_sp1_host_trade",
  "radroots_sql_core",
  "radroots_trade",
+ "radroots_trade_sp1_host",
  "radroots_transport",
  "radroots_transport_nostr",
  "serde",
@@ -3666,19 +3666,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "radroots_event_store"
-version = "0.1.0-alpha.2"
-dependencies = [
- "radroots_event",
- "radroots_nostr",
- "radroots_transport",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "radroots_event"
 version = "0.1.0-alpha.2"
 dependencies = [
@@ -3698,6 +3685,19 @@ dependencies = [
  "radroots_event",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "radroots_event_store"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "radroots_event",
+ "radroots_nostr",
+ "radroots_transport",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3729,16 +3729,6 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tracing",
-]
-
-[[package]]
-name = "radroots_runtime_store"
-version = "0.1.0-alpha.2"
-dependencies = [
- "radroots_sql_core",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3822,8 +3812,8 @@ name = "radroots_outbox"
 version = "0.1.0-alpha.2"
 dependencies = [
  "hex",
- "radroots_event_store",
  "radroots_event",
+ "radroots_event_store",
  "radroots_transport",
  "serde",
  "serde_json",
@@ -3845,25 +3835,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "radroots_replica_db"
+name = "radroots_replica_schema"
 version = "0.1.0-alpha.2"
 dependencies = [
- "hex",
- "radroots_replica_db_schema",
- "radroots_sql_core",
- "radroots_types",
  "serde",
  "serde_json",
- "sha2",
 ]
 
 [[package]]
-name = "radroots_replica_db_schema"
+name = "radroots_replica_store"
 version = "0.1.0-alpha.2"
 dependencies = [
- "radroots_types",
+ "hex",
+ "radroots_replica_schema",
+ "radroots_sql_core",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -3875,10 +3863,9 @@ dependencies = [
  "radroots_core",
  "radroots_event",
  "radroots_event_codec",
- "radroots_replica_db",
- "radroots_replica_db_schema",
+ "radroots_replica_schema",
+ "radroots_replica_store",
  "radroots_sql_core",
- "radroots_types",
  "serde",
  "serde_json",
  "sha2",
@@ -3916,6 +3903,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "radroots_runtime_store"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "radroots_sql_core",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "radroots_sdk"
 version = "0.1.0"
 dependencies = [
@@ -3923,9 +3920,9 @@ dependencies = [
  "hex",
  "nostr",
  "radroots_authority",
- "radroots_event_store",
  "radroots_event",
  "radroots_event_codec",
+ "radroots_event_store",
  "radroots_geocoder",
  "radroots_identity",
  "radroots_nostr",
@@ -3955,32 +3952,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "radroots_sp1_guest_trade"
-version = "0.1.0-alpha.2"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "radroots_sp1_host_trade"
-version = "0.1.0-alpha.2"
-dependencies = [
- "base64 0.22.1",
- "bincode",
- "radroots_sp1_guest_trade",
- "radroots_trade",
- "serde",
- "serde_json",
- "sha2",
- "sp1-build",
- "sp1-sdk",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "radroots_sql_core"
 version = "0.1.0-alpha.2"
 dependencies = [
@@ -3999,13 +3970,39 @@ dependencies = [
  "hex",
  "radroots_authority",
  "radroots_core",
- "radroots_event_store",
  "radroots_event",
  "radroots_event_codec",
+ "radroots_event_store",
  "serde",
  "serde_json",
  "sha2",
  "sqlx",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "radroots_trade_sp1_guest"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "radroots_trade_sp1_host"
+version = "0.1.0-alpha.2"
+dependencies = [
+ "base64 0.22.1",
+ "bincode",
+ "radroots_trade",
+ "radroots_trade_sp1_guest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sp1-build",
+ "sp1-sdk",
  "thiserror 1.0.69",
 ]
 
@@ -4023,8 +4020,8 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "futures",
  "nostr",
- "radroots_event_store",
  "radroots_event",
+ "radroots_event_store",
  "radroots_nostr",
  "radroots_outbox",
  "radroots_transport",
@@ -4048,14 +4045,6 @@ name = "radroots_transport_reticulum"
 version = "0.1.0-alpha.2"
 dependencies = [
  "radroots_transport",
-]
-
-[[package]]
-name = "radroots_types"
-version = "0.1.0-alpha.2"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

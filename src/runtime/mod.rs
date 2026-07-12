@@ -31,7 +31,7 @@ pub enum RuntimeError {
     #[error("accounts error: {0}")]
     Accounts(#[from] radroots_nostr_accounts::prelude::RadrootsNostrAccountsError),
     #[error("replica sql error: {0}")]
-    Sql(#[from] radroots_replica_db::SqlError),
+    Sql(#[from] radroots_replica_store::SqlError),
     #[error("replica sync error: {0}")]
     ReplicaSync(#[from] radroots_replica_sync::RadrootsReplicaEventsError),
     #[error("runtime store error: {0}")]

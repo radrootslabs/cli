@@ -313,7 +313,7 @@ impl Default for ProxyTransportConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalConfig {
     pub root: PathBuf,
-    pub replica_db_path: PathBuf,
+    pub replica_store_path: PathBuf,
     pub backups_dir: PathBuf,
     pub exports_dir: PathBuf,
 }
@@ -812,7 +812,7 @@ impl RuntimeConfig {
             transport,
             local: LocalConfig {
                 root: paths.app_data_root.join(DEFAULT_LOCAL_STATE_DIR),
-                replica_db_path: paths
+                replica_store_path: paths
                     .app_data_root
                     .join(DEFAULT_LOCAL_STATE_DIR)
                     .join(DEFAULT_LOCAL_DB_FILE),

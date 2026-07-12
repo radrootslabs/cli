@@ -7,13 +7,13 @@ use radroots_sdk::{
     TradeValidationReceiptWorkerEvidence,
     TradeValidationReceiptWorkerEvidenceSelection as SdkWorkerEvidenceSelection,
 };
-use radroots_sp1_host_trade::RadrootsSp1TradeHostError;
-use radroots_sp1_host_trade::verify_order_acceptance_validation_receipt_inline_sp1_proof;
 use radroots_trade::validation_receipt::{
     RadrootsTradeCommitmentConfidence, RadrootsTradeValidationAuthority,
     RadrootsTradeValidationReceipt, RadrootsValidationReceiptProofSystem,
     RadrootsValidationReceiptResult, RadrootsValidationReceiptType,
 };
+use radroots_trade_sp1_host::RadrootsSp1TradeHostError;
+use radroots_trade_sp1_host::verify_order_acceptance_validation_receipt_inline_sp1_proof;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -1305,13 +1305,13 @@ mod tests {
         proof_state_from_sp1_error, proof_state_is_invalid, proof_state_is_verification_success,
         proof_verification_view_for_receipt, validation_receipt_invalid_reason_code,
     };
-    use radroots_sp1_host_trade::RadrootsSp1TradeHostError;
     use radroots_trade::validation_receipt::{
         RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
         RadrootsValidationReceiptProof, RadrootsValidationReceiptProofSystem,
         RadrootsValidationReceiptResult, RadrootsValidationReceiptStatement,
         RadrootsValidationReceiptType, VALIDATION_RECEIPT_DOMAIN, VALIDATION_RECEIPT_VERSION,
     };
+    use radroots_trade_sp1_host::RadrootsSp1TradeHostError;
 
     fn sp1_proof_with_material() -> RadrootsValidationReceiptProof {
         RadrootsValidationReceiptProof {

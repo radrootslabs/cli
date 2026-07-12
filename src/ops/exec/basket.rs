@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_event::order::RadrootsOrderEconomics;
-use radroots_replica_db::{ReplicaSql, trade_product};
-use radroots_replica_db_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
+use radroots_replica_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
+use radroots_replica_store::{ReplicaSql, trade_product};
 use radroots_sql_core::SqliteExecutor;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -873,17 +873,17 @@ fn basket_market_issues(
     config: &RuntimeConfig,
     document: &BasketDocument,
 ) -> Result<Vec<BasketIssue>, OperationAdapterError> {
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Ok(vec![basket_issue(
             "basket_market_replica_missing",
-            "local.replica_db",
+            "local.replica_store",
             "current local replica data is required before quote creation; run `radroots store init` and `radroots market refresh`",
         )]);
     }
-    let executor = SqliteExecutor::open(&config.local.replica_db_path).map_err(|error| {
+    let executor = SqliteExecutor::open(&config.local.replica_store_path).map_err(|error| {
         OperationAdapterError::Runtime(format!(
             "open local replica {}: {error}",
-            config.local.replica_db_path.display()
+            config.local.replica_store_path.display()
         ))
     })?;
     let mut issues = Vec::new();
@@ -983,12 +983,13 @@ fn basket_product_bin_state(
     let Some(listing_lookup) = item.listing.as_deref().and_then(non_empty_ref) else {
         return Ok(BasketProductResolution::Unresolved);
     };
-    let lookup_executor = SqliteExecutor::open(&config.local.replica_db_path).map_err(|error| {
-        OperationAdapterError::Runtime(format!(
-            "open local replica {}: {error}",
-            config.local.replica_db_path.display()
-        ))
-    })?;
+    let lookup_executor =
+        SqliteExecutor::open(&config.local.replica_store_path).map_err(|error| {
+            OperationAdapterError::Runtime(format!(
+                "open local replica {}: {error}",
+                config.local.replica_store_path.display()
+            ))
+        })?;
     let rows = ReplicaSql::new(lookup_executor)
         .trade_product_lookup(listing_lookup)
         .map_err(|error| {
@@ -1818,7 +1819,8 @@ mod tests {
             content: "# Market Eggs".to_owned(),
             sig: "f".repeat(128),
         };
-        let executor = SqliteExecutor::open(&config.local.replica_db_path).expect("open replica");
+        let executor =
+            SqliteExecutor::open(&config.local.replica_store_path).expect("open replica");
         assert_eq!(
             radroots_replica_ingest_event(&executor, &event).expect("ingest listing"),
             RadrootsReplicaIngestOutcome::Applied
@@ -1833,7 +1835,8 @@ mod tests {
     }
 
     fn duplicate_current_listing_row(config: &RuntimeConfig) {
-        let executor = SqliteExecutor::open(&config.local.replica_db_path).expect("open replica");
+        let executor =
+            SqliteExecutor::open(&config.local.replica_store_path).expect("open replica");
         let params = json!(["33333333-3333-3333-3333-333333333333", LISTING_ADDR]).to_string();
         executor
             .exec(
@@ -1908,7 +1911,7 @@ mod tests {
             transport: crate::runtime::config::TransportConfig::local_only(),
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
-                replica_db_path: data.join("apps/cli/replica/replica.sqlite"),
+                replica_store_path: data.join("apps/cli/replica/replica.sqlite"),
                 backups_dir: data.join("apps/cli/replica/backups"),
                 exports_dir: data.join("apps/cli/replica/exports"),
             },

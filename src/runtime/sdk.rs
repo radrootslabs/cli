@@ -919,14 +919,14 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
-            name: "radroots_replica_db",
+            name: "radroots_replica_store",
             owner: "derived-projection-and-market-reads",
             reason: "derived projection status, export, market reads, sync pull, basket lookup, and trade draft preflight",
             lifecycle: "retain until those derived projection surfaces move behind SDK APIs",
         },
         DirectRrRsDependency {
             section: "dependencies",
-            name: "radroots_replica_db_schema",
+            name: "radroots_replica_schema",
             owner: "derived-projection-and-market-reads",
             reason: "typed query filters for market, basket, and order lookup projections",
             lifecycle: "retain until those derived projection surfaces move behind SDK APIs",
@@ -968,7 +968,7 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
-            name: "radroots_sp1_host_trade",
+            name: "radroots_trade_sp1_host",
             owner: "validation-receipts",
             reason: "validation receipt SP1 proof inspection and verification",
             lifecycle: "retain until validation receipt verification moves behind SDK APIs",
@@ -1257,7 +1257,7 @@ mod tests {
         "radroots_replica_pending_publish_batch",
         "radroots_replica_sync_status",
         "ReplicaSql::new",
-        "SqliteExecutor::open(&config.local.replica_db_path)",
+        "SqliteExecutor::open(&config.local.replica_store_path)",
         "outbox_idempotency_digest",
         "canonical_target_transport_endpoints",
         "radroots_sdk::protocol::order",
@@ -2807,7 +2807,7 @@ struct FixtureConfig;\n\
             ),
             local: LocalConfig {
                 root: data.join("apps/cli/replica"),
-                replica_db_path: data.join("apps/cli/replica/replica.sqlite"),
+                replica_store_path: data.join("apps/cli/replica/replica.sqlite"),
                 backups_dir: data.join("apps/cli/replica/backups"),
                 exports_dir: data.join("apps/cli/replica/exports"),
             },

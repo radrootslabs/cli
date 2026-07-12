@@ -23,7 +23,7 @@ use radroots_event::listing::{
 use radroots_event::trade_validation::RadrootsTradeValidationListingError;
 use radroots_event_codec::d_tag::is_d_tag_base64url;
 use radroots_event_codec::listing::encode::to_wire_parts_with_kind;
-use radroots_replica_db::ReplicaSql;
+use radroots_replica_store::ReplicaSql;
 use radroots_runtime_store::{RuntimeStoreRecord, RuntimeStoreRecordFamily, SourceRuntime};
 use radroots_sdk::{
     ListingEnqueuePublishRequest, ListingEnqueueReceipt, ListingPreparePublishRequest,
@@ -1607,8 +1607,8 @@ pub fn get(
     args: &RecordLookupArgs,
 ) -> Result<ListingGetView, RuntimeError> {
     refresh_market_listing_if_needed(config)?;
-    let freshness = if config.local.replica_db_path.exists() {
-        let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let freshness = if config.local.replica_store_path.exists() {
+        let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
         freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?
     } else {
         missing_freshness()
@@ -1619,7 +1619,7 @@ pub fn get(
         relay_count: config.transport.nostr_relay_urls.len(),
     };
 
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Ok(ListingGetView {
             state: "unconfigured".to_owned(),
             source: LISTING_READ_SOURCE.to_owned(),
@@ -1641,7 +1641,7 @@ pub fn get(
         });
     }
 
-    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
+    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_store_path)?);
     let rows = db.trade_product_lookup(args.key.as_str())?;
     let Some(row) = rows.into_iter().next() else {
         return Ok(ListingGetView {
@@ -1722,13 +1722,13 @@ pub fn get(
 }
 
 fn refresh_market_listing_if_needed(config: &RuntimeConfig) -> Result<(), RuntimeError> {
-    if !config.local.replica_db_path.exists()
+    if !config.local.replica_store_path.exists()
         || config.output.dry_run
         || config.transport.nostr_relay_urls.is_empty()
     {
         return Ok(());
     }
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     let freshness =
         freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?;
     if crate::runtime::sync::freshness_requires_refresh(&freshness) {

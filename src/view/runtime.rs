@@ -302,7 +302,7 @@ pub struct PublishProviderRuntimeView {
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalRuntimeView {
     pub root: String,
-    pub replica_db_path: String,
+    pub replica_store_path: String,
     pub backups_dir: String,
     pub exports_dir: String,
 }
@@ -565,9 +565,9 @@ pub struct LocalInitView {
     pub state: String,
     pub source: String,
     pub local_root: String,
-    pub replica_db: String,
+    pub replica_store: String,
     pub path: String,
-    pub replica_db_version: String,
+    pub replica_store_version: String,
     pub backup_format_version: String,
 }
 
@@ -657,9 +657,9 @@ pub struct SdkIntegrityView {
 pub struct LocalDerivedProjectionStatusView {
     pub state: String,
     pub source: String,
-    pub replica_db: String,
+    pub replica_store: String,
     pub path: String,
-    pub replica_db_version: String,
+    pub replica_store_version: String,
     pub backup_format_version: String,
     pub schema_hash: String,
     pub counts: LocalReplicaCountsView,
@@ -1122,7 +1122,7 @@ pub struct FindView {
     pub query: String,
     pub count: usize,
     pub relay_count: usize,
-    pub replica_db: String,
+    pub replica_store: String,
     pub freshness: SyncFreshnessView,
     pub results: Vec<FindResultView>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3475,7 +3475,7 @@ pub struct SyncStatusView {
     pub state: String,
     pub source: String,
     pub local_root: String,
-    pub replica_db: String,
+    pub replica_store: String,
     pub configured_transport_target_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub configured_transport_targets: Vec<SyncTransportTargetView>,
@@ -3507,7 +3507,7 @@ pub struct SyncActionView {
     pub state: String,
     pub source: String,
     pub local_root: String,
-    pub replica_db: String,
+    pub replica_store: String,
     pub configured_transport_target_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub configured_transport_targets: Vec<SyncTransportTargetView>,

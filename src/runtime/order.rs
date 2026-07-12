@@ -34,14 +34,14 @@ use radroots_nostr::prelude::{
     RadrootsNostrEvent, RadrootsNostrFilter, radroots_event_from_nostr, radroots_nostr_filter_tag,
     radroots_nostr_kind,
 };
-use radroots_replica_db::{
-    ReplicaSql, ReplicaTradeProductSummaryRow, nostr_event_head, trade_product,
-};
-use radroots_replica_db_schema::nostr_event_head::{
+use radroots_replica_schema::nostr_event_head::{
     INostrEventHeadFindOne, INostrEventHeadFindOneArgs, NostrEventHeadQueryBindValues,
 };
-use radroots_replica_db_schema::trade_product::{
+use radroots_replica_schema::trade_product::{
     ITradeProductFieldsFilter, ITradeProductFindMany, TradeProduct,
+};
+use radroots_replica_store::{
+    ReplicaSql, ReplicaTradeProductSummaryRow, nostr_event_head, trade_product,
 };
 use radroots_runtime_store::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, PublishOutboxStatus, RuntimeStoreRecord,
@@ -2789,13 +2789,13 @@ fn resolve_order_listing(
         return Ok(None);
     };
 
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Err(RuntimeError::Config(format!(
             "trade listing lookup `{listing_lookup}` requires local market data; run `radroots store init` and `radroots market refresh` before creating a trade from a listing"
         )));
     }
 
-    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
+    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_store_path)?);
     let rows = db.trade_product_lookup(listing_lookup)?;
     match rows.len() {
         0 => Err(RuntimeError::Config(format!(
@@ -2859,11 +2859,11 @@ fn resolve_trade_product_by_listing_addr(
     config: &RuntimeConfig,
     listing_addr: &str,
 ) -> Result<Option<ResolvedOrderEconomicsProduct>, RuntimeError> {
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Ok(None);
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     let product_rows = trade_product::find_many(
         &executor,
         &ITradeProductFindMany {
@@ -2890,11 +2890,11 @@ fn resolve_active_listing_event_id(
     listing_addr: &str,
     parsed: &ParsedListingAddress,
 ) -> Result<Option<String>, RuntimeError> {
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Ok(None);
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     let product_rows = trade_product::find_many(
         &executor,
         &ITradeProductFindMany {

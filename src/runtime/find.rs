@@ -1,4 +1,4 @@
-use radroots_replica_db::ReplicaSql;
+use radroots_replica_store::ReplicaSql;
 use radroots_sql_core::SqliteExecutor;
 
 use crate::cli::global::FindQueryArgs;
@@ -45,14 +45,14 @@ impl AppliedQueryRewrite {
 
 pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, RuntimeError> {
     let query = args.query.join(" ");
-    if !config.local.replica_db_path.exists() {
+    if !config.local.replica_store_path.exists() {
         return Ok(FindView {
             state: "unconfigured".to_owned(),
             source: FIND_SOURCE.to_owned(),
             query,
             count: 0,
             relay_count: config.transport.nostr_relay_urls.len(),
-            replica_db: config.local.replica_db_path.display().to_string(),
+            replica_store: config.local.replica_store_path.display().to_string(),
             freshness: missing_freshness(),
             results: Vec::new(),
             hyf: None,
@@ -62,7 +62,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
     }
 
     refresh_market_if_needed(config)?;
-    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_db_path)?);
+    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_store_path)?);
     let freshness =
         freshness_for_scope_from_executor(config, db.executor(), RelayIngestScope::MarketRefresh)?;
     let applied_query_rewrite = attempt_query_rewrite(config, query.as_str(), &args.query);
@@ -149,7 +149,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
         query,
         count: results.len(),
         relay_count,
-        replica_db: config.local.replica_db_path.display().to_string(),
+        replica_store: config.local.replica_store_path.display().to_string(),
         freshness,
         results,
         hyf: applied_query_rewrite.map(|rewrite| rewrite.to_find_view()),
@@ -162,7 +162,7 @@ fn refresh_market_if_needed(config: &RuntimeConfig) -> Result<(), RuntimeError> 
     if config.output.dry_run || config.transport.nostr_relay_urls.is_empty() {
         return Ok(());
     }
-    let executor = SqliteExecutor::open(&config.local.replica_db_path)?;
+    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
     let freshness =
         freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?;
     if freshness_requires_refresh(&freshness) {

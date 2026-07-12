@@ -31,7 +31,7 @@ impl TerminalOperationRenderer for WorkspaceRenderer {
         common::push_path_field(&mut document, "Profile", result, &["profile"]);
         common::push_verbose_path_field(&mut document, "Config", result, &["app_config_path"]);
         common::push_verbose_path_field(&mut document, "Data", result, &["app_data_root"]);
-        common::push_verbose_path_field(&mut document, "Replica", result, &["replica_db_path"]);
+        common::push_verbose_path_field(&mut document, "Replica", result, &["replica_store_path"]);
         document
     }
 }
