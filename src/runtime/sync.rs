@@ -919,8 +919,22 @@ fn sync_transport_target_view(
     kind: RadrootsTransportKind,
     endpoint_uri: &str,
 ) -> Result<SyncTransportTargetView, RuntimeError> {
-    let target = RadrootsTransportTarget::new(kind, endpoint_uri)
-        .map_err(|error| RuntimeError::Config(format!("invalid transport target: {error}")))?;
+    let target = match kind {
+        RadrootsTransportKind::Nostr => RadrootsTransportTarget::nostr_relay(endpoint_uri),
+        RadrootsTransportKind::Reticulum => {
+            if endpoint_uri != RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI {
+                Err(radroots_transport::RadrootsTransportError::InvalidTargetUri)
+            } else {
+                RadrootsTransportTarget::reticulum_preview()
+            }
+        }
+        RadrootsTransportKind::Local => RadrootsTransportTarget::local(endpoint_uri),
+        RadrootsTransportKind::Proxy => RadrootsTransportTarget::proxy(endpoint_uri),
+        RadrootsTransportKind::Mesh | RadrootsTransportKind::Custom(_) => {
+            RadrootsTransportTarget::new(kind, endpoint_uri)
+        }
+    }
+    .map_err(|error| RuntimeError::Config(format!("invalid transport target: {error}")))?;
     Ok(SyncTransportTargetView {
         transport_kind: target.kind.canonical_label(),
         endpoint_uri: target.uri.as_str().to_owned(),
