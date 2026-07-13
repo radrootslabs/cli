@@ -42,7 +42,7 @@ use crate::runtime::sdk::{
 use crate::view::runtime::{
     SyncActionView, SyncFreshnessView, SyncQueueView, SyncRunFreshnessView, SyncStatusView,
     SyncTransportStatusView, SyncTransportTargetView, SyncWatchFrameView, SyncWatchView,
-    TransportTargetFailureView,
+    TransportOperationCapabilitiesView, TransportTargetFailureView,
 };
 
 const SYNC_SOURCE: &str = "local replica · local first";
@@ -613,6 +613,10 @@ fn sdk_transport_status_view(
         configured: status.configured,
         implementation: status.implementation.clone(),
         usable_for_delivery: status.usable_for_delivery,
+        capabilities: TransportOperationCapabilitiesView {
+            deliver: status.capabilities.deliver,
+            fetch: status.capabilities.fetch,
+        },
         message: status.message.clone(),
     }
 }
@@ -1015,6 +1019,10 @@ fn sync_transport_status_view(status: RadrootsTransportStatus) -> SyncTransportS
         configured: status.configured,
         implementation: transport_implementation_label(status.implementation).to_owned(),
         usable_for_delivery: status.usable_for_delivery,
+        capabilities: TransportOperationCapabilitiesView {
+            deliver: status.capabilities.deliver,
+            fetch: status.capabilities.fetch,
+        },
         message: status.message,
     }
 }
@@ -1774,7 +1782,8 @@ mod tests {
         PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
         PushOutboxTargetOutcomeKind, PushOutboxTargetReceipt, PushOutboxTransportOutcomeKind,
         SyncEventStoreStatus, SyncOutboxStatus, SyncStatusReceipt, SyncStatusSource,
-        SyncTransportProfileSummary, SyncTransportStatusSummary, SyncTransportTargetSummary,
+        SyncTransportOperationCapabilitiesSummary, SyncTransportProfileSummary,
+        SyncTransportStatusSummary, SyncTransportTargetSummary,
     };
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_transport::{
@@ -1868,6 +1877,8 @@ mod tests {
         assert!(!view.transport_statuses[0].configured);
         assert_eq!(view.transport_statuses[0].implementation, "real");
         assert!(!view.transport_statuses[0].usable_for_delivery);
+        assert!(!view.transport_statuses[0].capabilities.deliver);
+        assert!(!view.transport_statuses[0].capabilities.fetch);
         assert!(view.target_transport_endpoints.is_empty());
         assert_eq!(
             view.actions,
@@ -1900,6 +1911,8 @@ mod tests {
         assert_eq!(view.transport_statuses.len(), 2);
         assert_eq!(view.transport_statuses[0].transport, "nostr");
         assert!(view.transport_statuses[0].usable_for_delivery);
+        assert!(view.transport_statuses[0].capabilities.deliver);
+        assert!(!view.transport_statuses[0].capabilities.fetch);
         assert_eq!(view.transport_statuses[1].transport, "reticulum");
         assert!(view.transport_statuses[1].configured);
         assert_eq!(
@@ -1907,6 +1920,8 @@ mod tests {
             "preview_unavailable"
         );
         assert!(!view.transport_statuses[1].usable_for_delivery);
+        assert!(!view.transport_statuses[1].capabilities.deliver);
+        assert!(!view.transport_statuses[1].capabilities.fetch);
         assert_eq!(
             view.target_transport_endpoints,
             vec!["wss://relay.example.com"]
@@ -1944,6 +1959,8 @@ mod tests {
         assert!(!view.transport_statuses[0].configured);
         assert_eq!(view.transport_statuses[0].implementation, "real");
         assert!(!view.transport_statuses[0].usable_for_delivery);
+        assert!(!view.transport_statuses[0].capabilities.deliver);
+        assert!(!view.transport_statuses[0].capabilities.fetch);
         assert_eq!(view.transport_statuses[1].transport, "reticulum");
         assert!(view.transport_statuses[1].configured);
         assert_eq!(
@@ -1951,6 +1968,8 @@ mod tests {
             "preview_unavailable"
         );
         assert!(!view.transport_statuses[1].usable_for_delivery);
+        assert!(!view.transport_statuses[1].capabilities.deliver);
+        assert!(!view.transport_statuses[1].capabilities.fetch);
         assert!(view.target_transport_endpoints.is_empty());
         assert_eq!(view.actions, vec!["radroots transport profile get"]);
     }
@@ -1997,6 +2016,8 @@ mod tests {
             "preview_unavailable"
         );
         assert!(!view.transport_statuses[0].usable_for_delivery);
+        assert!(!view.transport_statuses[0].capabilities.deliver);
+        assert!(!view.transport_statuses[0].capabilities.fetch);
         assert_eq!(view.fetched_count, None);
         assert!(view.target_transport_endpoints.is_empty());
         assert!(
@@ -2097,6 +2118,10 @@ mod tests {
                     configured: true,
                     implementation: "real".to_owned(),
                     usable_for_delivery: true,
+                    capabilities: SyncTransportOperationCapabilitiesSummary {
+                        deliver: true,
+                        fetch: false,
+                    },
                     message: "Nostr relay transport is configured for delivery".to_owned(),
                 },
                 SyncTransportStatusSummary {
@@ -2106,6 +2131,10 @@ mod tests {
                     configured: true,
                     implementation: "preview_unavailable".to_owned(),
                     usable_for_delivery: false,
+                    capabilities: SyncTransportOperationCapabilitiesSummary {
+                        deliver: false,
+                        fetch: false,
+                    },
                     message: RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned(),
                 },
             ],
@@ -2126,6 +2155,8 @@ mod tests {
             "preview_unavailable"
         );
         assert!(!view.transport_statuses[1].usable_for_delivery);
+        assert!(!view.transport_statuses[1].capabilities.deliver);
+        assert!(!view.transport_statuses[1].capabilities.fetch);
     }
 
     #[test]
@@ -2482,6 +2513,10 @@ mod tests {
                     configured: true,
                     implementation: "real".to_owned(),
                     usable_for_delivery: true,
+                    capabilities: SyncTransportOperationCapabilitiesSummary {
+                        deliver: true,
+                        fetch: false,
+                    },
                     message: "Nostr relay transport is configured for delivery".to_owned(),
                 }],
             },
@@ -2532,6 +2567,10 @@ mod tests {
                     configured: true,
                     implementation: "preview_unavailable".to_owned(),
                     usable_for_delivery: false,
+                    capabilities: SyncTransportOperationCapabilitiesSummary {
+                        deliver: false,
+                        fetch: false,
+                    },
                     message: RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned(),
                 }],
             },

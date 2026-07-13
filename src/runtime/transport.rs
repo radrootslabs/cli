@@ -18,8 +18,9 @@ use crate::runtime::RuntimeError;
 use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy};
 use crate::view::runtime::{
-    TransportOutboxPushView, TransportOutboxStatusView, TransportProfileSummaryView,
-    TransportProfileView, TransportRuntimeStatusView, TransportStatusView,
+    TransportOperationCapabilitiesView, TransportOutboxPushView, TransportOutboxStatusView,
+    TransportProfileSummaryView, TransportProfileView, TransportRuntimeStatusView,
+    TransportStatusView,
 };
 
 const TRANSPORT_SOURCE: &str = "transport profile config";
@@ -551,6 +552,10 @@ fn transport_runtime_status_view(status: RadrootsTransportStatus) -> TransportRu
         configured: status.configured,
         implementation: transport_implementation_label(status.implementation).to_owned(),
         usable_for_delivery: status.usable_for_delivery,
+        capabilities: TransportOperationCapabilitiesView {
+            deliver: status.capabilities.deliver,
+            fetch: status.capabilities.fetch,
+        },
         message: status.message,
     }
 }

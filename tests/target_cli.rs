@@ -107,6 +107,11 @@ fn assert_no_removed_transport_status_fields(status: &Value) {
     }
 }
 
+fn assert_transport_capabilities(status: &Value, deliver: bool, fetch: bool) {
+    assert_eq!(status["capabilities"]["deliver"], deliver);
+    assert_eq!(status["capabilities"]["fetch"], fetch);
+}
+
 fn write_proxy_transport_config(sandbox: &RadrootsCliSandbox, body: &str) -> PathBuf {
     sandbox.write_app_config(
         format!("[transport]\nprofile = \"proxy\"\n\n[transport.proxy]\n{body}").as_str(),
@@ -1445,6 +1450,7 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
         result["transport_statuses"][0]["usable_for_delivery"],
         false
     );
+    assert_transport_capabilities(&result["transport_statuses"][0], false, false);
     assert_eq!(
         result["transport_statuses"][0]["message"],
         RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
@@ -1492,6 +1498,7 @@ fn transport_profile_local_only_output_uses_profile_and_local_status_fields() {
     assert_eq!(local["implementation"], "real");
     assert_eq!(local["configured"], true);
     assert_eq!(local["usable_for_delivery"], false);
+    assert_transport_capabilities(local, false, false);
     assert_eq!(
         local["message"],
         "Local-only profile writes only to local state"
@@ -1550,6 +1557,7 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
         value["result"]["transport_statuses"][0]["usable_for_delivery"],
         true
     );
+    assert_transport_capabilities(&value["result"]["transport_statuses"][0], true, false);
     assert_eq!(
         value["result"]["transport_statuses"][1]["transport"],
         "reticulum"
@@ -1563,6 +1571,7 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
         value["result"]["transport_statuses"][1]["usable_for_delivery"],
         false
     );
+    assert_transport_capabilities(&value["result"]["transport_statuses"][1], false, false);
     assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][0]);
     assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][1]);
     assert_eq!(
@@ -1623,10 +1632,12 @@ fn transport_status_hybrid_output_reports_nostr_and_reticulum_rows() {
     assert_eq!(nostr["implementation"], "real");
     assert_eq!(nostr["configured"], true);
     assert_eq!(nostr["usable_for_delivery"], true);
+    assert_transport_capabilities(nostr, true, false);
     assert_eq!(reticulum["transport"], "reticulum");
     assert_eq!(reticulum["implementation"], "preview_unavailable");
     assert_eq!(reticulum["configured"], true);
     assert_eq!(reticulum["usable_for_delivery"], false);
+    assert_transport_capabilities(reticulum, false, false);
     assert_eq!(reticulum["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     assert_no_removed_transport_status_fields(nostr);
     assert_no_removed_transport_status_fields(reticulum);
@@ -1652,6 +1663,7 @@ fn transport_status_nostr_output_uses_canonical_transport_row() {
     assert_eq!(nostr["implementation"], "real");
     assert_eq!(nostr["configured"], true);
     assert_eq!(nostr["usable_for_delivery"], true);
+    assert_transport_capabilities(nostr, true, false);
     assert_no_removed_transport_status_fields(nostr);
 }
 
@@ -1680,6 +1692,7 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
     assert_eq!(active["implementation"], "preview_unavailable");
     assert_eq!(active["configured"], true);
     assert_eq!(active["usable_for_delivery"], false);
+    assert_transport_capabilities(active, false, false);
     assert_eq!(active["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     assert!(
         !active["message"]
@@ -2004,6 +2017,10 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         "pub configured: bool,",
         "pub implementation: String,",
         "pub usable_for_delivery: bool,",
+        "pub capabilities: TransportOperationCapabilitiesView,",
+        "pub struct TransportOperationCapabilitiesView",
+        "pub deliver: bool,",
+        "pub fetch: bool,",
         "pub message: String,",
     ] {
         assert!(
@@ -2194,6 +2211,7 @@ fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_ou
         "pub configured: bool,",
         "pub implementation: String,",
         "pub usable_for_delivery: bool,",
+        "pub capabilities: TransportOperationCapabilitiesView,",
         "pub message: String,",
         "pub target_transport_endpoints: Vec<String>,",
         "pub attempted_transport_endpoints: Vec<String>,",
@@ -2211,6 +2229,15 @@ fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_ou
         "pub struct SyncTransportStatusView",
         "pub struct TransportTargetFailureView",
     );
+    for required in [
+        "pub capabilities: TransportOperationCapabilitiesView,",
+        "pub message: String,",
+    ] {
+        assert!(
+            sync_status_view_source.contains(required),
+            "sync transport status view must retain canonical field `{required}`"
+        );
+    }
     for forbidden in [
         "pub transport_kind:",
         "pub implementation_state:",
@@ -2583,6 +2610,7 @@ fn transport_profile_set_proxy_persists_token_file_without_printing_token_materi
         value["result"]["transport_statuses"][0]["usable_for_delivery"],
         true
     );
+    assert_transport_capabilities(&value["result"]["transport_statuses"][0], true, false);
     assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][0]);
     assert_eq!(value["result"]["proxy_token_source"], "token_file");
     assert_eq!(
@@ -2646,6 +2674,7 @@ fn transport_profile_set_proxy_persists_token_secret_id_without_printing_token_m
         value["result"]["transport_statuses"][0]["usable_for_delivery"],
         true
     );
+    assert_transport_capabilities(&value["result"]["transport_statuses"][0], true, false);
     assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][0]);
     assert_eq!(value["result"]["proxy_token_source"], "token_secret_id");
     assert!(value["result"]["proxy_token_file"].is_null());

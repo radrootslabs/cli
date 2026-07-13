@@ -195,6 +195,12 @@ fn push_transport_status_table(document: &mut TerminalDocument, result: &Value, 
                 common::bool_path(transport, &["usable_for_delivery"])
                     .map(|value| if value { "yes" } else { "no" }.to_owned())
                     .unwrap_or_default(),
+                common::bool_path(transport, &["capabilities", "deliver"])
+                    .map(|value| if value { "yes" } else { "no" }.to_owned())
+                    .unwrap_or_default(),
+                common::bool_path(transport, &["capabilities", "fetch"])
+                    .map(|value| if value { "yes" } else { "no" }.to_owned())
+                    .unwrap_or_default(),
                 common::string(transport, &["endpoint_uri"]).unwrap_or_default(),
             ])
         })
@@ -207,6 +213,8 @@ fn push_transport_status_table(document: &mut TerminalDocument, result: &Value, 
             TerminalTableColumn::new("Configured", 10, 10),
             TerminalTableColumn::new("Implementation", 14, 24),
             TerminalTableColumn::new("Usable", 6, 6),
+            TerminalTableColumn::new("Deliver", 7, 7),
+            TerminalTableColumn::new("Fetch", 5, 5),
             TerminalTableColumn::new("Endpoint", 8, 32),
         ],
         rows,

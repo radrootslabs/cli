@@ -3318,7 +3318,14 @@ pub struct TransportRuntimeStatusView {
     pub configured: bool,
     pub implementation: String,
     pub usable_for_delivery: bool,
+    pub capabilities: TransportOperationCapabilitiesView,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransportOperationCapabilitiesView {
+    pub deliver: bool,
+    pub fetch: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3569,6 +3576,7 @@ pub struct SyncTransportStatusView {
     pub configured: bool,
     pub implementation: String,
     pub usable_for_delivery: bool,
+    pub capabilities: TransportOperationCapabilitiesView,
     pub message: String,
 }
 
