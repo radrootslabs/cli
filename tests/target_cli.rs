@@ -61,6 +61,92 @@ use support::{
 
 const ORDERABLE_LISTING_RELAY: &str = "wss://relay.example.com";
 
+const FORBIDDEN_FOUNDATION_HARDENING_RETIRED_CONCEPTS: &[(&str, &str)] = &[
+    (
+        "SignedNostrEvent",
+        "generic signed-event surfaces must use product-neutral signed-event names",
+    ),
+    (
+        "RadrootsEventIndexIndexCheckpoint",
+        "event-index checkpoint names must not duplicate the index noun",
+    ),
+    (
+        "RadrootsEventsIndexed",
+        "event-indexed APIs must use the singular event-index crate family",
+    ),
+    (
+        "RADROOTS_EVENTS_VERSION",
+        "event contract version constants must use the current singular event namespace",
+    ),
+    (
+        "radroots_events",
+        "CLI surfaces must use the current singular event crate names",
+    ),
+    (
+        "radroots_events_codec",
+        "CLI event codec surfaces must use the current singular event-codec name",
+    ),
+    (
+        "radroots_events_indexed",
+        "CLI event index surfaces must use the current singular event-index name",
+    ),
+    (
+        "radroots_local_events",
+        "CLI storage surfaces must not reintroduce retired local-events names",
+    ),
+    (
+        "radroots_local_store",
+        "CLI storage surfaces must not reintroduce retired local-store names",
+    ),
+    (
+        "radroots_types",
+        "CLI type surfaces must use current crate ownership instead of retired types crates",
+    ),
+    (
+        "radroots_types_bindings",
+        "CLI generated surfaces must not reintroduce retired types-binding names",
+    ),
+    (
+        "radroots_nostr_ndb",
+        "CLI Nostr database surfaces must not reintroduce retired ndb names",
+    ),
+    (
+        "radroots_replica_db",
+        "CLI replica surfaces must use current replica-store ownership",
+    ),
+    (
+        "radroots_replica_db_schema",
+        "CLI replica schema surfaces must use current replica-schema ownership",
+    ),
+    (
+        "radroots_sp1_guest_trade",
+        "CLI trade SP1 surfaces must use the current trade_sp1 crate names",
+    ),
+    (
+        "radroots_sp1_host_trade",
+        "CLI trade SP1 surfaces must use the current trade_sp1 crate names",
+    ),
+];
+
+const FORBIDDEN_FOUNDATION_HARDENING_DOC_CONCEPTS: &[(&str, &str)] = &[
+    (
+        "Nostr event timestamp",
+        "CLI docs must describe event-envelope timestamps without generic Nostr wording",
+    ),
+    (
+        "Forwarded satisfies Delivered",
+        "CLI docs must not imply forwarded evidence is strict delivery",
+    ),
+    (
+        "StoredByGateway satisfies Delivered",
+        "CLI docs must not imply gateway storage evidence is strict delivery",
+    ),
+    (
+        "Seen satisfies Delivered",
+        "CLI docs must not imply seen evidence is strict delivery",
+    ),
+];
+
 const LISTING_ADDR: &str =
     "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
 const DERIVED_PROJECTION_SYNC_PUSH_FARM_D_TAG: &str = "AAAAAAAAAAAAAAAAAAAAAA";
@@ -2196,6 +2282,45 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
 }
 
 #[test]
+fn foundation_hardening_sources_reject_retired_names_and_ambiguous_docs() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut findings = Vec::new();
+
+    for path in cli_foundation_hardening_guard_files(manifest_dir) {
+        let source = fs::read_to_string(path.as_path()).expect("read source");
+        let relative_path = path
+            .strip_prefix(manifest_dir)
+            .expect("guard path under manifest")
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        for (pattern, reason) in FORBIDDEN_FOUNDATION_HARDENING_RETIRED_CONCEPTS {
+            if contains_foundation_hardening_concept(source.as_str(), pattern) {
+                findings.push(format!(
+                    "{relative_path} contains retired Foundation Hardening concept `{pattern}`: {reason}"
+                ));
+            }
+        }
+
+        if is_foundation_doc_surface(path.as_path()) {
+            for (pattern, reason) in FORBIDDEN_FOUNDATION_HARDENING_DOC_CONCEPTS {
+                if source.contains(pattern) {
+                    findings.push(format!(
+                        "{relative_path} contains ambiguous Foundation Hardening wording `{pattern}`: {reason}"
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        findings.is_empty(),
+        "CLI Foundation Hardening V1 source-boundary violations:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
 fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_output() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let view_source =
@@ -2304,6 +2429,82 @@ fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_ou
             );
         }
     }
+}
+
+fn cli_foundation_hardening_guard_files(manifest_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    for path in [
+        manifest_dir.join("Cargo.toml"),
+        manifest_dir.join("README"),
+        manifest_dir.join("README.md"),
+    ] {
+        if path.exists() {
+            paths.push(path);
+        }
+    }
+
+    for relative_root in ["src", "docs"] {
+        let root = manifest_dir.join(relative_root);
+        if root.exists() {
+            collect_foundation_hardening_guard_files(root.as_path(), &mut paths);
+        }
+    }
+
+    paths.sort();
+    paths
+}
+
+fn collect_foundation_hardening_guard_files(root: &Path, paths: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(root)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", root.display()))
+    {
+        let path = entry.expect("guard entry").path();
+        if path.is_dir() {
+            collect_foundation_hardening_guard_files(path.as_path(), paths);
+            continue;
+        }
+
+        let guarded_extension = matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("rs") | Some("toml") | Some("md")
+        );
+        if guarded_extension
+            || matches!(
+                path.file_name().and_then(|file_name| file_name.to_str()),
+                Some("README") | Some("README.md")
+            )
+        {
+            paths.push(path);
+        }
+    }
+}
+
+fn contains_foundation_hardening_concept(source: &str, pattern: &str) -> bool {
+    if !pattern.chars().all(is_foundation_identifier_character) {
+        return source.contains(pattern);
+    }
+
+    source.match_indices(pattern).any(|(index, _)| {
+        let before = source[..index].chars().next_back();
+        let after = source[index + pattern.len()..].chars().next();
+        before.is_none_or(|character| !is_foundation_identifier_character(character))
+            && after.is_none_or(|character| !is_foundation_identifier_character(character))
+    })
+}
+
+fn is_foundation_identifier_character(character: char) -> bool {
+    character == '_' || character.is_ascii_alphanumeric()
+}
+
+fn is_foundation_doc_surface(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|file_name| file_name.to_str()),
+        Some("README") | Some("README.md")
+    ) || matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("md")
+    )
 }
 
 fn source_window<'source>(
