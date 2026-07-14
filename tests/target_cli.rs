@@ -63,6 +63,26 @@ const ORDERABLE_LISTING_RELAY: &str = "wss://relay.example.com";
 
 const FORBIDDEN_FOUNDATION_HARDENING_RETIRED_CONCEPTS: &[(&str, &str)] = &[
     (
+        "WireEventParts",
+        "event construction must use current Radroots NIP-01 wire part names",
+    ),
+    (
+        "RadrootsFrozenEventDraft",
+        "event draft surfaces must use the current RadrootsEventDraft name",
+    ),
+    (
+        "RadrootsNostrEvent",
+        "product-level event surfaces must use protocol-neutral event names",
+    ),
+    (
+        "RadrootsNostrEventRef",
+        "product-level event references must use RadrootsEventRef",
+    ),
+    (
+        "RadrootsNostrEventPtr",
+        "product-level event pointers must use RadrootsEventPtr",
+    ),
+    (
         "SignedNostrEvent",
         "generic signed-event surfaces must use product-neutral signed-event names",
     ),
@@ -2305,6 +2325,9 @@ fn foundation_hardening_sources_reject_retired_names_and_ambiguous_docs() {
             .replace('\\', "/");
 
         for (pattern, reason) in FORBIDDEN_FOUNDATION_HARDENING_RETIRED_CONCEPTS {
+            if foundation_hardening_retired_concept_allowed(relative_path.as_str(), pattern) {
+                continue;
+            }
             if contains_foundation_hardening_concept(source.as_str(), pattern) {
                 findings.push(format!(
                     "{relative_path} contains retired Foundation Hardening concept `{pattern}`: {reason}"
@@ -2439,6 +2462,17 @@ fn sync_transport_status_source_boundary_rejects_retired_relay_shaped_generic_ou
             );
         }
     }
+}
+
+fn foundation_hardening_retired_concept_allowed(relative_path: &str, pattern: &str) -> bool {
+    pattern == "RadrootsNostrEvent" && cli_nostr_protocol_context(relative_path)
+}
+
+fn cli_nostr_protocol_context(relative_path: &str) -> bool {
+    matches!(
+        relative_path,
+        "src/runtime/order.rs" | "src/runtime/sdk.rs" | "src/runtime/sync.rs"
+    )
 }
 
 fn cli_foundation_hardening_guard_files(manifest_dir: &Path) -> Vec<PathBuf> {
