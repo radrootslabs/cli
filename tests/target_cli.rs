@@ -738,7 +738,8 @@ fn handle_proxy_connection(mut stream: TcpStream, expected_token: Option<&str>) 
     let request: Value = serde_json::from_str(body.as_str()).expect("proxy json");
     assert_eq!(request["jsonrpc"], "2.0");
     assert_eq!(request["method"], "transport.publish.event");
-    let event = &request["params"]["event"];
+    assert!(request["params"].get("event").is_none());
+    let event = proxy_request_raw_event(&request);
     let target_result = json!({
         "transport_kind": "nostr",
         "endpoint_uri": "wss://daemon-resolved.radroots.test",
@@ -756,9 +757,9 @@ fn handle_proxy_connection(mut stream: TcpStream, expected_token: Option<&str>) 
                 "status": "delivery_satisfied",
                 "terminal": true,
                 "delivery_satisfied": true,
-                "event_id": event["id"],
-                "pubkey": event["pubkey"],
-                "event_kind": event["kind"],
+                "event_id": event["id"].clone(),
+                "pubkey": event["pubkey"].clone(),
+                "event_kind": event["kind"].clone(),
                 "target_policy": request["params"]["target_policy"],
                 "delivery_policy": request["params"]["delivery_policy"],
                 "target_count": 1,
@@ -780,6 +781,15 @@ fn handle_proxy_connection(mut stream: TcpStream, expected_token: Option<&str>) 
         .write_all(raw_response.as_bytes())
         .expect("write proxy response");
     request
+}
+
+fn proxy_request_raw_event(request: &Value) -> Value {
+    serde_json::from_str(
+        request["params"]["raw_event_json"]
+            .as_str()
+            .expect("proxy raw event json"),
+    )
+    .expect("proxy raw event")
 }
 
 fn http_body_start(bytes: &[u8]) -> Option<usize> {
@@ -3607,10 +3617,8 @@ token_file = "{}"
         "SDK listing publish · configured signer"
     );
     assert_eq!(value["result"]["dry_run"], false);
-    assert_eq!(
-        request["params"]["event"]["id"],
-        value["result"]["event_id"]
-    );
+    let event = proxy_request_raw_event(&request);
+    assert_eq!(event["id"], value["result"]["event_id"]);
     assert_eq!(
         request["params"]["target_policy"]["relay_urls"]
             .as_array()
@@ -3890,15 +3898,10 @@ token_file = "{}"
     assert!(report.req_count >= 1);
     assert_eq!(report.sign_request_count, 1);
     assert_eq!(report.published_events.len(), 0);
-    assert_eq!(request["params"]["event"]["kind"], KIND_LISTING);
-    assert_eq!(
-        request["params"]["event"]["pubkey"],
-        user_public.public_key_hex
-    );
-    assert_eq!(
-        request["params"]["event"]["id"],
-        value["result"]["event_id"]
-    );
+    let event = proxy_request_raw_event(&request);
+    assert_eq!(event["kind"], KIND_LISTING);
+    assert_eq!(event["pubkey"], user_public.public_key_hex);
+    assert_eq!(event["id"], value["result"]["event_id"]);
 }
 
 #[test]

@@ -4,9 +4,9 @@ use std::process::{Command, Output};
 use std::sync::Mutex;
 
 use assert_cmd::prelude::*;
-use radroots_event::RadrootsEventEnvelope;
 use radroots_event::ids::RadrootsListingAddress;
 use radroots_event::kinds::{KIND_FARM, KIND_LISTING};
+use radroots_event::{RadrootsEventEnvelope, RadrootsEventEnvelopeParts};
 use radroots_identity::{RadrootsIdentity, RadrootsIdentityPublic};
 use radroots_protected_store::RadrootsProtectedFileSecretVault;
 use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
@@ -274,7 +274,7 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
         .expect("replica db path from store init");
     let (seller_pubkey, listing_id) = listing_addr_parts(listing_addr);
     let event_id = "2".repeat(64);
-    let event = RadrootsEventEnvelope {
+    let event = RadrootsEventEnvelope::new(RadrootsEventEnvelopeParts {
         id: event_id.clone(),
         author: seller_pubkey.clone(),
         created_at: 1,
@@ -322,7 +322,8 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
         ],
         content: "# Market Eggs".to_owned(),
         sig: "f".repeat(128),
-    };
+    })
+    .expect("seed listing event");
     let executor = SqliteExecutor::open(Path::new(db_path)).expect("open replica db");
     assert_eq!(
         radroots_replica_ingest_event(&executor, &event).expect("ingest listing"),
@@ -437,24 +438,26 @@ fn seed_orderable_listing_signed_event(
     store.migrate_up().expect("migrate runtime store");
     store
         .append_record(&RuntimeStoreRecordInput {
-            record_id: format!("test:signed_listing:{}", event.id),
+            record_id: format!("test:signed_listing:{}", event.id_str()),
             family: RuntimeStoreRecordFamily::SignedEvent,
             status: RuntimeStoreRecordStatus::Published,
             source_runtime: SourceRuntime::Cli,
             created_at_ms: 1_779_000_001_000,
             inserted_at_ms: 1_779_000_001_000,
             owner_account_id: None,
-            owner_pubkey: Some(event.author.clone()),
+            owner_pubkey: Some(event.author_str().to_owned()),
             farm_id: None,
             listing_addr: Some(listing_addr.to_owned()),
             local_work_json: None,
-            event_id: Some(event.id.clone()),
-            event_kind: Some(i64::from(event.kind)),
-            event_pubkey: Some(event.author.clone()),
-            event_created_at: Some(i64::try_from(event.created_at).expect("event created_at")),
-            event_tags_json: Some(json!(event.tags)),
-            event_content: Some(event.content.clone()),
-            event_sig: Some(event.sig.clone()),
+            event_id: Some(event.id_str().to_owned()),
+            event_kind: Some(i64::from(event.kind_u32())),
+            event_pubkey: Some(event.author_str().to_owned()),
+            event_created_at: Some(
+                i64::try_from(event.created_at_u64()).expect("event created_at"),
+            ),
+            event_tags_json: Some(json!(event.tags_as_vec())),
+            event_content: Some(event.content().to_owned()),
+            event_sig: Some(event.sig_str().to_owned()),
             raw_event_json: Some(json!(event)),
             outbox_status: PublishOutboxStatus::Acknowledged,
             relay_set_fingerprint: None,

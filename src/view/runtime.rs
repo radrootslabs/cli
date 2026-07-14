@@ -3036,7 +3036,7 @@ pub struct ListingMutationEventView {
     pub kind: u32,
     pub author: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<u32>,
+    pub created_at: Option<u64>,
     pub content: String,
     pub tags: Vec<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]

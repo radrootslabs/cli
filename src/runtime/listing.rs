@@ -10,7 +10,6 @@ use radroots_core::{
     RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney,
     RadrootsCorePercent, RadrootsCoreQuantity, RadrootsCoreQuantityPrice, RadrootsCoreUnit,
 };
-use radroots_event::RadrootsEventEnvelope;
 use radroots_event::contract::RadrootsActorRole;
 use radroots_event::farm::RadrootsFarmRef;
 use radroots_event::ids::{RadrootsDTag, RadrootsInventoryBinId};
@@ -21,6 +20,7 @@ use radroots_event::listing::{
     RadrootsListingStatus,
 };
 use radroots_event::trade_validation::RadrootsTradeValidationListingError;
+use radroots_event::{RadrootsEventEnvelope, RadrootsEventEnvelopeParts};
 use radroots_event_codec::d_tag::is_d_tag_base64url;
 use radroots_event_codec::listing::encode::to_wire_parts_with_kind;
 use radroots_replica_store::ReplicaSql;
@@ -588,14 +588,20 @@ pub fn validate(
                     issue,
                 ));
             }
-            let event = RadrootsEventEnvelope {
-                id: String::new(),
-                author: canonical.seller_pubkey.clone(),
-                created_at: 0,
-                kind: KIND_LISTING_DRAFT,
-                tags: parts.tags,
-                content: parts.content,
-                sig: String::new(),
+            let event = match listing_validation_event(&canonical, parts) {
+                Ok(event) => event,
+                Err(error) => {
+                    return Ok(invalid_validation_view(
+                        args.file.as_path(),
+                        &parsed,
+                        &context,
+                        ListingValidationIssueView {
+                            field: "listing".to_owned(),
+                            message: format!("invalid listing event envelope: {error}"),
+                            line: None,
+                        },
+                    ));
+                }
             };
             match validate_listing_event(&event) {
                 Ok(_) => Ok(ListingValidateView {
@@ -1157,14 +1163,15 @@ fn listing_ready_issues(
             }];
         }
     };
-    let event = RadrootsEventEnvelope {
-        id: String::new(),
-        author: canonical.seller_pubkey.clone(),
-        created_at: 0,
-        kind: KIND_LISTING_DRAFT,
-        tags: parts.tags,
-        content: parts.content,
-        sig: String::new(),
+    let event = match listing_validation_event(canonical, parts) {
+        Ok(event) => event,
+        Err(error) => {
+            return vec![ListingValidationIssueView {
+                field: "listing".to_owned(),
+                message: format!("invalid listing event envelope: {error}"),
+                line: None,
+            }];
+        }
     };
     match validate_listing_event(&event) {
         Ok(_) => Vec::new(),
@@ -1947,15 +1954,31 @@ fn sdk_enqueued_publish_view(
 
 fn sdk_plan_event_view(plan: &ListingPublishPlan) -> ListingMutationEventView {
     ListingMutationEventView {
-        kind: plan.frozen_draft.kind,
-        author: plan.frozen_draft.expected_pubkey.clone(),
-        created_at: Some(plan.frozen_draft.created_at),
-        content: plan.frozen_draft.content.clone(),
-        tags: plan.frozen_draft.tags.clone(),
+        kind: plan.frozen_draft.kind_u32(),
+        author: plan.frozen_draft.expected_pubkey_str().to_owned(),
+        created_at: Some(plan.frozen_draft.created_at_u64()),
+        content: plan.frozen_draft.content().to_owned(),
+        tags: plan.frozen_draft.tags_as_vec(),
         event_id: Some(plan.expected_event_id.as_str().to_owned()),
         signature: None,
         event_addr: plan.public_listing_addr.as_str().to_owned(),
     }
+}
+
+fn listing_validation_event(
+    canonical: &CanonicalListingDraft,
+    parts: radroots_event::wire::RadrootsNip01EventWireParts,
+) -> Result<RadrootsEventEnvelope, String> {
+    RadrootsEventEnvelope::new(RadrootsEventEnvelopeParts {
+        id: "0".repeat(64),
+        author: canonical.seller_pubkey.clone(),
+        created_at: 0,
+        kind: KIND_LISTING_DRAFT,
+        tags: parts.tags,
+        content: parts.content,
+        sig: "0".repeat(128),
+    })
+    .map_err(|error| error.to_string())
 }
 
 fn sdk_push_event_for_listing<'a>(

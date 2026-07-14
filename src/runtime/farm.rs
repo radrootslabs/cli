@@ -1180,10 +1180,10 @@ fn sdk_enqueued_publish_view(
 
 fn sdk_plan_event_view(plan: &FarmPublishPlan) -> FarmPublishEventView {
     FarmPublishEventView {
-        kind: plan.frozen_draft.kind,
-        author: plan.frozen_draft.expected_pubkey.clone(),
-        content: plan.frozen_draft.content.clone(),
-        tags: plan.frozen_draft.tags.clone(),
+        kind: plan.frozen_draft.kind_u32(),
+        author: plan.frozen_draft.expected_pubkey_str().to_owned(),
+        content: plan.frozen_draft.content().to_owned(),
+        tags: plan.frozen_draft.tags_as_vec(),
         event_id: Some(plan.expected_event_id.as_str().to_owned()),
         event_addr: Some(plan.farm_addr.as_str().to_owned()),
     }

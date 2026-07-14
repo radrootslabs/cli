@@ -107,7 +107,7 @@ pub struct ValidationReceiptResourceView {
 pub struct ValidationReceiptEventView {
     pub id: String,
     pub author: String,
-    pub created_at: u32,
+    pub created_at: u64,
     pub kind: u32,
     pub sig: String,
     pub tags: Vec<Vec<String>>,
@@ -179,7 +179,7 @@ pub struct ValidationReceiptSummaryView {
     pub receipt_event_id: String,
     pub order_id: String,
     pub author: String,
-    pub created_at: u32,
+    pub created_at: u64,
     pub receipt_type: String,
     pub result: String,
     pub proof_system: String,
@@ -394,7 +394,7 @@ fn inspected_event_view(
     failed_transport_targets: Vec<TransportTargetFailureView>,
     relay_reason_code: Option<String>,
 ) -> ValidationReceiptInspectionView {
-    let event_id = sdk_receipt.event.id.clone();
+    let event_id = sdk_receipt.event.id_str().to_owned();
     let order_id = sdk_receipt.tags.order_id.clone();
     let proof_verification = proof_verification_view_for_receipt(
         &sdk_receipt.receipt,
@@ -457,8 +457,8 @@ fn invalid_inspected_event_view(
 ) -> ValidationReceiptInspectionView {
     ValidationReceiptInspectionView {
         state: "invalid".to_owned(),
-        resource: Some(validation_receipt_resource(&invalid.event.id)),
-        receipt_event_id: Some(invalid.event.id.clone()),
+        resource: Some(validation_receipt_resource(invalid.event.id_str())),
+        receipt_event_id: Some(invalid.event.id_str().to_owned()),
         order_id: None,
         validation_state: "invalid".to_owned(),
         proof_verification: None,
@@ -496,8 +496,8 @@ fn list_from_sdk_receipt(
         );
         if proof_state_is_invalid(proof_verification.state.as_str()) {
             invalid_receipts.push(ValidationReceiptInvalidCandidateView {
-                receipt_event_id: sdk_event.event.id,
-                kind: sdk_event.event.kind,
+                receipt_event_id: sdk_event.event.id_str().to_owned(),
+                kind: sdk_event.event.kind_u32(),
                 reason_code: proof_verification
                     .reason_code
                     .clone()
@@ -718,13 +718,13 @@ fn validation_receipt_resource(id: &str) -> ValidationReceiptResourceView {
 
 fn event_view(event: radroots_event::RadrootsEventEnvelope) -> ValidationReceiptEventView {
     ValidationReceiptEventView {
-        id: event.id,
-        author: event.author,
-        created_at: event.created_at,
-        kind: event.kind,
-        sig: event.sig,
-        tags: event.tags,
-        content: event.content,
+        id: event.id_str().to_owned(),
+        author: event.author_str().to_owned(),
+        created_at: event.created_at_u64(),
+        kind: event.kind_u32(),
+        sig: event.sig_str().to_owned(),
+        tags: event.tags_as_vec(),
+        content: event.content().to_owned(),
     }
 }
 
@@ -1189,8 +1189,8 @@ fn invalid_candidate_view(
     candidate: TradeValidationReceiptInvalidCandidate,
 ) -> ValidationReceiptInvalidCandidateView {
     ValidationReceiptInvalidCandidateView {
-        receipt_event_id: candidate.event.id,
-        kind: candidate.event.kind,
+        receipt_event_id: candidate.event.id_str().to_owned(),
+        kind: candidate.event.kind_u32(),
         reason_code: candidate.reason_code,
         reason: candidate.reason,
         proof_verification: None,
@@ -1269,11 +1269,11 @@ fn summary_view(
     proof_verification: &ValidationReceiptProofVerificationView,
 ) -> ValidationReceiptSummaryView {
     ValidationReceiptSummaryView {
-        resource: validation_receipt_resource(&event.id),
-        receipt_event_id: event.id.clone(),
+        resource: validation_receipt_resource(event.id_str()),
+        receipt_event_id: event.id_str().to_owned(),
         order_id: tags.order_id.clone(),
-        author: event.author.clone(),
-        created_at: event.created_at,
+        author: event.author_str().to_owned(),
+        created_at: event.created_at_u64(),
         receipt_type: receipt_type_label(receipt.receipt_type).to_owned(),
         result: receipt_result_label(receipt.result).to_owned(),
         proof_system: receipt.proof.system.as_str().to_owned(),

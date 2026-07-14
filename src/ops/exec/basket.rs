@@ -1315,9 +1315,9 @@ fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use radroots_event::RadrootsEventEnvelope;
     use radroots_event::ids::RadrootsListingAddress;
     use radroots_event::kinds::{KIND_FARM, KIND_LISTING};
+    use radroots_event::{RadrootsEventEnvelope, RadrootsEventEnvelopeParts};
     use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_sql_core::{SqlExecutor, SqliteExecutor};
@@ -1770,7 +1770,7 @@ mod tests {
     fn seed_current_listing(config: &RuntimeConfig) {
         crate::runtime::store::init(config).expect("store init");
         let (seller_pubkey, listing_id) = listing_addr_parts(LISTING_ADDR);
-        let event = RadrootsEventEnvelope {
+        let event = RadrootsEventEnvelope::new(RadrootsEventEnvelopeParts {
             id: "2".repeat(64),
             author: seller_pubkey.clone(),
             created_at: 1,
@@ -1818,7 +1818,8 @@ mod tests {
             ],
             content: "# Market Eggs".to_owned(),
             sig: "f".repeat(128),
-        };
+        })
+        .expect("seed listing event");
         let executor =
             SqliteExecutor::open(&config.local.replica_store_path).expect("open replica");
         assert_eq!(

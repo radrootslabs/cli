@@ -1783,11 +1783,11 @@ mod tests {
     use radroots_event::list_set::RadrootsListSet;
     use radroots_event::plot::RadrootsPlot;
     use radroots_event::profile::{RadrootsProfile, RadrootsProfileType};
+    use radroots_event::wire::RadrootsNip01EventWireParts;
     use radroots_event_codec::farm::encode as farm_encode;
     use radroots_event_codec::list_set::encode as list_set_encode;
     use radroots_event_codec::plot::encode as plot_encode;
     use radroots_event_codec::profile::encode as profile_encode;
-    use radroots_event_codec::wire::WireEventParts;
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{
         RadrootsNostrEvent, RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_nostr_build_event,
@@ -2929,7 +2929,7 @@ mod tests {
         let events = vec![
             signed_event(
                 &seller,
-                WireEventParts {
+                RadrootsNip01EventWireParts {
                     kind: KIND_POST,
                     content: "hello".to_owned(),
                     tags: Vec::new(),
@@ -2937,7 +2937,7 @@ mod tests {
             ),
             signed_event(
                 &seller,
-                WireEventParts {
+                RadrootsNip01EventWireParts {
                     kind: KIND_LISTING,
                     content: "not a listing".to_owned(),
                     tags: Vec::new(),
@@ -3152,7 +3152,10 @@ mod tests {
             .expect("signed event")
     }
 
-    fn signed_event(identity: &RadrootsIdentity, parts: WireEventParts) -> RadrootsNostrEvent {
+    fn signed_event(
+        identity: &RadrootsIdentity,
+        parts: RadrootsNip01EventWireParts,
+    ) -> RadrootsNostrEvent {
         radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
             .expect("event builder")
             .sign_with_keys(identity.keys())

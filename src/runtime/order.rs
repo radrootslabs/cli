@@ -1734,8 +1734,9 @@ fn order_event_list_entry_from_event(
     let event = radroots_event_from_nostr(event);
     let envelope = order_request_from_event(&event)
         .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
+    let event_tags = event.tags_as_vec();
     let context =
-        order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event.tags)
+        order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event_tags)
             .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
 
     if context.counterparty_pubkey != seller_pubkey
@@ -1747,13 +1748,13 @@ fn order_event_list_entry_from_event(
     }
 
     let listing_event_id = context.listing_event.as_ref().map(|event| event.id.clone());
-    let created_at_unix = u64::from(event.created_at);
+    let created_at_unix = event.created_at_u64();
 
     Ok(OrderEventListEntryView {
         id: envelope.order_id.clone(),
         state: "requested".to_owned(),
-        event_id: Some(event.id),
-        event_kind: Some(event.kind),
+        event_id: Some(event.id_str().to_owned()),
+        event_kind: Some(event.kind_u32()),
         listing_lookup: None,
         listing_addr: Some(envelope.listing_addr),
         listing_event_id,
@@ -4718,8 +4719,9 @@ fn order_submit_request_from_event(
     let event = radroots_event_from_nostr(event);
     let envelope = order_request_from_event(&event)
         .map_err(|error| RuntimeError::Config(format!("decode order request event: {error}")))?;
+    let event_tags = event.tags_as_vec();
     let context =
-        order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event.tags)
+        order_event_context_from_tags(RadrootsOrderEventType::OrderRequested, &event_tags)
             .map_err(|error| RuntimeError::Config(format!("decode order request tags: {error}")))?;
 
     if envelope.order_id != loaded.document.order.order_id
@@ -4743,12 +4745,12 @@ fn order_submit_request_from_event(
             "order request listing address is outside seller authority".to_owned(),
         ));
     }
-    let payload = canonicalize_order_request_for_signer(envelope.payload, event.author.as_str())
+    let payload = canonicalize_order_request_for_signer(envelope.payload, event.author_str())
         .map_err(|error| RuntimeError::Config(format!("canonicalize order request: {error}")))?;
     let listing_event_id = context.listing_event.as_ref().map(|event| event.id.clone());
 
     Ok(ResolvedOrderSubmitRequest {
-        request_event_id: event.id,
+        request_event_id: event.id_str().to_owned(),
         listing_event_id,
         payload,
     })
