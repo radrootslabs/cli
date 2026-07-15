@@ -111,24 +111,45 @@ pub enum OperationAdapterError {
         operation_id: String,
         message: String,
     },
-    #[error("operation `{operation_id}` failed: {message}")]
-    DetailedFailure {
+    #[error("operation `{}` failed: {}", .0.operation_id, .0.message)]
+    DetailedFailure(Box<OperationDetailedFailure>),
+    #[error("operation runtime error: {0}")]
+    Runtime(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationDetailedFailure {
+    pub operation_id: String,
+    pub code: String,
+    pub class: String,
+    pub message: String,
+    pub exit_code: CliExitCode,
+    pub detail_json: String,
+}
+
+impl OperationAdapterError {
+    fn detailed_failure(
         operation_id: String,
         code: String,
         class: String,
         message: String,
         exit_code: CliExitCode,
         detail_json: String,
-    },
-    #[error("operation runtime error: {0}")]
-    Runtime(String),
-}
+    ) -> Self {
+        Self::DetailedFailure(Box::new(OperationDetailedFailure {
+            operation_id,
+            code,
+            class,
+            message,
+            exit_code,
+            detail_json,
+        }))
+    }
 
-impl OperationAdapterError {
     pub fn approval_required(operation_id: &str) -> Self {
         Self::ApprovalRequired {
             operation_id: operation_id.to_owned(),
-            message: "missing required `approval_token` input".to_owned(),
+            message: "missing required V1 approval proof or --yes confirmation".to_owned(),
         }
     }
 
@@ -170,25 +191,25 @@ impl OperationAdapterError {
         message: String,
         detail: Value,
     ) -> Self {
-        Self::DetailedFailure {
-            operation_id: operation_id.to_owned(),
-            code: "operation_unavailable".to_owned(),
-            class: "operation".to_owned(),
+        Self::detailed_failure(
+            operation_id.to_owned(),
+            "operation_unavailable".to_owned(),
+            "operation".to_owned(),
             message,
-            exit_code: CliExitCode::RuntimeUnavailable,
-            detail_json: detail.to_string(),
-        }
+            CliExitCode::RuntimeUnavailable,
+            detail.to_string(),
+        )
     }
 
     pub fn not_found_with_detail(operation_id: &str, message: String, detail: Value) -> Self {
-        Self::DetailedFailure {
-            operation_id: operation_id.to_owned(),
-            code: "not_found".to_owned(),
-            class: "resource".to_owned(),
+        Self::detailed_failure(
+            operation_id.to_owned(),
+            "not_found".to_owned(),
+            "resource".to_owned(),
             message,
-            exit_code: CliExitCode::NotFound,
-            detail_json: detail.to_string(),
-        }
+            CliExitCode::NotFound,
+            detail.to_string(),
+        )
     }
 
     pub fn not_implemented(operation_id: &str, message: String) -> Self {
@@ -199,14 +220,14 @@ impl OperationAdapterError {
     }
 
     pub fn not_implemented_with_detail(operation_id: &str, message: String, detail: Value) -> Self {
-        Self::DetailedFailure {
-            operation_id: operation_id.to_owned(),
-            code: "not_implemented".to_owned(),
-            class: "operation".to_owned(),
+        Self::detailed_failure(
+            operation_id.to_owned(),
+            "not_implemented".to_owned(),
+            "operation".to_owned(),
             message,
-            exit_code: CliExitCode::RuntimeUnavailable,
-            detail_json: detail.to_string(),
-        }
+            CliExitCode::RuntimeUnavailable,
+            detail.to_string(),
+        )
     }
 
     pub fn network_unavailable_with_detail(
@@ -214,14 +235,14 @@ impl OperationAdapterError {
         message: String,
         detail: Value,
     ) -> Self {
-        Self::DetailedFailure {
-            operation_id: operation_id.to_owned(),
-            code: "network_unavailable".to_owned(),
-            class: "network".to_owned(),
+        Self::detailed_failure(
+            operation_id.to_owned(),
+            "network_unavailable".to_owned(),
+            "network".to_owned(),
             message,
-            exit_code: CliExitCode::SyncOrNetworkFailure,
-            detail_json: detail.to_string(),
-        }
+            CliExitCode::SyncOrNetworkFailure,
+            detail.to_string(),
+        )
     }
 
     pub fn validation_failed_with_detail(
@@ -229,14 +250,14 @@ impl OperationAdapterError {
         message: String,
         detail: Value,
     ) -> Self {
-        Self::DetailedFailure {
-            operation_id: operation_id.to_owned(),
-            code: "validation_failed".to_owned(),
-            class: "validation".to_owned(),
+        Self::detailed_failure(
+            operation_id.to_owned(),
+            "validation_failed".to_owned(),
+            "validation".to_owned(),
             message,
-            exit_code: CliExitCode::ValidationFailed,
-            detail_json: detail.to_string(),
-        }
+            CliExitCode::ValidationFailed,
+            detail.to_string(),
+        )
     }
 
     pub fn unavailable(operation_id: &str, message: String) -> Self {
@@ -349,14 +370,14 @@ impl OperationAdapterError {
                 Value::Array(actions.into_iter().map(Value::String).collect()),
             );
         }
-        Self::DetailedFailure {
-            operation_id: operation_id.to_owned(),
+        Self::detailed_failure(
+            operation_id.to_owned(),
             code,
             class,
             message,
             exit_code,
-            detail_json: detail.to_string(),
-        }
+            detail.to_string(),
+        )
     }
 
     pub fn to_output_error(&self) -> OutputError {
@@ -509,20 +530,13 @@ impl OperationAdapterError {
                 message,
                 CliExitCode::RuntimeUnavailable,
             ),
-            Self::DetailedFailure {
-                operation_id,
-                code,
-                class,
-                message,
-                exit_code,
-                detail_json,
-            } => runtime_output_error_with_detail(
-                code.as_str(),
-                operation_id,
-                class,
-                message,
-                *exit_code,
-                detail_json,
+            Self::DetailedFailure(failure) => runtime_output_error_with_detail(
+                failure.code.as_str(),
+                failure.operation_id.as_str(),
+                failure.class.as_str(),
+                failure.message.as_str(),
+                failure.exit_code,
+                failure.detail_json.as_str(),
             ),
             Self::UnknownOperation(operation_id) => OutputError::new(
                 "unknown_operation",
@@ -582,10 +596,10 @@ fn sdk_recovery_next_actions(
             RadrootsSdkRecoveryAction::RetryOperationWithSameIdempotencyKey
             | RadrootsSdkRecoveryAction::FixRequest => Some(operation_retry_action(operation_id)),
             RadrootsSdkRecoveryAction::InspectLocalStores => {
-                Some("radroots store status get".to_owned())
+                Some("radroots store inspect".to_owned())
             }
             RadrootsSdkRecoveryAction::ConfigureTransportTargets => {
-                Some("radroots transport profile get".to_owned())
+                Some("radroots transport config inspect".to_owned())
             }
             RadrootsSdkRecoveryAction::SelectAuthorizedActor => {
                 Some("radroots account list".to_owned())
@@ -594,7 +608,7 @@ fn sdk_recovery_next_actions(
                 Some(operation_retry_action(operation_id))
             }
             RadrootsSdkRecoveryAction::EnableRequiredFeature => {
-                Some("radroots health status get".to_owned())
+                Some("radroots health inspect".to_owned())
             }
             _ => None,
         })
@@ -667,14 +681,14 @@ fn account_failure_output(
     default_error: impl FnOnce() -> OperationAdapterError,
 ) -> OperationAdapterError {
     match detail_json {
-        Some(detail_json) => OperationAdapterError::DetailedFailure {
-            operation_id: operation_id.to_owned(),
-            code: code.to_owned(),
-            class: "account".to_owned(),
+        Some(detail_json) => OperationAdapterError::detailed_failure(
+            operation_id.to_owned(),
+            code.to_owned(),
+            "account".to_owned(),
             message,
             exit_code,
-            detail_json: detail_json.to_owned(),
-        },
+            detail_json.to_owned(),
+        ),
         None => default_error(),
     }
 }
@@ -698,18 +712,18 @@ fn auth_runtime_failure(
             "status 403",
         ],
     );
-    OperationAdapterError::DetailedFailure {
-        operation_id: operation_id.to_owned(),
-        code: if unauthorized {
+    OperationAdapterError::detailed_failure(
+        operation_id.to_owned(),
+        if unauthorized {
             "auth_unauthorized".to_owned()
         } else {
             "auth_unavailable".to_owned()
         },
-        class: "auth".to_owned(),
+        "auth".to_owned(),
         message,
-        exit_code: CliExitCode::AuthorizationFailed,
-        detail_json: Value::Null.to_string(),
-    }
+        CliExitCode::AuthorizationFailed,
+        Value::Null.to_string(),
+    )
 }
 
 fn classify_runtime_failure(
@@ -926,7 +940,7 @@ mod tests {
     #[test]
     fn sdk_storage_error_maps_to_typed_output_without_string_classification() {
         let error = OperationAdapterError::sdk_failure(
-            "store.status.get",
+            "store.inspect",
             RadrootsSdkError::EventStore {
                 message: "database is locked".to_owned(),
             },
@@ -937,11 +951,11 @@ mod tests {
         assert_eq!(output.code, "event_store");
         assert_eq!(output.exit_code, CliExitCode::RuntimeUnavailable.code());
         let detail = output.detail.expect("detail");
-        assert_eq!(detail["operation_id"], "store.status.get");
+        assert_eq!(detail["operation_id"], "store.inspect");
         assert_eq!(detail["class"], "storage");
         assert_eq!(detail["retryable"], true);
         assert_eq!(detail["detail"]["message"], "database is locked");
-        assert_eq!(detail["actions"], json!(["radroots store status get"]));
+        assert_eq!(detail["actions"], json!(["radroots store inspect"]));
     }
 
     #[test]

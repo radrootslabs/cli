@@ -8,25 +8,60 @@ pub struct TransportArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TransportCommand {
-    Profile(TransportProfileArgs),
-    Status,
-    Outbox(TransportOutboxArgs),
+    Capability(TransportCapabilityArgs),
+    Config(TransportConfigArgs),
+    Status(TransportStatusArgs),
+    Delivery(TransportDeliveryArgs),
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct TransportProfileArgs {
+pub struct TransportCapabilityArgs {
     #[command(subcommand)]
-    pub command: TransportProfileCommand,
+    pub command: TransportCapabilityCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum TransportProfileCommand {
-    Get,
-    Set(TransportProfileSetArgs),
+pub enum TransportCapabilityCommand {
+    List,
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct TransportProfileSetArgs {
+pub struct TransportConfigArgs {
+    #[command(subcommand)]
+    pub command: TransportConfigCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum TransportConfigCommand {
+    Inspect,
+    Update(TransportConfigUpdateArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TransportStatusArgs {
+    #[command(subcommand)]
+    pub command: TransportStatusCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum TransportStatusCommand {
+    Inspect,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TransportDeliveryArgs {
+    #[command(subcommand)]
+    pub command: TransportDeliveryCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum TransportDeliveryCommand {
+    Inspect,
+    Retry,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TransportConfigUpdateArgs {
     #[arg(long = "kind", value_enum)]
     pub kind: TransportProfileKindArg,
     #[arg(long = "nostr-relay")]
@@ -71,16 +106,4 @@ impl ReticulumBehaviorArg {
             Self::DeferDeliveryPlans => "defer_delivery_plans",
         }
     }
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct TransportOutboxArgs {
-    #[command(subcommand)]
-    pub command: TransportOutboxCommand,
-}
-
-#[derive(Debug, Clone, Copy, Subcommand)]
-pub enum TransportOutboxCommand {
-    Status,
-    Push,
 }

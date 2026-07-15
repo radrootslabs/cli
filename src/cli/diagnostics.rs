@@ -1,14 +1,12 @@
 use clap::{Args, Subcommand};
 
 #[derive(Debug, Clone, Args)]
-pub struct SyncArgs {
+pub struct DiagnosticsArgs {
     #[command(subcommand)]
-    pub command: SyncCommand,
+    pub command: DiagnosticsCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum SyncCommand {
-    Status,
-    Pull,
-    Push,
+pub enum DiagnosticsCommand {
+    Inspect,
 }

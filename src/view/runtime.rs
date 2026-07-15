@@ -1171,6 +1171,10 @@ impl MarketReadinessView {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "market candidate construction maps projection fields explicitly"
+    )]
     pub fn from_market_projection(
         listing_addr: Option<&str>,
         primary_bin_id: Option<&str>,
@@ -3107,7 +3111,7 @@ pub struct TransportProfileView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TransportStatusView {
+pub struct TransportStatusInspectView {
     pub state: String,
     pub source: String,
     pub active_profile: TransportProfileSummaryView,
@@ -3146,7 +3150,7 @@ pub struct TransportOperationCapabilitiesView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TransportOutboxStatusView {
+pub struct TransportDeliveryInspectView {
     pub state: String,
     pub source: String,
     pub transport_profile: String,
@@ -3166,7 +3170,7 @@ pub struct TransportOutboxStatusView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TransportOutboxPushView {
+pub struct TransportDeliveryRetryView {
     pub state: String,
     pub source: String,
     pub attempted_events: usize,
@@ -3303,7 +3307,7 @@ pub struct SyncStatusView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub configured_transport_targets: Vec<SyncTransportTargetView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub transport_statuses: Vec<SyncTransportStatusView>,
+    pub transport_statuses: Vec<SyncTransportStatusInspectView>,
     pub publish_policy: String,
     pub freshness: SyncFreshnessView,
     pub queue: SyncQueueView,
@@ -3335,7 +3339,7 @@ pub struct SyncActionView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub configured_transport_targets: Vec<SyncTransportTargetView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub transport_statuses: Vec<SyncTransportStatusView>,
+    pub transport_statuses: Vec<SyncTransportStatusInspectView>,
     pub publish_policy: String,
     pub freshness: SyncFreshnessView,
     pub queue: SyncQueueView,
@@ -3383,7 +3387,7 @@ pub struct SyncTransportTargetView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SyncTransportStatusView {
+pub struct SyncTransportStatusInspectView {
     pub transport: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,

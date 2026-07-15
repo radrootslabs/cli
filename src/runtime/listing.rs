@@ -272,7 +272,8 @@ impl From<ListingValidationIssueView> for ListingDraftValidationError {
 pub enum ListingMutationOperation {
     Publish,
     Update,
-    Archive,
+    Pause,
+    Withdraw,
 }
 
 impl ListingMutationOperation {
@@ -280,7 +281,16 @@ impl ListingMutationOperation {
         match self {
             Self::Publish => "publish",
             Self::Update => "update",
-            Self::Archive => "archive",
+            Self::Pause => "pause",
+            Self::Withdraw => "withdraw",
+        }
+    }
+
+    fn listing_status(self) -> Option<&'static str> {
+        match self {
+            Self::Pause => Some("paused"),
+            Self::Withdraw => Some("withdrawn"),
+            Self::Publish | Self::Update => None,
         }
     }
 }
@@ -295,7 +305,7 @@ pub fn scaffold(
     append_listing_local_work(config, output_path.as_path(), &draft)?;
 
     let mut actions = vec![format!(
-        "radroots listing validate {}",
+        "radroots listing publish {}",
         output_path.display()
     )];
     if let Some(action) = &defaults.farm_next_action {
@@ -328,7 +338,7 @@ pub fn scaffold_preflight(
     validate_listing_output_target(&output_path)?;
 
     let mut actions = vec![format!(
-        "radroots listing validate {}",
+        "radroots listing publish {}",
         output_path.display()
     )];
     if let Some(action) = &defaults.farm_next_action {
@@ -520,13 +530,14 @@ fn validate_listing_output_target(output_path: &Path) -> Result<(), RuntimeError
             output_path.display()
         )));
     }
-    if let Some(parent) = output_path.parent() {
-        if parent.exists() && !parent.is_dir() {
-            return Err(RuntimeError::Config(format!(
-                "listing draft parent {} is not a directory",
-                parent.display()
-            )));
-        }
+    if let Some(parent) = output_path.parent()
+        && parent.exists()
+        && !parent.is_dir()
+    {
+        return Err(RuntimeError::Config(format!(
+            "listing draft parent {} is not a directory",
+            parent.display()
+        )));
     }
     Ok(())
 }
@@ -893,7 +904,7 @@ pub fn app_record_export(
             "app-authored listing record exported as a CLI listing draft".to_owned()
         }),
         actions: vec![
-            format!("radroots listing validate {}", output_path.display()),
+            format!("radroots listing publish {}", output_path.display()),
             format!("radroots listing publish {}", output_path.display()),
         ],
     })
@@ -997,13 +1008,9 @@ fn rebind_inner(
             "listing seller actor binding updated".to_owned()
         }),
         actions: if dry_run {
-            vec![format!(
-                "radroots --approval-token approve listing rebind {} {}",
-                args.file.display(),
-                args.selector
-            )]
+            vec![format!("radroots account select {}", args.selector)]
         } else {
-            vec![format!("radroots listing validate {}", args.file.display())]
+            vec![format!("radroots listing publish {}", args.file.display())]
         },
     })
 }
@@ -1616,7 +1623,7 @@ pub fn get(
     refresh_market_listing_if_needed(config)?;
     let freshness = if config.local.replica_store_path.exists() {
         let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
-        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?
+        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketPull)?
     } else {
         missing_freshness()
     };
@@ -1644,7 +1651,7 @@ pub fn get(
             price: None,
             provenance,
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots store init".to_owned()],
+            actions: vec!["radroots store inspect".to_owned()],
         });
     }
 
@@ -1673,7 +1680,7 @@ pub fn get(
             )),
             actions: vec![
                 "radroots sync pull".to_owned(),
-                format!("radroots market product search {}", args.key),
+                format!("radroots market search {}", args.key),
             ],
         });
     };
@@ -1737,7 +1744,7 @@ fn refresh_market_listing_if_needed(config: &RuntimeConfig) -> Result<(), Runtim
     }
     let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     let freshness =
-        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?;
+        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketPull)?;
     if crate::runtime::sync::freshness_requires_refresh(&freshness) {
         let _ = market_refresh(config)?;
     }
@@ -2114,11 +2121,18 @@ pub fn update(
     mutate(config, args, ListingMutationOperation::Update)
 }
 
-pub fn archive(
+pub fn pause(
     config: &RuntimeConfig,
     args: &ListingMutationArgs,
 ) -> Result<ListingMutationView, CliSdkAdapterError> {
-    mutate(config, args, ListingMutationOperation::Archive)
+    mutate(config, args, ListingMutationOperation::Pause)
+}
+
+pub fn withdraw(
+    config: &RuntimeConfig,
+    args: &ListingMutationArgs,
+) -> Result<ListingMutationView, CliSdkAdapterError> {
+    mutate(config, args, ListingMutationOperation::Withdraw)
 }
 
 fn mutate(
@@ -2158,10 +2172,10 @@ fn mutate(
     })?;
     ensure_listing_bound_account(config, &canonical, args.file.as_path())?;
 
-    if matches!(operation, ListingMutationOperation::Archive) {
+    if let Some(status) = operation.listing_status() {
         canonical.listing.availability = Some(RadrootsListingAvailability::Status {
             status: RadrootsListingStatus::Other {
-                value: "archived".to_owned(),
+                value: status.to_owned(),
             },
         });
     }
@@ -2237,7 +2251,7 @@ fn scaffold_contents(draft: &ListingDraftDocument) -> Result<String, RuntimeErro
         RuntimeError::Config(format!("failed to render listing draft: {error}"))
     })?;
     Ok(format!(
-        "# radroots listing draft v1\n# this scaffold applies selected farm defaults and provided product inputs when available\n# review any remaining empty fields, then run `radroots listing validate <file>`\n\n{toml}"
+        "# radroots listing draft v1\n# this scaffold applies selected farm defaults and provided product inputs when available\n# review any remaining empty fields, then run `radroots listing publish <file>`\n\n{toml}"
     ))
 }
 
@@ -2953,7 +2967,7 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
         defaults.farm_next_action = None;
         defaults.farm_reason = None;
     } else {
-        defaults.farm_next_action = Some("radroots farm readiness check".to_owned());
+        defaults.farm_next_action = Some("radroots farm get".to_owned());
         defaults.farm_reason = Some(
             "selected farm draft is missing delivery or location defaults; those fields were left blank"
                 .to_owned(),

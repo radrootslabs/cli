@@ -18,7 +18,7 @@ pub fn runtime_invocation_args_from_target(args: &TargetCliArgs) -> RuntimeInvoc
         trace: args.trace,
         dry_run: args.dry_run,
         no_input: args.no_input,
-        yes: false,
+        yes: args.yes,
         log_filter: None,
         log_dir: None,
         log_stdout: false,
@@ -40,13 +40,10 @@ pub fn operation_id_from_target(args: &TargetCliArgs) -> &'static str {
 
 pub fn target_operation_input(command: &TargetCommand) -> OperationData {
     use crate::cli::{
-        AccountCommand, AccountSelectionCommand, BasketAdjustmentCommand, BasketCommand,
-        BasketItemCommand, BasketQuoteCommand, FarmCommand, FarmFulfillmentCommand,
-        FarmLocationCommand, FarmProfileCommand, ListingAppCommand, ListingCommand, MarketCommand,
-        MarketListingCommand, MarketProductCommand, MeshCommand, MeshScopeCommand,
-        StoreBackupCommand, StoreCommand, TradeAppCommand, TradeCommand, TradeEventCommand,
-        TradeStatusCommand, TransportCommand, TransportOutboxCommand, TransportProfileCommand,
-        ValidationCommand, ValidationReceiptCommand,
+        AccountCommand, BasketCommand, BasketItemCommand, FarmCommand, ListingCommand,
+        MarketCommand, StoreCommand, TradeCommand, TransportCapabilityCommand, TransportCommand,
+        TransportConfigCommand, TransportDeliveryCommand, ValidationCommand,
+        ValidationReceiptCommand,
     };
 
     let mut input = OperationData::new();
@@ -58,21 +55,8 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                     input.insert("default".to_owned(), Value::Bool(true));
                 }
             }
-            AccountCommand::AttachSecret(args) => {
-                insert_string(&mut input, "selector", &args.selector);
-                insert_path(&mut input, "path", &args.path);
-                if args.default {
-                    input.insert("default".to_owned(), Value::Bool(true));
-                }
-            }
-            AccountCommand::Get(args) => insert_string(&mut input, "selector", &args.selector),
+            AccountCommand::Select(args) => insert_string(&mut input, "selector", &args.selector),
             AccountCommand::Remove(args) => insert_string(&mut input, "selector", &args.selector),
-            AccountCommand::Selection(args) => match &args.command {
-                AccountSelectionCommand::Update(args) => {
-                    insert_string(&mut input, "selector", &args.selector)
-                }
-                AccountSelectionCommand::Get | AccountSelectionCommand::Clear => {}
-            },
             AccountCommand::Create | AccountCommand::List => {}
         },
         TargetCommand::Farm(args) => match &args.command {
@@ -91,46 +75,11 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                 insert_string(&mut input, "geohash", &args.geohash);
                 insert_string(&mut input, "delivery_method", &args.delivery_method);
             }
-            FarmCommand::Rebind(args) => {
-                insert_string(&mut input, "selector", &args.selector);
+            FarmCommand::Update(args) => {
+                insert_string(&mut input, "field", &args.field);
+                insert_string(&mut input, "value", &args.value);
             }
-            FarmCommand::Profile(args) => match &args.command {
-                FarmProfileCommand::Update(args) => {
-                    insert_string(&mut input, "field", &args.field);
-                    insert_string(&mut input, "value", &args.value);
-                }
-            },
-            FarmCommand::Location(args) => match &args.command {
-                FarmLocationCommand::Set(args) => {
-                    if let Some(latitude) = args.lat {
-                        insert_number(&mut input, "lat", latitude);
-                    }
-                    if let Some(longitude) = args.lng {
-                        insert_number(&mut input, "lng", longitude);
-                    }
-                    insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
-                    insert_string(&mut input, "city", &args.city);
-                    insert_string(&mut input, "region", &args.region);
-                    insert_string(&mut input, "country", &args.country);
-                    insert_string(&mut input, "query", &args.query);
-                    if let Some(geonames_id) = args.geonames_id {
-                        input.insert(
-                            "geonames_id".to_owned(),
-                            Value::Number(serde_json::Number::from(geonames_id)),
-                        );
-                    }
-                    insert_string(&mut input, "label", &args.label);
-                }
-                FarmLocationCommand::Get(args) | FarmLocationCommand::Clear(args) => {
-                    insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
-                }
-            },
-            FarmCommand::Fulfillment(args) => match &args.command {
-                FarmFulfillmentCommand::Update(args) => {
-                    insert_string(&mut input, "value", &args.value);
-                }
-            },
-            FarmCommand::Get | FarmCommand::Readiness(_) | FarmCommand::Publish => {}
+            FarmCommand::Get | FarmCommand::List | FarmCommand::Publish => {}
         },
         TargetCommand::Listing(args) => match &args.command {
             ListingCommand::Create(args) => {
@@ -156,47 +105,28 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                 insert_string(&mut input, "discount_currency", &args.discount_currency);
             }
             ListingCommand::Get(args) => insert_string(&mut input, "key", &args.key),
-            ListingCommand::App(args) => match &args.command {
-                ListingAppCommand::Export(args) => {
-                    insert_string(&mut input, "record_id", &args.record_id);
-                    insert_path(&mut input, "output", &args.output);
-                }
-                ListingAppCommand::List => {}
-            },
             ListingCommand::Update(args)
-            | ListingCommand::Validate(args)
             | ListingCommand::Publish(args)
-            | ListingCommand::Archive(args) => insert_path(&mut input, "file", &args.file),
-            ListingCommand::Rebind(args) => {
-                insert_path(&mut input, "file", &args.file);
-                insert_string(&mut input, "selector", &args.selector);
-                insert_string(&mut input, "farm_d_tag", &args.farm_d_tag);
-            }
+            | ListingCommand::Pause(args)
+            | ListingCommand::Withdraw(args) => insert_path(&mut input, "file", &args.file),
             ListingCommand::List => {}
         },
         TargetCommand::Market(args) => match &args.command {
-            MarketCommand::Product(product) => match &product.command {
-                MarketProductCommand::Search(args) => {
-                    insert_string_array(&mut input, "query", args.query.as_slice())
-                }
-            },
-            MarketCommand::Listing(listing) => match &listing.command {
-                MarketListingCommand::Get(args) => insert_string(&mut input, "key", &args.key),
-            },
-            MarketCommand::Refresh => {}
+            MarketCommand::Pull => {}
+            MarketCommand::Search(args) => {
+                insert_string_array(&mut input, "query", args.query.as_slice())
+            }
+            MarketCommand::Get(args) => insert_string(&mut input, "key", &args.key),
         },
         TargetCommand::Store(args) => match &args.command {
-            StoreCommand::Backup(backup) => match &backup.command {
-                StoreBackupCommand::Restore(args) => {
-                    insert_path(&mut input, "source", &Some(args.source.clone()));
-                    insert_path(&mut input, "destination", &args.destination);
-                    if args.overwrite {
-                        input.insert("overwrite".to_owned(), Value::Bool(true));
-                    }
+            StoreCommand::Restore(args) => {
+                insert_path(&mut input, "source", &Some(args.source.clone()));
+                insert_path(&mut input, "destination", &args.destination);
+                if args.overwrite {
+                    input.insert("overwrite".to_owned(), Value::Bool(true));
                 }
-                StoreBackupCommand::Create => {}
-            },
-            StoreCommand::Init | StoreCommand::Status(_) | StoreCommand::Export => {}
+            }
+            StoreCommand::Inspect | StoreCommand::Backup => {}
         },
         TargetCommand::Basket(args) => match &args.command {
             BasketCommand::Create(args) => {
@@ -206,9 +136,7 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                 insert_string(&mut input, "bin_id", &args.bin_id);
                 insert_string(&mut input, "quantity", &args.quantity);
             }
-            BasketCommand::Get(args) | BasketCommand::Validate(args) => {
-                insert_string(&mut input, "basket_id", &args.basket_id)
-            }
+            BasketCommand::Get(args) => insert_string(&mut input, "basket_id", &args.basket_id),
             BasketCommand::Item(item) => match &item.command {
                 BasketItemCommand::Add(args) | BasketItemCommand::Update(args) => {
                     insert_string(&mut input, "basket_id", &args.basket_id);
@@ -223,44 +151,15 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                     insert_string(&mut input, "item_id", &args.item_id);
                 }
             },
-            BasketCommand::Adjustment(adjustment) => match &adjustment.command {
-                BasketAdjustmentCommand::Add(args) => {
-                    insert_string(&mut input, "basket_id", &args.basket_id);
-                    insert_string(&mut input, "id", &args.id);
-                    insert_string(&mut input, "effect", &args.effect);
-                    insert_string(&mut input, "amount", &args.amount);
-                    insert_string(&mut input, "currency", &args.currency);
-                    insert_string(&mut input, "reason", &args.reason);
-                }
-                BasketAdjustmentCommand::Remove(args) => {
-                    insert_string(&mut input, "basket_id", &args.basket_id);
-                    insert_string(&mut input, "id", &args.id);
-                }
-            },
-            BasketCommand::Quote(quote) => match &quote.command {
-                BasketQuoteCommand::Create(args) => {
-                    insert_string(&mut input, "basket_id", &args.basket_id)
-                }
-            },
+            BasketCommand::Quote(args) => insert_string(&mut input, "basket_id", &args.basket_id),
             BasketCommand::List => {}
         },
         TargetCommand::Trade(args) => match &args.command {
-            TradeCommand::Submit(args) => {
+            TradeCommand::Request(args) => {
                 insert_string(&mut input, "trade_id", &args.trade_id);
                 insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
             }
             TradeCommand::Get(args) => insert_string(&mut input, "trade_id", &args.trade_id),
-            TradeCommand::App(args) => match &args.command {
-                TradeAppCommand::Export(args) => {
-                    insert_string(&mut input, "record_id", &args.record_id);
-                    insert_path(&mut input, "output", &args.output);
-                }
-                TradeAppCommand::List => {}
-            },
-            TradeCommand::Rebind(args) => {
-                insert_string(&mut input, "trade_id", &args.trade_id);
-                insert_string(&mut input, "selector", &args.selector);
-            }
             TradeCommand::Accept(args) => insert_string(&mut input, "trade_id", &args.trade_id),
             TradeCommand::Decline(args) => {
                 insert_string(&mut input, "trade_id", &args.trade_id);
@@ -272,31 +171,19 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                 insert_string(&mut input, "reason", &args.reason);
                 insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
             }
-            TradeCommand::Status(status) => match &status.command {
-                TradeStatusCommand::Get(args) => {
-                    insert_string(&mut input, "trade_id", &args.trade_id)
-                }
-            },
-            TradeCommand::Event(event) => match &event.command {
-                TradeEventCommand::List(args) | TradeEventCommand::Watch(args) => {
-                    insert_string(&mut input, "trade_id", &args.trade_id)
-                }
-            },
             TradeCommand::List => {}
         },
         TargetCommand::Validation(args) => match &args.command {
+            ValidationCommand::Status => {}
             ValidationCommand::Receipt(receipt) => match &receipt.command {
                 ValidationReceiptCommand::Get(args) | ValidationReceiptCommand::Verify(args) => {
                     insert_string(&mut input, "receipt_event_id", &args.receipt_event_id);
                 }
-                ValidationReceiptCommand::List(args) => {
-                    insert_string(&mut input, "trade_id", &args.trade_id);
-                }
             },
         },
         TargetCommand::Transport(args) => match &args.command {
-            TransportCommand::Profile(profile) => match &profile.command {
-                TransportProfileCommand::Set(args) => {
+            TransportCommand::Config(config) => match &config.command {
+                TransportConfigCommand::Update(args) => {
                     input.insert(
                         "kind".to_owned(),
                         Value::String(args.kind.as_str().to_owned()),
@@ -315,25 +202,15 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                         &args.reticulum_agent_endpoint,
                     );
                 }
-                TransportProfileCommand::Get => {}
+                TransportConfigCommand::Inspect => {}
             },
-            TransportCommand::Status => {}
-            TransportCommand::Outbox(outbox) => match outbox.command {
-                TransportOutboxCommand::Status | TransportOutboxCommand::Push => {}
+            TransportCommand::Capability(capability) => match capability.command {
+                TransportCapabilityCommand::List => {}
             },
-        },
-        TargetCommand::Mesh(args) => match &args.command {
-            MeshCommand::Scope(scope) => match &scope.command {
-                MeshScopeCommand::Set(args) => {
-                    input.insert(
-                        "scope".to_owned(),
-                        Value::String(args.scope.as_str().to_owned()),
-                    );
-                }
-                MeshScopeCommand::Get => {}
+            TransportCommand::Delivery(delivery) => match delivery.command {
+                TransportDeliveryCommand::Inspect | TransportDeliveryCommand::Retry => {}
             },
-            MeshCommand::Status => {}
-            MeshCommand::Policy(_) => {}
+            TransportCommand::Status(_) => {}
         },
         _ => {}
     }
@@ -360,12 +237,6 @@ fn insert_string_array(input: &mut OperationData, key: &str, values: &[String]) 
         .collect::<Vec<_>>();
     if !values.is_empty() {
         input.insert(key.to_owned(), Value::Array(values));
-    }
-}
-
-fn insert_number(input: &mut OperationData, key: &str, value: f64) {
-    if let Some(number) = serde_json::Number::from_f64(value) {
-        input.insert(key.to_owned(), Value::Number(number));
     }
 }
 

@@ -326,7 +326,7 @@ fn next_action_label(command: &str) -> String {
                     | "--account-id"
                     | "--idempotency-key"
                     | "--correlation-id"
-                    | "--approval-token"
+                    | "--approval-proof"
             ) && index < parts.len()
             {
                 index += 1;
@@ -543,18 +543,18 @@ mod tests {
     fn failure_envelope_carries_structured_error_and_exit_code() {
         let error = OutputError::new(
             "approval_required",
-            "operation requires approval token",
+            "operation requires approval proof",
             CliExitCode::ApprovalRequiredOrDenied,
         );
         let envelope = OutputEnvelope::failure(
-            "trade.submit",
+            "trade.request",
             error,
             EnvelopeContext::new("req_order", false),
         );
         let value = serde_json::to_value(envelope).expect("serialize envelope");
 
         assert_eq!(value["schema_version"], OUTPUT_SCHEMA_VERSION);
-        assert_eq!(value["operation_id"], "trade.submit");
+        assert_eq!(value["operation_id"], "trade.request");
         assert_eq!(value["status"], "error");
         assert_eq!(value["reason_code"], "approval_required");
         assert_eq!(value["result"], Value::Null);
@@ -577,7 +577,7 @@ mod tests {
             ]
         }));
         let envelope = OutputEnvelope::failure(
-            "trade.submit",
+            "trade.request",
             error,
             EnvelopeContext::new("req_order", true),
         );
@@ -612,7 +612,7 @@ mod tests {
             ]
         }));
         let envelope = OutputEnvelope::failure(
-            "config.get",
+            "transport.config.inspect",
             error,
             EnvelopeContext::new("req_config", false),
         );
@@ -655,21 +655,21 @@ mod tests {
     fn ndjson_frames_serialize_one_json_object_per_line() {
         let frames = [
             NdjsonFrame::new(
-                "sync.watch",
+                "sync.status",
                 "req_watch",
                 0,
                 NdjsonFrameType::Started,
                 json!({ "state": "started" }),
             ),
             NdjsonFrame::new(
-                "sync.watch",
+                "sync.status",
                 "req_watch",
                 1,
                 NdjsonFrameType::Event,
                 json!({ "state": "submitted" }),
             ),
             NdjsonFrame::new(
-                "sync.watch",
+                "sync.status",
                 "req_watch",
                 2,
                 NdjsonFrameType::Completed,
@@ -685,7 +685,7 @@ mod tests {
         for line in rendered.lines() {
             let value: Value = serde_json::from_str(line).expect("line is json");
             assert_eq!(value["schema_version"], OUTPUT_SCHEMA_VERSION);
-            assert_eq!(value["operation_id"], "sync.watch");
+            assert_eq!(value["operation_id"], "sync.status");
             assert!(value["frame_type"].is_string());
         }
     }

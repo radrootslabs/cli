@@ -214,7 +214,7 @@ fn rebind_inner(
         actions: if dry_run {
             vec![farm_rebind_live_action(args.selector.as_str())]
         } else {
-            vec!["radroots farm readiness check".to_owned()]
+            vec!["radroots farm get".to_owned()]
         },
     })
 }
@@ -632,7 +632,7 @@ fn transport_farm_publish_readiness(
             reason: Some("farm publish requires a configured Nostr transport profile".to_owned()),
             missing: vec!["Configured Nostr transport profile".to_owned()],
             actions: vec![
-                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+                "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com"
                     .to_owned(),
             ],
         };
@@ -650,7 +650,7 @@ fn transport_farm_publish_readiness(
                 executable: false,
                 reason: Some(error.to_string()),
                 missing: vec!["Remote signer binding".to_owned()],
-                actions: vec!["radroots signer status get".to_owned()],
+                actions: vec!["radroots signer status".to_owned()],
             };
         }
         return FarmPublishReadiness {
@@ -877,6 +877,10 @@ struct FarmPublishEventDraft {
     event: FarmPublishEventView,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "publish view construction mirrors the V1 output contract fields"
+)]
 fn missing_publish_view(
     config: &RuntimeConfig,
     scope: FarmConfigScope,
@@ -917,6 +921,10 @@ fn missing_publish_view(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "publish view construction mirrors the V1 output contract fields"
+)]
 fn base_publish_view(
     state: &str,
     config: &RuntimeConfig,
@@ -1058,6 +1066,10 @@ fn not_submitted_component(
     preview_component(rpc_method, event_kind, idempotency_key, args, event)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "publish view construction mirrors the V1 output contract fields"
+)]
 fn binding_error_publish_view(
     config: &RuntimeConfig,
     args: &FarmPublishArgs,
@@ -1070,7 +1082,7 @@ fn binding_error_publish_view(
 ) -> FarmPublishView {
     let reason = error.reason();
     let state = "unconfigured".to_owned();
-    let actions = vec!["run radroots signer status get".to_owned()];
+    let actions = vec!["run radroots signer status".to_owned()];
     base_publish_view(
         state.as_str(),
         config,
@@ -1118,6 +1130,10 @@ fn sdk_farm_publish_input(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "publish view construction mirrors the V1 output contract fields"
+)]
 fn sdk_prepared_publish_view(
     config: &RuntimeConfig,
     args: &FarmPublishArgs,
@@ -1159,6 +1175,10 @@ fn sdk_prepared_publish_view(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "publish view construction mirrors the V1 output contract fields"
+)]
 fn sdk_enqueued_publish_view(
     config: &RuntimeConfig,
     args: &FarmPublishArgs,
@@ -1607,7 +1627,7 @@ fn init_document(
         && document.selection.account != account.record.account_id.to_string()
     {
         let message = format!(
-            "account mismatch: farm config is bound to seller account `{}`; use `radroots --approval-token approve farm rebind {}` to change the farm-bound seller account",
+            "account mismatch: farm config is bound to seller account `{}`; select account `{}` before updating this farm config",
             document.selection.account, account.record.account_id
         );
         return Err(account::AccountRuntimeFailure::mismatch_with_detail(
@@ -1790,7 +1810,7 @@ fn farm_setup_actions(
     document: &FarmConfigDocument,
     account: Option<&AccountRecordView>,
 ) -> Vec<String> {
-    let mut actions = vec!["radroots farm readiness check".to_owned()];
+    let mut actions = vec!["radroots farm get".to_owned()];
     if account.is_none() {
         actions.extend(farm_bound_seller_recovery_actions("<selector>"));
         return actions;
@@ -1823,11 +1843,11 @@ pub(crate) fn farm_rebind_recovery_actions(selector: &str) -> Vec<String> {
 }
 
 pub(crate) fn farm_rebind_dry_run_action(selector: &str) -> String {
-    format!("radroots --dry-run farm rebind {selector}")
+    format!("radroots --dry-run account select {selector}")
 }
 
 pub(crate) fn farm_rebind_live_action(selector: &str) -> String {
-    format!("radroots --approval-token approve farm rebind {selector}")
+    format!("radroots account select {selector}")
 }
 
 fn account_recovery_actions() -> Vec<String> {
@@ -1982,7 +2002,7 @@ fn ensure_farm_location(document: &mut FarmConfigDocument) -> &mut RadrootsFarmP
     document
         .farm
         .location
-        .get_or_insert_with(|| RadrootsFarmPublicLocation {
+        .get_or_insert(RadrootsFarmPublicLocation {
             primary,
             city,
             region,

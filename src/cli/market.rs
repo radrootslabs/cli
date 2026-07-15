@@ -10,30 +10,8 @@ pub struct MarketArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum MarketCommand {
-    Refresh,
-    Product(MarketProductArgs),
-    Listing(MarketListingArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct MarketProductArgs {
-    #[command(subcommand)]
-    pub command: MarketProductCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum MarketProductCommand {
+    Pull,
     Search(QueryArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct MarketListingArgs {
-    #[command(subcommand)]
-    pub command: MarketListingCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum MarketListingCommand {
     Get(LookupArgs),
 }
 

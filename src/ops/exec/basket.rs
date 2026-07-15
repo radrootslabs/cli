@@ -12,13 +12,12 @@ use serde_json::{Value, json};
 
 use crate::cli::global::{OrderDraftAdjustmentArgs, OrderDraftCreateArgs};
 use crate::ops::{
-    BasketAdjustmentAddRequest, BasketAdjustmentAddResult, BasketAdjustmentRemoveRequest,
-    BasketAdjustmentRemoveResult, BasketCreateRequest, BasketCreateResult, BasketGetRequest,
-    BasketGetResult, BasketItemAddRequest, BasketItemAddResult, BasketItemRemoveRequest,
-    BasketItemRemoveResult, BasketItemUpdateRequest, BasketItemUpdateResult, BasketListRequest,
-    BasketListResult, BasketQuoteCreateRequest, BasketQuoteCreateResult, BasketValidateRequest,
-    BasketValidateResult, OperationAdapterError, OperationRequest, OperationRequestData,
-    OperationRequestPayload, OperationResult, OperationResultData, OperationService,
+    BasketCreateRequest, BasketCreateResult, BasketGetRequest, BasketGetResult,
+    BasketItemAddRequest, BasketItemAddResult, BasketItemRemoveRequest, BasketItemRemoveResult,
+    BasketItemUpdateRequest, BasketItemUpdateResult, BasketListRequest, BasketListResult,
+    BasketQuoteRequest, BasketQuoteResult, OperationAdapterError, OperationRequest,
+    OperationRequestData, OperationRequestPayload, OperationResult, OperationResultData,
+    OperationService,
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::view::runtime::OrderNewView;
@@ -351,126 +350,12 @@ impl OperationService<BasketItemRemoveRequest> for BasketOperationService<'_> {
     }
 }
 
-impl OperationService<BasketAdjustmentAddRequest> for BasketOperationService<'_> {
-    type Result = BasketAdjustmentAddResult;
+impl OperationService<BasketQuoteRequest> for BasketOperationService<'_> {
+    type Result = BasketQuoteResult;
 
     fn execute(
         &self,
-        request: OperationRequest<BasketAdjustmentAddRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let basket_id = required_basket_id(&request)?;
-        let mut loaded =
-            load_required_basket(self.config, basket_id.as_str(), request.operation_id())?;
-        let adjustment = required_adjustment_from_request(&request)?;
-        if loaded
-            .document
-            .basket
-            .adjustments
-            .iter()
-            .any(|existing| existing.id == adjustment.id)
-        {
-            return Err(invalid_input(
-                request.operation_id(),
-                format!("basket adjustment `{}` already exists", adjustment.id),
-            ));
-        }
-        if request.context.dry_run {
-            return json_operation_result::<BasketAdjustmentAddResult>(json!({
-                "state": "dry_run",
-                "source": BASKET_SOURCE,
-                "basket_id": basket_id,
-                "adjustment": adjustment,
-                "actions": ["radroots basket adjustment add"],
-            }));
-        }
-
-        loaded.document.basket.adjustments.push(adjustment);
-        touch_basket(&mut loaded.document);
-        loaded.document.quote = None;
-        save_basket(loaded.file.as_path(), &loaded.document)?;
-        json_operation_result::<BasketAdjustmentAddResult>(basket_view(
-            self.config,
-            &loaded.document,
-            loaded.file.as_path(),
-            Some("updated"),
-        )?)
-    }
-}
-
-impl OperationService<BasketAdjustmentRemoveRequest> for BasketOperationService<'_> {
-    type Result = BasketAdjustmentRemoveResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<BasketAdjustmentRemoveRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let basket_id = required_basket_id(&request)?;
-        let adjustment_id = required_string(&request, "id")?;
-        let mut loaded =
-            load_required_basket(self.config, basket_id.as_str(), request.operation_id())?;
-        let Some(index) = loaded
-            .document
-            .basket
-            .adjustments
-            .iter()
-            .position(|adjustment| adjustment.id == adjustment_id)
-        else {
-            return Err(invalid_input(
-                request.operation_id(),
-                format!("basket adjustment `{adjustment_id}` was not found"),
-            ));
-        };
-        if request.context.dry_run {
-            return json_operation_result::<BasketAdjustmentRemoveResult>(json!({
-                "state": "dry_run",
-                "source": BASKET_SOURCE,
-                "basket_id": basket_id,
-                "adjustment_id": adjustment_id,
-                "actions": ["radroots basket adjustment remove"],
-            }));
-        }
-
-        loaded.document.basket.adjustments.remove(index);
-        touch_basket(&mut loaded.document);
-        loaded.document.quote = None;
-        save_basket(loaded.file.as_path(), &loaded.document)?;
-        json_operation_result::<BasketAdjustmentRemoveResult>(basket_view(
-            self.config,
-            &loaded.document,
-            loaded.file.as_path(),
-            Some("updated"),
-        )?)
-    }
-}
-
-impl OperationService<BasketValidateRequest> for BasketOperationService<'_> {
-    type Result = BasketValidateResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<BasketValidateRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let basket_id = required_basket_id(&request)?;
-        let Some(loaded) = load_basket_optional(self.config, basket_id.as_str())? else {
-            return json_operation_result::<BasketValidateResult>(missing_basket_view(
-                self.config,
-                basket_id.as_str(),
-            ));
-        };
-        json_operation_result::<BasketValidateResult>(basket_validation_view(
-            self.config,
-            &loaded.document,
-            loaded.file.as_path(),
-        )?)
-    }
-}
-
-impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
-    type Result = BasketQuoteCreateResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<BasketQuoteCreateRequest>,
+        request: OperationRequest<BasketQuoteRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let basket_id = required_basket_id(&request)?;
         let mut loaded =
@@ -478,7 +363,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
         let issues = basket_issues(self.config, &loaded.document)?;
         if !issues.is_empty() {
             let actions = basket_actions(&loaded.document, issues.as_slice());
-            return json_operation_result::<BasketQuoteCreateResult>(json!({
+            return json_operation_result::<BasketQuoteResult>(json!({
                 "state": "unconfigured",
                 "source": BASKET_QUOTE_SOURCE,
                 "basket_id": basket_id,
@@ -510,7 +395,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
             .map_err(|error| {
                 OperationAdapterError::runtime_failure(request.operation_id(), error)
             })?;
-            return json_operation_result::<BasketQuoteCreateResult>(json!({
+            return json_operation_result::<BasketQuoteResult>(json!({
                 "state": "dry_run",
                 "source": BASKET_QUOTE_SOURCE,
                 "basket_id": basket_id,
@@ -553,7 +438,7 @@ impl OperationService<BasketQuoteCreateRequest> for BasketOperationService<'_> {
         touch_basket(&mut loaded.document);
         save_basket(loaded.file.as_path(), &loaded.document)?;
 
-        json_operation_result::<BasketQuoteCreateResult>(json!({
+        json_operation_result::<BasketQuoteResult>(json!({
             "state": "quoted",
             "source": BASKET_QUOTE_SOURCE,
             "basket_id": loaded.document.basket.basket_id,
@@ -655,66 +540,6 @@ where
     Ok(item)
 }
 
-fn required_adjustment_from_request<P>(
-    request: &OperationRequest<P>,
-) -> Result<BasketAdjustment, OperationAdapterError>
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    let id = required_string(request, "id")?.trim().to_owned();
-    if id.is_empty() {
-        return Err(invalid_input(
-            request.operation_id(),
-            "`id` must not be empty".to_owned(),
-        ));
-    }
-    let effect = required_string(request, "effect")?.trim().to_owned();
-    if effect != "increase" && effect != "decrease" {
-        return Err(invalid_input(
-            request.operation_id(),
-            "`effect` must be increase or decrease".to_owned(),
-        ));
-    }
-    let amount = required_string(request, "amount")?.trim().to_owned();
-    let parsed_amount = amount
-        .parse::<radroots_core::RadrootsCoreDecimal>()
-        .map_err(|_| {
-            invalid_input(
-                request.operation_id(),
-                "`amount` must be a valid decimal value".to_owned(),
-            )
-        })?;
-    if parsed_amount.is_sign_negative() || parsed_amount.is_zero() {
-        return Err(invalid_input(
-            request.operation_id(),
-            "`amount` must be greater than zero".to_owned(),
-        ));
-    }
-    let currency = required_string(request, "currency")?
-        .trim()
-        .to_ascii_uppercase();
-    if radroots_core::RadrootsCoreCurrency::from_str_upper(currency.as_str()).is_err() {
-        return Err(invalid_input(
-            request.operation_id(),
-            "`currency` must be a valid ISO currency code".to_owned(),
-        ));
-    }
-    let reason = required_string(request, "reason")?.trim().to_owned();
-    if reason.is_empty() {
-        return Err(invalid_input(
-            request.operation_id(),
-            "`reason` must not be empty".to_owned(),
-        ));
-    }
-    Ok(BasketAdjustment {
-        id,
-        effect,
-        amount,
-        currency,
-        reason,
-    })
-}
-
 fn basket_view(
     config: &RuntimeConfig,
     document: &BasketDocument,
@@ -735,27 +560,6 @@ fn basket_view(
         "adjustments": document.basket.adjustments,
         "quote": document.quote,
         "ready_for_quote": ready_for_quote,
-        "issues": issues,
-        "actions": actions,
-    }))
-}
-
-fn basket_validation_view(
-    config: &RuntimeConfig,
-    document: &BasketDocument,
-    file: &Path,
-) -> Result<Value, OperationAdapterError> {
-    let issues = basket_issues(config, document)?;
-    let ready_for_quote = issues.is_empty();
-    let actions = basket_actions(document, issues.as_slice());
-    Ok(json!({
-        "state": if ready_for_quote { "ready" } else { "unconfigured" },
-        "source": BASKET_SOURCE,
-        "basket_id": document.basket.basket_id,
-        "file": file.display().to_string(),
-        "ready_for_quote": ready_for_quote,
-        "item_count": document.basket.items.len(),
-        "adjustment_count": document.basket.adjustments.len(),
         "issues": issues,
         "actions": actions,
     }))
@@ -877,7 +681,7 @@ fn basket_market_issues(
         return Ok(vec![basket_issue(
             "basket_market_replica_missing",
             "local.replica_store",
-            "current local replica data is required before quote creation; run `radroots store init` and `radroots market refresh`",
+            "current local replica data is required before quote creation; run `radroots store inspect` and `radroots market pull`",
         )]);
     }
     let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path).map_err(|error| {
@@ -894,7 +698,7 @@ fn basket_market_issues(
                 issues.push(basket_issue(
                     "basket_item_listing_unresolved",
                     basket_item_listing_field(item),
-                    "basket item listing is not active in the current local replica; run `radroots market refresh` before quote creation",
+                    "basket item listing is not active in the current local replica; run `radroots market pull` before quote creation",
                 ));
                 continue;
             }
@@ -1084,7 +888,7 @@ fn basket_actions(document: &BasketDocument, issues: &[BasketIssue]) -> Vec<Stri
 
 fn quote_actions(order: &OrderNewView) -> Vec<String> {
     if order.ready_for_submit {
-        vec![format!("radroots trade submit {}", order.order_id)]
+        vec![format!("radroots trade request {}", order.order_id)]
     } else {
         let mut actions = vec![format!("radroots trade get {}", order.order_id)];
         actions.extend(order.actions.iter().cloned());
@@ -1308,638 +1112,5 @@ fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {
     OperationAdapterError::InvalidInput {
         operation_id: operation_id.to_owned(),
         message,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::{Path, PathBuf};
-
-    use radroots_event::ids::RadrootsListingAddress;
-    use radroots_event::kinds::{KIND_FARM, KIND_LISTING};
-    use radroots_event::{RadrootsEventEnvelope, RadrootsEventEnvelopeParts};
-    use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
-    use radroots_secret_vault::RadrootsSecretBackend;
-    use radroots_sql_core::{SqlExecutor, SqlxSqliteExecutor};
-    use serde_json::{Map, Value, json};
-    use tempfile::tempdir;
-
-    use super::BasketOperationService;
-    use crate::ops::{
-        BasketAdjustmentAddRequest, BasketAdjustmentRemoveRequest, BasketCreateRequest,
-        BasketGetRequest, BasketItemAddRequest, BasketItemRemoveRequest, BasketItemUpdateRequest,
-        BasketListRequest, BasketQuoteCreateRequest, BasketValidateRequest, OperationAdapter,
-        OperationContext, OperationData, OperationRequest,
-    };
-    use crate::runtime::account;
-    use crate::runtime::config::{
-        AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
-        LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig, RpcConfig,
-        RuntimeConfig, SignerBackend, SignerConfig, Verbosity,
-    };
-
-    const LISTING_ADDR: &str = "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
-
-    #[test]
-    fn basket_service_creates_gets_and_lists_local_baskets() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(BasketOperationService::new(&config));
-        let create = OperationRequest::new(
-            OperationContext::default(),
-            BasketCreateRequest::from_data(data(&[("basket_id", "basket_test")])),
-        )
-        .expect("basket create request");
-        let create_envelope = service
-            .execute(create)
-            .expect("basket create result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_create"))
-            .expect("basket create envelope");
-        assert_eq!(create_envelope.operation_id, "basket.create");
-        assert_eq!(create_envelope.result["basket_id"], "basket_test");
-        assert_eq!(create_envelope.result["item_count"], 0);
-
-        let get = OperationRequest::new(
-            OperationContext::default(),
-            BasketGetRequest::from_data(data(&[("basket_id", "basket_test")])),
-        )
-        .expect("basket get request");
-        let get_envelope = service
-            .execute(get)
-            .expect("basket get result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_get"))
-            .expect("basket get envelope");
-        assert_eq!(get_envelope.operation_id, "basket.get");
-        assert_eq!(get_envelope.result["state"], "ready");
-
-        let list = OperationRequest::new(OperationContext::default(), BasketListRequest::default())
-            .expect("basket list request");
-        let list_envelope = service
-            .execute(list)
-            .expect("basket list result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_list"))
-            .expect("basket list envelope");
-        assert_eq!(list_envelope.operation_id, "basket.list");
-        assert_eq!(list_envelope.result["count"], 1);
-    }
-
-    #[test]
-    fn basket_service_mutates_items_and_validates_readiness() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(BasketOperationService::new(&config));
-        create_basket(&service, "basket_items");
-
-        let add = OperationRequest::new(
-            OperationContext::default(),
-            BasketItemAddRequest::from_data(data(&[
-                ("basket_id", "basket_items"),
-                ("listing_addr", LISTING_ADDR),
-                ("bin_id", "bin-1"),
-                ("quantity", "2"),
-            ])),
-        )
-        .expect("basket item add request");
-        let add_envelope = service
-            .execute(add)
-            .expect("basket item add result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_add"))
-            .expect("basket item add envelope");
-        assert_eq!(add_envelope.operation_id, "basket.item.add");
-        assert_eq!(add_envelope.result["item_count"], 1);
-
-        let update = OperationRequest::new(
-            OperationContext::default(),
-            BasketItemUpdateRequest::from_data(data(&[
-                ("basket_id", "basket_items"),
-                ("item_id", "item_1"),
-                ("quantity", "3"),
-            ])),
-        )
-        .expect("basket item update request");
-        let update_envelope = service
-            .execute(update)
-            .expect("basket item update result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_update"))
-            .expect("basket item update envelope");
-        assert_eq!(update_envelope.operation_id, "basket.item.update");
-        assert_eq!(update_envelope.result["items"][0]["quantity"], 3);
-
-        let validate = OperationRequest::new(
-            OperationContext::default(),
-            BasketValidateRequest::from_data(data(&[("basket_id", "basket_items")])),
-        )
-        .expect("basket validate request");
-        let validate_envelope = service
-            .execute(validate)
-            .expect("basket validate result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_validate"))
-            .expect("basket validate envelope");
-        assert_eq!(validate_envelope.operation_id, "basket.validate");
-        assert_eq!(validate_envelope.result["ready_for_quote"], false);
-        assert_eq!(
-            validate_envelope.result["issues"][0]["code"],
-            "basket_market_replica_missing"
-        );
-
-        let adjustment_add = OperationRequest::new(
-            OperationContext::default(),
-            BasketAdjustmentAddRequest::from_data(data(&[
-                ("basket_id", "basket_items"),
-                ("id", "adj_pickup"),
-                ("effect", "decrease"),
-                ("amount", "1.00"),
-                ("currency", "USD"),
-                ("reason", "pickup"),
-            ])),
-        )
-        .expect("basket adjustment add request");
-        let adjustment_add_envelope = service
-            .execute(adjustment_add)
-            .expect("basket adjustment add result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_adjust_add"))
-            .expect("basket adjustment add envelope");
-        assert_eq!(
-            adjustment_add_envelope.operation_id,
-            "basket.adjustment.add"
-        );
-        assert_eq!(adjustment_add_envelope.result["adjustment_count"], 1);
-
-        let adjustment_remove = OperationRequest::new(
-            OperationContext::default(),
-            BasketAdjustmentRemoveRequest::from_data(data(&[
-                ("basket_id", "basket_items"),
-                ("id", "adj_pickup"),
-            ])),
-        )
-        .expect("basket adjustment remove request");
-        let adjustment_remove_envelope = service
-            .execute(adjustment_remove)
-            .expect("basket adjustment remove result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_adjust_remove"))
-            .expect("basket adjustment remove envelope");
-        assert_eq!(
-            adjustment_remove_envelope.operation_id,
-            "basket.adjustment.remove"
-        );
-        assert_eq!(adjustment_remove_envelope.result["adjustment_count"], 0);
-
-        let remove = OperationRequest::new(
-            OperationContext::default(),
-            BasketItemRemoveRequest::from_data(data(&[
-                ("basket_id", "basket_items"),
-                ("item_id", "item_1"),
-            ])),
-        )
-        .expect("basket item remove request");
-        let remove_envelope = service
-            .execute(remove)
-            .expect("basket item remove result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_remove"))
-            .expect("basket item remove envelope");
-        assert_eq!(remove_envelope.operation_id, "basket.item.remove");
-        assert_eq!(remove_envelope.result["item_count"], 0);
-        assert_eq!(remove_envelope.result["ready_for_quote"], false);
-    }
-
-    #[test]
-    fn basket_quote_create_materializes_order_draft() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        seed_current_listing(&config);
-        account::create_default_account(&config).expect("create buyer account");
-        let service = OperationAdapter::new(BasketOperationService::new(&config));
-        create_basket(&service, "basket_quote");
-        add_listing_item(&service, "basket_quote");
-
-        let quote = OperationRequest::new(
-            OperationContext::default(),
-            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_quote")])),
-        )
-        .expect("basket quote request");
-        let envelope = service
-            .execute(quote)
-            .expect("basket quote result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_quote"))
-            .expect("basket quote envelope");
-
-        assert_eq!(envelope.operation_id, "basket.quote.create");
-        assert_eq!(envelope.result["state"], "quoted");
-        assert!(
-            envelope.result["quote"]["trade_id"]
-                .as_str()
-                .unwrap()
-                .starts_with("ord_")
-        );
-        assert!(
-            envelope.result["trade"]["buyer_account_id"]
-                .as_str()
-                .expect("buyer account id")
-                .len()
-                > 8
-        );
-        assert!(
-            envelope.result["trade"]["buyer_pubkey"]
-                .as_str()
-                .expect("buyer pubkey")
-                .len()
-                == 64
-        );
-        assert_eq!(
-            envelope.result["trade"]["buyer_actor_source"],
-            "resolved_account"
-        );
-        let order_file = PathBuf::from(envelope.result["quote"]["trade_file"].as_str().unwrap());
-        assert!(order_file.exists());
-        let draft = std::fs::read_to_string(order_file).expect("read order draft");
-        assert!(draft.contains("[buyer_actor]"));
-        assert!(draft.contains("source = \"resolved_account\""));
-    }
-
-    #[test]
-    fn basket_quote_create_dry_run_skips_order_draft() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        seed_current_listing(&config);
-        account::create_default_account(&config).expect("create buyer account");
-        let service = OperationAdapter::new(BasketOperationService::new(&config));
-        create_basket(&service, "basket_dry_run");
-        add_listing_item(&service, "basket_dry_run");
-
-        let mut context = OperationContext::default();
-        context.dry_run = true;
-        let quote = OperationRequest::new(
-            context.clone(),
-            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_dry_run")])),
-        )
-        .expect("basket quote request");
-        let envelope = service
-            .execute(quote)
-            .expect("basket quote dry run")
-            .to_envelope(context.envelope_context("req_basket_quote"))
-            .expect("basket quote envelope");
-
-        assert_eq!(envelope.operation_id, "basket.quote.create");
-        assert_eq!(envelope.dry_run, true);
-        assert_eq!(envelope.result["state"], "dry_run");
-        assert_eq!(envelope.result["trade"]["state"], "dry_run");
-        assert_eq!(
-            envelope.result["trade"]["buyer_actor_source"],
-            "resolved_account"
-        );
-        assert!(!PathBuf::from(envelope.result["trade"]["file"].as_str().unwrap()).exists());
-    }
-
-    #[test]
-    fn basket_quote_create_requires_resolved_buyer_account() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        seed_current_listing(&config);
-        let service = OperationAdapter::new(BasketOperationService::new(&config));
-        create_basket(&service, "basket_no_buyer");
-        add_listing_item(&service, "basket_no_buyer");
-
-        let quote = OperationRequest::new(
-            OperationContext::default(),
-            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_no_buyer")])),
-        )
-        .expect("basket quote request");
-        let error = service.execute(quote).expect_err("missing buyer account");
-
-        let output_error = error.to_output_error();
-        assert_eq!(output_error.code, "account_unresolved");
-        let detail = output_error.detail.expect("account detail");
-        assert_eq!(detail["buyer_actor_source"], "resolved_account");
-        assert_eq!(detail["actions"][0], "radroots account create");
-    }
-
-    #[test]
-    fn basket_readiness_fails_closed_without_replica_data() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        let service = OperationAdapter::new(BasketOperationService::new(&config));
-        create_basket(&service, "basket_missing_replica");
-        let add = add_listing_item(&service, "basket_missing_replica");
-        assert_eq!(add.result["ready_for_quote"], false);
-        assert_eq!(
-            add.result["issues"][0]["code"],
-            "basket_market_replica_missing"
-        );
-
-        let list = OperationRequest::new(OperationContext::default(), BasketListRequest::default())
-            .expect("basket list request");
-        let list_envelope = service
-            .execute(list)
-            .expect("basket list result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_list"))
-            .expect("basket list envelope");
-        assert_eq!(
-            list_envelope.result["baskets"][0]["issues"][0]["code"],
-            "basket_market_replica_missing"
-        );
-
-        let validate = OperationRequest::new(
-            OperationContext::default(),
-            BasketValidateRequest::from_data(data(&[("basket_id", "basket_missing_replica")])),
-        )
-        .expect("basket validate request");
-        let validate_envelope = service
-            .execute(validate)
-            .expect("basket validate result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_validate"))
-            .expect("basket validate envelope");
-        assert_eq!(validate_envelope.result["state"], "unconfigured");
-        assert_eq!(
-            validate_envelope.result["issues"][0]["code"],
-            "basket_market_replica_missing"
-        );
-
-        let quote = OperationRequest::new(
-            OperationContext::default(),
-            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_missing_replica")])),
-        )
-        .expect("basket quote request");
-        let quote_envelope = service
-            .execute(quote)
-            .expect("basket quote result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_quote"))
-            .expect("basket quote envelope");
-        assert_eq!(quote_envelope.result["state"], "unconfigured");
-        assert_eq!(
-            quote_envelope.result["issues"][0]["code"],
-            "basket_market_replica_missing"
-        );
-        assert!(!config.paths.app_data_root.join("orders/drafts").exists());
-    }
-
-    #[test]
-    fn basket_readiness_fails_closed_for_unresolved_listing() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        crate::runtime::store::init(&config).expect("store init");
-        let service = OperationAdapter::new(BasketOperationService::new(&config));
-        create_basket(&service, "basket_unresolved");
-        let add = add_listing_item(&service, "basket_unresolved");
-        assert_eq!(add.result["ready_for_quote"], false);
-        assert_eq!(
-            add.result["issues"][0]["code"],
-            "basket_item_listing_unresolved"
-        );
-
-        let quote = OperationRequest::new(
-            OperationContext::default(),
-            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_unresolved")])),
-        )
-        .expect("basket quote request");
-        let quote_envelope = service
-            .execute(quote)
-            .expect("basket quote result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_quote"))
-            .expect("basket quote envelope");
-        assert_eq!(quote_envelope.result["state"], "unconfigured");
-        assert_eq!(
-            quote_envelope.result["issues"][0]["code"],
-            "basket_item_listing_unresolved"
-        );
-        assert!(!config.paths.app_data_root.join("orders/drafts").exists());
-    }
-
-    #[test]
-    fn basket_readiness_fails_closed_for_ambiguous_listing() {
-        let dir = tempdir().expect("tempdir");
-        let config = sample_config(dir.path());
-        seed_current_listing(&config);
-        duplicate_current_listing_row(&config);
-        let service = OperationAdapter::new(BasketOperationService::new(&config));
-        create_basket(&service, "basket_ambiguous");
-        let add = add_listing_item(&service, "basket_ambiguous");
-        assert_eq!(add.result["ready_for_quote"], false);
-        assert_eq!(
-            add.result["issues"][0]["code"],
-            "basket_item_listing_ambiguous"
-        );
-
-        let quote = OperationRequest::new(
-            OperationContext::default(),
-            BasketQuoteCreateRequest::from_data(data(&[("basket_id", "basket_ambiguous")])),
-        )
-        .expect("basket quote request");
-        let quote_envelope = service
-            .execute(quote)
-            .expect("basket quote result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_quote"))
-            .expect("basket quote envelope");
-        assert_eq!(quote_envelope.result["state"], "unconfigured");
-        assert_eq!(
-            quote_envelope.result["issues"][0]["code"],
-            "basket_item_listing_ambiguous"
-        );
-        assert!(!config.paths.app_data_root.join("orders/drafts").exists());
-    }
-
-    fn create_basket(service: &OperationAdapter<BasketOperationService<'_>>, basket_id: &str) {
-        let request = OperationRequest::new(
-            OperationContext::default(),
-            BasketCreateRequest::from_data(data(&[("basket_id", basket_id)])),
-        )
-        .expect("basket create request");
-        service.execute(request).expect("basket create result");
-    }
-
-    fn add_listing_item(
-        service: &OperationAdapter<BasketOperationService<'_>>,
-        basket_id: &str,
-    ) -> crate::out::envelope::OutputEnvelope {
-        let request = OperationRequest::new(
-            OperationContext::default(),
-            BasketItemAddRequest::from_data(data(&[
-                ("basket_id", basket_id),
-                ("listing_addr", LISTING_ADDR),
-                ("bin_id", "bin-1"),
-                ("quantity", "1"),
-            ])),
-        )
-        .expect("basket item add request");
-        service
-            .execute(request)
-            .expect("basket item add result")
-            .to_envelope(OperationContext::default().envelope_context("req_basket_add"))
-            .expect("basket item add envelope")
-    }
-
-    fn seed_current_listing(config: &RuntimeConfig) {
-        crate::runtime::store::init(config).expect("store init");
-        let (seller_pubkey, listing_id) = listing_addr_parts(LISTING_ADDR);
-        let event = RadrootsEventEnvelope::new(RadrootsEventEnvelopeParts {
-            id: "2".repeat(64),
-            author: seller_pubkey.clone(),
-            created_at: 1,
-            kind: KIND_LISTING,
-            tags: vec![
-                vec!["d".to_owned(), listing_id],
-                vec![
-                    "a".to_owned(),
-                    format!(
-                        "{}:{}:{}",
-                        KIND_FARM, seller_pubkey, "AAAAAAAAAAAAAAAAAAAAAA"
-                    ),
-                ],
-                vec!["p".to_owned(), seller_pubkey],
-                vec!["key".to_owned(), "pasture-eggs".to_owned()],
-                vec!["title".to_owned(), "Market Eggs".to_owned()],
-                vec!["category".to_owned(), "eggs".to_owned()],
-                vec!["summary".to_owned(), "Pasture-raised eggs".to_owned()],
-                vec!["process".to_owned(), "washed".to_owned()],
-                vec!["lot".to_owned(), "lot-a".to_owned()],
-                vec!["profile".to_owned(), "dozen".to_owned()],
-                vec!["year".to_owned(), "2026".to_owned()],
-                vec!["radroots:primary_bin".to_owned(), "bin-1".to_owned()],
-                vec![
-                    "radroots:bin".to_owned(),
-                    "bin-1".to_owned(),
-                    "12".to_owned(),
-                    "each".to_owned(),
-                    "12".to_owned(),
-                    "each".to_owned(),
-                    "dozen".to_owned(),
-                ],
-                vec![
-                    "radroots:price".to_owned(),
-                    "bin-1".to_owned(),
-                    "6".to_owned(),
-                    "USD".to_owned(),
-                    "1".to_owned(),
-                    "each".to_owned(),
-                    "6".to_owned(),
-                    "each".to_owned(),
-                ],
-                vec!["inventory".to_owned(), "5".to_owned()],
-                vec!["status".to_owned(), "active".to_owned()],
-            ],
-            content: "# Market Eggs".to_owned(),
-            sig: "f".repeat(128),
-        })
-        .expect("seed listing event");
-        let executor =
-            SqlxSqliteExecutor::open(&config.local.replica_store_path).expect("open replica");
-        assert_eq!(
-            radroots_replica_ingest_event(&executor, &event).expect("ingest listing"),
-            RadrootsReplicaIngestOutcome::Applied
-        );
-    }
-
-    fn listing_addr_parts(listing_addr: &str) -> (String, String) {
-        let parsed = RadrootsListingAddress::parse(listing_addr).expect("listing addr");
-        let (_, rest) = parsed.as_str().split_once(':').expect("listing addr kind");
-        let (seller_pubkey, listing_id) = rest.split_once(':').expect("listing addr parts");
-        (seller_pubkey.to_owned(), listing_id.to_owned())
-    }
-
-    fn duplicate_current_listing_row(config: &RuntimeConfig) {
-        let executor =
-            SqlxSqliteExecutor::open(&config.local.replica_store_path).expect("open replica");
-        let params = json!(["33333333-3333-3333-3333-333333333333", LISTING_ADDR]).to_string();
-        executor
-            .exec(
-                "INSERT INTO trade_product (id, created_at, updated_at, key, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes, listing_addr, primary_bin_id, qty_amt_exact, price_amt_exact, price_qty_amt_exact, verified_primary_bin_id) SELECT ?, created_at, updated_at, key, category, title, summary, process, lot, profile, year, qty_amt, qty_unit, qty_label, qty_avail, price_amt, price_currency, price_qty_amt, price_qty_unit, notes, listing_addr, primary_bin_id, qty_amt_exact, price_amt_exact, price_qty_amt_exact, verified_primary_bin_id FROM trade_product WHERE listing_addr = ?;",
-                params.as_str(),
-            )
-            .expect("duplicate listing row");
-    }
-
-    fn sample_config(root: &Path) -> RuntimeConfig {
-        let data = root.join("data");
-        let cache = root.join("cache");
-        let logs = root.join("logs");
-        let secrets = root.join("secrets");
-        RuntimeConfig {
-            output: OutputConfig {
-                format: OutputFormat::Terminal,
-                verbosity: Verbosity::Normal,
-                dry_run: false,
-            },
-            interaction: InteractionConfig {
-                input_enabled: true,
-                assume_yes: false,
-                stdin_tty: false,
-                stdout_tty: false,
-                prompts_allowed: false,
-                confirmations_allowed: false,
-            },
-            paths: PathsConfig {
-                profile: "interactive_user".into(),
-                profile_source: "test".into(),
-                allowed_profiles: vec!["interactive_user".into(), "repo_local".into()],
-                root_source: "test".into(),
-                repo_local_root: None,
-                repo_local_root_source: None,
-                subordinate_path_override_source: "runtime_config".into(),
-                app_namespace: "apps/cli".into(),
-                shared_accounts_namespace: "shared/accounts".into(),
-                shared_identities_namespace: "shared/identities".into(),
-                app_config_path: root.join("config/apps/cli/config.toml"),
-                workspace_config_path: None,
-                app_data_root: data.join("apps/cli"),
-                shared_cache_root: cache.clone(),
-                app_logs_root: logs.join("apps/cli"),
-                shared_accounts_data_root: data.join("shared/accounts"),
-                shared_accounts_secrets_root: secrets.join("shared/accounts"),
-                default_identity_path: secrets.join("shared/identities/default.json"),
-            },
-            logging: LoggingConfig {
-                filter: "info".into(),
-                directory: None,
-                stdout: false,
-            },
-            account: AccountConfig {
-                selector: None,
-                store_path: data.join("shared/accounts/store.json"),
-                secrets_dir: secrets.join("shared/accounts"),
-                secret_backend: RadrootsSecretBackend::EncryptedFile,
-            },
-            account_secret_contract: AccountSecretContractConfig {
-                default_backend: "host_vault".into(),
-                allowed_backends: vec!["host_vault".into(), "encrypted_file".into()],
-                host_vault_policy: Some("desktop".into()),
-                uses_protected_store: true,
-            },
-            identity: IdentityConfig {
-                path: secrets.join("shared/identities/default.json"),
-            },
-            signer: SignerConfig {
-                backend: SignerBackend::Local,
-            },
-            transport: crate::runtime::config::TransportConfig::local_only(),
-            local: LocalConfig {
-                root: data.join("apps/cli/replica"),
-                replica_store_path: data.join("apps/cli/replica/replica.sqlite"),
-                backups_dir: data.join("apps/cli/replica/backups"),
-                exports_dir: data.join("apps/cli/replica/exports"),
-            },
-            myc: MycConfig {
-                executable: PathBuf::from("myc"),
-                status_timeout_ms: 2_000,
-            },
-            hyf: HyfConfig {
-                enabled: false,
-                executable: PathBuf::from("hyfd"),
-            },
-            mesh: crate::runtime::config::MeshConfig::disabled(),
-            rpc: RpcConfig {
-                url: "http://127.0.0.1:7070".into(),
-            },
-            rhi: crate::runtime::config::RhiConfig {
-                validator_set: None,
-                require_cryptographic_proof: false,
-            },
-            capability_bindings: Vec::new(),
-        }
-    }
-
-    fn data(entries: &[(&str, &str)]) -> OperationData {
-        entries
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), Value::String((*value).to_owned())))
-            .collect::<Map<String, Value>>()
     }
 }

@@ -3625,6 +3625,7 @@ dependencies = [
  "radroots_replica_store",
  "radroots_replica_sync",
  "radroots_runtime",
+ "radroots_runtime_contract_v1",
  "radroots_runtime_paths",
  "radroots_runtime_store",
  "radroots_sdk",

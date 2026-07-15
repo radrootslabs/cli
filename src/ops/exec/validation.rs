@@ -4,13 +4,12 @@ use serde_json::{Value, json};
 use crate::ops::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
     OperationResult, OperationResultData, OperationService, ValidationReceiptGetRequest,
-    ValidationReceiptGetResult, ValidationReceiptListRequest, ValidationReceiptListResult,
-    ValidationReceiptVerifyRequest, ValidationReceiptVerifyResult,
+    ValidationReceiptGetResult, ValidationReceiptVerifyRequest, ValidationReceiptVerifyResult,
+    ValidationStatusRequest, ValidationStatusResult,
 };
 use crate::runtime::config::RuntimeConfig;
 use crate::runtime::validation_receipt::{
-    ValidationReceiptEventArgs, ValidationReceiptInspectionView, ValidationReceiptListArgs,
-    ValidationReceiptListView,
+    ValidationReceiptEventArgs, ValidationReceiptInspectionView,
 };
 use crate::view::runtime::CommandDisposition;
 
@@ -21,6 +20,28 @@ pub struct ValidationOperationService<'a> {
 impl<'a> ValidationOperationService<'a> {
     pub fn new(config: &'a RuntimeConfig) -> Self {
         Self { config }
+    }
+}
+
+impl OperationService<ValidationStatusRequest> for ValidationOperationService<'_> {
+    type Result = ValidationStatusResult;
+
+    fn execute(
+        &self,
+        _request: OperationRequest<ValidationStatusRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let state = if self.config.rhi.validator_set.is_some() {
+            "ready"
+        } else {
+            "unconfigured"
+        };
+        let view = json!({
+            "state": state,
+            "source": "Runtime Contract V1 validation configuration",
+            "validator_set_configured": self.config.rhi.validator_set.is_some(),
+            "cryptographic_proof_required": self.config.rhi.require_cryptographic_proof,
+        });
+        serialized_operation_result::<ValidationStatusResult, _>(&view)
     }
 }
 
@@ -37,19 +58,6 @@ impl OperationService<ValidationReceiptGetRequest> for ValidationOperationServic
             "validation.receipt.get",
             &view,
         )
-    }
-}
-
-impl OperationService<ValidationReceiptListRequest> for ValidationOperationService<'_> {
-    type Result = ValidationReceiptListResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<ValidationReceiptListRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = validation_receipt_list_args(&request)?;
-        let view = crate::runtime::validation_receipt::list(self.config, &args);
-        validation_receipt_list_result(&view)
     }
 }
 
@@ -80,17 +88,6 @@ where
     })
 }
 
-fn validation_receipt_list_args<P>(
-    request: &OperationRequest<P>,
-) -> Result<ValidationReceiptListArgs, OperationAdapterError>
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    Ok(ValidationReceiptListArgs {
-        order_id: required_string(request, "trade_id")?,
-    })
-}
-
 fn validation_receipt_inspection_result<R>(
     operation_id: &str,
     view: &ValidationReceiptInspectionView,
@@ -102,22 +99,6 @@ where
         CommandDisposition::Success => serialized_operation_result::<R, _>(view),
         disposition => Err(validation_receipt_view_error(
             operation_id,
-            disposition,
-            view,
-            view.reason.as_deref(),
-        )),
-    }
-}
-
-fn validation_receipt_list_result(
-    view: &ValidationReceiptListView,
-) -> Result<OperationResult<ValidationReceiptListResult>, OperationAdapterError> {
-    match view.disposition() {
-        CommandDisposition::Success => {
-            serialized_operation_result::<ValidationReceiptListResult, _>(view)
-        }
-        disposition => Err(validation_receipt_view_error(
-            "validation.receipt.list",
             disposition,
             view,
             view.reason.as_deref(),

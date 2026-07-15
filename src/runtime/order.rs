@@ -69,7 +69,7 @@ use serde_json::{Value, json};
 
 use crate::cli::global::{
     OrderDraftCreateArgs, RecordLookupArgs, TradeAppRecordExportArgs, TradeCancelArgs,
-    TradeDecisionArg, TradeDecisionArgs, TradeRebindArgs, TradeStatusArgs, TradeSubmitArgs,
+    TradeDecisionArg, TradeDecisionArgs, TradeRebindArgs, TradeRequestArgs, TradeStatusArgs,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
@@ -96,13 +96,13 @@ use self::sdk_status::sdk_order_status_view;
 const ORDER_DRAFT_KIND: &str = "order_draft_v1";
 const ORDER_SOURCE: &str = "local trade drafts · local first";
 const ORDER_APP_RECORD_SOURCE: &str = "app-authored shared local trade records";
-const ORDER_SUBMIT_SOURCE: &str = "SDK trade submit · local key";
+const ORDER_SUBMIT_SOURCE: &str = "SDK trade request · local key";
 const ORDER_DECISION_SOURCE: &str = "SDK trade decision · local key";
 const ORDER_CANCELLATION_SOURCE: &str = "SDK trade cancellation · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "shared Nostr transport fetch · selected seller identity";
 const ORDER_STATUS_SDK_SOURCE: &str = "SDK local trade projection";
 const ORDER_EVENT_LIST_RELAY_ACTION: &str =
-    "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com";
+    "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com";
 const ORDER_BUYER_ACTOR_SOURCE_RESOLVED_ACCOUNT: &str = "resolved_account";
 const ORDER_BUYER_ACTOR_SOURCE_REBIND: &str = "order_rebind";
 const ORDER_APP_RECORD_LIST_LIMIT: u32 = 500;
@@ -851,7 +851,7 @@ pub fn app_record_export(
                 app_order.loaded.document.order.order_id
             ),
             format!(
-                "radroots trade submit {}",
+                "radroots trade request {}",
                 app_order.loaded.document.order.order_id
             ),
         ],
@@ -860,7 +860,7 @@ pub fn app_record_export(
 
 pub fn submit(
     config: &RuntimeConfig,
-    args: &TradeSubmitArgs,
+    args: &TradeRequestArgs,
 ) -> Result<OrderSubmitView, CliSdkAdapterError> {
     let file = draft_lookup_path(config, args.key.as_str());
     let (loaded, source_issues) = if file.exists() {
@@ -1075,7 +1075,7 @@ fn rebind_inner(
                     .to_owned(),
             ),
             actions: vec![
-                format!("radroots trade status get {from_order_id}"),
+                format!("radroots trade get {from_order_id}"),
                 "radroots basket quote create <basket-id>".to_owned(),
             ],
         });
@@ -1140,10 +1140,7 @@ fn rebind_inner(
             "order buyer actor binding updated".to_owned()
         }),
         actions: if dry_run {
-            vec![format!(
-                "radroots --approval-token approve order rebind {} {}",
-                args.key, args.selector
-            )]
+            vec![format!("radroots account select {}", args.selector)]
         } else {
             vec![format!("radroots trade get {to_order_id}")]
         },
@@ -1432,7 +1429,7 @@ fn sdk_trade_decision_outcome_view(
                 "dry run requested; seller trade {} publication skipped",
                 args.decision.command()
             ));
-            view.actions = vec![format!("radroots trade status get {}", status.order_id)];
+            view.actions = vec![format!("radroots trade get {}", status.order_id)];
             view
         }
         TradeMutationOutcome::Enqueued { receipt } => {
@@ -1461,7 +1458,7 @@ fn sdk_trade_cancellation_outcome_view(
             view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
             view.reason =
                 Some("dry run requested; buyer trade cancellation publication skipped".to_owned());
-            view.actions = vec![format!("radroots trade status get {}", status.order_id)];
+            view.actions = vec![format!("radroots trade get {}", status.order_id)];
             view
         }
         TradeMutationOutcome::Enqueued { receipt } => {
@@ -2028,7 +2025,7 @@ fn sdk_mutation_state_label(state: &SdkMutationState) -> &'static str {
 fn sdk_order_push_recovery_actions() -> Vec<String> {
     vec![
         "radroots sync push".to_owned(),
-        "radroots sync status get".to_owned(),
+        "radroots sync status".to_owned(),
     ]
 }
 
@@ -2093,7 +2090,7 @@ fn resolve_order_listing(
 
     if !config.local.replica_store_path.exists() {
         return Err(RuntimeError::Config(format!(
-            "trade listing lookup `{listing_lookup}` requires local market data; run `radroots store init` and `radroots market refresh` before creating a trade from a listing"
+            "trade listing lookup `{listing_lookup}` requires local market data; run `radroots store inspect` and `radroots market pull` before creating a trade from a listing"
         )));
     }
 
@@ -2101,24 +2098,24 @@ fn resolve_order_listing(
     let rows = db.trade_product_lookup(listing_lookup)?;
     match rows.len() {
         0 => Err(RuntimeError::Config(format!(
-            "listing `{listing_lookup}` is not available in the local replica; run `radroots market refresh` or pass `--listing-addr`"
+            "listing `{listing_lookup}` is not available in the local replica; run `radroots market pull` or pass `--listing-addr`"
         ))),
         1 => {
             let row = rows.into_iter().next().expect("one row");
             let economics_product = ResolvedOrderEconomicsProduct::from_summary(&row);
             let listing_addr = normalize_optional(row.listing_addr.as_deref()).ok_or_else(|| {
                 RuntimeError::Config(format!(
-                    "listing `{listing_lookup}` is missing a canonical listing address; run `radroots market refresh` or pass `--listing-addr`"
+                    "listing `{listing_lookup}` is missing a canonical listing address; run `radroots market pull` or pass `--listing-addr`"
                 ))
             })?;
             let parsed = parse_listing_addr(listing_addr.as_str()).map_err(|error| {
                 RuntimeError::Config(format!(
-                    "listing `{listing_lookup}` has invalid listing_addr: {error}; run `radroots market refresh` or pass `--listing-addr`"
+                    "listing `{listing_lookup}` has invalid listing_addr: {error}; run `radroots market pull` or pass `--listing-addr`"
                 ))
             })?;
             if parsed.kind != KIND_LISTING {
                 return Err(RuntimeError::Config(format!(
-                    "listing `{listing_lookup}` listing_addr must reference a public NIP-99 listing; run `radroots market refresh` or pass `--listing-addr`"
+                    "listing `{listing_lookup}` listing_addr must reference a public NIP-99 listing; run `radroots market pull` or pass `--listing-addr`"
                 )));
             }
 
@@ -2129,7 +2126,7 @@ fn resolve_order_listing(
             )?
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
-                    "listing `{listing_lookup}` is missing the latest listing event pointer; run `radroots market refresh` before creating a trade from this listing"
+                    "listing `{listing_lookup}` is missing the latest listing event pointer; run `radroots market pull` before creating a trade from this listing"
                 ))
             })?;
             let shared_provenance = resolve_shared_signed_listing_provenance(
@@ -2260,7 +2257,7 @@ fn listing_provenance_relays(
     }
     relays.extend(relay_provenance_relays_for_scope(
         config,
-        RelayIngestScope::MarketRefresh,
+        RelayIngestScope::MarketPull,
     )?);
     normalize_listing_relay_set(relays)
         .map_err(|error| RuntimeError::Config(format!("listing provenance relays: {error}")))
@@ -3226,16 +3223,13 @@ fn app_order_record_summary(
         vec![
             format!("radroots trade get {}", document.order.order_id),
             format!("radroots trade app export {}", record.record_id),
-            format!("radroots trade submit {}", document.order.order_id),
+            format!("radroots trade request {}", document.order.order_id),
         ]
     } else if app_order_issue_present(&issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
-        vec![format!(
-            "radroots trade status get {}",
-            document.order.order_id
-        )]
+        vec![format!("radroots trade get {}", document.order.order_id)]
     } else if app_order_issue_present(&issues, APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE) {
         vec![
-            format!("radroots trade status get {}", document.order.order_id),
+            format!("radroots trade get {}", document.order.order_id),
             "radroots trade app list".to_owned(),
         ]
     } else {
@@ -3339,13 +3333,10 @@ fn app_order_export_failure_actions(
     issues: &[OrderIssueView],
 ) -> Vec<String> {
     if app_order_issue_present(issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
-        vec![format!(
-            "radroots trade status get {}",
-            document.order.order_id
-        )]
+        vec![format!("radroots trade get {}", document.order.order_id)]
     } else if app_order_issue_present(issues, APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE) {
         vec![
-            format!("radroots trade status get {}", document.order.order_id),
+            format!("radroots trade get {}", document.order.order_id),
             "radroots trade app list".to_owned(),
         ]
     } else {
@@ -3370,13 +3361,14 @@ fn validate_order_export_output_target(output_path: &Path) -> Result<(), Runtime
             output_path.display()
         )));
     }
-    if let Some(parent) = output_path.parent() {
-        if parent.exists() && !parent.is_dir() {
-            return Err(RuntimeError::Config(format!(
-                "trade draft parent {} is not a directory",
-                parent.display()
-            )));
-        }
+    if let Some(parent) = output_path.parent()
+        && parent.exists()
+        && !parent.is_dir()
+    {
+        return Err(RuntimeError::Config(format!(
+            "trade draft parent {} is not a directory",
+            parent.display()
+        )));
     }
     Ok(())
 }
@@ -3527,13 +3519,12 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
                     ));
                 }
                 if let Some(seller_pubkey) = non_empty_string(document.order.seller_pubkey.clone())
+                    && seller_pubkey != parsed.seller_pubkey
                 {
-                    if seller_pubkey != parsed.seller_pubkey {
-                        issues.push(issue(
-                            "order.seller_pubkey",
-                            "seller_pubkey must match listing_addr seller when both are set",
-                        ));
-                    }
+                    issues.push(issue(
+                        "order.seller_pubkey",
+                        "seller_pubkey must match listing_addr seller when both are set",
+                    ));
                 }
             }
             Err(error) => issues.push(issue(
@@ -3543,7 +3534,7 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
         },
         None => issues.push(issue(
             "trade.listing_addr",
-            "listing_addr is required before trade submit",
+            "listing_addr is required before trade request",
         )),
     }
 
@@ -3558,7 +3549,7 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
         }
         None => issues.push(issue(
             "trade.listing_event_id",
-            "latest active listing event id is required before trade submit; run `radroots market refresh` and create the trade from local market data",
+            "latest active listing event id is required before trade request; run `radroots market pull` and create the trade from local market data",
         )),
     }
 
@@ -3566,7 +3557,7 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
         Ok(listing_relays) if listing_relays.is_empty() => issues.push(issue_with_code(
             "listing_provenance_missing",
             "trade.listing_relays",
-            "listing relay provenance is required before trade submit; run `radroots market refresh` and create the trade from current local market data",
+            "listing relay provenance is required before trade request; run `radroots market pull` and create the trade from current local market data",
         )),
         Ok(_) => {}
         Err(error) => issues.push(issue_with_code(
@@ -3579,7 +3570,7 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
     if document.order.items.is_empty() {
         issues.push(issue(
             "order.items",
-            "at least one order item is required before trade submit",
+            "at least one order item is required before trade request",
         ));
     }
     for (index, item) in document.order.items.iter().enumerate() {
@@ -3614,26 +3605,26 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
         }
         None => issues.push(issue(
             "order.economics",
-            "quote economics is required before trade submit; run `radroots basket quote create` from current local market data",
+            "quote economics is required before trade request; run `radroots basket quote create` from current local market data",
         )),
     }
 
     if document.buyer_actor.account_id.trim().is_empty() {
         issues.push(issue(
             "buyer_actor.account_id",
-            "buyer_actor account_id is required before trade submit",
+            "buyer_actor account_id is required before trade request",
         ));
     }
     if document.buyer_actor.pubkey.trim().is_empty() {
         issues.push(issue(
             "buyer_actor.pubkey",
-            "buyer_actor pubkey is required before trade submit",
+            "buyer_actor pubkey is required before trade request",
         ));
     }
     if document.buyer_actor.source.trim().is_empty() {
         issues.push(issue(
             "buyer_actor.source",
-            "buyer_actor source is required before trade submit",
+            "buyer_actor source is required before trade request",
         ));
     } else if !matches!(
         document.buyer_actor.source.as_str(),
@@ -3650,7 +3641,7 @@ fn collect_issues(document: &OrderDraftDocument) -> Vec<OrderIssueView> {
     if document.order.buyer_pubkey.trim().is_empty() {
         issues.push(issue(
             "order.buyer_pubkey",
-            "order buyer_pubkey is required before trade submit",
+            "order buyer_pubkey is required before trade request",
         ));
     } else if !document
         .order
@@ -3690,14 +3681,11 @@ fn actions_for_document(
     issues: &[OrderIssueView],
 ) -> Vec<String> {
     if app_order_issue_present(issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
-        return vec![format!(
-            "radroots trade status get {}",
-            document.order.order_id
-        )];
+        return vec![format!("radroots trade get {}", document.order.order_id)];
     }
     if app_order_issue_present(issues, APP_ORDER_SIGNED_EVIDENCE_CONFLICT_ISSUE) {
         return vec![
-            format!("radroots trade status get {}", document.order.order_id),
+            format!("radroots trade get {}", document.order.order_id),
             "radroots trade app list".to_owned(),
         ];
     }
@@ -3931,7 +3919,7 @@ fn order_buyer_write_actor_context(
 fn order_submit_app_signed_evidence_view(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
-    args: &TradeSubmitArgs,
+    args: &TradeRequestArgs,
     issues: &[OrderIssueView],
 ) -> Option<OrderSubmitView> {
     if let Some(issue) = app_order_issue(issues, APP_ORDER_ALREADY_SUBMITTED_ISSUE) {
@@ -4004,7 +3992,7 @@ fn order_submit_app_signed_evidence_view(
             job: None,
             issues: issues.to_vec(),
             actions: vec![format!(
-                "radroots trade status get {}",
+                "radroots trade get {}",
                 loaded.document.order.order_id
             )],
         });
@@ -4070,7 +4058,7 @@ fn order_submit_request_matches_draft(
 fn order_submit_dry_run_view(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
-    args: &TradeSubmitArgs,
+    args: &TradeRequestArgs,
     plan: TradeSubmitPlan,
     target_transport_endpoints: Vec<String>,
 ) -> OrderSubmitView {
@@ -4110,7 +4098,7 @@ fn order_submit_dry_run_view(
         job: None,
         issues: Vec::new(),
         actions: vec![format!(
-            "radroots trade submit {}",
+            "radroots trade request {}",
             loaded.document.order.order_id
         )],
     }
@@ -4169,7 +4157,7 @@ fn order_submit_listing_event_ptr(
 fn propose_trade_via_sdk(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
-    args: &TradeSubmitArgs,
+    args: &TradeRequestArgs,
     account: &account::AccountRecordView,
 ) -> Result<OrderSubmitView, CliSdkAdapterError> {
     let actor = sdk_trade_actor(account, RadrootsActorRole::Buyer, "propose")?;
@@ -4200,7 +4188,7 @@ fn propose_trade_via_sdk(
 fn sdk_trade_submit_outcome_view(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
-    args: &TradeSubmitArgs,
+    args: &TradeRequestArgs,
     outcome: TradeMutationOutcome<TradeSubmitPlan, TradeSubmitReceipt>,
 ) -> OrderSubmitView {
     match outcome {
@@ -4223,7 +4211,7 @@ fn sdk_trade_submit_outcome_view(
 fn sdk_enqueued_order_submit_view(
     config: &RuntimeConfig,
     loaded: &LoadedOrderDraft,
-    args: &TradeSubmitArgs,
+    args: &TradeRequestArgs,
     enqueue: TradeSubmitReceipt,
     push: Option<&PushOutboxReceipt>,
 ) -> OrderSubmitView {
@@ -4311,7 +4299,7 @@ fn sdk_order_submit_reason(
             sdk_order_enqueue_retry_summary(enqueue)
         )),
         None => Some(format!(
-            "{}; trade submit queued in SDK outbox; no ready SDK outbox event was pushed; {}",
+            "{}; trade request queued in SDK outbox; no ready SDK outbox event was pushed; {}",
             sdk_order_enqueue_summary(enqueue),
             sdk_order_enqueue_retry_summary(enqueue)
         )),
@@ -4492,7 +4480,7 @@ fn validate_bound_order_buyer_account(
                         "attempted_buyer_account_id": attempted.record.account_id.to_string(),
                         "attempted_buyer_pubkey": attempted_pubkey,
                         "actions": [
-                            format!("radroots --account-id {account_id} trade submit {}", document.order.order_id),
+                            format!("radroots --account-id {account_id} trade request {}", document.order.order_id),
                             format!("radroots trade rebind {} <selector>", document.order.order_id),
                             format!("radroots trade get {}", document.order.order_id),
                         ],

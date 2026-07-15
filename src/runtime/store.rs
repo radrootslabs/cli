@@ -126,7 +126,7 @@ fn derived_projection_status(
                 pending_count: 0,
             },
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots store init".to_owned()],
+            actions: vec!["radroots store inspect".to_owned()],
         });
     }
 
@@ -187,7 +187,7 @@ pub fn backup_preflight(
         reason: Some(
             "dry run requested; SDK canonical backup directory was not written".to_owned(),
         ),
-        actions: vec!["radroots store backup create".to_owned()],
+        actions: vec!["radroots store backup".to_owned()],
     })
 }
 
@@ -226,7 +226,7 @@ pub fn export(
             export_version: String::new(),
             schema_hash: String::new(),
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots store init".to_owned()],
+            actions: vec!["radroots store inspect".to_owned()],
         });
     }
 
@@ -398,7 +398,7 @@ fn sdk_status_reason(state: &str) -> Option<String> {
 fn sdk_status_actions(state: &str) -> Vec<String> {
     match state {
         "ready" => Vec::new(),
-        _ => vec!["radroots store status get".to_owned()],
+        _ => vec!["radroots store inspect".to_owned()],
     }
 }
 
@@ -477,7 +477,7 @@ fn ensure_safe_sdk_backup_destination(
         sdk_private_path.as_path(),
         sdk_studio_path.as_path(),
     ];
-    if forbidden_paths.iter().any(|forbidden| output == *forbidden) {
+    if forbidden_paths.contains(&output) {
         return Err(RuntimeError::Config(format!(
             "backup destination {} would overwrite canonical or derived projection store data",
             output.display()
@@ -507,10 +507,7 @@ fn ensure_safe_sdk_restore_destination(
         sdk_private_path.as_path(),
         sdk_studio_path.as_path(),
     ];
-    if forbidden_paths
-        .iter()
-        .any(|forbidden| destination == *forbidden)
-    {
+    if forbidden_paths.contains(&destination) {
         return Err(RuntimeError::Config(format!(
             "restore destination {} would overwrite canonical runtime roots or store files",
             destination.display()
@@ -529,9 +526,18 @@ fn ensure_safe_sdk_restore_destination(
 }
 
 fn sdk_backup_view(receipt: BackupReceipt) -> Result<LocalBackupView, CliSdkAdapterError> {
-    let event_store_file = receipt.runtime_path.as_ref().map(display_path);
-    let outbox_file = receipt.runtime_path.as_ref().map(display_path);
-    let manifest_file = receipt.manifest_path.as_ref().map(display_path);
+    let event_store_file = receipt
+        .runtime_path
+        .as_ref()
+        .map(|path| display_path(path.as_path()));
+    let outbox_file = receipt
+        .runtime_path
+        .as_ref()
+        .map(|path| display_path(path.as_path()));
+    let manifest_file = receipt
+        .manifest_path
+        .as_ref()
+        .map(|path| display_path(path.as_path()));
     let size_bytes = path_size(receipt.runtime_path.as_ref())?
         + path_size(receipt.private_path.as_ref())?
         + path_size(receipt.studio_path.as_ref())?
@@ -571,7 +577,7 @@ fn sdk_restore_view(
         destination: receipt
             .destination
             .as_ref()
-            .map(display_path)
+            .map(|path| display_path(path.as_path()))
             .unwrap_or_default(),
         event_store_file: display_path(&receipt.runtime_path),
         outbox_file: display_path(&receipt.runtime_path),
@@ -591,7 +597,7 @@ fn sdk_restore_view(
             None
         },
         actions: if dry_run {
-            vec!["radroots store backup restore <backup-dir>".to_owned()]
+            vec!["radroots store restore <backup-dir>".to_owned()]
         } else {
             Vec::new()
         },
@@ -659,7 +665,7 @@ fn path_size(path: Option<&PathBuf>) -> Result<u64, RuntimeError> {
         .ok_or_else(|| RuntimeError::Config("SDK backup did not report all file paths".to_owned()))
 }
 
-fn display_path(path: &PathBuf) -> String {
+fn display_path(path: &Path) -> String {
     path.display().to_string()
 }
 

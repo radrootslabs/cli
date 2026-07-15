@@ -12,9 +12,7 @@ pub enum BasketCommand {
     Get(BasketKeyArgs),
     List,
     Item(BasketItemArgs),
-    Adjustment(BasketAdjustmentArgs),
-    Validate(BasketKeyArgs),
-    Quote(BasketQuoteArgs),
+    Quote(BasketKeyArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -49,40 +47,6 @@ pub enum BasketItemCommand {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct BasketAdjustmentArgs {
-    #[command(subcommand)]
-    pub command: BasketAdjustmentCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum BasketAdjustmentCommand {
-    Add(BasketAdjustmentAddArgs),
-    Remove(BasketAdjustmentRemoveArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct BasketAdjustmentAddArgs {
-    pub basket_id: Option<String>,
-    #[arg(long)]
-    pub id: Option<String>,
-    #[arg(long)]
-    pub effect: Option<String>,
-    #[arg(long)]
-    pub amount: Option<String>,
-    #[arg(long)]
-    pub currency: Option<String>,
-    #[arg(long)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct BasketAdjustmentRemoveArgs {
-    pub basket_id: Option<String>,
-    #[arg(long)]
-    pub id: Option<String>,
-}
-
-#[derive(Debug, Clone, Args)]
 pub struct BasketItemMutationArgs {
     pub basket_id: Option<String>,
     #[arg(long = "item-id")]
@@ -101,15 +65,4 @@ pub struct BasketItemMutationArgs {
 pub struct BasketItemRemoveArgs {
     pub basket_id: Option<String>,
     pub item_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct BasketQuoteArgs {
-    #[command(subcommand)]
-    pub command: BasketQuoteCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum BasketQuoteCommand {
-    Create(BasketKeyArgs),
 }

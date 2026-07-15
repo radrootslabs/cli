@@ -313,11 +313,11 @@ fn cli_write_kinds() -> [CliWriteKind; 9] {
             event_kind: KIND_LISTING,
         },
         CliWriteKind {
-            command: "listing.archive",
+            command: "listing.withdraw",
             event_kind: KIND_LISTING,
         },
         CliWriteKind {
-            command: "trade.submit",
+            command: "trade.request",
             event_kind: KIND_ORDER_REQUEST,
         },
         CliWriteKind {
@@ -606,21 +606,21 @@ mod tests {
                 "farm.publish",
                 "listing.publish",
                 "listing.update",
-                "listing.archive",
-                "trade.submit",
+                "listing.withdraw",
+                "trade.request",
                 "trade.accept",
                 "trade.decline",
                 "trade.cancel",
             ]
         );
-        assert!(!commands.contains(&"signer.status.get"));
+        assert!(!commands.contains(&"signer.status"));
     }
 
     #[test]
     fn order_submit_readiness_uses_active_order_request_kind() {
         let write_kind = cli_write_kinds()
             .into_iter()
-            .find(|kind| kind.command == "trade.submit")
+            .find(|kind| kind.command == "trade.request")
             .expect("order submit readiness");
 
         assert_eq!(write_kind.event_kind, KIND_ORDER_REQUEST);
@@ -669,7 +669,7 @@ mod tests {
         for (command, event_kind) in [
             ("farm.publish", KIND_FARM),
             ("listing.publish", KIND_LISTING),
-            ("trade.submit", KIND_ORDER_REQUEST),
+            ("trade.request", KIND_ORDER_REQUEST),
         ] {
             let entry = readiness
                 .iter()

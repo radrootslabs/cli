@@ -337,12 +337,12 @@ fn myc_nip46_signer_input(
             binding.target_kind.as_str()
         )));
     }
-    if let Some(managed_account_ref) = binding.managed_account_ref.as_deref() {
-        if !myc_managed_account_ref_matches(managed_account_ref, actor_account_id, actor_pubkey) {
-            return Err(RuntimeError::Config(format!(
-                "signer.remote_nip46 managed_account_ref `{managed_account_ref}` does not match actor account or pubkey"
-            )));
-        }
+    if let Some(managed_account_ref) = binding.managed_account_ref.as_deref()
+        && !myc_managed_account_ref_matches(managed_account_ref, actor_account_id, actor_pubkey)
+    {
+        return Err(RuntimeError::Config(format!(
+            "signer.remote_nip46 managed_account_ref `{managed_account_ref}` does not match actor account or pubkey"
+        )));
     }
     let signer_session_ref = binding.signer_session_ref.as_deref().ok_or_else(|| {
         RuntimeError::Config("signer.remote_nip46 signer_session_ref is missing".to_owned())
@@ -1181,7 +1181,7 @@ mod tests {
             ],
         },
         MigratedCliPathGuard {
-            label: "trade submit",
+            label: "trade request",
             path: "src/runtime/order.rs",
             start: "fn canonical_order_request_payload_from_loaded(",
             end: "fn sdk_trade_submit_outcome_view(",
@@ -1548,25 +1548,25 @@ mod tests {
         let sdk_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sdk/crates/sdk/src");
         let mut files = Vec::new();
         collect_rs_files(sdk_src.as_path(), &mut files);
-        let forbidden = [
-            ("radroots_cli", "CLI crate identity"),
-            ("domains/radroots/cli", "CLI mount path"),
-            ("approval_token", "CLI approval-token UX"),
-            ("OutputEnvelope", "CLI output envelope"),
-            ("next_actions", "CLI next-action rendering"),
-            ("exit_code", "CLI exit-code contract"),
-            ("docs/", "repository docs path"),
-            ("radroots store", "CLI command string"),
-            ("radroots sync", "CLI command string"),
-            ("radroots listing", "CLI command string"),
-            ("radroots trade", "CLI command string"),
+        let forbidden = vec![
+            ("radroots_cli".to_owned(), "CLI crate identity"),
+            ("domains/radroots/cli".to_owned(), "CLI mount path"),
+            (["approval", "token"].join("_"), "retired approval string"),
+            ("OutputEnvelope".to_owned(), "CLI output envelope"),
+            ("next_actions".to_owned(), "CLI next-action rendering"),
+            ("exit_code".to_owned(), "CLI exit-code contract"),
+            ("docs/".to_owned(), "repository docs path"),
+            ("radroots store".to_owned(), "CLI command string"),
+            ("radroots sync".to_owned(), "CLI command string"),
+            ("radroots listing".to_owned(), "CLI command string"),
+            ("radroots trade".to_owned(), "CLI command string"),
         ];
 
         for file in files {
             let source = fs::read_to_string(&file).expect("read sdk source");
-            for (needle, description) in forbidden {
+            for (needle, description) in forbidden.iter() {
                 assert!(
-                    !source.contains(needle),
+                    !source.contains(needle.as_str()),
                     "SDK source contains {description} `{needle}` in {}",
                     file.display()
                 );
@@ -1808,10 +1808,13 @@ mod tests {
                 let source = fs::read_to_string(file).expect("read cli source");
                 let relative_path = relative_source_path(manifest_dir, file.as_path());
                 match production_source_without_tests(&relative_path, &source) {
-                    Ok(production_source) => production_source
-                        .contains("allow(dead_code)")
-                        .then(|| vec![format!("{relative_path}: production dead-code suppression")])
-                        .unwrap_or_default(),
+                    Ok(production_source) => {
+                        if production_source.contains("allow(dead_code)") {
+                            vec![format!("{relative_path}: production dead-code suppression")]
+                        } else {
+                            Vec::new()
+                        }
+                    }
                     Err(error) => vec![error],
                 }
             })

@@ -3,22 +3,18 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::cli::global::{
-    ListingAppRecordExportArgs, ListingCreateArgs, ListingFileArgs, ListingMutationArgs,
-    ListingRebindArgs, RecordLookupArgs,
-};
+use crate::cli::global::{ListingCreateArgs, ListingMutationArgs, RecordLookupArgs};
 use crate::ops::{
-    ListingAppExportRequest, ListingAppExportResult, ListingAppListRequest, ListingAppListResult,
-    ListingArchiveRequest, ListingArchiveResult, ListingCreateRequest, ListingCreateResult,
-    ListingGetRequest, ListingGetResult, ListingListRequest, ListingListResult,
-    ListingPublishRequest, ListingPublishResult, ListingRebindRequest, ListingRebindResult,
-    ListingUpdateRequest, ListingUpdateResult, ListingValidateRequest, ListingValidateResult,
-    OperationAdapterError, OperationNetworkMode, OperationRequest, OperationRequestData,
-    OperationRequestPayload, OperationResult, OperationResultData, OperationService,
+    ListingCreateRequest, ListingCreateResult, ListingGetRequest, ListingGetResult,
+    ListingListRequest, ListingListResult, ListingPauseRequest, ListingPauseResult,
+    ListingPublishRequest, ListingPublishResult, ListingUpdateRequest, ListingUpdateResult,
+    ListingWithdrawRequest, ListingWithdrawResult, OperationAdapterError, OperationNetworkMode,
+    OperationRequest, OperationRequestData, OperationRequestPayload, OperationResult,
+    OperationResultData, OperationService,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::view::runtime::{CommandDisposition, ListingAppRecordExportView, ListingMutationView};
+use crate::view::runtime::{CommandDisposition, ListingMutationView};
 
 pub struct ListingOperationService<'a> {
     config: &'a RuntimeConfig,
@@ -108,44 +104,6 @@ impl OperationService<ListingListRequest> for ListingOperationService<'_> {
     }
 }
 
-impl OperationService<ListingAppListRequest> for ListingOperationService<'_> {
-    type Result = ListingAppListResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<ListingAppListRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = map_runtime(
-            request.operation_id(),
-            crate::runtime::listing::app_record_list(self.config),
-        )?;
-        serialized_operation_result::<ListingAppListResult, _>(&view)
-    }
-}
-
-impl OperationService<ListingAppExportRequest> for ListingOperationService<'_> {
-    type Result = ListingAppExportResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<ListingAppExportRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = ListingAppRecordExportArgs {
-            record_id: required_string(&request, "record_id")?,
-            output: optional_path(&request, "output"),
-        };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = map_runtime(
-            request.operation_id(),
-            crate::runtime::listing::app_record_export(&config, &args),
-        )?;
-        listing_app_record_export_result::<ListingAppExportResult>(request.operation_id(), &view)
-    }
-}
-
 impl OperationService<ListingUpdateRequest> for ListingOperationService<'_> {
     type Result = ListingUpdateResult;
 
@@ -153,61 +111,12 @@ impl OperationService<ListingUpdateRequest> for ListingOperationService<'_> {
         &self,
         request: OperationRequest<ListingUpdateRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        if !request.context.dry_run {
-            require_approval(&request)?;
-        }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
         let view = crate::runtime::listing::update(&config, &args).map_err(|error| {
             OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
         mutation_result::<ListingUpdateResult>(request.operation_id(), &view)
-    }
-}
-
-impl OperationService<ListingValidateRequest> for ListingOperationService<'_> {
-    type Result = ListingValidateResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<ListingValidateRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = ListingFileArgs {
-            file: required_path(&request, "file")?,
-        };
-        let view = map_runtime(
-            request.operation_id(),
-            crate::runtime::listing::validate(self.config, &args),
-        )?;
-        serialized_operation_result::<ListingValidateResult, _>(&view)
-    }
-}
-
-impl OperationService<ListingRebindRequest> for ListingOperationService<'_> {
-    type Result = ListingRebindResult;
-
-    fn execute(
-        &self,
-        request: OperationRequest<ListingRebindRequest>,
-    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = ListingRebindArgs {
-            file: required_path(&request, "file")?,
-            selector: required_string(&request, "selector")?,
-            farm_d_tag: string_input(&request, "farm_d_tag"),
-        };
-        if request.context.dry_run {
-            let view = map_runtime(
-                request.operation_id(),
-                crate::runtime::listing::rebind_preflight(self.config, &args),
-            )?;
-            return serialized_operation_result::<ListingRebindResult, _>(&view);
-        }
-        require_approval(&request)?;
-        let view = map_runtime(
-            request.operation_id(),
-            crate::runtime::listing::rebind(self.config, &args),
-        )?;
-        serialized_operation_result::<ListingRebindResult, _>(&view)
     }
 }
 
@@ -218,9 +127,6 @@ impl OperationService<ListingPublishRequest> for ListingOperationService<'_> {
         &self,
         request: OperationRequest<ListingPublishRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        if !request.context.dry_run {
-            require_approval(&request)?;
-        }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
         let view = crate::runtime::listing::publish_via_sdk(&config, &args).map_err(|error| {
@@ -230,22 +136,35 @@ impl OperationService<ListingPublishRequest> for ListingOperationService<'_> {
     }
 }
 
-impl OperationService<ListingArchiveRequest> for ListingOperationService<'_> {
-    type Result = ListingArchiveResult;
+impl OperationService<ListingPauseRequest> for ListingOperationService<'_> {
+    type Result = ListingPauseResult;
 
     fn execute(
         &self,
-        request: OperationRequest<ListingArchiveRequest>,
+        request: OperationRequest<ListingPauseRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        if !request.context.dry_run {
-            require_approval(&request)?;
-        }
         let args = mutation_args(&request)?;
         let config = mutation_config(self.config, &request);
-        let view = crate::runtime::listing::archive(&config, &args).map_err(|error| {
+        let view = crate::runtime::listing::pause(&config, &args).map_err(|error| {
             OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
         })?;
-        mutation_result::<ListingArchiveResult>(request.operation_id(), &view)
+        mutation_result::<ListingPauseResult>(request.operation_id(), &view)
+    }
+}
+
+impl OperationService<ListingWithdrawRequest> for ListingOperationService<'_> {
+    type Result = ListingWithdrawResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<ListingWithdrawRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = mutation_args(&request)?;
+        let config = mutation_config(self.config, &request);
+        let view = crate::runtime::listing::withdraw(&config, &args).map_err(|error| {
+            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
+        })?;
+        mutation_result::<ListingWithdrawResult>(request.operation_id(), &view)
     }
 }
 
@@ -276,18 +195,6 @@ where
         print_event: bool_input(request, "print_event").unwrap_or(false),
         offline: matches!(request.context.network_mode, OperationNetworkMode::Offline),
     })
-}
-
-fn require_approval<P>(request: &OperationRequest<P>) -> Result<(), OperationAdapterError>
-where
-    P: OperationRequestPayload + OperationRequestData,
-{
-    if request.context.requires_approval_token() {
-        return Err(OperationAdapterError::approval_required(
-            request.operation_id(),
-        ));
-    }
-    Ok(())
 }
 
 fn serialized_operation_result<R, T>(value: &T) -> Result<OperationResult<R>, OperationAdapterError>
@@ -343,50 +250,6 @@ fn listing_transport_delivery_unavailable(view: &ListingMutationView) -> bool {
     }) || !view.target_transport_endpoints.is_empty()
         || !view.attempted_transport_endpoints.is_empty()
         || !view.failed_transport_targets.is_empty())
-}
-
-fn listing_app_record_export_result<R>(
-    operation_id: &str,
-    view: &ListingAppRecordExportView,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    match view.disposition() {
-        CommandDisposition::Success => serialized_operation_result::<R, _>(view),
-        CommandDisposition::NotFound => Err(OperationAdapterError::not_found_with_detail(
-            operation_id,
-            view.reason.clone().unwrap_or_else(|| {
-                format!(
-                    "app-authored local record `{}` was not found",
-                    view.record_id
-                )
-            }),
-            serde_json::to_value(view).unwrap_or(Value::Null),
-        )),
-        CommandDisposition::ValidationFailed => {
-            Err(OperationAdapterError::validation_failed_with_detail(
-                operation_id,
-                view.reason.clone().unwrap_or_else(|| {
-                    format!(
-                        "app-authored local record `{}` cannot be exported",
-                        view.record_id
-                    )
-                }),
-                serde_json::to_value(view).unwrap_or(Value::Null),
-            ))
-        }
-        disposition => Err(OperationAdapterError::from_command_disposition(
-            operation_id,
-            disposition,
-            view.reason.clone().unwrap_or_else(|| {
-                format!(
-                    "app-authored local record export finished with state `{}`",
-                    view.state
-                )
-            }),
-        )),
-    }
 }
 
 fn map_runtime<T>(
@@ -468,7 +331,7 @@ mod tests {
 
     use super::ListingOperationService;
     use crate::ops::{
-        ListingArchiveRequest, ListingCreateRequest, ListingListRequest, ListingPublishRequest,
+        ListingCreateRequest, ListingListRequest, ListingPublishRequest, ListingWithdrawRequest,
         OperationAdapter, OperationContext, OperationData, OperationRequest,
     };
     use crate::runtime::config::{
@@ -482,8 +345,10 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(ListingOperationService::new(&config));
-        let mut context = OperationContext::default();
-        context.dry_run = true;
+        let context = OperationContext {
+            dry_run: true,
+            ..Default::default()
+        };
         let request = OperationRequest::new(
             context.clone(),
             ListingCreateRequest::from_data(data(&[("key", "eggs"), ("title", "Eggs")])),
@@ -518,29 +383,30 @@ mod tests {
     }
 
     #[test]
-    fn listing_publish_and_archive_require_approval_unless_dry_run() {
+    fn listing_publish_and_withdraw_errors_do_not_use_retired_approval_language() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(ListingOperationService::new(&config));
+        let retired_approval_language = ["approval", "token"].join("_");
         let publish = OperationRequest::new(
             OperationContext::default(),
             ListingPublishRequest::from_data(data(&[("file", "listing.toml")])),
         )
         .expect("listing publish request");
-        let publish_error = service.execute(publish).expect_err("approval required");
-        assert!(format!("{publish_error}").contains("approval_token"));
-        assert_eq!(publish_error.to_output_error().code, "approval_required");
-        assert_eq!(publish_error.to_output_error().exit_code, 6);
+        let publish_error = service.execute(publish).expect_err("publish preflight");
+        assert!(!format!("{publish_error}").contains(retired_approval_language.as_str()));
 
-        let mut context = OperationContext::default();
-        context.dry_run = true;
-        let archive = OperationRequest::new(
+        let context = OperationContext {
+            dry_run: true,
+            ..Default::default()
+        };
+        let withdraw = OperationRequest::new(
             context.clone(),
-            ListingArchiveRequest::from_data(data(&[("file", "listing.toml")])),
+            ListingWithdrawRequest::from_data(data(&[("file", "listing.toml")])),
         )
-        .expect("listing archive request");
-        let archive_error = service.execute(archive).expect_err("archive preflight");
-        assert!(!format!("{archive_error}").contains("approval_token"));
+        .expect("listing withdraw request");
+        let withdraw_error = service.execute(withdraw).expect_err("withdraw preflight");
+        assert!(!format!("{withdraw_error}").contains(retired_approval_language.as_str()));
     }
 
     fn sample_config(root: &Path) -> RuntimeConfig {

@@ -256,9 +256,7 @@ mod tests {
             "Details",
             vec!["extra context".to_owned()],
         ))
-        .with_next(TerminalAction::command(
-            "radroots trade status get ord_test",
-        ));
+        .with_next(TerminalAction::command("radroots trade get ord_test"));
         document.warnings = vec![TerminalWarning::new("warn_test", "suppressed")];
         document.reference = Some(TerminalReference {
             request_id: Some("req_test".to_owned()),

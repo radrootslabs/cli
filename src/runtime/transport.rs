@@ -17,9 +17,9 @@ use crate::runtime::RuntimeError;
 use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy};
 use crate::view::runtime::{
-    TransportOperationCapabilitiesView, TransportOutboxPushView, TransportOutboxStatusView,
+    TransportDeliveryInspectView, TransportDeliveryRetryView, TransportOperationCapabilitiesView,
     TransportProfileSummaryView, TransportProfileView, TransportRuntimeStatusView,
-    TransportStatusView,
+    TransportStatusInspectView,
 };
 
 const TRANSPORT_SOURCE: &str = "transport profile config";
@@ -112,10 +112,10 @@ pub fn set_profile(
     ))
 }
 
-pub fn status(config: &RuntimeConfig) -> TransportStatusView {
+pub fn status(config: &RuntimeConfig) -> TransportStatusInspectView {
     let profile = active_profile_view(config);
 
-    TransportStatusView {
+    TransportStatusInspectView {
         state: "ready".to_owned(),
         source: TRANSPORT_SOURCE.to_owned(),
         active_profile: profile.summary(),
@@ -125,7 +125,7 @@ pub fn status(config: &RuntimeConfig) -> TransportStatusView {
 
 pub fn outbox_status(
     config: &RuntimeConfig,
-) -> Result<TransportOutboxStatusView, CliSdkAdapterError> {
+) -> Result<TransportDeliveryInspectView, CliSdkAdapterError> {
     let profile = active_profile_view(config);
     let session = if profile.profile_delivery_usable {
         CliSdkSession::connect(config)?
@@ -138,7 +138,7 @@ pub fn outbox_status(
     } else {
         profile.configured_state.clone()
     };
-    Ok(TransportOutboxStatusView {
+    Ok(TransportDeliveryInspectView {
         state,
         source: "SDK transport outbox".to_owned(),
         transport_profile: profile.profile_id,
@@ -155,10 +155,12 @@ pub fn outbox_status(
     })
 }
 
-pub fn outbox_push(config: &RuntimeConfig) -> Result<TransportOutboxPushView, CliSdkAdapterError> {
+pub fn outbox_push(
+    config: &RuntimeConfig,
+) -> Result<TransportDeliveryRetryView, CliSdkAdapterError> {
     if config.output.dry_run {
         let status = outbox_status(config)?;
-        return Ok(TransportOutboxPushView {
+        return Ok(TransportDeliveryRetryView {
             state: "dry_run".to_owned(),
             source: "SDK transport outbox".to_owned(),
             attempted_events: 0,
@@ -181,7 +183,7 @@ pub fn outbox_push(config: &RuntimeConfig) -> Result<TransportOutboxPushView, Cl
         .count();
     let failed_count = receipt.retryable_events + receipt.terminal_events;
     let state = transport_outbox_push_state(&receipt, failed_count).to_owned();
-    Ok(TransportOutboxPushView {
+    Ok(TransportDeliveryRetryView {
         state,
         source: "SDK transport outbox".to_owned(),
         attempted_events: receipt.attempted_events,
@@ -212,14 +214,12 @@ fn transport_outbox_push_state(receipt: &PushOutboxReceipt, failed_count: usize)
 fn transport_outbox_reported_deferred_state(receipt: &PushOutboxReceipt) -> Option<&'static str> {
     let mut deferred = false;
     for event in &receipt.events {
-        match event.final_state {
-            PushOutboxEventState::DeferredUntilImplemented => deferred = true,
-            _ => {}
+        if event.final_state == PushOutboxEventState::DeferredUntilImplemented {
+            deferred = true;
         }
         for target in &event.targets {
-            match target.outcome_kind {
-                PushOutboxTargetOutcomeKind::DeferredUntilImplemented => deferred = true,
-                _ => {}
+            if target.outcome_kind == PushOutboxTargetOutcomeKind::DeferredUntilImplemented {
+                deferred = true;
             }
         }
     }
@@ -456,22 +456,22 @@ fn profile_actions(profile_id: &str, profile_delivery_usable: bool) -> Vec<Strin
     }
     match profile_id {
         "reticulum" => vec![
-            "radroots mesh status".to_owned(),
-            "radroots transport profile get".to_owned(),
+            "radroots transport status inspect".to_owned(),
+            "radroots transport config inspect".to_owned(),
         ],
         "nostr" => {
             vec![
-                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+                "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com"
                     .to_owned(),
             ]
         }
         "multi_target" => {
             vec![
-                "radroots transport profile set --kind multi-target --nostr-relay wss://relay.example.com"
+                "radroots transport config update --kind multi-target --nostr-relay wss://relay.example.com"
                     .to_owned(),
             ]
         }
-        _ => vec!["radroots transport profile get".to_owned()],
+        _ => vec!["radroots transport config inspect".to_owned()],
     }
 }
 

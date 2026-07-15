@@ -7,6 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use radroots_cli::{ops, registry, runtime};
+use radroots_runtime_contract_v1::{
+    ExecutionModeV1, RUNTIME_CONTRACT_NAME_V1, RUNTIME_CONTRACT_VERSION_V1, RuntimeContractErrorV1,
+    RuntimeRequestEnvelopeV1,
+};
 use serde_json::json;
 
 use radroots_cli::cli::input::runtime_invocation_args_from_target;
@@ -29,7 +33,7 @@ use radroots_cli::out::terminal::renderer::{
     TerminalRenderContext, TerminalVerbosity, render_terminal_document,
 };
 use radroots_cli::registry::{
-    ApprovalPolicy, NetworkRequirement, OPERATION_REGISTRY, network_requirement,
+    NetworkRequirement, OPERATION_REGISTRY, network_requirement,
     requires_delivery_capable_transport_profile, requires_local_signer_mode,
 };
 use radroots_cli::runtime::config::{
@@ -65,7 +69,7 @@ fn run() -> Result<ExitCode, runtime::RuntimeError> {
     let config = match RuntimeConfig::from_system(&runtime_invocation_args_from_target(&args)) {
         Ok(config) => config,
         Err(error) => {
-            let envelope = runtime_config_failure_envelope(&request, error.into());
+            let envelope = runtime_config_failure_envelope(&request, error);
             return render_envelope(&envelope, &pre_runtime_render_config);
         }
     };
@@ -91,19 +95,10 @@ fn execute_request(
     logging: &runtime::logging::LoggingState,
 ) -> OutputEnvelope {
     match request {
-        TargetOperationRequest::WorkspaceInit(request) => {
+        TargetOperationRequest::ProfileReset(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        TargetOperationRequest::WorkspaceGet(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::HealthStatusGet(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::HealthCheckRun(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::ConfigGet(request) => {
+        TargetOperationRequest::ProfileInspect(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
         TargetOperationRequest::AccountCreate(request) => {
@@ -112,73 +107,46 @@ fn execute_request(
         TargetOperationRequest::AccountImport(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        TargetOperationRequest::AccountAttachSecret(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::AccountGet(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
         TargetOperationRequest::AccountList(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
         TargetOperationRequest::AccountRemove(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        TargetOperationRequest::AccountSelectionGet(request) => {
+        TargetOperationRequest::AccountSelect(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        TargetOperationRequest::AccountSelectionUpdate(request) => {
+        TargetOperationRequest::StoreInspect(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        TargetOperationRequest::AccountSelectionClear(request) => {
+        TargetOperationRequest::StoreBackup(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        TargetOperationRequest::StoreInit(request) => {
+        TargetOperationRequest::StoreRestore(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }
-        TargetOperationRequest::StoreStatusGet(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::StoreExport(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::StoreBackupCreate(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::StoreBackupRestore(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::SignerStatusGet(request) => {
+        TargetOperationRequest::SignerStatus(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::TransportProfileGet(request) => {
+        TargetOperationRequest::TransportCapabilityList(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::TransportProfileSet(request) => {
+        TargetOperationRequest::TransportConfigInspect(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::TransportStatus(request) => {
+        TargetOperationRequest::TransportConfigUpdate(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::TransportOutboxStatus(request) => {
+        TargetOperationRequest::TransportStatusInspect(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::TransportOutboxPush(request) => {
+        TargetOperationRequest::TransportDeliveryInspect(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::MeshScopeGet(request) => {
+        TargetOperationRequest::TransportDeliveryRetry(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::MeshScopeSet(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::MeshStatus(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::MeshPolicyCheck(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::SyncStatusGet(request) => {
+        TargetOperationRequest::SyncStatus(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
         TargetOperationRequest::SyncPull(request) => {
@@ -187,7 +155,7 @@ fn execute_request(
         TargetOperationRequest::SyncPush(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
-        TargetOperationRequest::SyncWatch(request) => {
+        TargetOperationRequest::DiagnosticsInspect(request) => {
             execute_with(RuntimeOperationService::new(config), request)
         }
         TargetOperationRequest::FarmCreate(request) => {
@@ -196,25 +164,10 @@ fn execute_request(
         TargetOperationRequest::FarmGet(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        TargetOperationRequest::FarmRebind(request) => {
+        TargetOperationRequest::FarmUpdate(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
-        TargetOperationRequest::FarmProfileUpdate(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmLocationSet(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmLocationGet(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmLocationClear(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmFulfillmentUpdate(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmReadinessCheck(request) => {
+        TargetOperationRequest::FarmList(request) => {
             execute_with(FarmOperationService::new(config), request)
         }
         TargetOperationRequest::FarmPublish(request) => {
@@ -229,34 +182,25 @@ fn execute_request(
         TargetOperationRequest::ListingList(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        TargetOperationRequest::ListingAppList(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingAppExport(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
         TargetOperationRequest::ListingUpdate(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingValidate(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingRebind(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
         TargetOperationRequest::ListingPublish(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        TargetOperationRequest::ListingArchive(request) => {
+        TargetOperationRequest::ListingPause(request) => {
             execute_with(ListingOperationService::new(config), request)
         }
-        TargetOperationRequest::MarketRefresh(request) => {
+        TargetOperationRequest::ListingWithdraw(request) => {
+            execute_with(ListingOperationService::new(config), request)
+        }
+        TargetOperationRequest::MarketPull(request) => {
             execute_with(MarketOperationService::new(config), request)
         }
-        TargetOperationRequest::MarketProductSearch(request) => {
+        TargetOperationRequest::MarketSearch(request) => {
             execute_with(MarketOperationService::new(config), request)
         }
-        TargetOperationRequest::MarketListingGet(request) => {
+        TargetOperationRequest::MarketGet(request) => {
             execute_with(MarketOperationService::new(config), request)
         }
         TargetOperationRequest::BasketCreate(request) => {
@@ -277,34 +221,16 @@ fn execute_request(
         TargetOperationRequest::BasketItemRemove(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        TargetOperationRequest::BasketAdjustmentAdd(request) => {
+        TargetOperationRequest::BasketQuote(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        TargetOperationRequest::BasketAdjustmentRemove(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::BasketValidate(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::BasketQuoteCreate(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeSubmit(request) => {
+        TargetOperationRequest::TradeRequest(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
         TargetOperationRequest::TradeGet(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
         TargetOperationRequest::TradeList(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeAppList(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeAppExport(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeRebind(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
         TargetOperationRequest::TradeAccept(request) => {
@@ -316,23 +242,17 @@ fn execute_request(
         TargetOperationRequest::TradeCancel(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::TradeStatusGet(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeEventList(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeEventWatch(request) => {
-            execute_with(TradeOperationService::new(config), request)
+        TargetOperationRequest::ValidationStatus(request) => {
+            execute_with(ValidationOperationService::new(config), request)
         }
         TargetOperationRequest::ValidationReceiptGet(request) => {
             execute_with(ValidationOperationService::new(config), request)
         }
-        TargetOperationRequest::ValidationReceiptList(request) => {
-            execute_with(ValidationOperationService::new(config), request)
-        }
         TargetOperationRequest::ValidationReceiptVerify(request) => {
             execute_with(ValidationOperationService::new(config), request)
+        }
+        TargetOperationRequest::HealthInspect(request) => {
+            execute_with(CoreOperationService::new(config, logging), request)
         }
     }
 }
@@ -383,13 +303,50 @@ fn validate_pre_runtime_request_contract(
             message: format!("`{}` does not support --format ndjson", spec.cli_path),
         });
     }
-    if request.context().dry_run && !spec.supports_dry_run {
+    if request.context().dry_run && !spec.supports_dry_run() {
         return Err(OperationAdapterError::InvalidInput {
             operation_id: spec.operation_id.to_owned(),
             message: format!("`{}` does not support --dry-run", spec.cli_path),
         });
     }
+    validate_idempotency_contract(request)?;
+    if !request.context().dry_run
+        && spec.requires_approval()
+        && !request.context().has_operator_approval()
+    {
+        return Err(OperationAdapterError::approval_required(spec.operation_id));
+    }
     Ok(())
+}
+
+fn validate_idempotency_contract(
+    request: &TargetOperationRequest,
+) -> Result<(), OperationAdapterError> {
+    let spec = request.spec();
+    RuntimeRequestEnvelopeV1 {
+        contract: RUNTIME_CONTRACT_NAME_V1.to_owned(),
+        contract_version: RUNTIME_CONTRACT_VERSION_V1,
+        operation_id: spec.runtime_operation_id,
+        operation_schema_version: spec.descriptor.schema_version,
+        request_id: "cli-pre-runtime-contract-validation".to_owned(),
+        actor_pubkey: None,
+        idempotency_key: request.context().idempotency_key.clone(),
+        approval: request.context().approval_proof.clone(),
+        execution_mode: ExecutionModeV1::Embedded,
+        request_json: "{}".to_owned(),
+    }
+    .validate()
+    .map_err(|error| idempotency_contract_error(spec.operation_id, error))
+}
+
+fn idempotency_contract_error(
+    operation_id: &str,
+    error: RuntimeContractErrorV1,
+) -> OperationAdapterError {
+    OperationAdapterError::InvalidInput {
+        operation_id: operation_id.to_owned(),
+        message: error.to_string(),
+    }
 }
 
 fn validate_signer_mode_contract(
@@ -488,8 +445,6 @@ fn validate_transport_profile_contract(
             request.context().network_mode,
             OperationNetworkMode::Offline
         )
-        || (spec.approval_policy == ApprovalPolicy::Required
-            && request.context().requires_approval_token())
     {
         return Ok(());
     }
@@ -779,12 +734,12 @@ mod tests {
     #[test]
     fn terminal_registry_failure_envelope_is_structured_internal_error() {
         let original = OutputEnvelope::success(
-            "workspace.get",
+            "profile.inspect",
             Value::Null,
             EnvelopeContext::new("req_test", false),
         );
         let error = TerminalRendererRegistry::new()
-            .validate_operation_ids(["workspace.get"])
+            .validate_operation_ids(["profile.inspect"])
             .expect_err("missing renderer should fail");
         let failure = terminal_registry_failure_envelope(&original, error);
 
@@ -800,8 +755,9 @@ mod tests {
         );
         assert!(rendered.starts_with("✕ Command failed\n"));
         assert!(
-            rendered
-                .contains("Reason  terminal renderer registry invariant failed for workspace.get")
+            rendered.contains(
+                "Reason  terminal renderer registry invariant failed for profile.inspect"
+            )
         );
         assert!(!rendered.contains("RuntimeError::Config"));
     }

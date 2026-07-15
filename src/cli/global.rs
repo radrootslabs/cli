@@ -232,7 +232,7 @@ pub struct OrderDraftAdjustmentArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct TradeSubmitArgs {
+pub struct TradeRequestArgs {
     pub key: String,
     pub idempotency_key: Option<String>,
     pub confirm_public_note: bool,

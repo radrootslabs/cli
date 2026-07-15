@@ -3,10 +3,9 @@ use serde_json::Value;
 
 use crate::cli::global::{FindQueryArgs, RecordLookupArgs};
 use crate::ops::{
-    MarketListingGetRequest, MarketListingGetResult, MarketProductSearchRequest,
-    MarketProductSearchResult, MarketRefreshRequest, MarketRefreshResult, OperationAdapterError,
-    OperationRequest, OperationRequestData, OperationRequestPayload, OperationResult,
-    OperationResultData, OperationService,
+    MarketGetRequest, MarketGetResult, MarketPullRequest, MarketPullResult, MarketSearchRequest,
+    MarketSearchResult, OperationAdapterError, OperationRequest, OperationRequestData,
+    OperationRequestPayload, OperationResult, OperationResultData, OperationService,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
@@ -22,26 +21,26 @@ impl<'a> MarketOperationService<'a> {
     }
 }
 
-impl OperationService<MarketRefreshRequest> for MarketOperationService<'_> {
-    type Result = MarketRefreshResult;
+impl OperationService<MarketPullRequest> for MarketOperationService<'_> {
+    type Result = MarketPullResult;
 
     fn execute(
         &self,
-        _request: OperationRequest<MarketRefreshRequest>,
+        _request: OperationRequest<MarketPullRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let view = market_refresh_view(map_runtime(crate::runtime::sync::market_refresh(
             self.config,
         ))?);
-        serialized_operation_result::<MarketRefreshResult, _>(&view)
+        serialized_operation_result::<MarketPullResult, _>(&view)
     }
 }
 
-impl OperationService<MarketProductSearchRequest> for MarketOperationService<'_> {
-    type Result = MarketProductSearchResult;
+impl OperationService<MarketSearchRequest> for MarketOperationService<'_> {
+    type Result = MarketSearchResult;
 
     fn execute(
         &self,
-        request: OperationRequest<MarketProductSearchRequest>,
+        request: OperationRequest<MarketSearchRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let args = FindQueryArgs {
             query: required_query_terms(&request)?,
@@ -50,16 +49,16 @@ impl OperationService<MarketProductSearchRequest> for MarketOperationService<'_>
             self.config,
             &args,
         ))?);
-        serialized_operation_result::<MarketProductSearchResult, _>(&view)
+        serialized_operation_result::<MarketSearchResult, _>(&view)
     }
 }
 
-impl OperationService<MarketListingGetRequest> for MarketOperationService<'_> {
-    type Result = MarketListingGetResult;
+impl OperationService<MarketGetRequest> for MarketOperationService<'_> {
+    type Result = MarketGetResult;
 
     fn execute(
         &self,
-        request: OperationRequest<MarketListingGetRequest>,
+        request: OperationRequest<MarketGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
         let args = RecordLookupArgs {
             key: required_lookup(&request)?,
@@ -68,21 +67,21 @@ impl OperationService<MarketListingGetRequest> for MarketOperationService<'_> {
             self.config,
             &args,
         ))?);
-        serialized_operation_result::<MarketListingGetResult, _>(&view)
+        serialized_operation_result::<MarketGetResult, _>(&view)
     }
 }
 
 fn market_refresh_view(mut view: SyncActionView) -> SyncActionView {
     view.actions = match view.state.as_str() {
-        "ready" => vec!["radroots market product search tomatoes".to_owned()],
-        "unavailable" => vec!["radroots sync status get".to_owned()],
+        "ready" => vec!["radroots market search tomatoes".to_owned()],
+        "unavailable" => vec!["radroots sync status".to_owned()],
         "unconfigured" => {
             let mut actions = Vec::new();
             if view.replica_store == "missing" {
-                actions.push("radroots store init".to_owned());
+                actions.push("radroots store inspect".to_owned());
             }
             if view.configured_transport_target_count == 0 {
-                actions.push("radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com".to_owned());
+                actions.push("radroots transport config update --kind nostr --nostr-relay wss://relay.example.com".to_owned());
             }
             if actions.is_empty() {
                 actions.extend(std::mem::take(&mut view.actions));
@@ -100,10 +99,7 @@ fn market_product_search_view(mut view: FindView) -> FindView {
             .results
             .first()
             .map(|result| {
-                let mut actions = vec![format!(
-                    "radroots market listing get {}",
-                    result.product_key
-                )];
+                let mut actions = vec![format!("radroots market get {}", result.product_key)];
                 if result.readiness.checkout_enabled {
                     actions.push("radroots basket create".to_owned());
                 }
@@ -111,12 +107,12 @@ fn market_product_search_view(mut view: FindView) -> FindView {
             })
             .unwrap_or_default(),
         "empty" => vec![
-            "radroots market refresh".to_owned(),
-            "radroots market product search eggs".to_owned(),
+            "radroots market pull".to_owned(),
+            "radroots market search eggs".to_owned(),
         ],
         "unconfigured" => vec![
-            "radroots store init".to_owned(),
-            "radroots market refresh".to_owned(),
+            "radroots store inspect".to_owned(),
+            "radroots market pull".to_owned(),
         ],
         _ => std::mem::take(&mut view.actions),
     };
@@ -133,12 +129,12 @@ fn market_listing_get_view(mut view: ListingGetView) -> ListingGetView {
             }
         }
         "missing" => vec![
-            "radroots market product search tomatoes".to_owned(),
-            "radroots market refresh".to_owned(),
+            "radroots market search tomatoes".to_owned(),
+            "radroots market pull".to_owned(),
         ],
         "unconfigured" => vec![
-            "radroots store init".to_owned(),
-            "radroots market refresh".to_owned(),
+            "radroots store inspect".to_owned(),
+            "radroots market pull".to_owned(),
         ],
         _ => std::mem::take(&mut view.actions),
     };
@@ -248,8 +244,8 @@ mod tests {
 
     use super::{MarketOperationService, market_listing_get_view, market_product_search_view};
     use crate::ops::{
-        MarketListingGetRequest, MarketProductSearchRequest, MarketRefreshRequest,
-        OperationAdapter, OperationContext, OperationData, OperationRequest,
+        MarketGetRequest, MarketPullRequest, MarketSearchRequest, OperationAdapter,
+        OperationContext, OperationData, OperationRequest,
     };
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
@@ -269,7 +265,7 @@ mod tests {
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(MarketOperationService::new(&config));
         let request =
-            OperationRequest::new(OperationContext::default(), MarketRefreshRequest::default())
+            OperationRequest::new(OperationContext::default(), MarketPullRequest::default())
                 .expect("market refresh request");
         let envelope = service
             .execute(request)
@@ -277,10 +273,10 @@ mod tests {
             .to_envelope(OperationContext::default().envelope_context("req_market_refresh"))
             .expect("market refresh envelope");
 
-        assert_eq!(envelope.operation_id, "market.refresh");
+        assert_eq!(envelope.operation_id, "market.pull");
         assert_eq!(envelope.result["state"], "unconfigured");
         assert_eq!(envelope.result["direction"], "pull");
-        assert_eq!(envelope.result["actions"][0], "radroots store init");
+        assert_eq!(envelope.result["actions"][0], "radroots store inspect");
     }
 
     #[test]
@@ -288,9 +284,11 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(MarketOperationService::new(&config));
-        let mut context = OperationContext::default();
-        context.dry_run = true;
-        let request = OperationRequest::new(context.clone(), MarketRefreshRequest::default())
+        let context = OperationContext {
+            dry_run: true,
+            ..Default::default()
+        };
+        let request = OperationRequest::new(context.clone(), MarketPullRequest::default())
             .expect("market refresh request");
         let envelope = service
             .execute(request)
@@ -298,8 +296,8 @@ mod tests {
             .to_envelope(context.envelope_context("req_market_refresh"))
             .expect("market refresh envelope");
 
-        assert_eq!(envelope.operation_id, "market.refresh");
-        assert_eq!(envelope.dry_run, true);
+        assert_eq!(envelope.operation_id, "market.pull");
+        assert!(envelope.dry_run);
         assert_eq!(envelope.result["state"], "unconfigured");
         assert_eq!(envelope.result["replica_store"], "missing");
         assert_eq!(envelope.result["direction"], "pull");
@@ -314,9 +312,11 @@ mod tests {
         crate::runtime::store::init(&config).expect("store init");
 
         let service = OperationAdapter::new(MarketOperationService::new(&config));
-        let mut context = OperationContext::default();
-        context.dry_run = true;
-        let request = OperationRequest::new(context.clone(), MarketRefreshRequest::default())
+        let context = OperationContext {
+            dry_run: true,
+            ..Default::default()
+        };
+        let request = OperationRequest::new(context.clone(), MarketPullRequest::default())
             .expect("market refresh request");
         let envelope = service
             .execute(request)
@@ -324,7 +324,7 @@ mod tests {
             .to_envelope(context.envelope_context("req_market_refresh"))
             .expect("market refresh envelope");
 
-        assert_eq!(envelope.operation_id, "market.refresh");
+        assert_eq!(envelope.operation_id, "market.pull");
         assert_eq!(envelope.result["state"], "ready");
         assert_eq!(
             envelope.result["target_transport_endpoints"][0],
@@ -349,7 +349,7 @@ mod tests {
         crate::runtime::store::init(&config).expect("store init");
         let service = OperationAdapter::new(MarketOperationService::new(&config));
         let request =
-            OperationRequest::new(OperationContext::default(), MarketRefreshRequest::default())
+            OperationRequest::new(OperationContext::default(), MarketPullRequest::default())
                 .expect("market refresh request");
         let envelope = service
             .execute(request)
@@ -360,7 +360,7 @@ mod tests {
         assert_eq!(envelope.result["state"], "unconfigured");
         assert_eq!(
             envelope.result["actions"][0],
-            "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+            "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com"
         );
     }
 
@@ -371,7 +371,7 @@ mod tests {
         let service = OperationAdapter::new(MarketOperationService::new(&config));
         let request = OperationRequest::new(
             OperationContext::default(),
-            MarketProductSearchRequest::from_data(data(&[("query", "eggs")])),
+            MarketSearchRequest::from_data(data(&[("query", "eggs")])),
         )
         .expect("market product search request");
         let envelope = service
@@ -380,10 +380,10 @@ mod tests {
             .to_envelope(OperationContext::default().envelope_context("req_market_search"))
             .expect("market product search envelope");
 
-        assert_eq!(envelope.operation_id, "market.product.search");
+        assert_eq!(envelope.operation_id, "market.search");
         assert_eq!(envelope.result["state"], "unconfigured");
         assert_eq!(envelope.result["query"], "eggs");
-        assert_eq!(envelope.result["actions"][0], "radroots store init");
+        assert_eq!(envelope.result["actions"][0], "radroots store inspect");
     }
 
     #[test]
@@ -391,11 +391,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path());
         let service = OperationAdapter::new(MarketOperationService::new(&config));
-        let request = OperationRequest::new(
-            OperationContext::default(),
-            MarketListingGetRequest::default(),
-        )
-        .expect("market listing get request");
+        let request =
+            OperationRequest::new(OperationContext::default(), MarketGetRequest::default())
+                .expect("market listing get request");
         let error = service.execute(request).expect_err("key required");
 
         assert!(format!("{error}").contains("`key`"));
@@ -408,7 +406,7 @@ mod tests {
         let service = OperationAdapter::new(MarketOperationService::new(&config));
         let request = OperationRequest::new(
             OperationContext::default(),
-            MarketListingGetRequest::from_data(data(&[("key", "eggs")])),
+            MarketGetRequest::from_data(data(&[("key", "eggs")])),
         )
         .expect("market listing get request");
         let envelope = service
@@ -417,9 +415,9 @@ mod tests {
             .to_envelope(OperationContext::default().envelope_context("req_market_listing"))
             .expect("market listing get envelope");
 
-        assert_eq!(envelope.operation_id, "market.listing.get");
+        assert_eq!(envelope.operation_id, "market.get");
         assert_eq!(envelope.result["state"], "unconfigured");
-        assert_eq!(envelope.result["actions"][0], "radroots store init");
+        assert_eq!(envelope.result["actions"][0], "radroots store inspect");
     }
 
     #[test]
@@ -455,7 +453,7 @@ mod tests {
         assert_eq!(
             search.actions,
             vec![
-                "radroots market listing get eggs".to_owned(),
+                "radroots market get eggs".to_owned(),
                 "radroots basket create".to_owned()
             ]
         );
@@ -522,7 +520,7 @@ mod tests {
 
         assert_eq!(
             disabled_search.actions,
-            vec!["radroots market listing get eggs".to_owned()]
+            vec!["radroots market get eggs".to_owned()]
         );
 
         let disabled_listing = market_listing_get_view(ListingGetView {

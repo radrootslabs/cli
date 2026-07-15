@@ -48,6 +48,7 @@ radroots_transport_nostr = { path = "../lib/crates/transport_nostr", default-fea
   "runtime-tokio",
 ] }
 radroots_runtime = { path = "../lib/crates/runtime" }
+radroots_runtime_contract_v1 = { path = "../sdk/crates/runtime_contract_v1" }
 radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
 radroots_sdk = { path = "../sdk/crates/sdk", features = ["local-runtime-radrootsd-execution", "transport-nostr-runtime"] }
 radroots_secret_vault = { path = "../lib/crates/secret_vault", features = ["std", "os-keyring"] }

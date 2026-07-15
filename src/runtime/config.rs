@@ -1263,13 +1263,11 @@ fn resolve_rhi_config(
             .and_then(|rhi| rhi.require_cryptographic_proof)
         {
             value
-        } else if let Some(value) = workspace_config
-            .and_then(|config| config.rhi.as_ref())
-            .and_then(|rhi| rhi.require_cryptographic_proof)
-        {
-            value
         } else {
-            false
+            workspace_config
+                .and_then(|config| config.rhi.as_ref())
+                .and_then(|rhi| rhi.require_cryptographic_proof)
+                .unwrap_or_default()
         };
 
     Ok(RhiConfig {
@@ -2159,6 +2157,10 @@ fn validate_logging_output_contract(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "configuration precedence keeps each source explicit"
+)]
 fn resolve_bool_pair(
     positive_flag: bool,
     negative_flag: bool,

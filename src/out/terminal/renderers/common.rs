@@ -4,10 +4,9 @@ use crate::out::envelope::OutputEnvelope;
 use crate::out::terminal::actions::terminal_actions_from_next_actions;
 use crate::out::terminal::errors::terminal_error_document;
 use crate::out::terminal::layout::{
-    TerminalDocument, TerminalField, TerminalHeader, TerminalReference, TerminalSection,
-    TerminalSymbol, TerminalWarning,
+    TerminalDocument, TerminalField, TerminalHeader, TerminalReference, TerminalSymbol,
+    TerminalWarning,
 };
-use crate::out::terminal::tables::{TerminalTable, TerminalTableColumn, TerminalTableRow};
 use crate::out::terminal::values::{proof_summary, string_path, transport_label};
 
 pub(crate) fn base_terminal_document(envelope: &OutputEnvelope) -> TerminalDocument {
@@ -36,43 +35,7 @@ pub(crate) fn base_terminal_document(envelope: &OutputEnvelope) -> TerminalDocum
     document
 }
 
-pub(crate) fn document_with_title(
-    envelope: &OutputEnvelope,
-    title: impl Into<String>,
-) -> TerminalDocument {
-    let mut document = base_terminal_document(envelope);
-    document.header.title = title.into();
-    document
-}
-
-pub(crate) fn document_with_status_title(
-    envelope: &OutputEnvelope,
-    title_prefix: &str,
-) -> TerminalDocument {
-    let status = terminal_envelope_status(envelope);
-    let mut document = base_terminal_document(envelope);
-    document.header.symbol = terminal_status_symbol(status, envelope.dry_run);
-    document.header.title = format!("{title_prefix} {}", terminal_status_label(status));
-    document
-}
-
-pub(crate) fn result(envelope: &OutputEnvelope) -> &Value {
-    &envelope.result
-}
-
-pub(crate) fn display_source(envelope: &OutputEnvelope) -> &Value {
-    terminal_display_source(envelope)
-}
-
-pub(crate) fn status_label(status: &str) -> String {
-    terminal_status_label(status)
-}
-
-pub(crate) fn push_field(
-    document: &mut TerminalDocument,
-    label: impl Into<String>,
-    value: impl Into<String>,
-) {
+fn push_field(document: &mut TerminalDocument, label: impl Into<String>, value: impl Into<String>) {
     let label = label.into();
     let value = value.into();
     if value.trim().is_empty() {
@@ -86,149 +49,6 @@ pub(crate) fn push_field(
         return;
     }
     document.fields.push(TerminalField::new(label, value));
-}
-
-pub(crate) fn push_verbose_field(
-    document: &mut TerminalDocument,
-    label: impl Into<String>,
-    value: impl Into<String>,
-) {
-    let value = value.into();
-    if value.trim().is_empty() {
-        return;
-    }
-    document.fields.push(TerminalField::verbose(label, value));
-}
-
-pub(crate) fn push_path_field(
-    document: &mut TerminalDocument,
-    label: &str,
-    value: &Value,
-    path: &[&str],
-) {
-    if let Some(value) = string_path(value, path) {
-        push_field(document, label, value);
-    }
-}
-
-pub(crate) fn push_verbose_path_field(
-    document: &mut TerminalDocument,
-    label: &str,
-    value: &Value,
-    path: &[&str],
-) {
-    if let Some(value) = string_path(value, path) {
-        push_verbose_field(document, label, value);
-    }
-}
-
-pub(crate) fn push_count_field(
-    document: &mut TerminalDocument,
-    label: &str,
-    value: &Value,
-    path: &[&str],
-) {
-    if let Some(value) = number_label_path(value, path) {
-        push_field(document, label, value);
-    }
-}
-
-pub(crate) fn push_number_field(
-    document: &mut TerminalDocument,
-    label: &str,
-    value: &Value,
-    path: &[&str],
-) {
-    if let Some(value) = number_label_path(value, path) {
-        push_field(document, label, value);
-    }
-}
-
-pub(crate) fn push_bool_field(
-    document: &mut TerminalDocument,
-    label: &str,
-    value: &Value,
-    path: &[&str],
-) {
-    if let Some(value) = bool_path(value, path) {
-        push_field(document, label, if value { "yes" } else { "no" });
-    }
-}
-
-pub(crate) fn table_section(
-    title: &str,
-    columns: Vec<TerminalTableColumn>,
-    rows: Vec<TerminalTableRow>,
-    empty: &str,
-) -> TerminalSection {
-    let mut table = TerminalTable::new(columns).with_empty(empty);
-    for row in rows {
-        table = table.with_row(row);
-    }
-    TerminalSection::table(title, table)
-}
-
-pub(crate) fn string(value: &Value, path: &[&str]) -> Option<String> {
-    string_path(value, path).map(str::to_owned)
-}
-
-pub(crate) fn array<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Vec<Value>> {
-    let mut current = value;
-    for segment in path {
-        current = current.get(*segment)?;
-    }
-    current.as_array()
-}
-
-pub(crate) fn number_path(value: &Value, path: &[&str]) -> Option<i64> {
-    let mut current = value;
-    for segment in path {
-        current = current.get(*segment)?;
-    }
-    current.as_i64()
-}
-
-pub(crate) fn number_label_path(value: &Value, path: &[&str]) -> Option<String> {
-    let mut current = value;
-    for segment in path {
-        current = current.get(*segment)?;
-    }
-    number_label(current)
-}
-
-pub(crate) fn number_label(value: &Value) -> Option<String> {
-    if let Some(value) = value.as_i64() {
-        return Some(value.to_string());
-    }
-    if let Some(value) = value.as_u64() {
-        return Some(value.to_string());
-    }
-    value
-        .as_f64()
-        .filter(|value| value.is_finite())
-        .map(|value| {
-            let mut rendered = format!("{value:.6}");
-            while rendered.contains('.') && rendered.ends_with('0') {
-                rendered.pop();
-            }
-            if rendered.ends_with('.') {
-                rendered.pop();
-            }
-            rendered
-        })
-}
-
-pub(crate) fn bool_path(value: &Value, path: &[&str]) -> Option<bool> {
-    let mut current = value;
-    for segment in path {
-        current = current.get(*segment)?;
-    }
-    current.as_bool()
-}
-
-pub(crate) fn title_for(envelope: &OutputEnvelope, noun: &str) -> String {
-    let status = terminal_envelope_status(envelope);
-    format!("{noun} {}", terminal_status_label(status))
 }
 
 fn add_terminal_display_fields(

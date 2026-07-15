@@ -269,10 +269,10 @@ mod tests {
 
     #[test]
     fn exact_command_renders_as_command() {
-        let action = terminal_action_from_command("radroots store init");
+        let action = terminal_action_from_command("radroots store inspect");
 
         assert_eq!(action.kind, TerminalActionKind::Command);
-        assert_eq!(action.command.as_deref(), Some("radroots store init"));
+        assert_eq!(action.command.as_deref(), Some("radroots store inspect"));
     }
 
     #[test]

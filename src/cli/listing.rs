@@ -10,15 +10,13 @@ pub struct ListingArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ListingCommand {
-    Create(ListingCreateArgs),
+    Create(Box<ListingCreateArgs>),
+    Update(FileArgs),
+    Publish(FileArgs),
+    Pause(FileArgs),
+    Withdraw(FileArgs),
     Get(LookupArgs),
     List,
-    App(ListingAppArgs),
-    Update(FileArgs),
-    Validate(FileArgs),
-    Rebind(ListingRebindArgs),
-    Publish(FileArgs),
-    Archive(FileArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -68,33 +66,6 @@ pub struct ListingCreateArgs {
 #[derive(Debug, Clone, Args)]
 pub struct FileArgs {
     pub file: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct ListingAppArgs {
-    #[command(subcommand)]
-    pub command: ListingAppCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum ListingAppCommand {
-    List,
-    Export(ListingAppExportArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct ListingAppExportArgs {
-    pub record_id: Option<String>,
-    #[arg(long)]
-    pub output: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct ListingRebindArgs {
-    pub file: Option<PathBuf>,
-    pub selector: Option<String>,
-    #[arg(long = "farm-d-tag")]
-    pub farm_d_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

@@ -2,36 +2,34 @@ pub mod global;
 
 pub mod account;
 pub mod basket;
-pub mod config;
+pub mod diagnostics;
 pub mod farm;
 pub mod health;
 pub mod input;
 pub mod listing;
 pub mod market;
-pub mod mesh;
+pub mod profile;
 pub mod signer;
 pub mod store;
 pub mod sync;
 pub mod trade;
 pub mod transport;
 pub mod validation;
-pub mod workspace;
 
 pub use account::*;
 pub use basket::*;
-pub use config::*;
+pub use diagnostics::*;
 pub use farm::*;
 pub use health::*;
 pub use listing::*;
 pub use market::*;
-pub use mesh::*;
+pub use profile::*;
 pub use signer::*;
 pub use store::*;
 pub use sync::*;
 pub use trade::*;
 pub use transport::*;
 pub use validation::*;
-pub use workspace::*;
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
@@ -64,8 +62,10 @@ pub struct TargetCliArgs {
     pub idempotency_key: Option<String>,
     #[arg(long = "correlation-id", global = true)]
     pub correlation_id: Option<String>,
-    #[arg(long = "approval-token", global = true)]
-    pub approval_token: Option<String>,
+    #[arg(long = "yes", global = true, action = ArgAction::SetTrue)]
+    pub yes: bool,
+    #[arg(long = "approval-proof", global = true)]
+    pub approval_proof: Option<String>,
     #[arg(long = "no-input", global = true, action = ArgAction::SetTrue)]
     pub no_input: bool,
     #[arg(long = "quiet", global = true, action = ArgAction::SetTrue)]
@@ -80,20 +80,16 @@ pub struct TargetCliArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TargetCommand {
-    #[command(about = "Inspect and initialize workspace state.")]
-    Workspace(WorkspaceArgs),
+    #[command(about = "Inspect and reset runtime profile state.")]
+    Profile(ProfileArgs),
     #[command(about = "Inspect local readiness and mode-specific recovery steps.")]
     Health(HealthArgs),
-    #[command(about = "Show effective configuration and publish-plane readiness.")]
-    Config(ConfigArgs),
     #[command(about = "Manage local signer accounts and custody.")]
     Account(AccountArgs),
     #[command(about = "Inspect signer readiness for local relay writes.")]
     Signer(SignerArgs),
     #[command(about = "Manage transport profiles and outbox delivery.")]
     Transport(TransportArgs),
-    #[command(about = "Inspect mesh scope and Reticulum admission policy.")]
-    Mesh(MeshArgs),
     #[command(about = "Initialize and inspect the local replica store.")]
     Store(StoreArgs),
     #[command(about = "Read from relay events into the local replica.")]
@@ -110,126 +106,76 @@ pub enum TargetCommand {
     Trade(TradeArgs),
     #[command(about = "Inspect validation receipts and proof state.")]
     Validation(ValidationArgs),
+    #[command(about = "Inspect runtime diagnostics.")]
+    Diagnostics(DiagnosticsArgs),
 }
 
 impl TargetCommand {
     pub fn operation_id(&self) -> &'static str {
         match self {
-            Self::Workspace(args) => match args.command {
-                WorkspaceCommand::Init => "workspace.init",
-                WorkspaceCommand::Get => "workspace.get",
+            Self::Profile(args) => match args.command {
+                ProfileCommand::Inspect => "profile.inspect",
+                ProfileCommand::Reset => "profile.reset",
             },
-            Self::Health(args) => match &args.command {
-                HealthCommand::Status(status) => match status.command {
-                    HealthStatusCommand::Get => "health.status.get",
-                },
-                HealthCommand::Check(check) => match check.command {
-                    HealthCheckCommand::Run => "health.check.run",
-                },
-            },
-            Self::Config(args) => match args.command {
-                ConfigCommand::Get => "config.get",
+            Self::Health(args) => match args.command {
+                HealthCommand::Inspect => "health.inspect",
             },
             Self::Account(args) => match &args.command {
                 AccountCommand::Create => "account.create",
                 AccountCommand::Import(_) => "account.import",
-                AccountCommand::AttachSecret(_) => "account.attach_secret",
-                AccountCommand::Get(_) => "account.get",
+                AccountCommand::Select(_) => "account.select",
                 AccountCommand::List => "account.list",
                 AccountCommand::Remove(_) => "account.remove",
-                AccountCommand::Selection(selection) => match &selection.command {
-                    AccountSelectionCommand::Get => "account.selection.get",
-                    AccountSelectionCommand::Update(_) => "account.selection.update",
-                    AccountSelectionCommand::Clear => "account.selection.clear",
-                },
             },
-            Self::Signer(args) => match &args.command {
-                SignerCommand::Status(status) => match status.command {
-                    SignerStatusCommand::Get => "signer.status.get",
-                },
+            Self::Signer(args) => match args.command {
+                SignerCommand::Status => "signer.status",
             },
             Self::Transport(args) => match &args.command {
-                TransportCommand::Profile(profile) => match &profile.command {
-                    TransportProfileCommand::Get => "transport.profile.get",
-                    TransportProfileCommand::Set(_) => "transport.profile.set",
+                TransportCommand::Capability(capability) => match capability.command {
+                    TransportCapabilityCommand::List => "transport.capability.list",
                 },
-                TransportCommand::Status => "transport.status",
-                TransportCommand::Outbox(outbox) => match outbox.command {
-                    TransportOutboxCommand::Status => "transport.outbox.status",
-                    TransportOutboxCommand::Push => "transport.outbox.push",
+                TransportCommand::Config(config) => match &config.command {
+                    TransportConfigCommand::Inspect => "transport.config.inspect",
+                    TransportConfigCommand::Update(_) => "transport.config.update",
                 },
-            },
-            Self::Mesh(args) => match &args.command {
-                MeshCommand::Scope(scope) => match &scope.command {
-                    MeshScopeCommand::Get => "mesh.scope.get",
-                    MeshScopeCommand::Set(_) => "mesh.scope.set",
+                TransportCommand::Status(status) => match status.command {
+                    TransportStatusCommand::Inspect => "transport.status.inspect",
                 },
-                MeshCommand::Status => "mesh.status",
-                MeshCommand::Policy(policy) => match policy.command {
-                    MeshPolicyCommand::Check => "mesh.policy.check",
+                TransportCommand::Delivery(delivery) => match delivery.command {
+                    TransportDeliveryCommand::Inspect => "transport.delivery.inspect",
+                    TransportDeliveryCommand::Retry => "transport.delivery.retry",
                 },
             },
             Self::Store(args) => match &args.command {
-                StoreCommand::Init => "store.init",
-                StoreCommand::Status(status) => match status.command {
-                    StoreStatusCommand::Get => "store.status.get",
-                },
-                StoreCommand::Export => "store.export",
-                StoreCommand::Backup(backup) => match &backup.command {
-                    StoreBackupCommand::Create => "store.backup.create",
-                    StoreBackupCommand::Restore(_) => "store.backup.restore",
-                },
+                StoreCommand::Inspect => "store.inspect",
+                StoreCommand::Backup => "store.backup",
+                StoreCommand::Restore(_) => "store.restore",
             },
             Self::Sync(args) => match &args.command {
-                SyncCommand::Status(status) => match status.command {
-                    SyncStatusCommand::Get => "sync.status.get",
-                },
+                SyncCommand::Status => "sync.status",
                 SyncCommand::Pull => "sync.pull",
                 SyncCommand::Push => "sync.push",
-                SyncCommand::Watch => "sync.watch",
             },
             Self::Farm(args) => match &args.command {
                 FarmCommand::Create(_) => "farm.create",
-                FarmCommand::Get => "farm.get",
-                FarmCommand::Rebind(_) => "farm.rebind",
-                FarmCommand::Profile(profile) => match profile.command {
-                    FarmProfileCommand::Update(_) => "farm.profile.update",
-                },
-                FarmCommand::Location(location) => match location.command {
-                    FarmLocationCommand::Set(_) => "farm.location.set",
-                    FarmLocationCommand::Get(_) => "farm.location.get",
-                    FarmLocationCommand::Clear(_) => "farm.location.clear",
-                },
-                FarmCommand::Fulfillment(fulfillment) => match fulfillment.command {
-                    FarmFulfillmentCommand::Update(_) => "farm.fulfillment.update",
-                },
-                FarmCommand::Readiness(readiness) => match readiness.command {
-                    FarmReadinessCommand::Check => "farm.readiness.check",
-                },
+                FarmCommand::Update(_) => "farm.update",
                 FarmCommand::Publish => "farm.publish",
+                FarmCommand::Get => "farm.get",
+                FarmCommand::List => "farm.list",
             },
             Self::Listing(args) => match &args.command {
                 ListingCommand::Create(_) => "listing.create",
+                ListingCommand::Update(_) => "listing.update",
+                ListingCommand::Publish(_) => "listing.publish",
+                ListingCommand::Pause(_) => "listing.pause",
+                ListingCommand::Withdraw(_) => "listing.withdraw",
                 ListingCommand::Get(_) => "listing.get",
                 ListingCommand::List => "listing.list",
-                ListingCommand::App(app) => match &app.command {
-                    ListingAppCommand::List => "listing.app.list",
-                    ListingAppCommand::Export(_) => "listing.app.export",
-                },
-                ListingCommand::Update(_) => "listing.update",
-                ListingCommand::Validate(_) => "listing.validate",
-                ListingCommand::Rebind(_) => "listing.rebind",
-                ListingCommand::Publish(_) => "listing.publish",
-                ListingCommand::Archive(_) => "listing.archive",
             },
             Self::Market(args) => match &args.command {
-                MarketCommand::Refresh => "market.refresh",
-                MarketCommand::Product(product) => match &product.command {
-                    MarketProductCommand::Search(_) => "market.product.search",
-                },
-                MarketCommand::Listing(listing) => match &listing.command {
-                    MarketListingCommand::Get(_) => "market.listing.get",
-                },
+                MarketCommand::Pull => "market.pull",
+                MarketCommand::Search(_) => "market.search",
+                MarketCommand::Get(_) => "market.get",
             },
             Self::Basket(args) => match &args.command {
                 BasketCommand::Create(_) => "basket.create",
@@ -240,59 +186,41 @@ impl TargetCommand {
                     BasketItemCommand::Update(_) => "basket.item.update",
                     BasketItemCommand::Remove(_) => "basket.item.remove",
                 },
-                BasketCommand::Adjustment(adjustment) => match &adjustment.command {
-                    BasketAdjustmentCommand::Add(_) => "basket.adjustment.add",
-                    BasketAdjustmentCommand::Remove(_) => "basket.adjustment.remove",
-                },
-                BasketCommand::Validate(_) => "basket.validate",
-                BasketCommand::Quote(quote) => match quote.command {
-                    BasketQuoteCommand::Create(_) => "basket.quote.create",
-                },
+                BasketCommand::Quote(_) => "basket.quote",
             },
             Self::Trade(args) => match &args.command {
-                TradeCommand::Submit(_) => "trade.submit",
+                TradeCommand::Request(_) => "trade.request",
                 TradeCommand::Get(_) => "trade.get",
                 TradeCommand::List => "trade.list",
-                TradeCommand::App(app) => match &app.command {
-                    TradeAppCommand::List => "trade.app.list",
-                    TradeAppCommand::Export(_) => "trade.app.export",
-                },
-                TradeCommand::Rebind(_) => "trade.rebind",
                 TradeCommand::Accept(_) => "trade.accept",
                 TradeCommand::Decline(_) => "trade.decline",
                 TradeCommand::Cancel(_) => "trade.cancel",
-                TradeCommand::Status(status) => match &status.command {
-                    TradeStatusCommand::Get(_) => "trade.status.get",
-                },
-                TradeCommand::Event(event) => match &event.command {
-                    TradeEventCommand::List(_) => "trade.event.list",
-                    TradeEventCommand::Watch(_) => "trade.event.watch",
-                },
             },
             Self::Validation(args) => match &args.command {
+                ValidationCommand::Status => "validation.status",
                 ValidationCommand::Receipt(receipt) => match &receipt.command {
                     ValidationReceiptCommand::Get(_) => "validation.receipt.get",
-                    ValidationReceiptCommand::List(_) => "validation.receipt.list",
                     ValidationReceiptCommand::Verify(_) => "validation.receipt.verify",
                 },
+            },
+            Self::Diagnostics(args) => match args.command {
+                DiagnosticsCommand::Inspect => "diagnostics.inspect",
             },
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use clap::{CommandFactory, Parser};
 
-    use super::{
-        AccountCommand, FarmCommand, FarmLocationCommand, ListingCommand, TargetCliArgs,
-        TargetOutputFormat, TradeCommand, ValidationCommand, ValidationReceiptCommand,
-    };
+    use super::{TargetCliArgs, TargetCommand, TargetOutputFormat};
     use crate::registry::OPERATION_REGISTRY;
 
     #[test]
-    fn target_parser_accepts_every_target_registry_path() {
+    fn target_parser_accepts_every_generated_registry_path() {
         for operation in OPERATION_REGISTRY {
             let parsed = TargetCliArgs::try_parse_from(operation.cli_path.split_whitespace())
                 .unwrap_or_else(|error| {
@@ -303,19 +231,17 @@ mod tests {
     }
 
     #[test]
-    fn target_parser_exposes_only_target_top_level_namespaces() {
+    fn target_parser_exposes_only_v1_namespaces() {
         let actual = TargetCliArgs::command()
             .get_subcommands()
             .map(|command| command.get_name().to_owned())
             .collect::<BTreeSet<_>>();
         let expected = [
-            "workspace",
+            "profile",
             "health",
-            "config",
             "account",
             "signer",
             "transport",
-            "mesh",
             "store",
             "sync",
             "farm",
@@ -324,6 +250,7 @@ mod tests {
             "basket",
             "trade",
             "validation",
+            "diagnostics",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -333,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn target_global_flags_parse() {
+    fn target_global_flags_parse_v1_approval_inputs() {
         let parsed = TargetCliArgs::try_parse_from([
             "radroots",
             "--format",
@@ -343,15 +270,16 @@ mod tests {
             "--offline",
             "--dry-run",
             "--idempotency-key",
-            "idem_test",
+            "018f3d99-7d35-7c0c-8a0f-7f3b645abcde",
             "--correlation-id",
             "corr_test",
-            "--approval-token",
-            "approval_test",
+            "--yes",
+            "--approval-proof",
+            "{\"operation_id\":\"profile.reset\"}",
             "--no-input",
             "--quiet",
-            "workspace",
-            "get",
+            "profile",
+            "inspect",
         ])
         .expect("target args parse");
 
@@ -359,404 +287,92 @@ mod tests {
         assert_eq!(parsed.account_id.as_deref(), Some("acct_test"));
         assert!(parsed.offline);
         assert!(parsed.dry_run);
-        assert_eq!(parsed.idempotency_key.as_deref(), Some("idem_test"));
+        assert_eq!(
+            parsed.idempotency_key.as_deref(),
+            Some("018f3d99-7d35-7c0c-8a0f-7f3b645abcde")
+        );
         assert_eq!(parsed.correlation_id.as_deref(), Some("corr_test"));
-        assert_eq!(parsed.approval_token.as_deref(), Some("approval_test"));
+        assert!(parsed.yes);
+        assert!(parsed.approval_proof.is_some());
         assert!(parsed.no_input);
         assert!(parsed.quiet);
-        assert_eq!(parsed.command.operation_id(), "workspace.get");
+        assert_eq!(parsed.command.operation_id(), "profile.inspect");
     }
 
     #[test]
-    fn target_parser_rejects_removed_no_color_flag() {
-        let error = TargetCliArgs::try_parse_from(["radroots", "--no-color", "workspace", "get"])
-            .expect_err("removed no-color flag should be rejected");
-
-        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-    }
-
-    #[test]
-    fn target_parser_rejects_removed_relay_flag() {
-        let error = TargetCliArgs::try_parse_from([
-            "radroots",
-            "--relay",
-            "wss://relay.example.com",
-            "workspace",
-            "get",
-        ])
-        .expect_err("removed relay flag should be rejected");
-
-        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-    }
-
-    #[test]
-    fn target_parser_accepts_account_attach_secret_inputs() {
-        let parsed = TargetCliArgs::try_parse_from([
-            "radroots",
-            "account",
-            "attach-secret",
-            "acct_test",
-            "identity.json",
-            "--default",
-        ])
-        .expect("target args parse");
-
-        assert_eq!(parsed.command.operation_id(), "account.attach_secret");
-        let crate::cli::TargetCommand::Account(account) = parsed.command else {
-            panic!("expected account command")
-        };
-        let AccountCommand::AttachSecret(args) = account.command else {
-            panic!("expected account attach-secret command")
-        };
-        assert_eq!(args.selector.as_deref(), Some("acct_test"));
-        assert_eq!(
-            args.path.as_ref().map(|path| path.as_os_str()),
-            Some(std::ffi::OsStr::new("identity.json"))
-        );
-        assert!(args.default);
-    }
-
-    #[test]
-    fn target_parser_accepts_farm_rebind_selector() {
-        let parsed = TargetCliArgs::try_parse_from(["radroots", "farm", "rebind", "acct_test"])
-            .expect("target args parse");
-
-        assert_eq!(parsed.command.operation_id(), "farm.rebind");
-        let crate::cli::TargetCommand::Farm(farm) = parsed.command else {
-            panic!("expected farm command")
-        };
-        let FarmCommand::Rebind(args) = farm.command else {
-            panic!("expected farm rebind command")
-        };
-        assert_eq!(args.selector.as_deref(), Some("acct_test"));
-    }
-
-    #[test]
-    fn target_parser_accepts_negative_farm_location_coordinates() {
-        let parsed = TargetCliArgs::try_parse_from([
-            "radroots",
-            "farm",
-            "location",
-            "set",
-            "--lat",
-            "48.429456",
-            "--lng",
-            "-123.349786",
-        ])
-        .expect("target args parse");
-
-        assert_eq!(parsed.command.operation_id(), "farm.location.set");
-        let crate::cli::TargetCommand::Farm(farm) = parsed.command else {
-            panic!("expected farm command")
-        };
-        let FarmCommand::Location(location) = farm.command else {
-            panic!("expected farm location command")
-        };
-        let FarmLocationCommand::Set(args) = location.command else {
-            panic!("expected farm location set command")
-        };
-        assert_eq!(args.lat, Some(48.429456));
-        assert_eq!(args.lng, Some(-123.349786));
-    }
-
-    #[test]
-    fn target_parser_accepts_structured_farm_location_city() {
-        let parsed = TargetCliArgs::try_parse_from([
-            "radroots",
-            "farm",
-            "location",
-            "set",
-            "--city",
-            "Victoria",
-            "--region",
-            "BC",
-            "--country",
-            "CA",
-            "--label",
-            "main pickup point",
-        ])
-        .expect("target args parse");
-
-        let crate::cli::TargetCommand::Farm(farm) = parsed.command else {
-            panic!("expected farm command")
-        };
-        let FarmCommand::Location(location) = farm.command else {
-            panic!("expected farm location command")
-        };
-        let FarmLocationCommand::Set(args) = location.command else {
-            panic!("expected farm location set command")
-        };
-        assert_eq!(args.city.as_deref(), Some("Victoria"));
-        assert_eq!(args.region.as_deref(), Some("BC"));
-        assert_eq!(args.country.as_deref(), Some("CA"));
-        assert_eq!(args.label.as_deref(), Some("main pickup point"));
-    }
-
-    #[test]
-    fn target_parser_accepts_query_and_geonames_id_farm_location_modes() {
-        let query = TargetCliArgs::try_parse_from([
-            "radroots",
-            "farm",
-            "location",
-            "set",
-            "--query",
-            "Fixture Victoria, BC, CA",
-        ])
-        .expect("query args parse");
-        let crate::cli::TargetCommand::Farm(farm) = query.command else {
-            panic!("expected farm command")
-        };
-        let FarmCommand::Location(location) = farm.command else {
-            panic!("expected farm location command")
-        };
-        let FarmLocationCommand::Set(args) = location.command else {
-            panic!("expected farm location set command")
-        };
-        assert_eq!(args.query.as_deref(), Some("Fixture Victoria, BC, CA"));
-
-        let geonames_id = TargetCliArgs::try_parse_from([
-            "radroots",
-            "farm",
-            "location",
-            "set",
-            "--geonames-id",
-            "3004",
-        ])
-        .expect("geonames id args parse");
-        let crate::cli::TargetCommand::Farm(farm) = geonames_id.command else {
-            panic!("expected farm command")
-        };
-        let FarmCommand::Location(location) = farm.command else {
-            panic!("expected farm location command")
-        };
-        let FarmLocationCommand::Set(args) = location.command else {
-            panic!("expected farm location set command")
-        };
-        assert_eq!(args.geonames_id, Some(3004));
-    }
-
-    #[test]
-    fn target_parser_rejects_invalid_farm_location_modes() {
-        for argv in [
-            vec!["radroots", "farm", "location", "set", "--lat", "48.429456"],
+    fn target_parser_rejects_retired_commands_and_global_flags() {
+        let rejected = [
             vec![
-                "radroots",
-                "farm",
-                "location",
-                "set",
-                "--lat",
-                "48.429456",
-                "--lng",
-                "-123.349786",
-                "--city",
-                "Victoria",
+                "radroots".to_owned(),
+                format!("--approval-{}", "token"),
+                "approve".to_owned(),
+                "profile".to_owned(),
+                "reset".to_owned(),
             ],
             vec![
-                "radroots",
-                "farm",
-                "location",
-                "set",
-                "--query",
-                "Victoria, BC",
-                "--country",
-                "CA",
+                "radroots".to_owned(),
+                "workspace".to_owned(),
+                "get".to_owned(),
+            ],
+            vec!["radroots".to_owned(), "config".to_owned(), "get".to_owned()],
+            vec![
+                "radroots".to_owned(),
+                "mesh".to_owned(),
+                "status".to_owned(),
             ],
             vec![
-                "radroots",
-                "farm",
-                "location",
-                "set",
-                "--lookup",
-                "geonames",
-                "--lat",
-                "48.429456",
-                "--lng",
-                "-123.349786",
+                "radroots".to_owned(),
+                "trade".to_owned(),
+                "submit".to_owned(),
             ],
-        ] {
+            vec![
+                "radroots".to_owned(),
+                "listing".to_owned(),
+                "archive".to_owned(),
+            ],
+            vec![
+                "radroots".to_owned(),
+                "validation".to_owned(),
+                "receipt".to_owned(),
+                "list".to_owned(),
+            ],
+        ];
+
+        for args in rejected {
             assert!(
-                TargetCliArgs::try_parse_from(argv).is_err(),
-                "expected farm location args to fail"
+                TargetCliArgs::try_parse_from(args.iter().map(String::as_str)).is_err(),
+                "{args:?}"
             );
         }
     }
 
     #[test]
-    fn target_parser_accepts_listing_rebind_inputs() {
+    fn target_parser_maps_v1_operation_inputs() {
         let parsed = TargetCliArgs::try_parse_from([
             "radroots",
-            "listing",
-            "rebind",
-            "listing.toml",
-            "acct_test",
-            "--farm-d-tag",
-            "AAAAAAAAAAAAAAAAAAAAAw",
+            "transport",
+            "config",
+            "update",
+            "--kind",
+            "multi-target",
+            "--nostr-relay",
+            "wss://relay.example",
         ])
-        .expect("target args parse");
+        .expect("transport config update parses");
+        assert_eq!(parsed.command.operation_id(), "transport.config.update");
 
-        assert_eq!(parsed.command.operation_id(), "listing.rebind");
-        let crate::cli::TargetCommand::Listing(listing) = parsed.command else {
-            panic!("expected listing command")
+        let TargetCommand::Transport(_) = parsed.command else {
+            panic!("expected transport command")
         };
-        let ListingCommand::Rebind(args) = listing.command else {
-            panic!("expected listing rebind command")
-        };
-        assert_eq!(
-            args.file.as_ref().map(|path| path.as_os_str()),
-            Some(std::ffi::OsStr::new("listing.toml"))
-        );
-        assert_eq!(args.selector.as_deref(), Some("acct_test"));
-        assert_eq!(args.farm_d_tag.as_deref(), Some("AAAAAAAAAAAAAAAAAAAAAw"));
-    }
 
-    #[test]
-    fn target_parser_accepts_order_rebind_inputs() {
-        let parsed =
-            TargetCliArgs::try_parse_from(["radroots", "trade", "rebind", "ord_test", "acct_test"])
-                .expect("target args parse");
-
-        assert_eq!(parsed.command.operation_id(), "trade.rebind");
-        let crate::cli::TargetCommand::Trade(trade) = parsed.command else {
-            panic!("expected trade command")
-        };
-        let TradeCommand::Rebind(args) = trade.command else {
-            panic!("expected trade rebind command")
-        };
-        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
-        assert_eq!(args.selector.as_deref(), Some("acct_test"));
-    }
-
-    #[test]
-    fn target_parser_accepts_order_cancel_reason() {
-        let parsed = TargetCliArgs::try_parse_from([
+        let trade = TargetCliArgs::try_parse_from([
             "radroots",
             "trade",
-            "cancel",
-            "ord_test",
-            "--reason",
-            "changed plans",
+            "request",
+            "trade_test",
             "--confirm-public-note",
         ])
-        .expect("target args parse");
-
-        assert_eq!(parsed.command.operation_id(), "trade.cancel");
-        let crate::cli::TargetCommand::Trade(trade) = parsed.command else {
-            panic!("expected trade command")
-        };
-        let TradeCommand::Cancel(args) = trade.command else {
-            panic!("expected trade cancel command")
-        };
-        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
-        assert_eq!(args.reason.as_deref(), Some("changed plans"));
-        assert!(args.confirm_public_note);
-    }
-
-    #[test]
-    fn target_parser_accepts_validation_receipt_commands() {
-        let get = TargetCliArgs::try_parse_from([
-            "radroots",
-            "validation",
-            "receipt",
-            "get",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ])
-        .expect("target args parse");
-        assert_eq!(get.command.operation_id(), "validation.receipt.get");
-        let crate::cli::TargetCommand::Validation(validation) = get.command else {
-            panic!("expected validation command")
-        };
-        let ValidationCommand::Receipt(receipt) = validation.command;
-        let ValidationReceiptCommand::Get(args) = receipt.command else {
-            panic!("expected validation receipt get command")
-        };
-        assert_eq!(
-            args.receipt_event_id.as_deref(),
-            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-        );
-
-        let list = TargetCliArgs::try_parse_from([
-            "radroots",
-            "validation",
-            "receipt",
-            "list",
-            "--trade-id",
-            "ord_1",
-        ])
-        .expect("target args parse");
-        assert_eq!(list.command.operation_id(), "validation.receipt.list");
-        let crate::cli::TargetCommand::Validation(validation) = list.command else {
-            panic!("expected validation command")
-        };
-        let ValidationCommand::Receipt(receipt) = validation.command;
-        let ValidationReceiptCommand::List(args) = receipt.command else {
-            panic!("expected validation receipt list command")
-        };
-        assert_eq!(args.trade_id.as_deref(), Some("ord_1"));
-
-        let verify = TargetCliArgs::try_parse_from([
-            "radroots",
-            "validation",
-            "receipt",
-            "verify",
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        ])
-        .expect("target args parse");
-        assert_eq!(verify.command.operation_id(), "validation.receipt.verify");
-    }
-
-    #[test]
-    fn target_parser_rejects_removed_global_flags() {
-        let rejected = [
-            vec!["radroots", "--output", "json", "config", "get"],
-            vec!["radroots", "--json", "config", "get"],
-            vec!["radroots", "--ndjson", "config", "get"],
-            vec!["radroots", "--yes", "config", "get"],
-            vec!["radroots", "--non-interactive", "config", "get"],
-            vec!["radroots", "--signer", "myc", "config", "get"],
-            vec!["radroots", "--farm-id", "farm_test", "config", "get"],
-            vec!["radroots", "--profile", "repo_local", "config", "get"],
-            vec![
-                "radroots",
-                "--signer-session-id",
-                "sess_test",
-                "config",
-                "get",
-            ],
-        ];
-
-        for args in rejected {
-            assert!(TargetCliArgs::try_parse_from(args).is_err());
-        }
-    }
-
-    #[test]
-    fn target_parser_rejects_removed_top_level_commands() {
-        for command in [
-            "setup", "status", "doctor", "sell", "find", "local", "net", "myc", "rpc",
-        ] {
-            assert!(TargetCliArgs::try_parse_from(["radroots", command]).is_err());
-        }
-    }
-
-    #[test]
-    fn target_parser_rejects_deferred_namespaces() {
-        for command in ["product", "message", "approval", "agent"] {
-            assert!(TargetCliArgs::try_parse_from(["radroots", command]).is_err());
-        }
-    }
-
-    #[test]
-    fn target_parser_rejects_online_offline_conflict() {
-        assert!(
-            TargetCliArgs::try_parse_from([
-                "radroots",
-                "--online",
-                "--offline",
-                "health",
-                "status",
-                "get"
-            ])
-            .is_err()
-        );
+        .expect("trade request parses");
+        assert_eq!(trade.command.operation_id(), "trade.request");
     }
 }

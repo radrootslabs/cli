@@ -57,14 +57,14 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
             results: Vec::new(),
             hyf: None,
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots store init".to_owned()],
+            actions: vec!["radroots store inspect".to_owned()],
         });
     }
 
     refresh_market_if_needed(config)?;
     let db = ReplicaSql::new(SqlxSqliteExecutor::open(&config.local.replica_store_path)?);
     let freshness =
-        freshness_for_scope_from_executor(config, db.executor(), RelayIngestScope::MarketRefresh)?;
+        freshness_for_scope_from_executor(config, db.executor(), RelayIngestScope::MarketPull)?;
     let applied_query_rewrite = attempt_query_rewrite(config, query.as_str(), &args.query);
     let effective_query_terms = applied_query_rewrite
         .as_ref()
@@ -130,7 +130,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
 
     let (state, reason, actions) = if results.is_empty() {
         let actions = if freshness.state == "never" {
-            vec!["radroots sync status get".to_owned()]
+            vec!["radroots sync status".to_owned()]
         } else {
             Vec::new()
         };
@@ -164,7 +164,7 @@ fn refresh_market_if_needed(config: &RuntimeConfig) -> Result<(), RuntimeError> 
     }
     let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     let freshness =
-        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?;
+        freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketPull)?;
     if freshness_requires_refresh(&freshness) {
         let _ = market_refresh(config)?;
     }

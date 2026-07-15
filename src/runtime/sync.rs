@@ -42,7 +42,7 @@ use crate::runtime::sdk::{
 };
 use crate::view::runtime::{
     SyncActionView, SyncFreshnessView, SyncQueueView, SyncRunFreshnessView, SyncStatusView,
-    SyncTransportStatusView, SyncTransportTargetView, SyncWatchFrameView, SyncWatchView,
+    SyncTransportStatusInspectView, SyncTransportTargetView, SyncWatchFrameView, SyncWatchView,
     TransportOperationCapabilitiesView, TransportTargetFailureView,
 };
 
@@ -50,11 +50,11 @@ const SYNC_SOURCE: &str = "local replica · local first";
 const SDK_SYNC_SOURCE: &str = "SDK canonical event store and outbox";
 const SDK_PUSH_SOURCE: &str = "SDK outbox push";
 const RELAY_PULL_SETUP_ACTION: &str =
-    "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com";
+    "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com";
 const SYNC_PULL_ACTION: &str = "radroots sync pull";
 const SYNC_PUSH_ACTION: &str = "radroots sync push";
-const SYNC_READY_ACTION: &str = "radroots market product search eggs";
-const MARKET_READY_ACTION: &str = "radroots market product search eggs";
+const SYNC_READY_ACTION: &str = "radroots market search eggs";
+const MARKET_READY_ACTION: &str = "radroots market search eggs";
 const INGEST_SOURCE: &str = "shared Nostr transport fetch · local replica ingest";
 const RELAY_FETCH_LIMIT: usize = 1_000;
 const RELAY_FETCH_MAX_PAGES: usize = 5;
@@ -92,7 +92,7 @@ struct SyncSnapshot {
     replica_store: String,
     configured_transport_target_count: usize,
     configured_transport_targets: Vec<SyncTransportTargetView>,
-    transport_statuses: Vec<SyncTransportStatusView>,
+    transport_statuses: Vec<SyncTransportStatusInspectView>,
     publish_policy: String,
     freshness: SyncFreshnessView,
     queue: SyncQueueView,
@@ -103,7 +103,7 @@ struct SyncSnapshot {
 struct SyncTransportMetadata {
     configured_transport_target_count: usize,
     configured_transport_targets: Vec<SyncTransportTargetView>,
-    transport_statuses: Vec<SyncTransportStatusView>,
+    transport_statuses: Vec<SyncTransportStatusInspectView>,
 }
 
 #[derive(Debug, Clone)]
@@ -176,7 +176,7 @@ where
         RadrootsNostrFilter,
     ) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError>,
 {
-    relay_ingest(config, RelayIngestScope::MarketRefresh, fetcher)
+    relay_ingest(config, RelayIngestScope::MarketPull, fetcher)
 }
 
 fn shared_relay_transport_fetch_windowed(
@@ -531,6 +531,10 @@ fn sdk_push_view(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "sync push view construction mirrors the V1 output contract fields"
+)]
 fn sdk_push_action_view(
     config: &RuntimeConfig,
     state: &str,
@@ -538,7 +542,7 @@ fn sdk_push_action_view(
     freshness: SyncFreshnessView,
     configured_transport_target_count: usize,
     configured_transport_targets: Vec<SyncTransportTargetView>,
-    transport_statuses: Vec<SyncTransportStatusView>,
+    transport_statuses: Vec<SyncTransportStatusInspectView>,
     target_transport_endpoints: Vec<String>,
     attempted_transport_endpoints: Vec<String>,
     accepted_transport_endpoints: Vec<String>,
@@ -595,7 +599,7 @@ fn sdk_transport_targets(receipt: &SyncStatusReceipt) -> Vec<SyncTransportTarget
         .collect()
 }
 
-fn sdk_transport_statuses(receipt: &SyncStatusReceipt) -> Vec<SyncTransportStatusView> {
+fn sdk_transport_statuses(receipt: &SyncStatusReceipt) -> Vec<SyncTransportStatusInspectView> {
     receipt
         .transport_profile
         .transport_statuses
@@ -606,8 +610,8 @@ fn sdk_transport_statuses(receipt: &SyncStatusReceipt) -> Vec<SyncTransportStatu
 
 fn sdk_transport_status_view(
     status: &radroots_sdk::SyncTransportStatusSummary,
-) -> SyncTransportStatusView {
-    SyncTransportStatusView {
+) -> SyncTransportStatusInspectView {
+    SyncTransportStatusInspectView {
         transport: status.transport.clone(),
         profile_id: status.profile_id.clone(),
         endpoint_uri: status.endpoint_uri.clone(),
@@ -638,15 +642,15 @@ fn sdk_sync_status_actions(receipt: &SyncStatusReceipt) -> Vec<String> {
 fn sdk_sync_push_actions(state: &str, retryable: bool) -> Vec<String> {
     match state {
         "published" | "ready" | "deferred_until_implemented" => {
-            vec!["radroots sync status get".to_owned()]
+            vec!["radroots sync status".to_owned()]
         }
         "dry_run" | "partial" | "unavailable" if retryable => {
             vec![
                 SYNC_PUSH_ACTION.to_owned(),
-                "radroots sync status get".to_owned(),
+                "radroots sync status".to_owned(),
             ]
         }
-        _ => vec!["radroots sync status get".to_owned()],
+        _ => vec!["radroots sync status".to_owned()],
     }
 }
 
@@ -678,14 +682,12 @@ fn sdk_push_state(receipt: &PushOutboxReceipt, failed_count: usize) -> &'static 
 fn sdk_push_reported_deferred_state(receipt: &PushOutboxReceipt) -> Option<&'static str> {
     let mut deferred = false;
     for event in &receipt.events {
-        match event.final_state {
-            PushOutboxEventState::DeferredUntilImplemented => deferred = true,
-            _ => {}
+        if event.final_state == PushOutboxEventState::DeferredUntilImplemented {
+            deferred = true;
         }
         for target in &event.targets {
-            match target.outcome_kind {
-                PushOutboxTargetOutcomeKind::DeferredUntilImplemented => deferred = true,
-                _ => {}
+            if target.outcome_kind == PushOutboxTargetOutcomeKind::DeferredUntilImplemented {
+                deferred = true;
             }
         }
     }
@@ -923,7 +925,7 @@ fn sync_transport_target_view(
     })
 }
 
-fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusView> {
+fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusInspectView> {
     let profile_id = config.transport.profile.as_str();
     let nostr_targets_configured = !config.transport.nostr_relay_urls.is_empty();
     match config.transport.profile {
@@ -987,8 +989,8 @@ fn reticulum_transport_status(profile_id: &str) -> RadrootsTransportStatus {
     .with_availability(RadrootsTransportCapabilityAvailability::Unavailable)
 }
 
-fn sync_transport_status_view(status: RadrootsTransportStatus) -> SyncTransportStatusView {
-    SyncTransportStatusView {
+fn sync_transport_status_view(status: RadrootsTransportStatus) -> SyncTransportStatusInspectView {
+    SyncTransportStatusInspectView {
         transport: status.kind.canonical_label(),
         profile_id: status.profile_id,
         endpoint_uri: status.endpoint_uri,
@@ -1044,7 +1046,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
             freshness: missing_freshness(),
             queue: derived_projection_sync_queue(0, 0),
             reason: Some("local replica database is not initialized".to_owned()),
-            actions: vec!["radroots store init".to_owned()],
+            actions: vec!["radroots store inspect".to_owned()],
         });
     }
 
@@ -1072,7 +1074,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
             if transport_metadata.configured_transport_target_count == 0 {
                 RELAY_PULL_SETUP_ACTION.to_owned()
             } else {
-                "radroots transport profile get".to_owned()
+                "radroots transport config inspect".to_owned()
             },
         );
         return Ok(SyncSnapshot {
@@ -1584,35 +1586,35 @@ fn relay_failure_reason(failed_transport_targets: &[TransportTargetFailureView])
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RelayIngestScope {
     SyncPull,
-    MarketRefresh,
+    MarketPull,
 }
 
 impl RelayIngestScope {
     fn id(self) -> &'static str {
         match self {
             Self::SyncPull => "sync_pull",
-            Self::MarketRefresh => "market_refresh",
+            Self::MarketPull => "market_refresh",
         }
     }
 
     fn display(self) -> &'static str {
         match self {
             Self::SyncPull => "sync pull",
-            Self::MarketRefresh => "market refresh",
+            Self::MarketPull => "market refresh",
         }
     }
 
     fn stale_after_seconds(self) -> u64 {
         match self {
             Self::SyncPull => SYNC_PULL_FRESHNESS_STALE_AFTER_SECONDS,
-            Self::MarketRefresh => MARKET_FRESHNESS_STALE_AFTER_SECONDS,
+            Self::MarketPull => MARKET_FRESHNESS_STALE_AFTER_SECONDS,
         }
     }
 
     fn kinds(self) -> &'static [u32] {
         match self {
             Self::SyncPull => SYNC_PULL_KINDS,
-            Self::MarketRefresh => MARKET_REFRESH_KINDS,
+            Self::MarketPull => MARKET_REFRESH_KINDS,
         }
     }
 
@@ -1630,7 +1632,7 @@ impl RelayIngestScope {
     fn ready_action(self) -> &'static str {
         match self {
             Self::SyncPull => SYNC_READY_ACTION,
-            Self::MarketRefresh => MARKET_READY_ACTION,
+            Self::MarketPull => MARKET_READY_ACTION,
         }
     }
 
@@ -1846,7 +1848,7 @@ mod tests {
         assert_eq!(
             view.actions,
             vec![
-                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+                "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com"
             ]
         );
     }
@@ -1880,7 +1882,7 @@ mod tests {
         assert_eq!(
             view.actions,
             vec![
-                "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+                "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com"
             ]
         );
     }
@@ -1967,7 +1969,7 @@ mod tests {
         assert!(!view.transport_statuses[1].capabilities.deliver);
         assert!(!view.transport_statuses[1].capabilities.fetch);
         assert!(view.target_transport_endpoints.is_empty());
-        assert_eq!(view.actions, vec!["radroots transport profile get"]);
+        assert_eq!(view.actions, vec!["radroots transport config inspect"]);
     }
 
     #[test]
@@ -2233,7 +2235,7 @@ mod tests {
         );
         assert_eq!(
             view.actions,
-            vec!["radroots sync push", "radroots sync status get"]
+            vec!["radroots sync push", "radroots sync status"]
         );
         assert!(view.publish_plan.is_none());
     }
@@ -2270,7 +2272,7 @@ mod tests {
             view.reason.as_deref(),
             Some("SDK outbox had no ready signed events to push")
         );
-        assert_eq!(view.actions, vec!["radroots sync status get"]);
+        assert_eq!(view.actions, vec!["radroots sync status"]);
     }
 
     #[test]
@@ -2341,7 +2343,7 @@ mod tests {
                 view.failed_transport_targets[0].reason,
                 RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
             );
-            assert_eq!(view.actions, vec!["radroots sync status get"]);
+            assert_eq!(view.actions, vec!["radroots sync status"]);
         }
     }
 
@@ -2432,10 +2434,14 @@ mod tests {
         );
         assert_eq!(
             view.actions,
-            vec!["radroots sync push", "radroots sync status get"]
+            vec!["radroots sync push", "radroots sync status"]
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test fixture construction sets every storage status field explicitly"
+    )]
     fn sdk_status_receipt(
         total_events: i64,
         outbox_total_events: i64,
@@ -2757,7 +2763,7 @@ mod tests {
 
         let _ = market_refresh_with_fetcher(&config, fake_fetcher(vec![listing_event(&seller)]))
             .expect("market refresh");
-        let relays = relay_provenance_relays_for_scope(&config, RelayIngestScope::MarketRefresh)
+        let relays = relay_provenance_relays_for_scope(&config, RelayIngestScope::MarketPull)
             .expect("relay provenance");
 
         assert_eq!(
@@ -2783,7 +2789,7 @@ mod tests {
         let run = view.freshness.run.as_ref().expect("run freshness");
         assert_eq!(run.scope, "market_refresh");
         assert_eq!(run.last_state, "success");
-        assert_eq!(run.relay_set_current, true);
+        assert!(run.relay_set_current);
         assert_eq!(run.fetched_count, Some(1));
         assert_eq!(run.ingested_count, Some(1));
     }
@@ -2884,7 +2890,7 @@ mod tests {
         assert_eq!(freshness.state, "relay_set_changed");
         let run = freshness.run.as_ref().expect("run freshness");
         assert_eq!(run.scope, "sync_pull");
-        assert_eq!(run.relay_set_current, false);
+        assert!(!run.relay_set_current);
     }
 
     #[test]

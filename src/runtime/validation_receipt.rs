@@ -634,7 +634,7 @@ fn sdk_error_parts(error: RadrootsSdkError) -> ValidationReceiptSdkErrorParts {
     };
     let actions = if error.code() == "empty_transport_targets" {
         vec![
-            "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com"
+            "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com"
                 .to_owned(),
         ]
     } else {
@@ -1258,11 +1258,13 @@ mod tests {
         proof_state_from_sp1_error, proof_state_is_invalid, proof_state_is_verification_success,
         proof_verification_view_for_receipt, validation_receipt_invalid_reason_code,
     };
+    use radroots_event::ids::{RadrootsAddressableCoordinate, RadrootsPublicKey};
     use radroots_trade::validation_receipt::{
         RadrootsTradeValidationReceipt, RadrootsValidationReceiptError,
         RadrootsValidationReceiptProof, RadrootsValidationReceiptProofSystem,
         RadrootsValidationReceiptResult, RadrootsValidationReceiptStatement,
         RadrootsValidationReceiptType, VALIDATION_RECEIPT_DOMAIN, VALIDATION_RECEIPT_VERSION,
+        validator_set_address,
     };
     use radroots_trade_sp1_host::RadrootsSp1TradeHostError;
 
@@ -1305,10 +1307,22 @@ mod tests {
                     .to_owned(),
                 target_event_id: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                     .to_owned(),
+                validator_set_addr: validator_set_addr(),
+                validator_set_event_id:
+                    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_owned(),
                 statement_type: RadrootsValidationReceiptType::TradeTransition,
             },
             version: VALIDATION_RECEIPT_VERSION,
         }
+    }
+
+    fn validator_set_addr() -> RadrootsAddressableCoordinate {
+        let author = RadrootsPublicKey::parse(
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        )
+        .expect("validator set author");
+        validator_set_address(&author, "018f3d99-7d35-7c0c-8a0f-7f3b645abcde")
+            .expect("validator set address")
     }
 
     fn deterministic_receipt() -> RadrootsTradeValidationReceipt {

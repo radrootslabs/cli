@@ -65,6 +65,10 @@ impl TerminalRendererRegistry {
         self.entries.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn operation_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.entries.iter().map(|entry| entry.operation_id)
     }
@@ -97,11 +101,11 @@ impl TerminalRendererRegistry {
             *counts.entry(operation_id).or_default() += 1;
         }
         let mut violations = self.violations.clone();
-        for operation_id in expected {
+        for operation_id in &expected {
             match counts.get(operation_id).copied().unwrap_or(0) {
                 0 => {
                     violations.push(TerminalRendererRegistryViolation::missing(
-                        operation_id.to_owned(),
+                        (*operation_id).to_owned(),
                     ));
                 }
                 1 => {}
@@ -111,6 +115,11 @@ impl TerminalRendererRegistry {
                         count,
                     ));
                 }
+            }
+        }
+        for operation_id in counts.keys() {
+            if !expected.contains(operation_id) {
+                violations.push(TerminalRendererRegistryViolation::extra(*operation_id));
             }
         }
         violations.sort();
@@ -126,6 +135,7 @@ impl TerminalRendererRegistry {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TerminalRendererRegistryViolation {
     DuplicateOperation { operation_id: String, count: usize },
+    ExtraOperation { operation_id: String },
     MissingOperation { operation_id: String },
 }
 
@@ -144,6 +154,12 @@ impl TerminalRendererRegistryViolation {
         }
     }
 
+    fn extra(operation_id: impl Into<String>) -> Self {
+        Self::ExtraOperation {
+            operation_id: operation_id.into(),
+        }
+    }
+
     fn missing(operation_id: impl Into<String>) -> Self {
         Self::MissingOperation {
             operation_id: operation_id.into(),
@@ -153,6 +169,7 @@ impl TerminalRendererRegistryViolation {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::DuplicateOperation { .. } => "duplicate",
+            Self::ExtraOperation { .. } => "extra",
             Self::MissingOperation { .. } => "missing",
         }
     }
@@ -160,6 +177,7 @@ impl TerminalRendererRegistryViolation {
     pub fn operation_id(&self) -> &str {
         match self {
             Self::DuplicateOperation { operation_id, .. }
+            | Self::ExtraOperation { operation_id }
             | Self::MissingOperation { operation_id } => operation_id,
         }
     }
@@ -167,7 +185,7 @@ impl TerminalRendererRegistryViolation {
     pub fn count(&self) -> Option<usize> {
         match self {
             Self::DuplicateOperation { count, .. } => Some(*count),
-            Self::MissingOperation { .. } => None,
+            Self::ExtraOperation { .. } | Self::MissingOperation { .. } => None,
         }
     }
 }
@@ -201,6 +219,9 @@ impl fmt::Display for TerminalRendererRegistryError {
                     formatter,
                     "; duplicate renderer for {operation_id} ({count})"
                 )?,
+                TerminalRendererRegistryViolation::ExtraOperation { operation_id } => {
+                    write!(formatter, "; unexpected renderer for {operation_id}")?
+                }
                 TerminalRendererRegistryViolation::MissingOperation { operation_id } => {
                     write!(formatter, "; missing renderer for {operation_id}")?
                 }
@@ -212,19 +233,7 @@ impl fmt::Display for TerminalRendererRegistryError {
 
 pub fn terminal_renderer_registry() -> TerminalRendererRegistry {
     let registry = TerminalRendererRegistry::new();
-    let registry = crate::out::terminal::renderers::workspace::register(registry);
-    let registry = crate::out::terminal::renderers::health::register(registry);
-    let registry = crate::out::terminal::renderers::config::register(registry);
-    let registry = crate::out::terminal::renderers::account::register(registry);
-    let registry = crate::out::terminal::renderers::runtime::register(registry);
-    let registry = crate::out::terminal::renderers::store::register(registry);
-    let registry = crate::out::terminal::renderers::sync::register(registry);
-    let registry = crate::out::terminal::renderers::farm::register(registry);
-    let registry = crate::out::terminal::renderers::listing::register(registry);
-    let registry = crate::out::terminal::renderers::market::register(registry);
-    let registry = crate::out::terminal::renderers::basket::register(registry);
-    let registry = crate::out::terminal::renderers::trade::register(registry);
-    crate::out::terminal::renderers::validation::register(registry)
+    crate::out::terminal::renderers::v1::register(registry)
 }
 
 #[cfg(test)]
@@ -250,42 +259,60 @@ mod tests {
 
     #[test]
     fn registers_operation_renderers() {
-        let registry = TerminalRendererRegistry::new().register("workspace.get", &TEST_RENDERER);
+        let registry = TerminalRendererRegistry::new().register("profile.inspect", &TEST_RENDERER);
 
-        assert!(registry.contains("workspace.get"));
+        assert!(registry.contains("profile.inspect"));
         assert_eq!(registry.len(), 1);
-        assert!(registry.get("workspace.get").is_some());
+        assert!(registry.get("profile.inspect").is_some());
         assert!(registry.get("missing").is_none());
     }
 
     #[test]
     fn duplicate_operation_renderer_registration_fails() {
         let registry = TerminalRendererRegistry::new()
-            .register("workspace.get", &TEST_RENDERER)
-            .register("workspace.get", &TEST_RENDERER);
+            .register("profile.inspect", &TEST_RENDERER)
+            .register("profile.inspect", &TEST_RENDERER);
         let error = registry
-            .validate_operation_ids(["workspace.get"])
+            .validate_operation_ids(["profile.inspect"])
             .expect_err("duplicate renderer registration should fail");
 
         assert_eq!(
             error.violations(),
             &[TerminalRendererRegistryViolation::duplicate_count(
-                "workspace.get",
+                "profile.inspect",
                 2
             )]
         );
-        assert!(registry.get("workspace.get").is_none());
+        assert!(registry.get("profile.inspect").is_none());
     }
 
     #[test]
     fn missing_operation_renderer_registration_fails() {
         let error = TerminalRendererRegistry::new()
-            .validate_operation_ids(["workspace.get"])
+            .validate_operation_ids(["profile.inspect"])
             .expect_err("missing renderer registration should fail");
 
         assert_eq!(
             error.violations(),
-            &[TerminalRendererRegistryViolation::missing("workspace.get")]
+            &[TerminalRendererRegistryViolation::missing(
+                "profile.inspect"
+            )]
+        );
+    }
+
+    #[test]
+    fn extra_operation_renderer_registration_fails() {
+        let error = TerminalRendererRegistry::new()
+            .register("test.extra", &TEST_RENDERER)
+            .validate_operation_ids(["profile.inspect"])
+            .expect_err("extra renderer registration should fail");
+
+        assert_eq!(
+            error.violations(),
+            &[
+                TerminalRendererRegistryViolation::extra("test.extra"),
+                TerminalRendererRegistryViolation::missing("profile.inspect"),
+            ]
         );
     }
 

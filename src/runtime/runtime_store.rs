@@ -129,6 +129,16 @@ fn shared_runtime_store_root_from_paths(paths: &PathsConfig) -> Result<PathBuf, 
     .map_err(|err| RuntimeError::Config(format!("resolve shared runtime-store root: {err}")))
 }
 
+fn current_time_ms() -> Result<i64, RuntimeError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            RuntimeError::Config(format!("system clock is before unix epoch: {error}"))
+        })?;
+    i64::try_from(duration.as_millis())
+        .map_err(|_| RuntimeError::Config("current timestamp exceeds i64 milliseconds".to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -180,14 +190,4 @@ mod tests {
             ),
         }
     }
-}
-
-fn current_time_ms() -> Result<i64, RuntimeError> {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| {
-            RuntimeError::Config(format!("system clock is before unix epoch: {error}"))
-        })?;
-    i64::try_from(duration.as_millis())
-        .map_err(|_| RuntimeError::Config("current timestamp exceeds i64 milliseconds".to_owned()))
 }

@@ -84,7 +84,7 @@ fn sdk_status_ambiguity_candidate_view(
     let status_selector = TradeStatusRequest::locator_selector(&candidate.locator);
     OrderStatusAmbiguityCandidateView {
         locator: sdk_trade_locator_view(&candidate.locator),
-        status_command: format!("radroots trade status get {status_selector}"),
+        status_command: format!("radroots trade get {status_selector}"),
         status_selector,
     }
 }
@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(
             view_json["actions"][0],
             json!(format!(
-                "radroots trade status get order-1@{}",
+                "radroots trade get order-1@{}",
                 root_event_id.as_str()
             ))
         );

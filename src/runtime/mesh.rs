@@ -91,6 +91,6 @@ fn scope_view(scope: &str, state: &str) -> MeshScopeView {
         implementation: "unavailable".to_owned(),
         message: "Mesh delivery is disabled unless a Reticulum scope is explicitly configured"
             .to_owned(),
-        actions: vec!["radroots mesh policy check".to_owned()],
+        actions: vec!["radroots diagnostics inspect".to_owned()],
     }
 }
