@@ -144,54 +144,6 @@ pub const TRADE_CANCEL: OperationSpec = operation!(
     true
 );
 
-pub const TRADE_REVISION_PROPOSE: OperationSpec = operation!(
-    "trade.revision.propose",
-    "radroots trade revision propose",
-    "trade",
-    "trade_revision_propose",
-    "TradeRevisionProposeRequest",
-    "TradeRevisionProposeResult",
-    "Propose seller-authored trade revision.",
-    Seller,
-    true,
-    Required,
-    High,
-    false,
-    true
-);
-
-pub const TRADE_REVISION_ACCEPT: OperationSpec = operation!(
-    "trade.revision.accept",
-    "radroots trade revision accept",
-    "trade",
-    "trade_revision_accept",
-    "TradeRevisionAcceptRequest",
-    "TradeRevisionAcceptResult",
-    "Accept a seller-authored trade revision.",
-    Buyer,
-    true,
-    Required,
-    High,
-    false,
-    true
-);
-
-pub const TRADE_REVISION_DECLINE: OperationSpec = operation!(
-    "trade.revision.decline",
-    "radroots trade revision decline",
-    "trade",
-    "trade_revision_decline",
-    "TradeRevisionDeclineRequest",
-    "TradeRevisionDeclineResult",
-    "Decline a seller-authored trade revision.",
-    Buyer,
-    true,
-    Required,
-    High,
-    false,
-    true
-);
-
 pub const TRADE_STATUS_GET: OperationSpec = operation!(
     "trade.status.get",
     "radroots trade status get",

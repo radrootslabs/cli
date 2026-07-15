@@ -316,15 +316,6 @@ fn execute_request(
         TargetOperationRequest::TradeCancel(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::TradeRevisionPropose(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeRevisionAccept(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeRevisionDecline(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
         TargetOperationRequest::TradeStatusGet(request) => {
             execute_with(TradeOperationService::new(config), request)
         }

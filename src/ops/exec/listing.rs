@@ -625,7 +625,8 @@ mod tests {
                 url: "http://127.0.0.1:7070".into(),
             },
             rhi: crate::runtime::config::RhiConfig {
-                trusted_worker_pubkeys: Vec::new(),
+                validator_set: None,
+                require_cryptographic_proof: false,
             },
             capability_bindings: Vec::new(),
         }

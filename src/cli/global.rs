@@ -290,53 +290,6 @@ pub struct TradeCancelArgs {
 }
 
 #[derive(Debug, Clone)]
-pub struct TradeRevisionProposeArgs {
-    pub key: String,
-    pub reason: String,
-    pub confirm_public_note: bool,
-    pub bin_id: Option<String>,
-    pub bin_count: Option<u32>,
-    pub adjustment_id: Option<String>,
-    pub adjustment_effect: Option<String>,
-    pub adjustment_amount: Option<String>,
-    pub adjustment_currency: Option<String>,
-    pub adjustment_reason: Option<String>,
-    pub idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TradeRevisionDecisionArg {
-    Accept,
-    Decline,
-}
-
-impl TradeRevisionDecisionArg {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Accept => "accepted",
-            Self::Decline => "declined",
-        }
-    }
-
-    pub fn command(self) -> &'static str {
-        match self {
-            Self::Accept => "accept",
-            Self::Decline => "decline",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TradeRevisionDecisionArgs {
-    pub key: String,
-    pub revision_id: String,
-    pub decision: TradeRevisionDecisionArg,
-    pub reason: Option<String>,
-    pub idempotency_key: Option<String>,
-    pub confirm_public_note: bool,
-}
-
-#[derive(Debug, Clone)]
 pub struct TradeStatusArgs {
     pub key: String,
 }

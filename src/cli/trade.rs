@@ -18,7 +18,6 @@ pub enum TradeCommand {
     Accept(TradeKeyArgs),
     Decline(TradeDeclineArgs),
     Cancel(TradeCancelArgs),
-    Revision(TradeRevisionArgs),
     Status(TradeStatusArgs),
     Event(TradeEventArgs),
 }
@@ -72,60 +71,6 @@ pub struct TradeDeclineArgs {
 #[derive(Debug, Clone, Args)]
 pub struct TradeCancelArgs {
     pub trade_id: Option<String>,
-    #[arg(long)]
-    pub reason: Option<String>,
-    #[arg(long)]
-    pub confirm_public_note: bool,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct TradeRevisionArgs {
-    #[command(subcommand)]
-    pub command: TradeRevisionCommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum TradeRevisionCommand {
-    Propose(TradeRevisionProposeArgs),
-    Accept(TradeRevisionDecisionArgs),
-    Decline(TradeRevisionDeclineArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct TradeRevisionProposeArgs {
-    pub trade_id: Option<String>,
-    #[arg(long)]
-    pub reason: Option<String>,
-    #[arg(long)]
-    pub confirm_public_note: bool,
-    #[arg(long)]
-    pub bin_id: Option<String>,
-    #[arg(long)]
-    pub bin_count: Option<u32>,
-    #[arg(long)]
-    pub adjustment_id: Option<String>,
-    #[arg(long)]
-    pub adjustment_effect: Option<String>,
-    #[arg(long)]
-    pub adjustment_amount: Option<String>,
-    #[arg(long)]
-    pub adjustment_currency: Option<String>,
-    #[arg(long)]
-    pub adjustment_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct TradeRevisionDecisionArgs {
-    pub trade_id: Option<String>,
-    #[arg(long)]
-    pub revision_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct TradeRevisionDeclineArgs {
-    pub trade_id: Option<String>,
-    #[arg(long)]
-    pub revision_id: Option<String>,
     #[arg(long)]
     pub reason: Option<String>,
     #[arg(long)]

@@ -52,7 +52,6 @@ pub(super) fn sdk_order_status_view(receipt: TradeStatusReceipt) -> OrderStatusV
         seller_pubkey: receipt.seller_pubkey.as_ref().map(ToString::to_string),
         economics: receipt.economics.clone(),
         last_event_id: sdk_event_id_string(receipt.last_event_id.as_ref()),
-        revision: None,
         inventory: None,
         lifecycle: Some(lifecycle),
         sdk_receipt,
@@ -112,7 +111,6 @@ fn sdk_status_evidence_view(
         has_decision: evidence.has_decision,
         has_agreement: evidence.has_agreement,
         has_validation_receipt: evidence.has_validation_receipt,
-        has_pending_revision: false,
         has_cancellation: evidence.has_cancellation,
         has_issues: evidence.has_issues,
     }
@@ -123,8 +121,9 @@ fn sdk_status_validation_trust_view(
 ) -> OrderStatusValidationTrustView {
     OrderStatusValidationTrustView {
         state: decision.state.as_str().to_owned(),
-        trusted_rhi_pubkey_count: decision.trusted_rhi_pubkey_count,
-        allow_deterministic_none: decision.allow_deterministic_none,
+        validator_count: decision.validator_count,
+        validator_set_addr: decision.validator_set_addr.clone(),
+        validator_set_event_id: decision.validator_set_event_id.clone(),
         require_cryptographic_proof: decision.require_cryptographic_proof,
         receipt_event_id: decision.receipt_event_id.as_ref().map(ToString::to_string),
         receipt_author: decision.receipt_author.as_ref().map(ToString::to_string),
@@ -148,8 +147,6 @@ fn sdk_status_validation_trust_view(
 fn sdk_status_eligibility_view(eligibility: &TradeStatusEligibility) -> OrderStatusEligibilityView {
     OrderStatusEligibilityView {
         can_decide: eligibility.can_decide,
-        can_propose_revision: false,
-        can_decide_revision: false,
         can_cancel: eligibility.can_cancel,
     }
 }

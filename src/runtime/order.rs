@@ -49,16 +49,17 @@ use radroots_runtime_store::{
 };
 use radroots_sdk::{
     PrivacyPreflightConfirmation, ProductSensitivityField, PublishMode, PushOutboxEventReceipt,
-    PushOutboxEventState, PushOutboxReceipt, PushOutboxTargetOutcomeKind, SatisfactionPolicy,
-    SdkMutationState, SdkTradeStatusSource, TargetPolicy, TradeAcceptRequest, TradeCancelRequest,
-    TradeCancellationPlan, TradeCancellationReceipt, TradeDecisionPlan, TradeDecisionReceipt,
-    TradeDeclineRequest, TradeEvidenceMode, TradeMutationOutcome, TradeProposeRequest,
-    TradeStatusReceipt, TradeStatusRequest, TradeSubmitPlan, TradeSubmitReceipt,
-    TradeWorkflowEnqueueReceipt,
+    PushOutboxEventState, PushOutboxReceipt, PushOutboxTargetOutcomeKind,
+    RadrootsTradeValidationTrustPolicy, SatisfactionPolicy, SdkMutationState, SdkTradeStatusSource,
+    TargetPolicy, TradeAcceptRequest, TradeCancelRequest, TradeCancellationPlan,
+    TradeCancellationReceipt, TradeDecisionPlan, TradeDecisionReceipt, TradeDeclineRequest,
+    TradeEvidenceMode, TradeMutationOutcome, TradeProposeRequest, TradeStatusReceipt,
+    TradeStatusRequest, TradeSubmitPlan, TradeSubmitReceipt, TradeWorkflowEnqueueReceipt,
 };
 use radroots_sql_core::SqlxSqliteExecutor;
 use radroots_trade::identity::RadrootsTradeLocator;
 use radroots_trade::order::canonicalize_order_request_for_signer;
+use radroots_trade::validation_receipt::{RadrootsValidatorSetV1, validator_set_address_from_str};
 use radroots_transport_nostr::{
     RadrootsRelayFetchFailure, RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError,
     RadrootsRelayUrl, RadrootsRelayUrlPolicy,
@@ -68,8 +69,7 @@ use serde_json::{Value, json};
 
 use crate::cli::global::{
     OrderDraftCreateArgs, RecordLookupArgs, TradeAppRecordExportArgs, TradeCancelArgs,
-    TradeDecisionArg, TradeDecisionArgs, TradeRebindArgs, TradeRevisionDecisionArg,
-    TradeRevisionDecisionArgs, TradeRevisionProposeArgs, TradeStatusArgs, TradeSubmitArgs,
+    TradeDecisionArg, TradeDecisionArgs, TradeRebindArgs, TradeStatusArgs, TradeSubmitArgs,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
@@ -87,8 +87,8 @@ use crate::view::runtime::{
     OrderAppRecordExportView, OrderAppRecordListView, OrderAppRecordSummaryView,
     OrderCancellationView, OrderDecisionView, OrderDraftItemView, OrderEventListEntryView,
     OrderEventListView, OrderGetView, OrderIssueView, OrderListView, OrderNewView, OrderRebindView,
-    OrderRevisionDecisionView, OrderRevisionProposalView, OrderStatusView, OrderSubmitView,
-    OrderSummaryView, OrderTradeLocatorView, TransportTargetFailureView,
+    OrderStatusView, OrderSubmitView, OrderSummaryView, OrderTradeLocatorView,
+    TransportTargetFailureView,
 };
 
 use self::sdk_status::sdk_order_status_view;
@@ -98,8 +98,6 @@ const ORDER_SOURCE: &str = "local trade drafts · local first";
 const ORDER_APP_RECORD_SOURCE: &str = "app-authored shared local trade records";
 const ORDER_SUBMIT_SOURCE: &str = "SDK trade submit · local key";
 const ORDER_DECISION_SOURCE: &str = "SDK trade decision · local key";
-const ORDER_REVISION_PROPOSAL_SOURCE: &str = "SDK trade revision proposal · local key";
-const ORDER_REVISION_DECISION_SOURCE: &str = "SDK trade revision decision · local key";
 const ORDER_CANCELLATION_SOURCE: &str = "SDK trade cancellation · local key";
 const ORDER_EVENT_LIST_SOURCE: &str = "shared Nostr transport fetch · selected seller identity";
 const ORDER_STATUS_SDK_SOURCE: &str = "SDK local trade projection";
@@ -220,13 +218,6 @@ fn protocol_order_id(value: &str, field: &str) -> Result<RadrootsOrderId, Runtim
 fn protocol_listing_addr(value: &str, field: &str) -> Result<RadrootsListingAddress, RuntimeError> {
     value.parse().map_err(|error| {
         RuntimeError::Config(format!("{field} is not a valid listing address: {error}"))
-    })
-}
-
-#[cfg(any())]
-fn protocol_revision_id(value: &str, field: &str) -> Result<RadrootsOrderRevisionId, RuntimeError> {
-    value.parse().map_err(|error| {
-        RuntimeError::Config(format!("{field} is not a valid trade revision id: {error}"))
     })
 }
 
@@ -1232,37 +1223,6 @@ pub fn decide(
     decide_trade_via_sdk(config, args, &seller)
 }
 
-pub fn revision_propose(
-    config: &RuntimeConfig,
-    args: &TradeRevisionProposeArgs,
-) -> Result<OrderRevisionProposalView, CliSdkAdapterError> {
-    if let Some(view) = order_revision_args_preflight_view(config, args) {
-        return Ok(view);
-    }
-    let mut view = order_revision_base_view(config, args, "unavailable", config.output.dry_run);
-    view.reason = Some(
-        "trade revision proposal is not supported by the current SDK trade runtime".to_owned(),
-    );
-    view.actions = vec![format!("radroots trade status get {}", args.key)];
-    Ok(view)
-}
-
-pub fn revision_decide(
-    config: &RuntimeConfig,
-    args: &TradeRevisionDecisionArgs,
-) -> Result<OrderRevisionDecisionView, CliSdkAdapterError> {
-    if let Some(view) = order_revision_decision_args_preflight_view(config, args) {
-        return Ok(view);
-    }
-    let mut view =
-        order_revision_decision_base_view(config, args, "unavailable", config.output.dry_run);
-    view.reason = Some(
-        "trade revision decision is not supported by the current SDK trade runtime".to_owned(),
-    );
-    view.actions = vec![format!("radroots trade status get {}", args.key)];
-    Ok(view)
-}
-
 pub fn cancel(
     config: &RuntimeConfig,
     args: &TradeCancelArgs,
@@ -1284,9 +1244,8 @@ pub fn status(
     config: &RuntimeConfig,
     args: &TradeStatusArgs,
 ) -> Result<OrderStatusView, CliSdkAdapterError> {
-    let request = TradeStatusRequest::parse(args.key.as_str())?.try_with_trusted_rhi_pubkeys(
-        config.rhi.trusted_worker_pubkeys.iter().map(String::as_str),
-    )?;
+    let request = TradeStatusRequest::parse(args.key.as_str())?
+        .with_validation_trust_policy(trade_validation_trust_policy(config)?);
     let session = CliSdkSession::connect(config)?;
     let receipt = session.block_on(session.sdk().trades().status(request))?;
     Ok(sdk_order_status_view(receipt))
@@ -1355,114 +1314,6 @@ fn decide_trade_via_sdk(
     ))
 }
 
-#[cfg(any())]
-fn propose_revision_via_sdk(
-    config: &RuntimeConfig,
-    args: &TradeRevisionProposeArgs,
-    seller: &account::AccountRecordView,
-) -> Result<OrderRevisionProposalView, CliSdkAdapterError> {
-    let actor = sdk_trade_actor(seller, RadrootsActorRole::Seller, "revision propose")?;
-    let session = connect_sdk_for_trade_actor(config, seller, "trade revision propose")?;
-    let locator = trade_locator_from_key(args.key.as_str())?;
-    let status = trade_status_for_locator(config, &session, locator.clone())?;
-    let status_view = sdk_order_status_view(status);
-    let revision = revision_request_parts_from_status(args, &status_view)?;
-    let publish_mode = trade_publish_mode(config);
-    let ack_policy = trade_satisfaction_policy(publish_mode)?;
-    let mut request = TradeRevisionProposalRequest::new(
-        actor,
-        locator,
-        revision.revision_id.clone(),
-        revision.items.clone(),
-        revision.economics.clone(),
-        args.reason.trim(),
-        trade_target_policy(),
-        publish_mode,
-        ack_policy,
-        TradeEvidenceMode::ResyncBeforeMutation,
-    )
-    .with_privacy_confirmation(trade_privacy_confirmation(args.confirm_public_note));
-    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
-        request = request.try_with_idempotency_key(idempotency_key)?;
-    }
-    let outcome = session.block_on(session.sdk().trades().seller().propose_revision(request))?;
-    Ok(sdk_trade_revision_outcome_view(
-        config,
-        args,
-        &status_view,
-        revision,
-        outcome,
-    ))
-}
-
-#[cfg(any())]
-fn decide_revision_via_sdk(
-    config: &RuntimeConfig,
-    args: &TradeRevisionDecisionArgs,
-    actor_context: OrderBuyerWriteActorContext,
-) -> Result<OrderRevisionDecisionView, CliSdkAdapterError> {
-    let account = match actor_context.bound {
-        Some(bound) => bound.account,
-        None => account::resolve_account(config)?.ok_or_else(|| {
-            RuntimeError::Config(
-                "trade revision decision requires a selected buyer account".to_owned(),
-            )
-        })?,
-    };
-    let actor = sdk_trade_actor(&account, RadrootsActorRole::Buyer, "revision decision")?;
-    let session = connect_sdk_for_trade_actor(config, &account, "trade revision decision")?;
-    let locator = trade_locator_from_key(args.key.as_str())?;
-    let status = trade_status_for_locator(config, &session, locator.clone())?;
-    let status_view = sdk_order_status_view(status);
-    let revision_id = protocol_revision_id(args.revision_id.trim(), "revision_id")?;
-    let decision = match args.decision {
-        TradeRevisionDecisionArg::Accept => RadrootsOrderRevisionOutcome::Accepted,
-        TradeRevisionDecisionArg::Decline => RadrootsOrderRevisionOutcome::Declined {
-            reason: args
-                .reason
-                .as_deref()
-                .map(str::trim)
-                .filter(|reason| !reason.is_empty())
-                .ok_or_else(|| {
-                    RuntimeError::Config(
-                        "trade revision decline requires a non-empty reason".to_owned(),
-                    )
-                })?
-                .to_owned(),
-        },
-    };
-    let publish_mode = trade_publish_mode(config);
-    let ack_policy = trade_satisfaction_policy(publish_mode)?;
-    let mut request = TradeRevisionDecisionRequest::new(
-        actor,
-        locator,
-        revision_id,
-        decision,
-        trade_target_policy(),
-        publish_mode,
-        ack_policy,
-        TradeEvidenceMode::ResyncBeforeMutation,
-    )
-    .with_privacy_confirmation(trade_privacy_confirmation(args.confirm_public_note));
-    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
-        request = request.try_with_idempotency_key(idempotency_key)?;
-    }
-    let outcome = match args.decision {
-        TradeRevisionDecisionArg::Accept => {
-            session.block_on(session.sdk().trades().buyer().accept_revision(request))?
-        }
-        TradeRevisionDecisionArg::Decline => {
-            session.block_on(session.sdk().trades().buyer().decline_revision(request))?
-        }
-    };
-    Ok(sdk_trade_revision_decision_outcome_view(
-        config,
-        args,
-        &status_view,
-        outcome,
-    ))
-}
-
 fn cancel_trade_via_sdk(
     config: &RuntimeConfig,
     args: &TradeCancelArgs,
@@ -1510,10 +1361,39 @@ fn trade_status_for_locator(
 ) -> Result<TradeStatusReceipt, CliSdkAdapterError> {
     let request = TradeStatusRequest::new(locator)
         .with_source(SdkTradeStatusSource::ResyncThenLocal)
-        .try_with_trusted_rhi_pubkeys(
-            config.rhi.trusted_worker_pubkeys.iter().map(String::as_str),
-        )?;
+        .with_validation_trust_policy(trade_validation_trust_policy(config)?);
     Ok(session.block_on(session.sdk().trades().status(request))?)
+}
+
+fn trade_validation_trust_policy(
+    config: &RuntimeConfig,
+) -> Result<RadrootsTradeValidationTrustPolicy, CliSdkAdapterError> {
+    let policy = RadrootsTradeValidationTrustPolicy::production()
+        .with_require_cryptographic_proof(config.rhi.require_cryptographic_proof);
+    let Some(validator_set_config) = config.rhi.validator_set.as_ref() else {
+        return Ok(policy);
+    };
+    let validator_set = RadrootsValidatorSetV1 {
+        set_id: validator_set_config.set_id.clone(),
+        validator_pubkey: RadrootsPublicKey::parse(validator_set_config.validator_pubkey.as_str())
+            .map_err(|error| {
+                RuntimeError::Config(format!("invalid RHI validator pubkey: {error}"))
+            })?,
+        threshold: 1,
+        valid_from: validator_set_config.valid_from,
+        valid_until: validator_set_config.valid_until,
+        protocol_contract_hash: validator_set_config.protocol_contract_hash.clone(),
+        operator_name: validator_set_config.operator_name.clone(),
+        operator_contact: validator_set_config.operator_contact.clone(),
+    };
+    let validator_set_addr =
+        validator_set_address_from_str(validator_set_config.validator_set_addr.as_str())
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    Ok(policy.with_validator_set(
+        validator_set,
+        validator_set_addr,
+        validator_set_config.validator_set_event_id.clone(),
+    ))
 }
 
 fn inventory_commitments_from_status(
@@ -1530,39 +1410,6 @@ fn inventory_commitments_from_status(
             bin_count: item.bin_count,
         })
         .collect())
-}
-
-#[cfg(any())]
-#[derive(Debug, Clone)]
-struct SdkRevisionRequestParts {
-    revision_id: RadrootsOrderRevisionId,
-    items: Vec<RadrootsOrderItem>,
-    economics: RadrootsOrderEconomics,
-}
-
-#[cfg(any())]
-fn revision_request_parts_from_status(
-    args: &TradeRevisionProposeArgs,
-    status: &OrderStatusView,
-) -> Result<SdkRevisionRequestParts, RuntimeError> {
-    let revision_id = protocol_revision_id(next_revision_id().as_str(), "revision_id")?;
-    let economics = status.economics.clone().ok_or_else(|| {
-        RuntimeError::Config("accepted trade is missing current agreement economics".to_owned())
-    })?;
-    let economics = revised_order_economics(args, revision_id.as_str(), &economics)?;
-    let items = economics
-        .items
-        .iter()
-        .map(|item| RadrootsOrderItem {
-            bin_id: item.bin_id.clone(),
-            bin_count: item.bin_count,
-        })
-        .collect::<Vec<_>>();
-    Ok(SdkRevisionRequestParts {
-        revision_id,
-        items,
-        economics,
-    })
 }
 
 fn sdk_trade_decision_outcome_view(
@@ -1593,85 +1440,6 @@ fn sdk_trade_decision_outcome_view(
         }
         TradeMutationOutcome::Published { receipt, publish } => {
             sdk_enqueued_order_decision_view(config, args, status, receipt, Some(&publish))
-        }
-    }
-}
-
-#[cfg(any())]
-fn sdk_trade_revision_outcome_view(
-    config: &RuntimeConfig,
-    args: &TradeRevisionProposeArgs,
-    status: &OrderStatusView,
-    revision: SdkRevisionRequestParts,
-    outcome: TradeMutationOutcome<TradeRevisionProposalPlan, TradeRevisionProposalReceipt>,
-) -> OrderRevisionProposalView {
-    match outcome {
-        TradeMutationOutcome::DryRun { plan } => {
-            let mut view = order_revision_base_view(config, args, "dry_run", true);
-            apply_order_revision_status(&mut view, status);
-            view.revision_id = Some(revision.revision_id.to_string());
-            view.root_event_id = Some(plan.root_event_id.to_string());
-            view.prev_event_id = Some(plan.previous_event_id.to_string());
-            view.event_id = Some(plan.expected_event_id.to_string());
-            view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
-            view.items = revision
-                .items
-                .iter()
-                .map(|item| OrderDraftItemView {
-                    bin_id: item.bin_id.to_string(),
-                    bin_count: item.bin_count,
-                })
-                .collect();
-            view.economics = Some(revision.economics);
-            view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
-            view.reason =
-                Some("dry run requested; seller revision proposal publication skipped".to_owned());
-            view.actions = vec![format!("radroots trade status get {}", status.order_id)];
-            view
-        }
-        TradeMutationOutcome::Enqueued { receipt } => {
-            sdk_enqueued_order_revision_view(config, args, status, revision, receipt, None)
-        }
-        TradeMutationOutcome::Published { receipt, publish } => sdk_enqueued_order_revision_view(
-            config,
-            args,
-            status,
-            revision,
-            receipt,
-            Some(&publish),
-        ),
-    }
-}
-
-#[cfg(any())]
-fn sdk_trade_revision_decision_outcome_view(
-    config: &RuntimeConfig,
-    args: &TradeRevisionDecisionArgs,
-    status: &OrderStatusView,
-    outcome: TradeMutationOutcome<TradeRevisionDecisionPlan, TradeRevisionDecisionReceipt>,
-) -> OrderRevisionDecisionView {
-    match outcome {
-        TradeMutationOutcome::DryRun { plan } => {
-            let mut view = order_revision_decision_base_view(config, args, "dry_run", true);
-            apply_order_revision_decision_status(&mut view, status);
-            view.revision_id = Some(args.revision_id.trim().to_owned());
-            view.root_event_id = Some(plan.root_event_id.to_string());
-            view.prev_event_id = Some(plan.previous_event_id.to_string());
-            view.event_id = Some(plan.expected_event_id.to_string());
-            view.event_kind = Some(KIND_ORDER_REVISION_DECISION);
-            view.target_transport_endpoints = config.transport.nostr_relay_urls.clone();
-            view.reason = Some(format!(
-                "dry run requested; buyer revision {} publication skipped",
-                args.decision.command()
-            ));
-            view.actions = vec![format!("radroots trade status get {}", status.order_id)];
-            view
-        }
-        TradeMutationOutcome::Enqueued { receipt } => {
-            sdk_enqueued_order_revision_decision_view(config, args, status, receipt, None)
-        }
-        TradeMutationOutcome::Published { receipt, publish } => {
-            sdk_enqueued_order_revision_decision_view(config, args, status, receipt, Some(&publish))
         }
     }
 }
@@ -1930,87 +1698,6 @@ fn order_decision_base_view(
     }
 }
 
-fn order_revision_base_view(
-    config: &RuntimeConfig,
-    args: &TradeRevisionProposeArgs,
-    state: &str,
-    dry_run: bool,
-) -> OrderRevisionProposalView {
-    OrderRevisionProposalView {
-        state: state.to_owned(),
-        source: ORDER_REVISION_PROPOSAL_SOURCE.to_owned(),
-        order_id: args.key.clone(),
-        locator: order_locator_view_from_key(args.key.as_str()),
-        revision_id: None,
-        listing_addr: None,
-        buyer_pubkey: None,
-        seller_pubkey: None,
-        request_event_id: None,
-        decision_event_id: None,
-        root_event_id: None,
-        prev_event_id: None,
-        event_id: None,
-        event_kind: None,
-        items: Vec::new(),
-        economics: None,
-        inventory: None,
-        dry_run,
-        target_transport_endpoints: config.transport.nostr_relay_urls.clone(),
-        attempted_transport_endpoints: Vec::new(),
-        accepted_transport_endpoints: Vec::new(),
-        failed_transport_targets: Vec::new(),
-        fetched_count: 0,
-        decoded_count: 0,
-        skipped_count: 0,
-        idempotency_key: args.idempotency_key.clone(),
-        signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        reason: None,
-        issues: Vec::new(),
-        actions: Vec::new(),
-    }
-}
-
-fn order_revision_decision_base_view(
-    config: &RuntimeConfig,
-    args: &TradeRevisionDecisionArgs,
-    state: &str,
-    dry_run: bool,
-) -> OrderRevisionDecisionView {
-    OrderRevisionDecisionView {
-        state: state.to_owned(),
-        source: ORDER_REVISION_DECISION_SOURCE.to_owned(),
-        order_id: args.key.clone(),
-        locator: order_locator_view_from_key(args.key.as_str()),
-        revision_id: Some(args.revision_id.trim().to_owned()).filter(|value| !value.is_empty()),
-        decision: Some(args.decision.as_str().to_owned()),
-        listing_addr: None,
-        buyer_pubkey: None,
-        seller_pubkey: None,
-        request_event_id: None,
-        decision_event_id: None,
-        agreement_event_id: None,
-        root_event_id: None,
-        prev_event_id: None,
-        event_id: None,
-        event_kind: None,
-        economics: None,
-        inventory: None,
-        dry_run,
-        target_transport_endpoints: config.transport.nostr_relay_urls.clone(),
-        attempted_transport_endpoints: Vec::new(),
-        accepted_transport_endpoints: Vec::new(),
-        failed_transport_targets: Vec::new(),
-        fetched_count: 0,
-        decoded_count: 0,
-        skipped_count: 0,
-        idempotency_key: args.idempotency_key.clone(),
-        signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        reason: args.reason.as_ref().map(|reason| reason.trim().to_owned()),
-        issues: Vec::new(),
-        actions: Vec::new(),
-    }
-}
-
 fn order_cancellation_base_view(
     config: &RuntimeConfig,
     args: &TradeCancelArgs,
@@ -2096,290 +1783,6 @@ fn apply_order_decision_status(view: &mut OrderDecisionView, status: &OrderStatu
     view.skipped_count = status.skipped_count;
     view.issues = status.reducer_issues.clone();
     view.inventory = status.inventory.clone();
-}
-
-#[cfg(any())]
-fn apply_order_revision_status(view: &mut OrderRevisionProposalView, status: &OrderStatusView) {
-    view.order_id = status.order_id.clone();
-    view.locator = order_locator_view_from_status(status);
-    view.listing_addr = status.listing_addr.clone();
-    view.buyer_pubkey = status.buyer_pubkey.clone();
-    view.seller_pubkey = status.seller_pubkey.clone();
-    view.request_event_id = status.request_event_id.clone();
-    view.decision_event_id = status.decision_event_id.clone();
-    view.root_event_id = status.request_event_id.clone();
-    view.prev_event_id = status.last_event_id.clone();
-    view.economics = status.economics.clone();
-    view.inventory = status.inventory.clone();
-    view.target_transport_endpoints = status.target_transport_endpoints.clone();
-    view.attempted_transport_endpoints = status.attempted_transport_endpoints.clone();
-    view.failed_transport_targets = status.failed_transport_targets.clone();
-    view.fetched_count = status.fetched_count;
-    view.decoded_count = status.decoded_count;
-    view.skipped_count = status.skipped_count;
-    view.issues = status.reducer_issues.clone();
-}
-
-#[cfg(any())]
-fn apply_order_revision_decision_status(
-    view: &mut OrderRevisionDecisionView,
-    status: &OrderStatusView,
-) {
-    view.order_id = status.order_id.clone();
-    view.locator = order_locator_view_from_status(status);
-    view.listing_addr = status.listing_addr.clone();
-    view.buyer_pubkey = status.buyer_pubkey.clone();
-    view.seller_pubkey = status.seller_pubkey.clone();
-    view.request_event_id = status.request_event_id.clone();
-    view.decision_event_id = status.decision_event_id.clone();
-    view.agreement_event_id = status.agreement_event_id.clone();
-    view.root_event_id = status.request_event_id.clone();
-    view.prev_event_id = status.last_event_id.clone();
-    view.economics = status.economics.clone();
-    view.inventory = status.inventory.clone();
-    view.target_transport_endpoints = status.target_transport_endpoints.clone();
-    view.attempted_transport_endpoints = status.attempted_transport_endpoints.clone();
-    view.failed_transport_targets = status.failed_transport_targets.clone();
-    view.fetched_count = status.fetched_count;
-    view.decoded_count = status.decoded_count;
-    view.skipped_count = status.skipped_count;
-    view.issues = status.reducer_issues.clone();
-}
-
-fn order_revision_args_preflight_view(
-    config: &RuntimeConfig,
-    args: &TradeRevisionProposeArgs,
-) -> Option<OrderRevisionProposalView> {
-    let mut issues = Vec::new();
-    let has_bin_id = args.bin_id.as_deref().and_then(non_empty_ref).is_some();
-    let has_bin_count = args.bin_count.is_some();
-    if has_bin_id != has_bin_count {
-        issues.push(issue_with_code(
-            "revision_item_change_incomplete",
-            "bin_id",
-            "`bin_id` and `bin_count` must be supplied together",
-        ));
-    }
-    if args.bin_count == Some(0) {
-        issues.push(issue_with_code(
-            "revision_bin_count_invalid",
-            "bin_count",
-            "bin_count must be greater than zero",
-        ));
-    }
-
-    let adjustment_inputs = [
-        args.adjustment_id.as_deref(),
-        args.adjustment_effect.as_deref(),
-        args.adjustment_amount.as_deref(),
-        args.adjustment_currency.as_deref(),
-        args.adjustment_reason.as_deref(),
-    ];
-    let adjustment_supplied = adjustment_inputs
-        .iter()
-        .any(|value| value.and_then(non_empty_ref).is_some());
-    let adjustment_complete = adjustment_inputs
-        .iter()
-        .all(|value| value.and_then(non_empty_ref).is_some());
-    if adjustment_supplied && !adjustment_complete {
-        issues.push(issue_with_code(
-            "revision_adjustment_incomplete",
-            "adjustment",
-            "all revision adjustment fields must be supplied together",
-        ));
-    }
-
-    if !has_bin_id && !adjustment_supplied {
-        issues.push(issue_with_code(
-            "revision_no_changes",
-            "revision",
-            "trade revision propose requires a bin-count change or revision adjustment",
-        ));
-    }
-
-    if issues.is_empty() {
-        return None;
-    }
-    let mut view = order_revision_base_view(config, args, "invalid", config.output.dry_run);
-    view.reason = Some(format!(
-        "trade revision propose inputs for `{}` failed validation",
-        args.key
-    ));
-    view.issues = issues;
-    Some(view)
-}
-
-fn order_revision_decision_args_preflight_view(
-    config: &RuntimeConfig,
-    args: &TradeRevisionDecisionArgs,
-) -> Option<OrderRevisionDecisionView> {
-    let mut issues = Vec::new();
-    if args.revision_id.trim().is_empty() {
-        issues.push(issue_with_code(
-            "revision_id_required",
-            "revision_id",
-            "trade revision decision requires --revision-id",
-        ));
-    }
-    if args.decision == TradeRevisionDecisionArg::Decline
-        && args
-            .reason
-            .as_deref()
-            .map(str::trim)
-            .filter(|reason| !reason.is_empty())
-            .is_none()
-    {
-        issues.push(issue_with_code(
-            "revision_decline_reason_required",
-            "reason",
-            "trade revision decline requires a non-empty reason",
-        ));
-    }
-
-    if issues.is_empty() {
-        return None;
-    }
-    let mut view =
-        order_revision_decision_base_view(config, args, "invalid", config.output.dry_run);
-    view.reason = Some(format!(
-        "trade revision {} inputs for `{}` failed validation",
-        args.decision.command(),
-        args.key
-    ));
-    view.issues = issues;
-    Some(view)
-}
-
-#[cfg(any())]
-fn revised_order_economics(
-    args: &TradeRevisionProposeArgs,
-    revision_id: &str,
-    current: &RadrootsOrderEconomics,
-) -> Result<RadrootsOrderEconomics, RuntimeError> {
-    let mut current_canonical = current.clone();
-    current_canonical.canonicalize();
-    let mut economics = current_canonical.clone();
-    let mut changed = false;
-    economics.quote_id = protocol_quote_id(format!("revision_{revision_id}").as_str(), "quote_id")?;
-    economics.quote_version = economics
-        .quote_version
-        .checked_add(1)
-        .ok_or_else(|| RuntimeError::Config("revision quote_version overflowed".to_owned()))?;
-
-    if let Some(bin_id) = args.bin_id.as_deref().and_then(non_empty_ref) {
-        let bin_id = protocol_inventory_bin_id(bin_id, "revision bin_id")?;
-        let bin_count = args.bin_count.ok_or_else(|| {
-            RuntimeError::Config("revision bin_count is required with bin_id".to_owned())
-        })?;
-        let Some(item) = economics
-            .items
-            .iter_mut()
-            .find(|item| item.bin_id == bin_id)
-        else {
-            return Err(RuntimeError::Config(format!(
-                "revision bin `{bin_id}` is not part of the current agreement"
-            )));
-        };
-        if item.bin_count != bin_count {
-            changed = true;
-        }
-        item.bin_count = bin_count;
-        item.line_subtotal = RadrootsCoreMoney::new(
-            item.unit_price_amount * item.quantity_amount * RadrootsCoreDecimal::from(bin_count),
-            item.unit_price_currency,
-        );
-    }
-
-    if let Some(line) = revision_adjustment_line(args, economics.currency)? {
-        changed = true;
-        if economics
-            .adjustments
-            .iter()
-            .any(|existing| existing.id == line.id)
-        {
-            return Err(RuntimeError::Config(format!(
-                "revision adjustment id `{}` already exists in current agreement economics",
-                line.id
-            )));
-        }
-        economics.adjustments.push(line);
-    }
-
-    economics.canonicalize();
-    economics
-        .validate()
-        .map_err(|error| RuntimeError::Config(format!("build revision economics: {error}")))?;
-    if !changed {
-        return Err(RuntimeError::Config(
-            "trade revision propose requires a changed item count or adjustment".to_owned(),
-        ));
-    }
-    Ok(economics)
-}
-
-#[cfg(any())]
-fn revision_adjustment_line(
-    args: &TradeRevisionProposeArgs,
-    expected_currency: RadrootsCoreCurrency,
-) -> Result<Option<RadrootsOrderEconomicLine>, RuntimeError> {
-    let Some(id) = args.adjustment_id.as_deref().and_then(non_empty_ref) else {
-        return Ok(None);
-    };
-    let effect = match args
-        .adjustment_effect
-        .as_deref()
-        .and_then(non_empty_ref)
-        .ok_or_else(|| RuntimeError::Config("revision adjustment effect is required".to_owned()))?
-    {
-        "increase" => RadrootsOrderEconomicEffect::Increase,
-        "decrease" => RadrootsOrderEconomicEffect::Decrease,
-        other => {
-            return Err(RuntimeError::Config(format!(
-                "revision adjustment effect `{other}` is invalid"
-            )));
-        }
-    };
-    let currency = parse_economics_currency(
-        args.adjustment_currency
-            .as_deref()
-            .and_then(non_empty_ref)
-            .ok_or_else(|| {
-                RuntimeError::Config("revision adjustment currency is required".to_owned())
-            })?,
-        "revision_adjustment_currency",
-    )?;
-    if currency != expected_currency {
-        return Err(RuntimeError::Config(
-            "revision adjustment currency must match current agreement currency".to_owned(),
-        ));
-    }
-    let amount = decimal_from_adjustment(
-        args.adjustment_amount
-            .as_deref()
-            .and_then(non_empty_ref)
-            .ok_or_else(|| {
-                RuntimeError::Config("revision adjustment amount is required".to_owned())
-            })?,
-        "revision_adjustment_amount",
-    )?;
-    if amount.is_zero() {
-        return Err(RuntimeError::Config(
-            "revision adjustment amount must be greater than zero".to_owned(),
-        ));
-    }
-    let reason = args
-        .adjustment_reason
-        .as_deref()
-        .and_then(non_empty_ref)
-        .ok_or_else(|| RuntimeError::Config("revision adjustment reason is required".to_owned()))?;
-    Ok(Some(RadrootsOrderEconomicLine {
-        id: id.to_owned(),
-        kind: RadrootsOrderEconomicLineKind::RevisionAdjustment,
-        actor: RadrootsOrderEconomicActor::Seller,
-        effect,
-        amount: RadrootsCoreMoney::new(amount, currency),
-        reason: reason.to_owned(),
-    }))
 }
 
 fn sdk_enqueued_order_decision_view(
@@ -2480,103 +1883,6 @@ fn sdk_order_decision_actions(push_event: Option<&PushOutboxEventReceipt>) -> Ve
         return sdk_order_push_recovery_actions();
     }
     Vec::new()
-}
-
-#[cfg(any())]
-fn sdk_enqueued_order_revision_view(
-    config: &RuntimeConfig,
-    args: &TradeRevisionProposeArgs,
-    status: &OrderStatusView,
-    revision: SdkRevisionRequestParts,
-    enqueue: TradeRevisionProposalReceipt,
-    push: Option<&PushOutboxReceipt>,
-) -> OrderRevisionProposalView {
-    let push_event =
-        push.and_then(|push| sdk_push_event_for_event_id(&enqueue.signed_event_id, push));
-    let mut view = order_revision_base_view(
-        config,
-        args,
-        sdk_order_lifecycle_state("proposed", push_event).as_str(),
-        false,
-    );
-    apply_order_revision_status(&mut view, status);
-    view.locator = order_locator_view_from_locator(&enqueue.locator);
-    view.revision_id = Some(revision.revision_id.to_string());
-    view.root_event_id = Some(enqueue.root_event_id.to_string());
-    view.prev_event_id = Some(enqueue.previous_event_id.to_string());
-    view.items = revision
-        .items
-        .iter()
-        .map(|item| OrderDraftItemView {
-            bin_id: item.bin_id.to_string(),
-            bin_count: item.bin_count,
-        })
-        .collect();
-    view.economics = Some(revision.economics);
-    view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
-    view.event_kind = Some(KIND_ORDER_REVISION_PROPOSAL);
-    view.target_transport_endpoints = push_event
-        .map(sdk_push_target_transport_endpoints)
-        .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
-    view.attempted_transport_endpoints = push_event
-        .map(sdk_push_attempted_transport_endpoints)
-        .unwrap_or_default();
-    view.accepted_transport_endpoints = push_event
-        .map(sdk_push_accepted_transport_endpoints)
-        .unwrap_or_default();
-    view.failed_transport_targets = push_event
-        .map(sdk_push_failed_transport_targets)
-        .unwrap_or_default();
-    view.reason =
-        sdk_order_lifecycle_reason("trade revision proposal", &enqueue.workflow, push_event);
-    view.actions = sdk_order_lifecycle_actions(push_event);
-    view
-}
-
-#[cfg(any())]
-fn sdk_enqueued_order_revision_decision_view(
-    config: &RuntimeConfig,
-    args: &TradeRevisionDecisionArgs,
-    status: &OrderStatusView,
-    enqueue: TradeRevisionDecisionReceipt,
-    push: Option<&PushOutboxReceipt>,
-) -> OrderRevisionDecisionView {
-    let push_event =
-        push.and_then(|push| sdk_push_event_for_event_id(&enqueue.signed_event_id, push));
-    let success_state = args.decision.as_str();
-    let mut view = order_revision_decision_base_view(
-        config,
-        args,
-        sdk_order_lifecycle_state(success_state, push_event).as_str(),
-        false,
-    );
-    apply_order_revision_decision_status(&mut view, status);
-    view.locator = order_locator_view_from_locator(&enqueue.locator);
-    view.revision_id = Some(args.revision_id.trim().to_owned());
-    view.root_event_id = Some(enqueue.root_event_id.to_string());
-    view.prev_event_id = Some(enqueue.previous_event_id.to_string());
-    view.decision = Some(args.decision.as_str().to_owned());
-    view.event_id = Some(enqueue.signed_event_id.as_str().to_owned());
-    view.event_kind = Some(KIND_ORDER_REVISION_DECISION);
-    if args.decision == TradeRevisionDecisionArg::Accept {
-        view.agreement_event_id = Some(enqueue.signed_event_id.as_str().to_owned());
-    }
-    view.target_transport_endpoints = push_event
-        .map(sdk_push_target_transport_endpoints)
-        .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
-    view.attempted_transport_endpoints = push_event
-        .map(sdk_push_attempted_transport_endpoints)
-        .unwrap_or_default();
-    view.accepted_transport_endpoints = push_event
-        .map(sdk_push_accepted_transport_endpoints)
-        .unwrap_or_default();
-    view.failed_transport_targets = push_event
-        .map(sdk_push_failed_transport_targets)
-        .unwrap_or_default();
-    view.reason =
-        sdk_order_lifecycle_reason("trade revision decision", &enqueue.workflow, push_event);
-    view.actions = sdk_order_lifecycle_actions(push_event);
-    view
 }
 
 fn sdk_enqueued_order_cancellation_view(
@@ -5455,19 +4761,6 @@ fn next_order_id() -> String {
     let counter = ORDER_COUNTER.fetch_add(1, Ordering::Relaxed) as u128;
     format!(
         "ord_{}",
-        encode_base64url_no_pad((nanos ^ counter).to_be_bytes())
-    )
-}
-
-#[cfg(any())]
-fn next_revision_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    let counter = ORDER_COUNTER.fetch_add(1, Ordering::Relaxed) as u128;
-    format!(
-        "rev_{}",
         encode_base64url_no_pad((nanos ^ counter).to_be_bytes())
     )
 }

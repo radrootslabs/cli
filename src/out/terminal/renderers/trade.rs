@@ -20,9 +20,6 @@ pub fn register(registry: TerminalRendererRegistry) -> TerminalRendererRegistry 
         .register("trade.accept", &TRADE_RENDERER)
         .register("trade.decline", &TRADE_RENDERER)
         .register("trade.cancel", &TRADE_RENDERER)
-        .register("trade.revision.propose", &TRADE_RENDERER)
-        .register("trade.revision.accept", &TRADE_RENDERER)
-        .register("trade.revision.decline", &TRADE_RENDERER)
         .register("trade.status.get", &TRADE_RENDERER)
         .register("trade.event.list", &TRADE_RENDERER)
         .register("trade.event.watch", &TRADE_RENDERER)
@@ -50,10 +47,6 @@ impl TerminalOperationRenderer for TradeRenderer {
             "trade.submit" => trade_publish_document(envelope, result),
             "trade.accept" | "trade.decline" => trade_decision_document(envelope, result),
             "trade.cancel" => trade_cancel_document(envelope, result),
-            "trade.revision.propose" => trade_revision_propose_document(envelope, result),
-            "trade.revision.accept" | "trade.revision.decline" => {
-                trade_revision_decision_document(envelope, result)
-            }
             _ => trade_detail_document(envelope, result),
         }
     }
@@ -107,41 +100,6 @@ fn trade_cancel_document(envelope: &OutputEnvelope, result: &Value) -> TerminalD
     common::push_path_field(&mut document, "Event", result, &["event_id"]);
     common::push_path_field(&mut document, "Signer", result, &["signer_mode"]);
     push_relay_field(&mut document, result);
-    push_issue_sections(&mut document, result);
-    document
-}
-
-fn trade_revision_propose_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
-    let mut document = common::document_with_status_title(envelope, "Trade revision propose");
-    push_trade_identity_fields(&mut document, result);
-    common::push_path_field(&mut document, "Revision", result, &["revision_id"]);
-    common::push_bool_field(&mut document, "Dry run", result, &["dry_run"]);
-    common::push_path_field(&mut document, "Request", result, &["request_event_id"]);
-    common::push_path_field(&mut document, "Decision", result, &["decision_event_id"]);
-    common::push_path_field(&mut document, "Event", result, &["event_id"]);
-    common::push_path_field(&mut document, "Signer", result, &["signer_mode"]);
-    push_relay_field(&mut document, result);
-    push_trade_items_section(&mut document, result);
-    push_inventory_section(&mut document, result);
-    push_issue_sections(&mut document, result);
-    document
-}
-
-fn trade_revision_decision_document(envelope: &OutputEnvelope, result: &Value) -> TerminalDocument {
-    let mut document = common::document_with_status_title(
-        envelope,
-        trade_revision_title(envelope.operation_id.as_str()),
-    );
-    push_trade_identity_fields(&mut document, result);
-    common::push_path_field(&mut document, "Revision", result, &["revision_id"]);
-    common::push_path_field(&mut document, "Decision", result, &["decision"]);
-    common::push_bool_field(&mut document, "Dry run", result, &["dry_run"]);
-    common::push_path_field(&mut document, "Request", result, &["request_event_id"]);
-    common::push_path_field(&mut document, "Agreement", result, &["agreement_event_id"]);
-    common::push_path_field(&mut document, "Event", result, &["event_id"]);
-    common::push_path_field(&mut document, "Signer", result, &["signer_mode"]);
-    push_relay_field(&mut document, result);
-    push_inventory_section(&mut document, result);
     push_issue_sections(&mut document, result);
     document
 }
@@ -338,7 +296,6 @@ fn trade_status_document(envelope: &OutputEnvelope, result: &Value) -> TerminalD
         result,
         &["sdk_receipt", "validation_trust", "reason_code"],
     );
-    common::push_path_field(&mut document, "Revision", result, &["revision", "state"]);
     push_relay_field(&mut document, result);
     push_inventory_section(&mut document, result);
     push_ambiguity_candidates_section(&mut document, result);
@@ -629,14 +586,6 @@ fn trade_decision_title(operation_id: &str) -> &'static str {
         "trade.accept" => "Trade accept",
         "trade.decline" => "Trade decline",
         _ => "Trade decision",
-    }
-}
-
-fn trade_revision_title(operation_id: &str) -> &'static str {
-    match operation_id {
-        "trade.revision.accept" => "Trade revision accept",
-        "trade.revision.decline" => "Trade revision decline",
-        _ => "Trade revision decision",
     }
 }
 

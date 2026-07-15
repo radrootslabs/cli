@@ -142,14 +142,14 @@ pub struct ValidationReceiptProofVerificationView {
     pub verifying_key_hash: Option<String>,
     pub proof_reference: Option<String>,
     pub inline_proof_present: bool,
-    pub worker_evidence: Option<ValidationReceiptWorkerEvidenceView>,
-    pub untrusted_worker_evidence: Option<ValidationReceiptWorkerEvidenceView>,
+    pub validator_evidence: Option<ValidationReceiptValidatorEvidenceView>,
+    pub untrusted_validator_evidence: Option<ValidationReceiptValidatorEvidenceView>,
     pub reason_code: Option<String>,
     pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ValidationReceiptWorkerEvidenceView {
+pub struct ValidationReceiptValidatorEvidenceView {
     pub result_event_id: String,
     pub author: String,
     pub validation_authority: Option<String>,
@@ -166,9 +166,9 @@ pub struct ValidationReceiptWorkerEvidenceView {
 }
 
 #[derive(Clone, Debug, Default)]
-struct ValidationReceiptWorkerEvidenceSelection {
-    trusted: Option<ValidationReceiptWorkerEvidenceView>,
-    untrusted: Option<ValidationReceiptWorkerEvidenceView>,
+struct ValidationReceiptValidatorEvidenceSelection {
+    trusted: Option<ValidationReceiptValidatorEvidenceView>,
+    untrusted: Option<ValidationReceiptValidatorEvidenceView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -387,7 +387,7 @@ fn inspected_event_view(
     let order_id = sdk_receipt.tags.order_id.clone();
     let proof_verification = proof_verification_view_for_receipt(
         &sdk_receipt.receipt,
-        ValidationReceiptWorkerEvidenceSelection::default(),
+        ValidationReceiptValidatorEvidenceSelection::default(),
     );
     let accepted = match intent {
         ValidationReceiptCommandIntent::Inspect => {
@@ -481,7 +481,7 @@ fn list_from_sdk_receipt(
     for sdk_event in sdk_receipt.receipts {
         let proof_verification = proof_verification_view_for_receipt(
             &sdk_event.receipt,
-            ValidationReceiptWorkerEvidenceSelection::default(),
+            ValidationReceiptValidatorEvidenceSelection::default(),
         );
         if proof_state_is_invalid(proof_verification.state.as_str()) {
             invalid_receipts.push(ValidationReceiptInvalidCandidateView {
@@ -741,14 +741,14 @@ struct ValidationReceiptTrustSummary {
 
 fn local_only_trust_summary() -> ValidationReceiptTrustSummary {
     ValidationReceiptTrustSummary {
-        state: "local_only_deterministic_receipt",
+        state: "validator_set_deterministic_receipt",
         validation_authority: Some(
-            RadrootsTradeValidationAuthority::DevDeterministicOnly
+            RadrootsTradeValidationAuthority::ValidatorSetDeterministic
                 .as_str()
                 .to_owned(),
         ),
         commitment_confidence: Some(
-            RadrootsTradeCommitmentConfidence::LocalOnly
+            RadrootsTradeCommitmentConfidence::CommittedByValidatorSet
                 .as_str()
                 .to_owned(),
         ),
@@ -766,38 +766,38 @@ fn sp1_execute_checked_trust_summary() -> ValidationReceiptTrustSummary {
         production_verification: false,
         reason_code: Some("validation_receipt_trust_metadata_missing"),
         reason: Some(
-            "trusted worker evidence reports SP1 execution but omits validation authority or commitment confidence",
+            "validator evidence reports SP1 execution but omits validation authority or commitment confidence",
         ),
     }
 }
 
 fn missing_trust_metadata_summary() -> ValidationReceiptTrustSummary {
     ValidationReceiptTrustSummary {
-        state: "worker_evidence_trust_metadata_missing",
+        state: "validator_evidence_trust_metadata_missing",
         validation_authority: None,
         commitment_confidence: None,
         production_verification: false,
         reason_code: Some("validation_receipt_trust_metadata_missing"),
-        reason: Some("trusted worker evidence omits validation authority or commitment confidence"),
+        reason: Some("validator evidence omits validation authority or commitment confidence"),
     }
 }
 
 fn mismatched_trust_metadata_summary() -> ValidationReceiptTrustSummary {
     ValidationReceiptTrustSummary {
-        state: "worker_evidence_trust_metadata_mismatch",
+        state: "validator_evidence_trust_metadata_mismatch",
         validation_authority: None,
         commitment_confidence: None,
         production_verification: false,
         reason_code: Some("validation_receipt_trust_metadata_mismatch"),
         reason: Some(
-            "trusted worker evidence validation authority does not match commitment confidence",
+            "validator evidence validation authority does not match commitment confidence",
         ),
     }
 }
 
-fn invalid_worker_evidence_summary() -> ValidationReceiptTrustSummary {
+fn invalid_validator_evidence_summary() -> ValidationReceiptTrustSummary {
     ValidationReceiptTrustSummary {
-        state: "validation_receipt_worker_evidence_invalid",
+        state: "validation_receipt_validator_evidence_invalid",
         validation_authority: None,
         commitment_confidence: Some(
             RadrootsTradeCommitmentConfidence::Invalid
@@ -805,12 +805,12 @@ fn invalid_worker_evidence_summary() -> ValidationReceiptTrustSummary {
                 .to_owned(),
         ),
         production_verification: false,
-        reason_code: Some("validation_receipt_worker_evidence_invalid"),
-        reason: Some("trusted worker evidence marks the validation receipt invalid"),
+        reason_code: Some("validation_receipt_validator_evidence_invalid"),
+        reason: Some("validator evidence marks the validation receipt invalid"),
     }
 }
 
-fn trusted_worker_summary(
+fn trusted_validator_summary(
     state: &'static str,
     authority: &str,
     confidence: &str,
@@ -827,9 +827,9 @@ fn trusted_worker_summary(
 }
 
 fn none_proof_trust_summary(
-    worker_evidence: &ValidationReceiptWorkerEvidenceSelection,
+    validator_evidence: &ValidationReceiptValidatorEvidenceSelection,
 ) -> ValidationReceiptTrustSummary {
-    let Some(evidence) = worker_evidence.trusted.as_ref() else {
+    let Some(evidence) = validator_evidence.trusted.as_ref() else {
         return local_only_trust_summary();
     };
     let authority = evidence.validation_authority.as_deref();
@@ -845,45 +845,43 @@ fn none_proof_trust_summary(
         return missing_trust_metadata_summary();
     };
     match (authority, confidence) {
-        ("dev_deterministic_only", "local_only") => local_only_trust_summary(),
-        ("trusted_rhi_service_key", "pending_rhi") => {
-            trusted_worker_summary("pending_rhi_validation", authority, confidence, false)
+        ("validator_set_deterministic", "awaiting_validation") => {
+            trusted_validator_summary("pending_validator_validation", authority, confidence, false)
         }
-        ("trusted_rhi_service_key", "committed_by_trusted_service") => {
-            trusted_worker_summary("trusted_service_validated", authority, confidence, false)
+        ("validator_set_deterministic", "committed_by_validator_set") => {
+            trusted_validator_summary("validator_set_validated", authority, confidence, false)
         }
         ("cryptographic_proof_verified", "committed_by_cryptographic_proof") => {
-            trusted_worker_summary("cryptographic_proof_verified", authority, confidence, true)
+            trusted_validator_summary("cryptographic_proof_verified", authority, confidence, true)
         }
-        ("trusted_service_and_proof_verified", "committed_by_trusted_service_and_proof") => {
-            trusted_worker_summary(
-                "trusted_service_and_proof_verified",
+        ("validator_set_and_proof_verified", "committed_by_validator_set_and_proof") => {
+            trusted_validator_summary(
+                "validator_set_and_proof_verified",
                 authority,
                 confidence,
                 true,
             )
         }
-        (_, "invalid") => invalid_worker_evidence_summary(),
+        (_, "invalid") => invalid_validator_evidence_summary(),
         _ => mismatched_trust_metadata_summary(),
     }
 }
 
 fn verified_sp1_trust_summary(
-    worker_evidence: &ValidationReceiptWorkerEvidenceSelection,
+    validator_evidence: &ValidationReceiptValidatorEvidenceSelection,
 ) -> ValidationReceiptTrustSummary {
-    if let Some(evidence) = worker_evidence.trusted.as_ref()
-        && evidence.validation_authority.as_deref() == Some("trusted_service_and_proof_verified")
-        && evidence.commitment_confidence.as_deref()
-            == Some("committed_by_trusted_service_and_proof")
+    if let Some(evidence) = validator_evidence.trusted.as_ref()
+        && evidence.validation_authority.as_deref() == Some("validator_set_and_proof_verified")
+        && evidence.commitment_confidence.as_deref() == Some("committed_by_validator_set_and_proof")
     {
-        return trusted_worker_summary(
-            "trusted_service_and_proof_verified",
-            "trusted_service_and_proof_verified",
-            "committed_by_trusted_service_and_proof",
+        return trusted_validator_summary(
+            "validator_set_and_proof_verified",
+            "validator_set_and_proof_verified",
+            "committed_by_validator_set_and_proof",
             true,
         );
     }
-    trusted_worker_summary(
+    trusted_validator_summary(
         "sp1_inline_proof_verified",
         "cryptographic_proof_verified",
         "committed_by_cryptographic_proof",
@@ -893,12 +891,12 @@ fn verified_sp1_trust_summary(
 
 fn proof_verification_view_for_receipt(
     receipt: &RadrootsTradeValidationReceipt,
-    worker_evidence: ValidationReceiptWorkerEvidenceSelection,
+    validator_evidence: ValidationReceiptValidatorEvidenceSelection,
 ) -> ValidationReceiptProofVerificationView {
     let proof = &receipt.proof;
     let cryptographic_proof_required = proof.system != RadrootsValidationReceiptProofSystem::None;
     if proof.system == RadrootsValidationReceiptProofSystem::None {
-        let trust = none_proof_trust_summary(&worker_evidence);
+        let trust = none_proof_trust_summary(&validator_evidence);
         return ValidationReceiptProofVerificationView {
             state: trust.state.to_owned(),
             verifier: "radroots_cli_validation_receipt_v1".to_owned(),
@@ -915,8 +913,8 @@ fn proof_verification_view_for_receipt(
             verifying_key_hash: proof.verifying_key_hash.clone(),
             proof_reference: proof.proof_reference.clone(),
             inline_proof_present: proof.inline_proof_base64.is_some(),
-            worker_evidence: worker_evidence.trusted,
-            untrusted_worker_evidence: worker_evidence.untrusted,
+            validator_evidence: validator_evidence.trusted,
+            untrusted_validator_evidence: validator_evidence.untrusted,
             reason_code: trust.reason_code.map(str::to_owned),
             reason: trust.reason.map(str::to_owned),
         };
@@ -924,7 +922,7 @@ fn proof_verification_view_for_receipt(
     if proof.proof_reference.is_some() {
         return sp1_unverified_proof_view(
             receipt,
-            worker_evidence,
+            validator_evidence,
             "sp1_reference_unresolved",
             "unverified",
             "reference_unresolved",
@@ -935,7 +933,7 @@ fn proof_verification_view_for_receipt(
     if proof.inline_proof_base64.is_none() {
         return sp1_unverified_proof_view(
             receipt,
-            worker_evidence,
+            validator_evidence,
             "sp1_proof_material_missing",
             "unverified",
             "missing_proof_material",
@@ -946,7 +944,7 @@ fn proof_verification_view_for_receipt(
     if proof.system != RadrootsValidationReceiptProofSystem::Sp1Core {
         return sp1_unverified_proof_view(
             receipt,
-            worker_evidence,
+            validator_evidence,
             "sp1_metadata_consistent_unverified",
             "unverified",
             "metadata_consistent_unverified",
@@ -957,7 +955,7 @@ fn proof_verification_view_for_receipt(
 
     match verify_inline_sp1_receipt(receipt) {
         Ok(()) => {
-            let trust = verified_sp1_trust_summary(&worker_evidence);
+            let trust = verified_sp1_trust_summary(&validator_evidence);
             ValidationReceiptProofVerificationView {
                 state: trust.state.to_owned(),
                 verifier: "radroots_cli_validation_receipt_v1".to_owned(),
@@ -974,8 +972,8 @@ fn proof_verification_view_for_receipt(
                 verifying_key_hash: proof.verifying_key_hash.clone(),
                 proof_reference: proof.proof_reference.clone(),
                 inline_proof_present: proof.inline_proof_base64.is_some(),
-                worker_evidence: worker_evidence.trusted,
-                untrusted_worker_evidence: worker_evidence.untrusted,
+                validator_evidence: validator_evidence.trusted,
+                untrusted_validator_evidence: validator_evidence.untrusted,
                 reason_code: trust.reason_code.map(str::to_owned),
                 reason: trust.reason.map(str::to_owned),
             }
@@ -985,7 +983,7 @@ fn proof_verification_view_for_receipt(
             let reason = error.to_string();
             sp1_unverified_proof_view(
                 receipt,
-                worker_evidence,
+                validator_evidence,
                 mapped.state,
                 mapped.public_values_hash_binding,
                 mapped.proof_metadata_binding,
@@ -998,7 +996,7 @@ fn proof_verification_view_for_receipt(
 
 fn sp1_unverified_proof_view(
     receipt: &RadrootsTradeValidationReceipt,
-    worker_evidence: ValidationReceiptWorkerEvidenceSelection,
+    validator_evidence: ValidationReceiptValidatorEvidenceSelection,
     state: &str,
     public_values_hash_binding: &str,
     proof_metadata_binding: &str,
@@ -1022,8 +1020,8 @@ fn sp1_unverified_proof_view(
         verifying_key_hash: proof.verifying_key_hash.clone(),
         proof_reference: proof.proof_reference.clone(),
         inline_proof_present: proof.inline_proof_base64.is_some(),
-        worker_evidence: worker_evidence.trusted,
-        untrusted_worker_evidence: worker_evidence.untrusted,
+        validator_evidence: validator_evidence.trusted,
+        untrusted_validator_evidence: validator_evidence.untrusted,
         reason_code: reason_code.map(str::to_owned),
         reason: reason.map(str::to_owned),
     }
@@ -1158,17 +1156,17 @@ fn proof_state_is_invalid(state: &str) -> bool {
             | "sp1_program_hash_mismatch"
             | "sp1_verifying_key_hash_mismatch"
             | "sp1_proof_invalid"
-            | "validation_receipt_worker_evidence_invalid"
-            | "worker_evidence_trust_metadata_mismatch"
+            | "validation_receipt_validator_evidence_invalid"
+            | "validator_evidence_trust_metadata_mismatch"
     )
 }
 
 fn proof_state_is_verification_success(state: &str) -> bool {
     matches!(
         state,
-        "trusted_service_validated"
+        "validator_set_validated"
             | "cryptographic_proof_verified"
-            | "trusted_service_and_proof_verified"
+            | "validator_set_and_proof_verified"
             | "sp1_inline_proof_verified"
     )
 }
@@ -1256,7 +1254,7 @@ fn receipt_result_label(value: RadrootsValidationReceiptResult) -> &'static str 
 #[cfg(test)]
 mod tests {
     use super::{
-        ValidationReceiptWorkerEvidenceSelection, ValidationReceiptWorkerEvidenceView,
+        ValidationReceiptValidatorEvidenceSelection, ValidationReceiptValidatorEvidenceView,
         proof_state_from_sp1_error, proof_state_is_invalid, proof_state_is_verification_success,
         proof_verification_view_for_receipt, validation_receipt_invalid_reason_code,
     };
@@ -1324,12 +1322,12 @@ mod tests {
         })
     }
 
-    fn worker_evidence(
+    fn validator_evidence(
         validation_authority: Option<&str>,
         commitment_confidence: Option<&str>,
         sp1_execute_checked: bool,
-    ) -> ValidationReceiptWorkerEvidenceView {
-        ValidationReceiptWorkerEvidenceView {
+    ) -> ValidationReceiptValidatorEvidenceView {
+        ValidationReceiptValidatorEvidenceView {
             result_event_id: "result-1".to_owned(),
             author: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             validation_authority: validation_authority.map(str::to_owned),
@@ -1353,15 +1351,18 @@ mod tests {
     fn none_receipts_report_local_only_without_crypto_claim() {
         let view = proof_verification_view_for_receipt(
             &deterministic_receipt(),
-            ValidationReceiptWorkerEvidenceSelection::default(),
+            ValidationReceiptValidatorEvidenceSelection::default(),
         );
 
-        assert_eq!(view.state, "local_only_deterministic_receipt");
+        assert_eq!(view.state, "validator_set_deterministic_receipt");
         assert_eq!(
             view.validation_authority.as_deref(),
-            Some("dev_deterministic_only")
+            Some("validator_set_deterministic")
         );
-        assert_eq!(view.commitment_confidence.as_deref(), Some("local_only"));
+        assert_eq!(
+            view.commitment_confidence.as_deref(),
+            Some("committed_by_validator_set")
+        );
         assert!(!view.production_verification);
         assert!(!view.cryptographic_proof_required);
         assert!(!view.cryptographic_proof_verified);
@@ -1371,8 +1372,8 @@ mod tests {
     fn none_receipts_surface_advisory_sp1_execute_evidence() {
         let view = proof_verification_view_for_receipt(
             &deterministic_receipt(),
-            ValidationReceiptWorkerEvidenceSelection {
-                trusted: Some(worker_evidence(None, None, true)),
+            ValidationReceiptValidatorEvidenceSelection {
+                trusted: Some(validator_evidence(None, None, true)),
                 untrusted: None,
             },
         );
@@ -1388,39 +1389,39 @@ mod tests {
     }
 
     #[test]
-    fn none_receipts_surface_trusted_service_confidence_without_production_verification() {
+    fn none_receipts_surface_validator_set_confidence_without_production_verification() {
         let view = proof_verification_view_for_receipt(
             &deterministic_receipt(),
-            ValidationReceiptWorkerEvidenceSelection {
-                trusted: Some(worker_evidence(
-                    Some("trusted_rhi_service_key"),
-                    Some("committed_by_trusted_service"),
+            ValidationReceiptValidatorEvidenceSelection {
+                trusted: Some(validator_evidence(
+                    Some("validator_set_deterministic"),
+                    Some("committed_by_validator_set"),
                     false,
                 )),
                 untrusted: None,
             },
         );
 
-        assert_eq!(view.state, "trusted_service_validated");
+        assert_eq!(view.state, "validator_set_validated");
         assert_eq!(
             view.validation_authority.as_deref(),
-            Some("trusted_rhi_service_key")
+            Some("validator_set_deterministic")
         );
         assert_eq!(
             view.commitment_confidence.as_deref(),
-            Some("committed_by_trusted_service")
+            Some("committed_by_validator_set")
         );
         assert!(!view.production_verification);
         assert!(proof_state_is_verification_success(view.state.as_str()));
     }
 
     #[test]
-    fn invalid_worker_evidence_marks_receipt_invalid() {
+    fn invalid_validator_evidence_marks_receipt_invalid() {
         let view = proof_verification_view_for_receipt(
             &deterministic_receipt(),
-            ValidationReceiptWorkerEvidenceSelection {
-                trusted: Some(worker_evidence(
-                    Some("trusted_rhi_service_key"),
+            ValidationReceiptValidatorEvidenceSelection {
+                trusted: Some(validator_evidence(
+                    Some("validator_set_deterministic"),
                     Some("invalid"),
                     false,
                 )),
@@ -1428,45 +1429,45 @@ mod tests {
             },
         );
 
-        assert_eq!(view.state, "validation_receipt_worker_evidence_invalid");
+        assert_eq!(view.state, "validation_receipt_validator_evidence_invalid");
         assert!(proof_state_is_invalid(view.state.as_str()));
         assert!(!view.production_verification);
     }
 
     #[test]
-    fn untrusted_worker_evidence_does_not_upgrade_deterministic_receipts() {
+    fn untrusted_validator_evidence_does_not_upgrade_deterministic_receipts() {
         let view = proof_verification_view_for_receipt(
             &deterministic_receipt(),
-            ValidationReceiptWorkerEvidenceSelection {
+            ValidationReceiptValidatorEvidenceSelection {
                 trusted: None,
-                untrusted: Some(worker_evidence(
-                    Some("trusted_rhi_service_key"),
-                    Some("committed_by_trusted_service"),
+                untrusted: Some(validator_evidence(
+                    Some("validator_set_deterministic"),
+                    Some("committed_by_validator_set"),
                     true,
                 )),
             },
         );
 
-        assert_eq!(view.state, "local_only_deterministic_receipt");
+        assert_eq!(view.state, "validator_set_deterministic_receipt");
         assert!(!view.production_verification);
-        assert!(view.worker_evidence.is_none());
-        assert!(view.untrusted_worker_evidence.is_some());
+        assert!(view.validator_evidence.is_none());
+        assert!(view.untrusted_validator_evidence.is_some());
     }
 
     #[test]
     fn validation_success_labels_exclude_local_only_and_sp1_execute_checked() {
         assert!(!proof_state_is_verification_success(
-            "local_only_deterministic_receipt"
+            "validator_set_deterministic_receipt"
         ));
         assert!(!proof_state_is_verification_success("sp1_execute_checked"));
         assert!(proof_state_is_verification_success(
-            "trusted_service_validated"
+            "validator_set_validated"
         ));
         assert!(proof_state_is_verification_success(
             "sp1_inline_proof_verified"
         ));
         assert!(proof_state_is_verification_success(
-            "trusted_service_and_proof_verified"
+            "validator_set_and_proof_verified"
         ));
     }
 
@@ -1478,7 +1479,7 @@ mod tests {
 
         let view = proof_verification_view_for_receipt(
             &receipt,
-            ValidationReceiptWorkerEvidenceSelection::default(),
+            ValidationReceiptValidatorEvidenceSelection::default(),
         );
 
         assert_eq!(view.state, "sp1_reference_unresolved");
@@ -1492,7 +1493,7 @@ mod tests {
     fn invalid_inline_sp1_material_reports_invalid_proof_state() {
         let view = proof_verification_view_for_receipt(
             &receipt_with_proof(sp1_proof_with_material()),
-            ValidationReceiptWorkerEvidenceSelection::default(),
+            ValidationReceiptValidatorEvidenceSelection::default(),
         );
 
         assert_eq!(view.state, "sp1_proof_invalid");
@@ -1506,7 +1507,7 @@ mod tests {
     fn inline_sp1_material_reports_unavailable_verifier_without_sp1_verify_feature() {
         let view = proof_verification_view_for_receipt(
             &receipt_with_proof(sp1_proof_with_material()),
-            ValidationReceiptWorkerEvidenceSelection::default(),
+            ValidationReceiptValidatorEvidenceSelection::default(),
         );
 
         assert_eq!(view.state, "sp1_verifier_unavailable");

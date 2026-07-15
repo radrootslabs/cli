@@ -173,9 +173,6 @@ pub const OPERATION_REGISTRY: &[OperationSpec] = &[
     trade::TRADE_ACCEPT,
     trade::TRADE_DECLINE,
     trade::TRADE_CANCEL,
-    trade::TRADE_REVISION_PROPOSE,
-    trade::TRADE_REVISION_ACCEPT,
-    trade::TRADE_REVISION_DECLINE,
     trade::TRADE_STATUS_GET,
     trade::TRADE_EVENT_LIST,
     trade::TRADE_EVENT_WATCH,
@@ -208,12 +205,7 @@ pub fn network_requirement(operation_id: &str) -> NetworkRequirement {
         | "validation.receipt.verify" => NetworkRequirement::External {
             dry_run_requires_network: false,
         },
-        "trade.accept"
-        | "trade.decline"
-        | "trade.cancel"
-        | "trade.revision.propose"
-        | "trade.revision.accept"
-        | "trade.revision.decline" => NetworkRequirement::External {
+        "trade.accept" | "trade.decline" | "trade.cancel" => NetworkRequirement::External {
             dry_run_requires_network: true,
         },
         _ => NetworkRequirement::Local,
@@ -229,9 +221,6 @@ pub fn requires_local_signer_mode(operation_id: &str) -> bool {
             | "trade.accept"
             | "trade.decline"
             | "trade.cancel"
-            | "trade.revision.propose"
-            | "trade.revision.accept"
-            | "trade.revision.decline"
     )
 }
 
@@ -341,9 +330,6 @@ mod tests {
         "trade.accept",
         "trade.decline",
         "trade.cancel",
-        "trade.revision.propose",
-        "trade.revision.accept",
-        "trade.revision.decline",
         "trade.status.get",
         "trade.event.list",
         "trade.event.watch",
@@ -395,9 +381,6 @@ mod tests {
         "trade.accept",
         "trade.decline",
         "trade.cancel",
-        "trade.revision.propose",
-        "trade.revision.accept",
-        "trade.revision.decline",
     ];
 
     const INTENTIONALLY_UNSUPPORTED_MUTATING_DRY_RUN_OPERATION_IDS: &[&str] = &[];
@@ -470,9 +453,6 @@ mod tests {
             "trade.accept",
             "trade.decline",
             "trade.cancel",
-            "trade.revision.propose",
-            "trade.revision.accept",
-            "trade.revision.decline",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -574,9 +554,6 @@ mod tests {
             "trade.accept",
             "trade.decline",
             "trade.cancel",
-            "trade.revision.propose",
-            "trade.revision.accept",
-            "trade.revision.decline",
             "transport.outbox.push",
             "trade.event.list",
             "validation.receipt.get",
@@ -602,9 +579,6 @@ mod tests {
             "trade.accept",
             "trade.decline",
             "trade.cancel",
-            "trade.revision.propose",
-            "trade.revision.accept",
-            "trade.revision.decline",
             "transport.outbox.push",
         ]
         .into_iter()

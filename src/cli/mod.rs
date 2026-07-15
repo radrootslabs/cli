@@ -261,11 +261,6 @@ impl TargetCommand {
                 TradeCommand::Accept(_) => "trade.accept",
                 TradeCommand::Decline(_) => "trade.decline",
                 TradeCommand::Cancel(_) => "trade.cancel",
-                TradeCommand::Revision(revision) => match &revision.command {
-                    TradeRevisionCommand::Propose(_) => "trade.revision.propose",
-                    TradeRevisionCommand::Accept(_) => "trade.revision.accept",
-                    TradeRevisionCommand::Decline(_) => "trade.revision.decline",
-                },
                 TradeCommand::Status(status) => match &status.command {
                     TradeStatusCommand::Get(_) => "trade.status.get",
                 },
@@ -292,8 +287,7 @@ mod tests {
 
     use super::{
         AccountCommand, FarmCommand, FarmLocationCommand, ListingCommand, TargetCliArgs,
-        TargetOutputFormat, TradeCommand, TradeRevisionCommand, ValidationCommand,
-        ValidationReceiptCommand,
+        TargetOutputFormat, TradeCommand, ValidationCommand, ValidationReceiptCommand,
     };
     use crate::registry::OPERATION_REGISTRY;
 
@@ -654,109 +648,6 @@ mod tests {
         };
         assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
         assert_eq!(args.reason.as_deref(), Some("changed plans"));
-        assert!(args.confirm_public_note);
-    }
-
-    #[test]
-    fn target_parser_accepts_order_revision_propose_inputs() {
-        let parsed = TargetCliArgs::try_parse_from([
-            "radroots",
-            "trade",
-            "revision",
-            "propose",
-            "ord_test",
-            "--reason",
-            "update count",
-            "--bin-id",
-            "bin-1",
-            "--bin-count",
-            "3",
-            "--adjustment-id",
-            "adj_revision",
-            "--adjustment-effect",
-            "increase",
-            "--adjustment-amount",
-            "2",
-            "--adjustment-currency",
-            "USD",
-            "--adjustment-reason",
-            "packing change",
-            "--confirm-public-note",
-        ])
-        .expect("target args parse");
-
-        assert_eq!(parsed.command.operation_id(), "trade.revision.propose");
-        let crate::cli::TargetCommand::Trade(trade) = parsed.command else {
-            panic!("expected trade command")
-        };
-        let TradeCommand::Revision(revision) = trade.command else {
-            panic!("expected trade revision command")
-        };
-        let TradeRevisionCommand::Propose(args) = revision.command else {
-            panic!("expected trade revision propose command")
-        };
-        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
-        assert_eq!(args.reason.as_deref(), Some("update count"));
-        assert_eq!(args.bin_id.as_deref(), Some("bin-1"));
-        assert_eq!(args.bin_count, Some(3));
-        assert_eq!(args.adjustment_id.as_deref(), Some("adj_revision"));
-        assert_eq!(args.adjustment_effect.as_deref(), Some("increase"));
-        assert!(args.confirm_public_note);
-    }
-
-    #[test]
-    fn target_parser_accepts_order_revision_decision_inputs() {
-        let accepted = TargetCliArgs::try_parse_from([
-            "radroots",
-            "trade",
-            "revision",
-            "accept",
-            "ord_test",
-            "--revision-id",
-            "rev_test",
-        ])
-        .expect("target args parse");
-
-        assert_eq!(accepted.command.operation_id(), "trade.revision.accept");
-        let crate::cli::TargetCommand::Trade(trade) = accepted.command else {
-            panic!("expected trade command")
-        };
-        let TradeCommand::Revision(revision) = trade.command else {
-            panic!("expected trade revision command")
-        };
-        let TradeRevisionCommand::Accept(args) = revision.command else {
-            panic!("expected trade revision accept command")
-        };
-        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
-        assert_eq!(args.revision_id.as_deref(), Some("rev_test"));
-
-        let declined = TargetCliArgs::try_parse_from([
-            "radroots",
-            "trade",
-            "revision",
-            "decline",
-            "ord_test",
-            "--revision-id",
-            "rev_test",
-            "--reason",
-            "keep original trade",
-            "--confirm-public-note",
-        ])
-        .expect("target args parse");
-
-        assert_eq!(declined.command.operation_id(), "trade.revision.decline");
-        let crate::cli::TargetCommand::Trade(trade) = declined.command else {
-            panic!("expected trade command")
-        };
-        let TradeCommand::Revision(revision) = trade.command else {
-            panic!("expected trade revision command")
-        };
-        let TradeRevisionCommand::Decline(args) = revision.command else {
-            panic!("expected trade revision decline command")
-        };
-        assert_eq!(args.trade_id.as_deref(), Some("ord_test"));
-        assert_eq!(args.revision_id.as_deref(), Some("rev_test"));
-        assert_eq!(args.reason.as_deref(), Some("keep original trade"));
         assert!(args.confirm_public_note);
     }
 

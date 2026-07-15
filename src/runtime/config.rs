@@ -56,7 +56,20 @@ const ENV_CLI_MYC_EXECUTABLE: &str = "RADROOTS_CLI_MYC_EXECUTABLE";
 const ENV_CLI_MYC_STATUS_TIMEOUT_MS: &str = "RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS";
 const ENV_CLI_HYF_ENABLED: &str = "RADROOTS_CLI_HYF_ENABLED";
 const ENV_CLI_HYF_EXECUTABLE: &str = "RADROOTS_CLI_HYF_EXECUTABLE";
-const ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS: &str = "RADROOTS_CLI_RHI_TRUSTED_WORKER_PUBKEYS";
+const ENV_CLI_RHI_VALIDATOR_SET_ID: &str = "RADROOTS_CLI_RHI_VALIDATOR_SET_ID";
+const ENV_CLI_RHI_VALIDATOR_PUBKEY: &str = "RADROOTS_CLI_RHI_VALIDATOR_PUBKEY";
+const ENV_CLI_RHI_VALIDATOR_SET_ADDR: &str = "RADROOTS_CLI_RHI_VALIDATOR_SET_ADDR";
+const ENV_CLI_RHI_VALIDATOR_SET_EVENT_ID: &str = "RADROOTS_CLI_RHI_VALIDATOR_SET_EVENT_ID";
+const ENV_CLI_RHI_VALIDATOR_SET_VALID_FROM: &str = "RADROOTS_CLI_RHI_VALIDATOR_SET_VALID_FROM";
+const ENV_CLI_RHI_VALIDATOR_SET_VALID_UNTIL: &str = "RADROOTS_CLI_RHI_VALIDATOR_SET_VALID_UNTIL";
+const ENV_CLI_RHI_VALIDATOR_SET_PROTOCOL_CONTRACT_HASH: &str =
+    "RADROOTS_CLI_RHI_VALIDATOR_SET_PROTOCOL_CONTRACT_HASH";
+const ENV_CLI_RHI_VALIDATOR_SET_OPERATOR_NAME: &str =
+    "RADROOTS_CLI_RHI_VALIDATOR_SET_OPERATOR_NAME";
+const ENV_CLI_RHI_VALIDATOR_SET_OPERATOR_CONTACT: &str =
+    "RADROOTS_CLI_RHI_VALIDATOR_SET_OPERATOR_CONTACT";
+const ENV_CLI_RHI_REQUIRE_CRYPTOGRAPHIC_PROOF: &str =
+    "RADROOTS_CLI_RHI_REQUIRE_CRYPTOGRAPHIC_PROOF";
 const ENV_CLI_MESH_SCOPE: &str = "RADROOTS_CLI_MESH_SCOPE";
 const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_CLI_OUTPUT_FORMAT,
@@ -81,7 +94,16 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_CLI_MYC_STATUS_TIMEOUT_MS,
     ENV_CLI_HYF_ENABLED,
     ENV_CLI_HYF_EXECUTABLE,
-    ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS,
+    ENV_CLI_RHI_VALIDATOR_SET_ID,
+    ENV_CLI_RHI_VALIDATOR_PUBKEY,
+    ENV_CLI_RHI_VALIDATOR_SET_ADDR,
+    ENV_CLI_RHI_VALIDATOR_SET_EVENT_ID,
+    ENV_CLI_RHI_VALIDATOR_SET_VALID_FROM,
+    ENV_CLI_RHI_VALIDATOR_SET_VALID_UNTIL,
+    ENV_CLI_RHI_VALIDATOR_SET_PROTOCOL_CONTRACT_HASH,
+    ENV_CLI_RHI_VALIDATOR_SET_OPERATOR_NAME,
+    ENV_CLI_RHI_VALIDATOR_SET_OPERATOR_CONTACT,
+    ENV_CLI_RHI_REQUIRE_CRYPTOGRAPHIC_PROOF,
     ENV_CLI_MESH_SCOPE,
 ];
 
@@ -445,7 +467,21 @@ pub struct RpcConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RhiConfig {
-    pub trusted_worker_pubkeys: Vec<String>,
+    pub validator_set: Option<RhiValidatorSetConfig>,
+    pub require_cryptographic_proof: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RhiValidatorSetConfig {
+    pub set_id: String,
+    pub validator_pubkey: String,
+    pub validator_set_addr: String,
+    pub validator_set_event_id: String,
+    pub valid_from: u64,
+    pub valid_until: u64,
+    pub protocol_contract_hash: String,
+    pub operator_name: String,
+    pub operator_contact: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -567,7 +603,22 @@ struct RpcFileConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RhiFileConfig {
-    trusted_worker_pubkeys: Option<Vec<String>>,
+    validator_set: Option<RhiValidatorSetFileConfig>,
+    require_cryptographic_proof: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RhiValidatorSetFileConfig {
+    set_id: Option<String>,
+    validator_pubkey: Option<String>,
+    validator_set_addr: Option<String>,
+    validator_set_event_id: Option<String>,
+    valid_from: Option<u64>,
+    valid_until: Option<u64>,
+    protocol_contract_hash: Option<String>,
+    operator_name: Option<String>,
+    operator_contact: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1202,47 +1253,224 @@ fn resolve_rhi_config(
     user_config: Option<&CliConfigFile>,
     workspace_config: Option<&CliConfigFile>,
 ) -> Result<RhiConfig, RuntimeError> {
-    let trusted_worker_pubkeys =
-        if let Some(value) = env_value(env, env_file, &[ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS]) {
-            parse_pubkey_env_value(value.as_str(), ENV_CLI_RHI_TRUSTED_WORKER_PUBKEYS)?
-        } else if let Some(values) = user_config
+    let validator_set =
+        resolve_rhi_validator_set_config(env, env_file, user_config, workspace_config)?;
+    let require_cryptographic_proof =
+        if let Some(value) = env_value(env, env_file, &[ENV_CLI_RHI_REQUIRE_CRYPTOGRAPHIC_PROOF]) {
+            parse_bool_env(ENV_CLI_RHI_REQUIRE_CRYPTOGRAPHIC_PROOF, value.as_str())?
+        } else if let Some(value) = user_config
             .and_then(|config| config.rhi.as_ref())
-            .and_then(|rhi| rhi.trusted_worker_pubkeys.clone())
+            .and_then(|rhi| rhi.require_cryptographic_proof)
         {
-            normalize_pubkeys(values, "user config [rhi].trusted_worker_pubkeys")?
-        } else if let Some(values) = workspace_config
+            value
+        } else if let Some(value) = workspace_config
             .and_then(|config| config.rhi.as_ref())
-            .and_then(|rhi| rhi.trusted_worker_pubkeys.clone())
+            .and_then(|rhi| rhi.require_cryptographic_proof)
         {
-            normalize_pubkeys(values, "workspace config [rhi].trusted_worker_pubkeys")?
+            value
         } else {
-            Vec::new()
+            false
         };
 
     Ok(RhiConfig {
-        trusted_worker_pubkeys,
+        validator_set,
+        require_cryptographic_proof,
     })
 }
 
-fn parse_pubkey_env_value(value: &str, key: &str) -> Result<Vec<String>, RuntimeError> {
-    let entries = value
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    normalize_pubkeys(entries, key)
+fn resolve_rhi_validator_set_config(
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    user_config: Option<&CliConfigFile>,
+    workspace_config: Option<&CliConfigFile>,
+) -> Result<Option<RhiValidatorSetConfig>, RuntimeError> {
+    let env_keys = [
+        ENV_CLI_RHI_VALIDATOR_SET_ID,
+        ENV_CLI_RHI_VALIDATOR_PUBKEY,
+        ENV_CLI_RHI_VALIDATOR_SET_ADDR,
+        ENV_CLI_RHI_VALIDATOR_SET_EVENT_ID,
+        ENV_CLI_RHI_VALIDATOR_SET_VALID_FROM,
+        ENV_CLI_RHI_VALIDATOR_SET_VALID_UNTIL,
+        ENV_CLI_RHI_VALIDATOR_SET_PROTOCOL_CONTRACT_HASH,
+        ENV_CLI_RHI_VALIDATOR_SET_OPERATOR_NAME,
+        ENV_CLI_RHI_VALIDATOR_SET_OPERATOR_CONTACT,
+    ];
+    if env_keys
+        .iter()
+        .any(|key| env_value(env, env_file, &[*key]).is_some())
+    {
+        return Ok(Some(validate_rhi_validator_set_config(
+            RhiValidatorSetConfig {
+                set_id: required_env_value(env, env_file, ENV_CLI_RHI_VALIDATOR_SET_ID)?,
+                validator_pubkey: required_env_value(env, env_file, ENV_CLI_RHI_VALIDATOR_PUBKEY)?,
+                validator_set_addr: required_env_value(
+                    env,
+                    env_file,
+                    ENV_CLI_RHI_VALIDATOR_SET_ADDR,
+                )?,
+                validator_set_event_id: required_env_value(
+                    env,
+                    env_file,
+                    ENV_CLI_RHI_VALIDATOR_SET_EVENT_ID,
+                )?,
+                valid_from: parse_u64_value(
+                    ENV_CLI_RHI_VALIDATOR_SET_VALID_FROM,
+                    required_env_value(env, env_file, ENV_CLI_RHI_VALIDATOR_SET_VALID_FROM)?
+                        .as_str(),
+                )
+                .map_err(|err| RuntimeError::Config(err.to_string()))?,
+                valid_until: parse_u64_value(
+                    ENV_CLI_RHI_VALIDATOR_SET_VALID_UNTIL,
+                    required_env_value(env, env_file, ENV_CLI_RHI_VALIDATOR_SET_VALID_UNTIL)?
+                        .as_str(),
+                )
+                .map_err(|err| RuntimeError::Config(err.to_string()))?,
+                protocol_contract_hash: required_env_value(
+                    env,
+                    env_file,
+                    ENV_CLI_RHI_VALIDATOR_SET_PROTOCOL_CONTRACT_HASH,
+                )?,
+                operator_name: required_env_value(
+                    env,
+                    env_file,
+                    ENV_CLI_RHI_VALIDATOR_SET_OPERATOR_NAME,
+                )?,
+                operator_contact: env_value(
+                    env,
+                    env_file,
+                    &[ENV_CLI_RHI_VALIDATOR_SET_OPERATOR_CONTACT],
+                ),
+            },
+            "environment RHI validator_set",
+        )?));
+    }
+    if let Some(config) = user_config
+        .and_then(|config| config.rhi.as_ref())
+        .and_then(|rhi| rhi.validator_set.as_ref())
+    {
+        return Ok(Some(rhi_validator_set_from_file_config(
+            config,
+            "user config [rhi.validator_set]",
+        )?));
+    }
+    if let Some(config) = workspace_config
+        .and_then(|config| config.rhi.as_ref())
+        .and_then(|rhi| rhi.validator_set.as_ref())
+    {
+        return Ok(Some(rhi_validator_set_from_file_config(
+            config,
+            "workspace config [rhi.validator_set]",
+        )?));
+    }
+    Ok(None)
 }
 
-fn normalize_pubkeys(values: Vec<String>, source: &str) -> Result<Vec<String>, RuntimeError> {
-    let mut normalized = Vec::new();
-    for value in values {
-        let pubkey = validate_pubkey(value.as_str(), source)?;
-        if !normalized.iter().any(|existing| existing == &pubkey) {
-            normalized.push(pubkey);
-        }
+fn required_env_value(
+    env: &dyn Environment,
+    env_file: &EnvFileValues,
+    key: &'static str,
+) -> Result<String, RuntimeError> {
+    env_value(env, env_file, &[key]).ok_or_else(|| {
+        RuntimeError::Config(format!(
+            "{key} is required when any RHI validator set environment key is set"
+        ))
+    })
+}
+
+fn rhi_validator_set_from_file_config(
+    config: &RhiValidatorSetFileConfig,
+    source: &'static str,
+) -> Result<RhiValidatorSetConfig, RuntimeError> {
+    validate_rhi_validator_set_config(
+        RhiValidatorSetConfig {
+            set_id: required_file_value(config.set_id.clone(), source, "set_id")?,
+            validator_pubkey: required_file_value(
+                config.validator_pubkey.clone(),
+                source,
+                "validator_pubkey",
+            )?,
+            validator_set_addr: required_file_value(
+                config.validator_set_addr.clone(),
+                source,
+                "validator_set_addr",
+            )?,
+            validator_set_event_id: required_file_value(
+                config.validator_set_event_id.clone(),
+                source,
+                "validator_set_event_id",
+            )?,
+            valid_from: config
+                .valid_from
+                .ok_or_else(|| missing_file_value(source, "valid_from"))?,
+            valid_until: config
+                .valid_until
+                .ok_or_else(|| missing_file_value(source, "valid_until"))?,
+            protocol_contract_hash: required_file_value(
+                config.protocol_contract_hash.clone(),
+                source,
+                "protocol_contract_hash",
+            )?,
+            operator_name: required_file_value(
+                config.operator_name.clone(),
+                source,
+                "operator_name",
+            )?,
+            operator_contact: config.operator_contact.clone(),
+        },
+        source,
+    )
+}
+
+fn required_file_value(
+    value: Option<String>,
+    source: &'static str,
+    field: &'static str,
+) -> Result<String, RuntimeError> {
+    value.ok_or_else(|| missing_file_value(source, field))
+}
+
+fn missing_file_value(source: &'static str, field: &'static str) -> RuntimeError {
+    RuntimeError::Config(format!("{source}.{field} is required"))
+}
+
+fn validate_rhi_validator_set_config(
+    mut config: RhiValidatorSetConfig,
+    source: &'static str,
+) -> Result<RhiValidatorSetConfig, RuntimeError> {
+    config.set_id = validate_uuidv7(config.set_id.as_str(), source, "set_id")?;
+    config.validator_pubkey = validate_pubkey(
+        config.validator_pubkey.as_str(),
+        format!("{source}.validator_pubkey").as_str(),
+    )?;
+    config.validator_set_event_id = validate_event_id(
+        config.validator_set_event_id.as_str(),
+        format!("{source}.validator_set_event_id").as_str(),
+    )?;
+    config.protocol_contract_hash = validate_hash32(
+        config.protocol_contract_hash.as_str(),
+        format!("{source}.protocol_contract_hash").as_str(),
+    )?;
+    config.validator_set_addr = validate_validator_set_address(
+        config.validator_set_addr.as_str(),
+        config.set_id.as_str(),
+        format!("{source}.validator_set_addr").as_str(),
+    )?;
+    if config.valid_from >= config.valid_until {
+        return Err(RuntimeError::Config(format!(
+            "{source}.valid_from must be less than {source}.valid_until"
+        )));
     }
-    Ok(normalized)
+    config.operator_name = validate_required_text(
+        config.operator_name.as_str(),
+        format!("{source}.operator_name").as_str(),
+    )?;
+    if let Some(operator_contact) = config.operator_contact.as_ref() {
+        validate_required_text(
+            operator_contact.as_str(),
+            format!("{source}.operator_contact").as_str(),
+        )?;
+    }
+    Ok(config)
 }
 
 fn validate_pubkey(value: &str, source: &str) -> Result<String, RuntimeError> {
@@ -1253,6 +1481,92 @@ fn validate_pubkey(value: &str, source: &str) -> Result<String, RuntimeError> {
         )));
     }
     Ok(trimmed.to_ascii_lowercase())
+}
+
+fn validate_event_id(value: &str, source: &str) -> Result<String, RuntimeError> {
+    validate_pubkey(value, source)
+}
+
+fn validate_hash32(value: &str, source: &str) -> Result<String, RuntimeError> {
+    let trimmed = value.trim();
+    let Some(hex) = trimmed.strip_prefix("0x") else {
+        return Err(RuntimeError::Config(format!(
+            "{source} must be a 0x-prefixed 32-byte lowercase hex digest"
+        )));
+    };
+    if hex.len() != 64 || !hex.chars().all(|char| char.is_ascii_hexdigit()) {
+        return Err(RuntimeError::Config(format!(
+            "{source} must be a 0x-prefixed 32-byte lowercase hex digest"
+        )));
+    }
+    Ok(format!("0x{}", hex.to_ascii_lowercase()))
+}
+
+fn validate_uuidv7(value: &str, source: &str, field: &str) -> Result<String, RuntimeError> {
+    let trimmed = value.trim().to_ascii_lowercase();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() != 36
+        || bytes[8] != b'-'
+        || bytes[13] != b'-'
+        || bytes[18] != b'-'
+        || bytes[23] != b'-'
+        || bytes[14] != b'7'
+        || !matches!(bytes[19], b'8'..=b'9' | b'a'..=b'b')
+    {
+        return Err(RuntimeError::Config(format!(
+            "{source}.{field} must be a UUIDv7"
+        )));
+    }
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            continue;
+        }
+        if !byte.is_ascii_digit() && !(b'a'..=b'f').contains(byte) {
+            return Err(RuntimeError::Config(format!(
+                "{source}.{field} must be a UUIDv7"
+            )));
+        }
+    }
+    Ok(trimmed)
+}
+
+fn validate_validator_set_address(
+    value: &str,
+    expected_set_id: &str,
+    source: &str,
+) -> Result<String, RuntimeError> {
+    let trimmed = value.trim();
+    let mut parts = trimmed.split(':');
+    let Some(kind) = parts.next() else {
+        return Err(RuntimeError::Config(format!(
+            "{source} must be a 30381 address"
+        )));
+    };
+    let Some(pubkey) = parts.next() else {
+        return Err(RuntimeError::Config(format!(
+            "{source} must be a 30381 address"
+        )));
+    };
+    let Some(set_id) = parts.next() else {
+        return Err(RuntimeError::Config(format!(
+            "{source} must be a 30381 address"
+        )));
+    };
+    if parts.next().is_some() || kind != "30381" || set_id != expected_set_id {
+        return Err(RuntimeError::Config(format!(
+            "{source} must be a 30381 address"
+        )));
+    }
+    let pubkey = validate_pubkey(pubkey, source)?;
+    Ok(format!("30381:{pubkey}:{set_id}"))
+}
+
+fn validate_required_text(value: &str, source: &str) -> Result<String, RuntimeError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(RuntimeError::Config(format!("{source} must not be empty")));
+    }
+    Ok(trimmed.to_owned())
 }
 
 fn resolve_capability_bindings(
@@ -2456,7 +2770,8 @@ mod tests {
             PathBuf::from(DEFAULT_HYF_EXECUTABLE)
         );
         assert_eq!(resolved.rpc.url, DEFAULT_RPC_URL);
-        assert_eq!(resolved.rhi.trusted_worker_pubkeys, Vec::<String>::new());
+        assert_eq!(resolved.rhi.validator_set, None);
+        assert!(!resolved.rhi.require_cryptographic_proof);
     }
 
     #[test]

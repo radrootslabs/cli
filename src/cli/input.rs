@@ -45,8 +45,8 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
         FarmLocationCommand, FarmProfileCommand, ListingAppCommand, ListingCommand, MarketCommand,
         MarketListingCommand, MarketProductCommand, MeshCommand, MeshScopeCommand,
         StoreBackupCommand, StoreCommand, TradeAppCommand, TradeCommand, TradeEventCommand,
-        TradeRevisionCommand, TradeStatusCommand, TransportCommand, TransportOutboxCommand,
-        TransportProfileCommand, ValidationCommand, ValidationReceiptCommand,
+        TradeStatusCommand, TransportCommand, TransportOutboxCommand, TransportProfileCommand,
+        ValidationCommand, ValidationReceiptCommand,
     };
 
     let mut input = OperationData::new();
@@ -272,35 +272,6 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                 insert_string(&mut input, "reason", &args.reason);
                 insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
             }
-            TradeCommand::Revision(revision) => match &revision.command {
-                TradeRevisionCommand::Propose(args) => {
-                    insert_string(&mut input, "trade_id", &args.trade_id);
-                    insert_string(&mut input, "reason", &args.reason);
-                    insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
-                    insert_string(&mut input, "bin_id", &args.bin_id);
-                    if let Some(bin_count) = args.bin_count {
-                        input.insert(
-                            "bin_count".to_owned(),
-                            Value::Number(serde_json::Number::from(bin_count)),
-                        );
-                    }
-                    insert_string(&mut input, "adjustment_id", &args.adjustment_id);
-                    insert_string(&mut input, "adjustment_effect", &args.adjustment_effect);
-                    insert_string(&mut input, "adjustment_amount", &args.adjustment_amount);
-                    insert_string(&mut input, "adjustment_currency", &args.adjustment_currency);
-                    insert_string(&mut input, "adjustment_reason", &args.adjustment_reason);
-                }
-                TradeRevisionCommand::Accept(args) => {
-                    insert_string(&mut input, "trade_id", &args.trade_id);
-                    insert_string(&mut input, "revision_id", &args.revision_id);
-                }
-                TradeRevisionCommand::Decline(args) => {
-                    insert_string(&mut input, "trade_id", &args.trade_id);
-                    insert_string(&mut input, "revision_id", &args.revision_id);
-                    insert_string(&mut input, "reason", &args.reason);
-                    insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
-                }
-            },
             TradeCommand::Status(status) => match &status.command {
                 TradeStatusCommand::Get(args) => {
                     insert_string(&mut input, "trade_id", &args.trade_id)
