@@ -634,7 +634,6 @@ pub struct SdkOutboxStatusView {
     pub retryable_events: i64,
     pub terminal_events: i64,
     pub failed_terminal_events: i64,
-    pub preview_unavailable_events: i64,
     pub deferred_until_implemented_events: i64,
     pub ready_signed_events: i64,
     pub publishing_events: i64,
@@ -3155,8 +3154,6 @@ pub struct SyncQueueView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_terminal_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub preview_unavailable_count: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub deferred_until_implemented_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ready_signed_count: Option<usize>,
@@ -3273,19 +3270,11 @@ pub struct TransportProfileView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nostr_relays: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reticulum_preview_behavior: Option<String>,
+    pub reticulum_behavior: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reticulum_preview_scope: Option<String>,
+    pub reticulum_scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reticulum_preview_agent_endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxy_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxy_token_source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxy_token_file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proxy_token_secret_id: Option<String>,
+    pub reticulum_agent_endpoint: Option<String>,
     pub transport_statuses: Vec<TransportRuntimeStatusView>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
@@ -3317,6 +3306,8 @@ pub struct TransportRuntimeStatusView {
     pub endpoint_uri: Option<String>,
     pub configured: bool,
     pub implementation: String,
+    pub maturity: String,
+    pub availability: String,
     pub usable_for_delivery: bool,
     pub capabilities: TransportOperationCapabilitiesView,
     pub message: String,
@@ -3337,7 +3328,6 @@ pub struct TransportOutboxStatusView {
     pub pending_count: i64,
     pub retryable_count: i64,
     pub terminal_count: i64,
-    pub preview_unavailable_count: i64,
     pub deferred_until_implemented_count: i64,
     pub ready_signed_count: i64,
     pub publishing_count: i64,
@@ -3423,9 +3413,9 @@ pub struct RpcStatusView {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_signer_modes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub daemon_proxy_enabled: Option<bool>,
+    pub daemon_execution_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub daemon_proxy_ready: Option<bool>,
+    pub daemon_execution_ready: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relay_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3575,6 +3565,8 @@ pub struct SyncTransportStatusView {
     pub endpoint_uri: Option<String>,
     pub configured: bool,
     pub implementation: String,
+    pub maturity: String,
+    pub availability: String,
     pub usable_for_delivery: bool,
     pub capabilities: TransportOperationCapabilitiesView,
     pub message: String,

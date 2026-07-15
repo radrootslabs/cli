@@ -10,7 +10,7 @@ use radroots_sdk::{
     SdkOutboxStorageStatus, SdkRestoreState, SdkSqliteStoreStatus, SdkStorageKind,
     StorageStatusReceipt, StorageStatusRequest,
 };
-use radroots_sql_core::SqliteExecutor;
+use radroots_sql_core::SqlxSqliteExecutor;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -30,13 +30,14 @@ const SDK_CANONICAL_SOURCE: &str = "SDK canonical event store and outbox";
 const SDK_CANONICAL_STORE: &str = "sdk";
 const SDK_BACKUP_KIND: &str = "sdk_canonical";
 const SDK_BACKUP_MANIFEST_FILE: &str = "manifest.json";
-const SDK_EVENT_STORE_FILE: &str = "event_store.sqlite";
-const SDK_OUTBOX_FILE: &str = "outbox.sqlite";
+const SDK_RUNTIME_FILE: &str = "runtime.sqlite";
+const SDK_PRIVATE_FILE: &str = "private.sqlite";
+const SDK_STUDIO_FILE: &str = "studio.sqlite";
 
 pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
     let existed = config.local.replica_store_path.exists();
     ensure_local_roots(config)?;
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     ensure_sync_run_table(&executor)?;
     let manifest = export_manifest(&executor)?;
@@ -59,7 +60,7 @@ pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
 pub fn init_preflight(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
     validate_local_roots(config)?;
     if config.local.replica_store_path.exists() {
-        let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+        let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
         ensure_sync_run_table(&executor)?;
         let manifest = export_manifest(&executor)?;
         return Ok(LocalInitView {
@@ -129,7 +130,7 @@ fn derived_projection_status(
         });
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     ensure_sync_run_table(&executor)?;
     let manifest = export_manifest(&executor)?;
     let sync = radroots_replica_sync_status(&executor)?;
@@ -178,8 +179,8 @@ pub fn backup_preflight(
         canonical_store: SDK_CANONICAL_STORE.to_owned(),
         destination: output.display().to_string(),
         file: output.join(SDK_BACKUP_MANIFEST_FILE).display().to_string(),
-        event_store_file: Some(output.join(SDK_EVENT_STORE_FILE).display().to_string()),
-        outbox_file: Some(output.join(SDK_OUTBOX_FILE).display().to_string()),
+        event_store_file: Some(output.join(SDK_RUNTIME_FILE).display().to_string()),
+        outbox_file: Some(output.join(SDK_RUNTIME_FILE).display().to_string()),
         manifest_file: Some(output.join(SDK_BACKUP_MANIFEST_FILE).display().to_string()),
         size_bytes: 0,
         manifest,
@@ -232,7 +233,7 @@ pub fn export(
     ensure_safe_output_path(config, output)?;
     create_parent_dir(output)?;
 
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     let manifest = export_manifest(&executor)?;
     let sync = radroots_replica_sync_status(&executor)?;
     let records = match format {
@@ -338,7 +339,9 @@ fn validate_directory_target(path: &Path) -> Result<(), RuntimeError> {
 }
 
 fn sdk_storage_files_exist(sdk_root: &Path) -> bool {
-    sdk_root.join(SDK_EVENT_STORE_FILE).exists() && sdk_root.join(SDK_OUTBOX_FILE).exists()
+    sdk_root.join(SDK_RUNTIME_FILE).exists()
+        && sdk_root.join(SDK_PRIVATE_FILE).exists()
+        && sdk_root.join(SDK_STUDIO_FILE).exists()
 }
 
 fn sdk_status_view(
@@ -349,14 +352,10 @@ fn sdk_status_view(
     integrity: IntegrityReceipt,
     derived_projection: LocalDerivedProjectionStatusView,
 ) -> LocalStatusView {
-    let event_store_path = receipt
+    let runtime_path = receipt
         .paths
         .as_ref()
-        .map(|paths| paths.event_store_path.display().to_string());
-    let outbox_path = receipt
-        .paths
-        .as_ref()
-        .map(|paths| paths.outbox_path.display().to_string());
+        .map(|paths| paths.runtime_path.display().to_string());
     let state = sdk_status_state(&receipt, &integrity).to_owned();
     let reason = sdk_status_reason(&state);
     let actions = sdk_status_actions(&state);
@@ -368,8 +367,8 @@ fn sdk_status_view(
         sdk_storage: sdk_storage_kind_label(receipt.storage).to_owned(),
         sdk_root: sdk_root.display().to_string(),
         sdk_existed_before_open,
-        event_store: sdk_event_store_status_view(receipt.event_store, event_store_path),
-        outbox: sdk_outbox_status_view(receipt.outbox, outbox_path),
+        event_store: sdk_event_store_status_view(receipt.event_store, runtime_path.clone()),
+        outbox: sdk_outbox_status_view(receipt.outbox, runtime_path),
         integrity: sdk_integrity_view(integrity),
         derived_projection,
         reason,
@@ -430,7 +429,6 @@ fn sdk_outbox_status_view(
         retryable_events: status.retryable_events,
         terminal_events: status.terminal_events,
         failed_terminal_events: status.failed_terminal_events,
-        preview_unavailable_events: status.preview_unavailable_events,
         deferred_until_implemented_events: status.deferred_until_implemented_events,
         ready_signed_events: status.ready_signed_events,
         publishing_events: status.publishing_events,
@@ -469,13 +467,15 @@ fn ensure_safe_sdk_backup_destination(
     output: &Path,
 ) -> Result<(), RuntimeError> {
     let sdk_root = sdk_storage_root(config);
-    let sdk_event_store_path = sdk_root.join(SDK_EVENT_STORE_FILE);
-    let sdk_outbox_path = sdk_root.join(SDK_OUTBOX_FILE);
+    let sdk_runtime_path = sdk_root.join(SDK_RUNTIME_FILE);
+    let sdk_private_path = sdk_root.join(SDK_PRIVATE_FILE);
+    let sdk_studio_path = sdk_root.join(SDK_STUDIO_FILE);
     let forbidden_paths = [
         sdk_root.as_path(),
         config.local.replica_store_path.as_path(),
-        sdk_event_store_path.as_path(),
-        sdk_outbox_path.as_path(),
+        sdk_runtime_path.as_path(),
+        sdk_private_path.as_path(),
+        sdk_studio_path.as_path(),
     ];
     if forbidden_paths.iter().any(|forbidden| output == *forbidden) {
         return Err(RuntimeError::Config(format!(
@@ -497,13 +497,15 @@ fn ensure_safe_sdk_restore_destination(
     destination: &Path,
 ) -> Result<(), RuntimeError> {
     let sdk_root = sdk_storage_root(config);
-    let sdk_event_store_path = sdk_root.join(SDK_EVENT_STORE_FILE);
-    let sdk_outbox_path = sdk_root.join(SDK_OUTBOX_FILE);
+    let sdk_runtime_path = sdk_root.join(SDK_RUNTIME_FILE);
+    let sdk_private_path = sdk_root.join(SDK_PRIVATE_FILE);
+    let sdk_studio_path = sdk_root.join(SDK_STUDIO_FILE);
     let forbidden_paths = [
         config.local.root.as_path(),
         config.local.replica_store_path.as_path(),
-        sdk_event_store_path.as_path(),
-        sdk_outbox_path.as_path(),
+        sdk_runtime_path.as_path(),
+        sdk_private_path.as_path(),
+        sdk_studio_path.as_path(),
     ];
     if forbidden_paths
         .iter()
@@ -527,11 +529,12 @@ fn ensure_safe_sdk_restore_destination(
 }
 
 fn sdk_backup_view(receipt: BackupReceipt) -> Result<LocalBackupView, CliSdkAdapterError> {
-    let event_store_file = receipt.event_store_path.as_ref().map(display_path);
-    let outbox_file = receipt.outbox_path.as_ref().map(display_path);
+    let event_store_file = receipt.runtime_path.as_ref().map(display_path);
+    let outbox_file = receipt.runtime_path.as_ref().map(display_path);
     let manifest_file = receipt.manifest_path.as_ref().map(display_path);
-    let size_bytes = path_size(receipt.event_store_path.as_ref())?
-        + path_size(receipt.outbox_path.as_ref())?
+    let size_bytes = path_size(receipt.runtime_path.as_ref())?
+        + path_size(receipt.private_path.as_ref())?
+        + path_size(receipt.studio_path.as_ref())?
         + path_size(receipt.manifest_path.as_ref())?;
     Ok(LocalBackupView {
         state: sdk_backup_state_label(receipt.state).to_owned(),
@@ -570,15 +573,14 @@ fn sdk_restore_view(
             .as_ref()
             .map(display_path)
             .unwrap_or_default(),
-        event_store_file: display_path(&receipt.event_store_path),
-        outbox_file: display_path(&receipt.outbox_path),
+        event_store_file: display_path(&receipt.runtime_path),
+        outbox_file: display_path(&receipt.runtime_path),
         manifest_file: display_path(&receipt.manifest_path),
         destination_event_store_file: destination_paths
-            .map(|paths| display_path(&paths.event_store_path)),
-        destination_outbox_file: destination_paths.map(|paths| display_path(&paths.outbox_path)),
-        restored_event_store_file: restored_paths
-            .map(|paths| display_path(&paths.event_store_path)),
-        restored_outbox_file: restored_paths.map(|paths| display_path(&paths.outbox_path)),
+            .map(|paths| display_path(&paths.runtime_path)),
+        destination_outbox_file: destination_paths.map(|paths| display_path(&paths.runtime_path)),
+        restored_event_store_file: restored_paths.map(|paths| display_path(&paths.runtime_path)),
+        restored_outbox_file: restored_paths.map(|paths| display_path(&paths.runtime_path)),
         manifest: json_value(&receipt.manifest)?,
         verification: json_value(&receipt.verification)?,
         overwrite,
@@ -616,8 +618,9 @@ fn sdk_backup_manifest_preview(
         "source_storage": sdk_storage_kind_label(status.storage),
         "source_paths": &status.paths,
         "backup_paths": {
-            "event_store_path": output.join(SDK_EVENT_STORE_FILE).display().to_string(),
-            "outbox_path": output.join(SDK_OUTBOX_FILE).display().to_string(),
+            "runtime_path": output.join(SDK_RUNTIME_FILE).display().to_string(),
+            "private_path": output.join(SDK_PRIVATE_FILE).display().to_string(),
+            "studio_path": output.join(SDK_STUDIO_FILE).display().to_string(),
         },
         "source_status": status,
         "backup_verification": {

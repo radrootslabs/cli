@@ -926,6 +926,8 @@ fn local_listing_publish_fails_without_local_account_authority() {
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000004",
         "listing",
         "publish",
         listing_file.to_string_lossy().as_ref(),
@@ -1280,6 +1282,8 @@ fn local_farm_publish_fails_without_configured_relay() {
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000003",
         "farm",
         "publish",
     ]);
@@ -1420,6 +1424,7 @@ fn local_farm_publish_reports_sdk_push_failure_without_profile_publish() {
         "pickup",
     ]);
     let relay_url = "ws://127.0.0.1:9";
+    let idempotency_key = "01890f3c-7f2a-7b01-8000-000000000001";
 
     sandbox.write_nostr_transport_profile(&[relay_url]);
     let (output, value) = sandbox.json_output(&[
@@ -1428,7 +1433,7 @@ fn local_farm_publish_reports_sdk_push_failure_without_profile_publish() {
         "--approval-token",
         "approve",
         "--idempotency-key",
-        "farm_partial",
+        idempotency_key,
         "farm",
         "publish",
     ]);
@@ -1455,8 +1460,14 @@ fn local_farm_publish_reports_sdk_push_failure_without_profile_publish() {
             .len(),
         64
     );
-    assert_eq!(detail["profile"]["idempotency_key"], "farm_partial:profile");
-    assert_eq!(detail["farm"]["idempotency_key"], "farm_partial:farm");
+    assert_eq!(
+        detail["profile"]["idempotency_key"],
+        "01890f3c-7f2a-7b01-8000-9db91832364f"
+    );
+    assert_eq!(
+        detail["farm"]["idempotency_key"],
+        "01890f3c-7f2a-7b01-8000-f953bff1d106"
+    );
     assert_eq!(detail["actions"][0], "radroots sync push");
     assert_eq!(detail["farm"]["target_transport_endpoints"][0], relay_url);
     assert_relay_url(
@@ -1508,6 +1519,7 @@ fn local_farm_publish_does_not_persist_publication_until_sdk_push_publishes() {
         "pickup",
     ]);
     let relay_url = "ws://127.0.0.1:9";
+    let idempotency_key = "01890f3c-7f2a-7b01-8000-000000000002";
 
     sandbox.write_nostr_transport_profile(&[relay_url]);
     let (output, value) = sandbox.json_output(&[
@@ -1516,7 +1528,7 @@ fn local_farm_publish_does_not_persist_publication_until_sdk_push_publishes() {
         "--approval-token",
         "approve",
         "--idempotency-key",
-        "farm_success",
+        idempotency_key,
         "farm",
         "publish",
     ]);
@@ -1538,8 +1550,14 @@ fn local_farm_publish_does_not_persist_publication_until_sdk_push_publishes() {
             .len(),
         64
     );
-    assert_eq!(detail["profile"]["idempotency_key"], "farm_success:profile");
-    assert_eq!(detail["farm"]["idempotency_key"], "farm_success:farm");
+    assert_eq!(
+        detail["profile"]["idempotency_key"],
+        "01890f3c-7f2a-7b01-8000-c7f426f40246"
+    );
+    assert_eq!(
+        detail["farm"]["idempotency_key"],
+        "01890f3c-7f2a-7b01-8000-692916b32301"
+    );
     assert_no_removed_command_reference(&value, &["farm", "publish"]);
     assert_no_daemon_runtime_reference(&value, &["farm", "publish"]);
 
@@ -2153,6 +2171,8 @@ fn local_seller_publish_commands_attempt_configured_relay() {
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000003",
         "farm",
         "publish",
     ]);
@@ -2189,6 +2209,8 @@ fn local_seller_publish_commands_attempt_configured_relay() {
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000004",
         "listing",
         "publish",
         listing_file_arg.as_ref(),
@@ -2228,6 +2250,8 @@ fn local_seller_publish_commands_attempt_configured_relay() {
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000005",
         "listing",
         "archive",
         listing_file_arg.as_ref(),

@@ -55,7 +55,7 @@ pub const MESH_POLICY_CHECK: OperationSpec = operation!(
     "mesh_policy_check",
     "MeshPolicyCheckRequest",
     "MeshPolicyCheckResult",
-    "Evaluate mesh delivery policy for the active preview state.",
+    "Evaluate mesh delivery policy for the active Reticulum availability state.",
     Any,
     false,
     None,

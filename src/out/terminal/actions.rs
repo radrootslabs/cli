@@ -316,8 +316,8 @@ mod tests {
             kind: NextActionKind::OperatorConfig,
             label: "configure token".to_owned(),
             command: None,
-            description: Some("configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE".to_owned()),
-            env_var: Some("RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE".to_owned()),
+            description: Some("configure RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_FILE".to_owned()),
+            env_var: Some("RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_FILE".to_owned()),
             config_key: None,
         };
 
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(terminal[0].kind, TerminalActionKind::Setup);
         assert_eq!(
             terminal[0].description.as_deref(),
-            Some("configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE")
+            Some("configure RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_FILE")
         );
     }
 }

@@ -234,7 +234,7 @@ impl OperationService<FarmPublishRequest> for FarmOperationService<'_> {
         }
         if matches!(
             self.config.transport.profile,
-            TransportProfileKind::Nostr | TransportProfileKind::Hybrid
+            TransportProfileKind::Nostr | TransportProfileKind::MultiTarget
         ) {
             require_nostr_delivery_target(&request, self.config)?;
         }

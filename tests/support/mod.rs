@@ -15,7 +15,7 @@ use radroots_runtime_store::{
     RuntimeStoreRecordInput, RuntimeStoreRecordStatus, SourceRuntime,
 };
 use radroots_secret_vault::RadrootsSecretVault;
-use radroots_sql_core::{SqlExecutor, SqliteExecutor};
+use radroots_sql_core::{SqlExecutor, SqlxSqliteExecutor};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -140,7 +140,7 @@ impl RadrootsCliSandbox {
         if !path.exists() {
             return Vec::new();
         }
-        let executor = SqliteExecutor::open(path).expect("open runtime store db");
+        let executor = SqlxSqliteExecutor::open(path).expect("open runtime store db");
         let store = RuntimeStore::new(executor);
         store.migrate_up().expect("migrate runtime store db");
         store
@@ -324,7 +324,7 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
         sig: "f".repeat(128),
     })
     .expect("seed listing event");
-    let executor = SqliteExecutor::open(Path::new(db_path)).expect("open replica db");
+    let executor = SqlxSqliteExecutor::open(Path::new(db_path)).expect("open replica db");
     assert_eq!(
         radroots_replica_ingest_event(&executor, &event).expect("ingest listing"),
         RadrootsReplicaIngestOutcome::Applied
@@ -335,7 +335,7 @@ pub fn seed_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) 
 
 #[allow(dead_code)]
 pub fn seed_market_refresh_provenance(sandbox: &RadrootsCliSandbox, relay_urls: &[&str]) {
-    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
+    let executor = SqlxSqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
     executor
         .exec(
             "CREATE TABLE IF NOT EXISTS radroots_cli_sync_run (
@@ -433,7 +433,7 @@ fn seed_orderable_listing_signed_event(
     let database_path = sandbox.runtime_store_db_path();
     fs::create_dir_all(database_path.parent().expect("runtime store parent"))
         .expect("runtime store parent");
-    let executor = SqliteExecutor::open(database_path).expect("open runtime store");
+    let executor = SqlxSqliteExecutor::open(database_path).expect("open runtime store");
     let store = RuntimeStore::new(executor);
     store.migrate_up().expect("migrate runtime store");
     store
@@ -467,7 +467,7 @@ fn seed_orderable_listing_signed_event(
 }
 
 pub fn remove_orderable_listing(sandbox: &RadrootsCliSandbox, listing_addr: &str) {
-    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
+    let executor = SqlxSqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
     let params = serde_json::to_string(&vec![listing_addr]).expect("delete listing params");
     executor
         .exec(
@@ -482,7 +482,7 @@ pub fn update_orderable_listing_available_amount(
     listing_addr: &str,
     available_amount: i64,
 ) {
-    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
+    let executor = SqlxSqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
     let params = serde_json::to_string(&serde_json::json!([available_amount, listing_addr]))
         .expect("update listing params");
     executor
@@ -498,7 +498,7 @@ pub fn update_orderable_listing_primary_bin_id(
     listing_addr: &str,
     primary_bin_id: Option<&str>,
 ) {
-    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
+    let executor = SqlxSqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
     let params = serde_json::to_string(&serde_json::json!([primary_bin_id, listing_addr]))
         .expect("update listing primary bin params");
     executor
@@ -510,7 +510,7 @@ pub fn update_orderable_listing_primary_bin_id(
 }
 
 pub fn duplicate_orderable_listing_row(sandbox: &RadrootsCliSandbox, listing_addr: &str) {
-    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
+    let executor = SqlxSqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
     let params = serde_json::to_string(&json!([
         "33333333-3333-3333-3333-333333333333",
         listing_addr
@@ -531,7 +531,7 @@ pub fn replace_latest_listing_event_id(
 ) {
     let (seller_pubkey, listing_id) = listing_addr_parts(listing_addr);
     let key = format!("{KIND_LISTING}:{seller_pubkey}:{listing_id}");
-    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
+    let executor = SqlxSqliteExecutor::open(sandbox.replica_store_path()).expect("open replica db");
     let params = serde_json::to_string(&vec![event_id, key.as_str()]).expect("update params");
     executor
         .exec(

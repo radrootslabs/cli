@@ -504,7 +504,7 @@ fn validate_transport_profile_contract(
     }
     if matches!(
         config.transport.profile,
-        TransportProfileKind::LocalOnly | TransportProfileKind::ReticulumPreview
+        TransportProfileKind::LocalOnly | TransportProfileKind::Reticulum
     ) {
         return Err(OperationAdapterError::NetworkUnavailable {
             operation_id: spec.operation_id.to_owned(),
@@ -517,7 +517,7 @@ fn validate_transport_profile_contract(
     }
     if matches!(
         config.transport.profile,
-        TransportProfileKind::Nostr | TransportProfileKind::Hybrid
+        TransportProfileKind::Nostr | TransportProfileKind::MultiTarget
     ) && config.transport.nostr_relay_urls.is_empty()
     {
         return Err(OperationAdapterError::NetworkUnavailable {
@@ -528,23 +528,12 @@ fn validate_transport_profile_contract(
             ),
         });
     }
-    if matches!(config.transport.profile, TransportProfileKind::Proxy)
-        && let Err(error) = runtime::transport::proxy_token_ready(config)
-    {
-        return Err(OperationAdapterError::NetworkUnavailable {
-            operation_id: spec.operation_id.to_owned(),
-            message: format!(
-                "`{}` requires a usable proxy token source: {error}",
-                spec.cli_path,
-            ),
-        });
-    }
     Ok(())
 }
 
 fn transport_profile_delivery_unavailable_reason(config: &RuntimeConfig) -> Option<String> {
     match config.transport.profile {
-        TransportProfileKind::Nostr | TransportProfileKind::Hybrid => {
+        TransportProfileKind::Nostr | TransportProfileKind::MultiTarget => {
             config.transport.nostr_relay_urls.is_empty().then(|| {
                 format!(
                     "active {} transport profile has no configured Nostr relay targets",
@@ -552,15 +541,11 @@ fn transport_profile_delivery_unavailable_reason(config: &RuntimeConfig) -> Opti
                 )
             })
         }
-        TransportProfileKind::Proxy => match runtime::transport::proxy_token_ready(config) {
-            Ok(()) => None,
-            Err(error) => Some(error.to_string()),
-        },
         TransportProfileKind::LocalOnly => {
             Some("active local_only transport profile cannot deliver".to_owned())
         }
-        TransportProfileKind::ReticulumPreview => {
-            Some("active reticulum_preview transport profile cannot deliver".to_owned())
+        TransportProfileKind::Reticulum => {
+            Some("active reticulum transport profile cannot deliver".to_owned())
         }
     }
 }

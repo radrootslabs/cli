@@ -804,7 +804,7 @@ fn publish_runtime_view(
     };
 
     match config.transport.profile {
-        TransportProfileKind::Nostr | TransportProfileKind::Hybrid => {
+        TransportProfileKind::Nostr | TransportProfileKind::MultiTarget => {
             let (state, executable, reason) =
                 nostr_publish_readiness(config, relay_ready, signed_write_required, account);
             PublishRuntimeView {
@@ -820,25 +820,6 @@ fn publish_runtime_view(
                     provider_runtime_id: config.transport.profile.as_str().to_owned(),
                     state: state.to_owned(),
                     source: config.transport.source.as_str().to_owned(),
-                    reason,
-                },
-            }
-        }
-        TransportProfileKind::Proxy => {
-            let (state, executable, reason) = proxy_publish_readiness(config);
-            PublishRuntimeView {
-                transport: config.transport.profile.as_str().to_owned(),
-                source,
-                transport_family: config.transport.profile.transport_family().to_owned(),
-                state: state.to_owned(),
-                executable,
-                reason: reason.clone(),
-                signed_write_required,
-                relay,
-                provider: PublishProviderRuntimeView {
-                    provider_runtime_id: "proxy".to_owned(),
-                    state: state.to_owned(),
-                    source: "publish transport · transport profile".to_owned(),
                     reason,
                 },
             }
@@ -861,18 +842,18 @@ fn publish_runtime_view(
                 reason: Some("local_only transport profile writes only to local state".to_owned()),
             },
         },
-        TransportProfileKind::ReticulumPreview => PublishRuntimeView {
+        TransportProfileKind::Reticulum => PublishRuntimeView {
             transport: config.transport.profile.as_str().to_owned(),
             source,
             transport_family: config.transport.profile.transport_family().to_owned(),
-            state: "preview_unavailable".to_owned(),
+            state: "unavailable".to_owned(),
             executable: false,
             reason: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
             signed_write_required,
             relay,
             provider: PublishProviderRuntimeView {
-                provider_runtime_id: "reticulum_preview".to_owned(),
-                state: "preview_unavailable".to_owned(),
+                provider_runtime_id: "reticulum".to_owned(),
+                state: "unavailable".to_owned(),
                 source: config.transport.source.as_str().to_owned(),
                 reason: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
             },
@@ -929,23 +910,6 @@ fn nostr_publish_readiness(
                 AccountRuntimeFailure::watch_only(&resolved_account.record.account_id).to_string(),
             ),
         );
-    }
-
-    ("ready", true, None)
-}
-
-fn proxy_publish_readiness(config: &RuntimeConfig) -> (&'static str, bool, Option<String>) {
-    if let Err(error) = crate::runtime::transport::proxy_token_ready(config) {
-        return ("unconfigured", false, Some(error.to_string()));
-    }
-
-    if matches!(config.signer.backend, SignerBackend::Myc) {
-        let signer = resolve_signer_status(config);
-        return if signer.state == "ready" {
-            ("ready", true, None)
-        } else {
-            ("unconfigured", false, signer.reason)
-        };
     }
 
     ("ready", true, None)
@@ -1101,7 +1065,7 @@ fn publish_recovery_actions(
 
     let mut actions = Vec::new();
     match config.transport.profile {
-        TransportProfileKind::Nostr | TransportProfileKind::Hybrid => {
+        TransportProfileKind::Nostr | TransportProfileKind::MultiTarget => {
             if config.transport.nostr_relay_urls.is_empty() {
                 push_unique(
                     &mut actions,
@@ -1120,27 +1084,13 @@ fn publish_recovery_actions(
                 }
             }
         }
-        TransportProfileKind::Proxy => {
-            if crate::runtime::transport::proxy_token_ready(config).is_ok() {
-                if publish.signed_write_required
-                    && matches!(config.signer.backend, SignerBackend::Myc)
-                {
-                    push_unique(&mut actions, "radroots signer status get");
-                }
-            } else {
-                push_unique(
-                    &mut actions,
-                    "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID",
-                );
-            }
-        }
         TransportProfileKind::LocalOnly => {
             push_unique(
                 &mut actions,
                 "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com",
             );
         }
-        TransportProfileKind::ReticulumPreview => {
+        TransportProfileKind::Reticulum => {
             push_unique(
                 &mut actions,
                 "radroots transport profile set --kind nostr --nostr-relay wss://relay.example.com",

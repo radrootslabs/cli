@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use radroots_event::order::RadrootsOrderEconomics;
 use radroots_replica_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
 use radroots_replica_store::{ReplicaSql, trade_product};
-use radroots_sql_core::SqliteExecutor;
+use radroots_sql_core::SqlxSqliteExecutor;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -880,7 +880,7 @@ fn basket_market_issues(
             "current local replica data is required before quote creation; run `radroots store init` and `radroots market refresh`",
         )]);
     }
-    let executor = SqliteExecutor::open(&config.local.replica_store_path).map_err(|error| {
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path).map_err(|error| {
         OperationAdapterError::Runtime(format!(
             "open local replica {}: {error}",
             config.local.replica_store_path.display()
@@ -955,7 +955,7 @@ fn basket_market_issues(
 
 fn basket_product_bin_state(
     config: &RuntimeConfig,
-    executor: &SqliteExecutor,
+    executor: &SqlxSqliteExecutor,
     item: &BasketItem,
 ) -> Result<BasketProductResolution, OperationAdapterError> {
     if let Some(listing_addr) = item.listing_addr.as_deref().and_then(non_empty_ref) {
@@ -984,7 +984,7 @@ fn basket_product_bin_state(
         return Ok(BasketProductResolution::Unresolved);
     };
     let lookup_executor =
-        SqliteExecutor::open(&config.local.replica_store_path).map_err(|error| {
+        SqlxSqliteExecutor::open(&config.local.replica_store_path).map_err(|error| {
             OperationAdapterError::Runtime(format!(
                 "open local replica {}: {error}",
                 config.local.replica_store_path.display()
@@ -1320,7 +1320,7 @@ mod tests {
     use radroots_event::{RadrootsEventEnvelope, RadrootsEventEnvelopeParts};
     use radroots_replica_sync::{RadrootsReplicaIngestOutcome, radroots_replica_ingest_event};
     use radroots_secret_vault::RadrootsSecretBackend;
-    use radroots_sql_core::{SqlExecutor, SqliteExecutor};
+    use radroots_sql_core::{SqlExecutor, SqlxSqliteExecutor};
     use serde_json::{Map, Value, json};
     use tempfile::tempdir;
 
@@ -1821,7 +1821,7 @@ mod tests {
         })
         .expect("seed listing event");
         let executor =
-            SqliteExecutor::open(&config.local.replica_store_path).expect("open replica");
+            SqlxSqliteExecutor::open(&config.local.replica_store_path).expect("open replica");
         assert_eq!(
             radroots_replica_ingest_event(&executor, &event).expect("ingest listing"),
             RadrootsReplicaIngestOutcome::Applied
@@ -1837,7 +1837,7 @@ mod tests {
 
     fn duplicate_current_listing_row(config: &RuntimeConfig) {
         let executor =
-            SqliteExecutor::open(&config.local.replica_store_path).expect("open replica");
+            SqlxSqliteExecutor::open(&config.local.replica_store_path).expect("open replica");
         let params = json!(["33333333-3333-3333-3333-333333333333", LISTING_ADDR]).to_string();
         executor
             .exec(

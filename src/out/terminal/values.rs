@@ -5,9 +5,8 @@ use serde_json::Value;
 pub fn transport_label(value: &str) -> String {
     match value {
         "nostr" => "nostr",
-        "proxy" => "proxy",
+        "reticulum" => "reticulum",
         "local" => "local",
-        "preview" => "preview",
         other => other,
     }
     .to_owned()

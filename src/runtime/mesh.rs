@@ -1,5 +1,5 @@
 use radroots_mesh::{
-    RADROOTS_MESH_PREVIEW_DENIAL_MESSAGE, RadrootsMeshAdmissionInput, RadrootsMeshPayloadPolicy,
+    RADROOTS_MESH_UNAVAILABLE_MESSAGE, RadrootsMeshAdmissionInput, RadrootsMeshPayloadPolicy,
     RadrootsMeshPrivacyClass, RadrootsMeshScope,
 };
 use serde_json::Value as JsonValue;
@@ -26,7 +26,7 @@ pub fn set_scope(
         .and_then(JsonValue::as_str)
         .unwrap_or("disabled");
     match scope {
-        "disabled" | "local_preview" => {}
+        "disabled" | "local" => {}
         other => {
             return Err(RuntimeError::Config(format!(
                 "mesh scope `{other}` is not supported"
@@ -47,14 +47,14 @@ pub fn status(config: &RuntimeConfig) -> MeshStatusView {
         scope: scope.to_owned(),
         transport: "reticulum".to_owned(),
         configured: scope != "disabled",
-        implementation: "preview_unavailable".to_owned(),
+        implementation: "unavailable".to_owned(),
         usable_for_delivery: false,
-        message: RADROOTS_MESH_PREVIEW_DENIAL_MESSAGE.to_owned(),
+        message: RADROOTS_MESH_UNAVAILABLE_MESSAGE.to_owned(),
     }
 }
 
 pub fn policy_check(config: &RuntimeConfig) -> MeshPolicyCheckView {
-    let policy = RadrootsMeshPayloadPolicy::preview_unavailable();
+    let policy = RadrootsMeshPayloadPolicy::reticulum_unavailable();
     let privacy_class = RadrootsMeshPrivacyClass::PublicEvent;
     let input = RadrootsMeshAdmissionInput::new(RadrootsMeshScope::Local, privacy_class, 1, 1);
     let decision = policy.evaluate(&input);
@@ -88,8 +88,8 @@ fn scope_view(scope: &str, state: &str) -> MeshScopeView {
         state: state.to_owned(),
         source: MESH_SOURCE.to_owned(),
         scope: scope.to_owned(),
-        implementation: "preview_unavailable".to_owned(),
-        message: "Mesh delivery is disabled unless a preview scope is explicitly configured"
+        implementation: "unavailable".to_owned(),
+        message: "Mesh delivery is disabled unless a Reticulum scope is explicitly configured"
             .to_owned(),
         actions: vec!["radroots mesh policy check".to_owned()],
     }

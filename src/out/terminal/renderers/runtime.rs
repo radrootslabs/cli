@@ -107,24 +107,6 @@ fn transport_profile_document(envelope: &OutputEnvelope, result: &Value) -> Term
         &["profile_delivery_usable"],
     );
     common::push_path_field(&mut document, "Message", result, &["message"]);
-    common::push_path_field(
-        &mut document,
-        "Proxy token",
-        result,
-        &["proxy_token_source"],
-    );
-    common::push_path_field(
-        &mut document,
-        "Proxy token file",
-        result,
-        &["proxy_token_file"],
-    );
-    common::push_path_field(
-        &mut document,
-        "Proxy token secret",
-        result,
-        &["proxy_token_secret_id"],
-    );
     if let Some(relays) = common::array(result, &["nostr_relays"]) {
         let rows = relays
             .iter()
@@ -233,9 +215,9 @@ fn transport_outbox_status_document(envelope: &OutputEnvelope, result: &Value) -
     common::push_count_field(&mut document, "Terminal", result, &["terminal_count"]);
     common::push_count_field(
         &mut document,
-        "Preview unavailable",
+        "Deferred",
         result,
-        &["preview_unavailable_count"],
+        &["deferred_until_implemented_count"],
     );
     common::push_count_field(
         &mut document,

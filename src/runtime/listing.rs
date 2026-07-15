@@ -13,7 +13,7 @@ use radroots_core::{
 use radroots_event::contract::RadrootsActorRole;
 use radroots_event::farm::RadrootsFarmRef;
 use radroots_event::ids::{RadrootsDTag, RadrootsInventoryBinId};
-use radroots_event::kinds::{KIND_LISTING, KIND_LISTING_DRAFT};
+use radroots_event::kinds::KIND_LISTING;
 use radroots_event::listing::{
     RadrootsListing, RadrootsListingAvailability, RadrootsListingBin,
     RadrootsListingDeliveryMethod, RadrootsListingProduct, RadrootsListingPublicLocation,
@@ -30,8 +30,8 @@ use radroots_sdk::{
     ListingPublishPlan, PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
     PushOutboxRequest, PushOutboxTargetOutcomeKind, SdkMutationState,
 };
-use radroots_sql_core::SqliteExecutor;
-use radroots_trade::listing::{RadrootsListingDraftDocumentV1, validation::validate_listing_event};
+use radroots_sql_core::SqlxSqliteExecutor;
+use radroots_trade::listing::{RadrootsListingEditDocumentV1, validation::validate_listing_event};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -237,7 +237,7 @@ struct CanonicalListingDraft {
 struct SdkListingPublishInput {
     canonical: CanonicalListingDraft,
     actor: RadrootsActorContext,
-    document: RadrootsListingDraftDocumentV1,
+    document: RadrootsListingEditDocumentV1,
 }
 
 #[derive(Debug, Clone)]
@@ -565,7 +565,7 @@ pub fn validate(
 
     match canonicalize_draft(&parsed, &contents, &context) {
         Ok(canonical) => {
-            let parts = match to_wire_parts_with_kind(&canonical.listing, KIND_LISTING_DRAFT) {
+            let parts = match to_wire_parts_with_kind(&canonical.listing, KIND_LISTING) {
                 Ok(parts) => parts,
                 Err(error) => {
                     return Ok(invalid_validation_view(
@@ -1153,7 +1153,7 @@ fn listing_ready_issues(
     canonical: &CanonicalListingDraft,
     contents: &str,
 ) -> Vec<ListingValidationIssueView> {
-    let parts = match to_wire_parts_with_kind(&canonical.listing, KIND_LISTING_DRAFT) {
+    let parts = match to_wire_parts_with_kind(&canonical.listing, KIND_LISTING) {
         Ok(parts) => parts,
         Err(error) => {
             return vec![ListingValidationIssueView {
@@ -1615,7 +1615,7 @@ pub fn get(
 ) -> Result<ListingGetView, RuntimeError> {
     refresh_market_listing_if_needed(config)?;
     let freshness = if config.local.replica_store_path.exists() {
-        let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+        let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
         freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?
     } else {
         missing_freshness()
@@ -1648,7 +1648,7 @@ pub fn get(
         });
     }
 
-    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_store_path)?);
+    let db = ReplicaSql::new(SqlxSqliteExecutor::open(&config.local.replica_store_path)?);
     let rows = db.trade_product_lookup(args.key.as_str())?;
     let Some(row) = rows.into_iter().next() else {
         return Ok(ListingGetView {
@@ -1735,7 +1735,7 @@ fn refresh_market_listing_if_needed(config: &RuntimeConfig) -> Result<(), Runtim
     {
         return Ok(());
     }
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     let freshness =
         freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?;
     if crate::runtime::sync::freshness_requires_refresh(&freshness) {
@@ -1846,7 +1846,7 @@ fn sdk_listing_publish_input(
         [RadrootsActorRole::Seller],
     )
     .map_err(|error| RuntimeError::Config(format!("invalid listing SDK actor: {error}")))?;
-    let document = RadrootsListingDraftDocumentV1::new(canonical.listing.clone());
+    let document = RadrootsListingEditDocumentV1::new(canonical.listing.clone());
     Ok(SdkListingPublishInput {
         canonical,
         actor,
@@ -1973,7 +1973,7 @@ fn listing_validation_event(
         id: "0".repeat(64),
         author: canonical.seller_pubkey.clone(),
         created_at: 0,
-        kind: KIND_LISTING_DRAFT,
+        kind: KIND_LISTING,
         tags: parts.tags,
         content: parts.content,
         sig: "0".repeat(128),
@@ -2185,7 +2185,7 @@ fn mutate_via_sdk_from_canonical(
         [RadrootsActorRole::Seller],
     )
     .map_err(|error| RuntimeError::Config(format!("invalid listing SDK actor: {error}")))?;
-    let document = RadrootsListingDraftDocumentV1::new(canonical.listing.clone());
+    let document = RadrootsListingEditDocumentV1::new(canonical.listing.clone());
     if config.output.dry_run {
         let session = CliSdkSession::connect_memory(config)?;
         let plan = session
@@ -3428,7 +3428,6 @@ mod tests {
             | PushOutboxTargetOutcomeKind::TargetUriRejected
             | PushOutboxTargetOutcomeKind::SkippedAlreadyAccepted
             | PushOutboxTargetOutcomeKind::DeferredUntilImplemented
-            | PushOutboxTargetOutcomeKind::PreviewUnavailable
             | PushOutboxTargetOutcomeKind::Unknown => PushOutboxTransportOutcomeKind::Rejected,
             _ => PushOutboxTransportOutcomeKind::Rejected,
         })

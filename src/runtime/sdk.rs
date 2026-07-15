@@ -16,13 +16,13 @@ use radroots_nostr_connect::prelude::{
     RadrootsNostrConnectClientTarget, RadrootsNostrConnectError, RadrootsNostrConnectUri,
 };
 use radroots_sdk::{
-    HybridProfile, MeshScopeId, NostrProfile, NostrRelayUrlPolicy, ProxyProfile,
+    MeshScopeId, MultiTargetProfile, NostrProfile, NostrRelayUrlPolicy,
     PushOutboxTargetOutcomeKind, PushOutboxTransportOutcomeKind, RadrootsClient,
     RadrootsClientBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
     RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
     RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
-    ReticulumPreviewAgentEndpoint, ReticulumPreviewBehavior as SdkReticulumPreviewBehavior,
-    ReticulumPreviewProfile, TargetPolicy, TradeValidationReceiptNostrRelayOutcomeKind,
+    RadrootsdExecutionProfile, ReticulumAgentEndpoint, ReticulumBehavior as SdkReticulumBehavior,
+    ReticulumProfile, TargetPolicy, TradeValidationReceiptNostrRelayOutcomeKind,
     TradeValidationReceiptNostrRelayTransportOutcomeKind, TransportProfile,
 };
 use radroots_transport_nostr::{
@@ -37,8 +37,8 @@ use url::Url;
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
 use crate::runtime::config::{
-    CapabilityBindingTargetKind, ReticulumPreviewBehavior, RuntimeConfig,
-    SIGNER_REMOTE_NIP46_CAPABILITY, SignerBackend, TransportProfileKind,
+    CapabilityBindingTargetKind, ReticulumBehavior, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY,
+    SignerBackend, TransportProfileKind,
 };
 
 const SDK_STORAGE_DIR_NAME: &str = "sdk";
@@ -79,6 +79,7 @@ pub struct CliSdkConfig {
     pub geonames_cache_root: PathBuf,
     pub nostr_relay_url_policy: NostrRelayUrlPolicy,
     pub transport_profile: TransportProfile,
+    pub radrootsd_execution_profile: Option<RadrootsdExecutionProfile>,
 }
 
 impl CliSdkConfig {
@@ -88,6 +89,7 @@ impl CliSdkConfig {
             geonames_cache_root: config.paths.shared_cache_root.clone(),
             nostr_relay_url_policy: sdk_nostr_relay_url_policy(config),
             transport_profile: sdk_transport_profile(config)?,
+            radrootsd_execution_profile: sdk_radrootsd_execution_profile(config)?,
         })
     }
 
@@ -97,16 +99,22 @@ impl CliSdkConfig {
             geonames_cache_root: config.paths.shared_cache_root.clone(),
             nostr_relay_url_policy: sdk_nostr_relay_url_policy(config),
             transport_profile: TransportProfile::local_only(),
+            radrootsd_execution_profile: None,
         }
     }
 
     pub fn builder(&self) -> RadrootsClientBuilder {
-        RadrootsClient::builder()
+        let builder = RadrootsClient::builder()
             .storage(RadrootsSdkStorageConfig::Directory(
                 self.storage_root.clone(),
             ))
             .geonames_cache_root(self.geonames_cache_root.clone())
-            .transport_profile(self.transport_profile.clone())
+            .transport_profile(self.transport_profile.clone());
+        if let Some(profile) = self.radrootsd_execution_profile.clone() {
+            builder.radrootsd_execution_profile(profile)
+        } else {
+            builder
+        }
     }
 }
 
@@ -398,7 +406,7 @@ async fn signer_provider(
                 request_policy,
             )
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
-            Ok(RadrootsSdkSignerProvider::MycNip46(signer))
+            Ok(RadrootsSdkSignerProvider::MycNip46(Box::new(signer)))
         }
     }
 }
@@ -674,93 +682,106 @@ fn sdk_transport_profile(config: &RuntimeConfig) -> Result<TransportProfile, Run
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
             Ok(TransportProfile::nostr(profile))
         }
-        TransportProfileKind::ReticulumPreview => Ok(TransportProfile::reticulum_preview(
-            sdk_reticulum_preview_profile(config)?,
-        )),
-        TransportProfileKind::Hybrid => {
+        TransportProfileKind::Reticulum => {
+            Ok(TransportProfile::reticulum(sdk_reticulum_profile(config)?))
+        }
+        TransportProfileKind::MultiTarget => {
             let nostr = NostrProfile::new(
                 config.transport.nostr_relay_urls.iter().map(String::as_str),
                 sdk_nostr_relay_url_policy(config),
             )
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
-            Ok(TransportProfile::hybrid(HybridProfile::new(
+            Ok(TransportProfile::multi_target(MultiTargetProfile::new(
                 nostr,
-                sdk_reticulum_preview_profile(config)?,
+                sdk_reticulum_profile(config)?,
             )))
-        }
-        TransportProfileKind::Proxy => {
-            let profile = ProxyProfile::new(config.transport.proxy.url.clone())
-                .with_bearer_token(proxy_bearer_token(config)?);
-            Ok(TransportProfile::proxy(profile))
         }
     }
 }
 
-fn sdk_reticulum_preview_profile(
-    config: &RuntimeConfig,
-) -> Result<ReticulumPreviewProfile, RuntimeError> {
-    let behavior = match config.transport.reticulum_preview_behavior {
-        ReticulumPreviewBehavior::RejectDeliveryAttempts => {
-            SdkReticulumPreviewBehavior::RejectDeliveryAttempts
-        }
-        ReticulumPreviewBehavior::DeferDeliveryPlans => {
-            SdkReticulumPreviewBehavior::DeferDeliveryPlans
-        }
+fn sdk_reticulum_profile(config: &RuntimeConfig) -> Result<ReticulumProfile, RuntimeError> {
+    let behavior = match config.transport.reticulum_behavior {
+        ReticulumBehavior::RejectDeliveryAttempts => SdkReticulumBehavior::RejectDeliveryAttempts,
+        ReticulumBehavior::DeferDeliveryPlans => SdkReticulumBehavior::DeferDeliveryPlans,
     };
-    let scope = MeshScopeId::parse(config.transport.reticulum_preview_scope.as_str())
+    let scope = MeshScopeId::parse(config.transport.reticulum_scope.as_str())
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-    let mut profile = ReticulumPreviewProfile::preview_unavailable()
+    let mut profile = ReticulumProfile::deferred_until_implemented()
         .with_behavior(behavior)
         .with_scope(scope);
-    if let Some(agent_endpoint) = config.transport.reticulum_preview_agent_endpoint.as_ref() {
+    if let Some(agent_endpoint) = config.transport.reticulum_agent_endpoint.as_ref() {
         profile = profile.with_agent_endpoint(
-            ReticulumPreviewAgentEndpoint::parse(agent_endpoint.as_str())
+            ReticulumAgentEndpoint::parse(agent_endpoint.as_str())
                 .map_err(|error| RuntimeError::Config(error.to_string()))?,
         );
     }
     Ok(profile)
 }
 
-pub(crate) fn validate_proxy_bearer_token(config: &RuntimeConfig) -> Result<(), RuntimeError> {
-    proxy_bearer_token(config).map(|_| ())
+fn sdk_radrootsd_execution_profile(
+    config: &RuntimeConfig,
+) -> Result<Option<RadrootsdExecutionProfile>, RuntimeError> {
+    if config.transport.radrootsd_execution.token_file.is_none()
+        && config
+            .transport
+            .radrootsd_execution
+            .token_secret_id
+            .is_none()
+    {
+        return Ok(None);
+    }
+    Ok(Some(
+        RadrootsdExecutionProfile::new(config.transport.radrootsd_execution.url.clone())
+            .with_bearer_token(radrootsd_execution_bearer_token(config)?),
+    ))
 }
 
-fn proxy_bearer_token(config: &RuntimeConfig) -> Result<String, RuntimeError> {
-    if let Some(path) = config.transport.proxy.token_file.as_ref() {
+fn radrootsd_execution_bearer_token(config: &RuntimeConfig) -> Result<String, RuntimeError> {
+    if let Some(path) = config.transport.radrootsd_execution.token_file.as_ref() {
         let token = fs::read_to_string(path).map_err(|error| {
             RuntimeError::Config(format!(
-                "failed to read proxy token file {}: {error}",
+                "failed to read radrootsd execution token file {}: {error}",
                 path.display()
             ))
         })?;
-        return normalize_proxy_bearer_token(
+        return normalize_radrootsd_execution_bearer_token(
             token.as_str(),
-            format!("proxy token file {}", path.display()).as_str(),
+            format!("radrootsd execution token file {}", path.display()).as_str(),
         );
     }
 
-    if let Some(secret_id) = config.transport.proxy.token_secret_id.as_ref() {
+    if let Some(secret_id) = config
+        .transport
+        .radrootsd_execution
+        .token_secret_id
+        .as_ref()
+    {
         let vault = account::account_secret_vault(config)?;
         let token = vault.load_secret(secret_id).map_err(|error| {
             RuntimeError::Config(format!(
-                "failed to load proxy token secret `{secret_id}`: {error}"
+                "failed to load radrootsd execution token secret `{secret_id}`: {error}"
             ))
         })?;
         let token = token.ok_or_else(|| {
-            RuntimeError::Config(format!("proxy token secret `{secret_id}` was not found"))
+            RuntimeError::Config(format!(
+                "radrootsd execution token secret `{secret_id}` was not found"
+            ))
         })?;
-        return normalize_proxy_bearer_token(
+        return normalize_radrootsd_execution_bearer_token(
             token.as_str(),
-            format!("proxy token secret `{secret_id}`").as_str(),
+            format!("radrootsd execution token secret `{secret_id}`").as_str(),
         );
     }
 
     Err(RuntimeError::Config(
-        "proxy transport profile requires a configured token file or token secret id".to_owned(),
+        "radrootsd execution requires a configured token file or token secret id".to_owned(),
     ))
 }
 
-fn normalize_proxy_bearer_token(raw: &str, source: &str) -> Result<String, RuntimeError> {
+fn normalize_radrootsd_execution_bearer_token(
+    raw: &str,
+    source: &str,
+) -> Result<String, RuntimeError> {
     let token = raw.trim();
     if token.is_empty() {
         return Err(RuntimeError::Config(format!("{source} is empty")));
@@ -782,8 +803,8 @@ mod tests {
 
     use radroots_authority::RadrootsEventSigner;
     use radroots_sdk::{
-        ProxyAuth, PushOutboxTargetOutcomeKind, PushOutboxTransportOutcomeKind, SdkStorageKind,
-        StorageStatusRequest, TradeValidationReceiptNostrRelayOutcomeKind,
+        PushOutboxTargetOutcomeKind, PushOutboxTransportOutcomeKind, RadrootsdExecutionAuth,
+        SdkStorageKind, StorageStatusRequest, TradeValidationReceiptNostrRelayOutcomeKind,
         TradeValidationReceiptNostrRelayTransportOutcomeKind,
     };
     use radroots_secret_vault::RadrootsSecretBackend;
@@ -793,7 +814,7 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        ReticulumPreviewBehavior, RhiConfig, RpcConfig, SignerBackend, SignerConfig, Verbosity,
+        ReticulumBehavior, RhiConfig, RpcConfig, SignerBackend, SignerConfig, Verbosity,
     };
 
     struct DirectRrRsDependency {
@@ -871,9 +892,9 @@ mod tests {
         DirectRrRsDependency {
             section: "dependencies",
             name: "radroots_mesh",
-            owner: "cli-mesh-preview-policy",
-            reason: "canonical Reticulum preview admission policy and structured delivery denial reporting",
-            lifecycle: "retain while CLI exposes mesh preview status and policy inspection",
+            owner: "cli-mesh-reticulum-admission-policy",
+            reason: "canonical Reticulum admission policy and structured delivery denial reporting",
+            lifecycle: "retain while CLI exposes Reticulum availability status and policy inspection",
         },
         DirectRrRsDependency {
             section: "dependencies",
@@ -1160,7 +1181,7 @@ mod tests {
         MigratedCliPathGuard {
             label: "trade submit",
             path: "src/runtime/order.rs",
-            start: "fn propose_trade_via_sdk(",
+            start: "fn canonical_order_request_payload_from_loaded(",
             end: "fn sdk_trade_submit_outcome_view(",
             required_tokens: &[
                 "propose_trade_via_sdk",
@@ -1325,38 +1346,34 @@ mod tests {
     }
 
     #[test]
-    fn maps_hybrid_runtime_config_to_sdk_hybrid_profile() {
+    fn maps_multi_target_runtime_config_to_sdk_multi_target_profile() {
         let root = tempdir().expect("tempdir");
         let mut config = sample_config(
             root.path(),
             vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()],
         );
-        config.transport.profile = TransportProfileKind::Hybrid;
-        config.transport.reticulum_preview_behavior = ReticulumPreviewBehavior::DeferDeliveryPlans;
-        config.transport.reticulum_preview_scope = "farmers_market".to_owned();
-        config.transport.reticulum_preview_agent_endpoint =
-            Some("reticulum-agent:local".to_owned());
+        config.transport.profile = TransportProfileKind::MultiTarget;
+        config.transport.reticulum_behavior = ReticulumBehavior::DeferDeliveryPlans;
+        config.transport.reticulum_scope = "farmers_market".to_owned();
+        config.transport.reticulum_agent_endpoint = Some("reticulum-agent:local".to_owned());
 
         let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
 
-        let TransportProfile::Hybrid { profile } = sdk_config.transport_profile else {
-            panic!("expected Hybrid transport profile");
+        let TransportProfile::MultiTarget { profile } = sdk_config.transport_profile else {
+            panic!("expected multi-target transport profile");
         };
         assert_eq!(
             profile.nostr().relay_urls(),
             vec!["wss://relay.one".to_owned(), "wss://relay.two".to_owned()]
         );
         assert_eq!(
-            profile.reticulum_preview().behavior().as_str(),
+            profile.reticulum().behavior().as_str(),
             "defer_delivery_plans"
         );
-        assert_eq!(
-            profile.reticulum_preview().scope().as_str(),
-            "farmers_market"
-        );
+        assert_eq!(profile.reticulum().scope().as_str(), "farmers_market");
         assert_eq!(
             profile
-                .reticulum_preview()
+                .reticulum()
                 .agent_endpoint()
                 .expect("agent endpoint")
                 .as_str(),
@@ -1365,72 +1382,77 @@ mod tests {
     }
 
     #[test]
-    fn maps_proxy_token_file_to_sdk_profile_auth() {
+    fn maps_radrootsd_execution_token_file_to_sdk_profile_auth() {
         let root = tempdir().expect("tempdir");
         let mut config = sample_config(root.path(), Vec::new());
-        let token_file = root.path().join("proxy.token");
-        fs::write(&token_file, "proxy-file-token\n").expect("write token file");
-        config.transport.profile = TransportProfileKind::Proxy;
-        config.transport.proxy.url = "http://127.0.0.1:7070".to_owned();
-        config.transport.proxy.token_file = Some(token_file);
+        let token_file = root.path().join("radrootsd_execution.token");
+        fs::write(&token_file, "radrootsd-execution-file-token\n").expect("write token file");
+        config.transport.radrootsd_execution.url = "http://127.0.0.1:7070".to_owned();
+        config.transport.radrootsd_execution.token_file = Some(token_file);
 
         let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
 
-        let TransportProfile::Proxy { profile } = sdk_config.transport_profile else {
-            panic!("expected proxy transport profile");
-        };
+        assert!(matches!(
+            sdk_config.transport_profile,
+            TransportProfile::LocalOnly
+        ));
+        let profile = sdk_config
+            .radrootsd_execution_profile
+            .expect("radrootsd execution profile");
         assert_eq!(profile.endpoint_url(), "http://127.0.0.1:7070");
         assert_eq!(
             profile.auth(),
-            &ProxyAuth::BearerToken("proxy-file-token".to_owned())
+            &RadrootsdExecutionAuth::BearerToken("radrootsd-execution-file-token".to_owned())
         );
     }
 
     #[test]
-    fn maps_proxy_token_secret_id_to_sdk_profile_auth() {
+    fn maps_radrootsd_execution_token_secret_id_to_sdk_profile_auth() {
         let root = tempdir().expect("tempdir");
         let mut config = sample_config(root.path(), Vec::new());
-        config.transport.profile = TransportProfileKind::Proxy;
-        config.transport.proxy.url = "http://127.0.0.1:7070".to_owned();
-        config.transport.proxy.token_secret_id = Some("proxy_token".to_owned());
+        config.transport.radrootsd_execution.url = "http://127.0.0.1:7070".to_owned();
+        config.transport.radrootsd_execution.token_secret_id =
+            Some("radrootsd_execution_token".to_owned());
         let vault = account::account_secret_vault(&config).expect("account vault");
         vault
-            .store_secret("proxy_token", "proxy-secret-token")
-            .expect("store proxy token");
+            .store_secret(
+                "radrootsd_execution_token",
+                "radrootsd-execution-secret-token",
+            )
+            .expect("store radrootsd execution token");
 
         let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
 
-        let TransportProfile::Proxy { profile } = sdk_config.transport_profile else {
-            panic!("expected proxy transport profile");
-        };
+        let profile = sdk_config
+            .radrootsd_execution_profile
+            .expect("radrootsd execution profile");
         assert_eq!(
             profile.auth(),
-            &ProxyAuth::BearerToken("proxy-secret-token".to_owned())
+            &RadrootsdExecutionAuth::BearerToken("radrootsd-execution-secret-token".to_owned())
         );
     }
 
     #[test]
-    fn proxy_sdk_profile_requires_materialized_bearer_token() {
+    fn radrootsd_execution_profile_requires_materialized_bearer_token() {
         let root = tempdir().expect("tempdir");
         let mut config = sample_config(root.path(), Vec::new());
-        config.transport.profile = TransportProfileKind::Proxy;
-        config.transport.proxy.url = "http://127.0.0.1:7070".to_owned();
+        config.transport.radrootsd_execution.url = "http://127.0.0.1:7070".to_owned();
 
-        assert!(matches!(
-            CliSdkConfig::from_runtime_config(&config),
-            Err(RuntimeError::Config(message))
-                if message.contains("configured token file or token secret id")
-        ));
+        let sdk_config = CliSdkConfig::from_runtime_config(&config).expect("sdk config");
+        assert!(sdk_config.radrootsd_execution_profile.is_none());
     }
 
     #[test]
-    fn proxy_token_resolution_rejects_empty_or_header_unsafe_tokens() {
+    fn radrootsd_execution_token_resolution_rejects_empty_or_header_unsafe_tokens() {
         assert!(matches!(
-            normalize_proxy_bearer_token(" \n", "proxy token"),
+            normalize_radrootsd_execution_bearer_token(" \n", "radrootsd execution token"),
             Err(RuntimeError::Config(message)) if message.contains("empty")
         ));
         assert!(matches!(
-            normalize_proxy_bearer_token("proxy\nsecret", "proxy token"),
+            normalize_radrootsd_execution_bearer_token(
+                "radrootsd\nexecution",
+                "radrootsd execution token"
+            ),
             Err(RuntimeError::Config(message)) if message.contains("control characters")
         ));
     }
@@ -1596,10 +1618,6 @@ mod tests {
             (
                 PushOutboxTargetOutcomeKind::DeferredUntilImplemented,
                 "deferred_until_implemented",
-            ),
-            (
-                PushOutboxTargetOutcomeKind::PreviewUnavailable,
-                "preview_unavailable",
             ),
             (PushOutboxTargetOutcomeKind::Unknown, "unknown"),
         ] {

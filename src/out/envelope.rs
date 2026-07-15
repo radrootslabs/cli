@@ -276,18 +276,6 @@ fn next_actions_from_actions_value(actions_value: Option<&Value>) -> Vec<NextAct
 
 fn next_action_from_action_string(action: &str) -> Option<NextAction> {
     let action = action.trim();
-    if action
-        == "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID"
-    {
-        return Some(NextAction {
-            kind: NextActionKind::OperatorConfig,
-            label: "configure proxy token source".to_owned(),
-            command: None,
-            description: Some(action.to_owned()),
-            env_var: Some("RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE".to_owned()),
-            config_key: None,
-        });
-    }
     if action == "configure signer.remote_nip46 signer_session_ref" {
         return Some(NextAction {
             kind: NextActionKind::OperatorConfig,
@@ -296,6 +284,18 @@ fn next_action_from_action_string(action: &str) -> Option<NextAction> {
             description: Some(action.to_owned()),
             env_var: None,
             config_key: Some("signer.remote_nip46.signer_session_ref".to_owned()),
+        });
+    }
+    if action
+        == "configure RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_FILE or RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_SECRET_ID"
+    {
+        return Some(NextAction {
+            kind: NextActionKind::OperatorConfig,
+            label: "configure radrootsd execution token source".to_owned(),
+            command: None,
+            description: Some(action.to_owned()),
+            env_var: Some("RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_FILE".to_owned()),
+            config_key: None,
         });
     }
     let command = action.trim().strip_prefix("run ").unwrap_or(action).trim();
@@ -606,9 +606,9 @@ mod tests {
         );
         error.detail = Some(json!({
             "actions": [
-                "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID",
+                "configure RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_FILE or RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_SECRET_ID",
                 "configure signer.remote_nip46 signer_session_ref",
-                "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID"
+                "configure RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_FILE or RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_SECRET_ID"
             ]
         }));
         let envelope = OutputEnvelope::failure(
@@ -625,12 +625,12 @@ mod tests {
         );
         assert_eq!(
             envelope.next_actions[0].label,
-            "configure proxy token source"
+            "configure radrootsd execution token source"
         );
         assert_eq!(envelope.next_actions[0].command, None);
         assert_eq!(
             envelope.next_actions[0].env_var.as_deref(),
-            Some("RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE")
+            Some("RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_FILE")
         );
         assert_eq!(
             envelope.next_actions[1].kind,

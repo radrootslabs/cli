@@ -623,7 +623,7 @@ fn transport_farm_publish_readiness(
 ) -> FarmPublishReadiness {
     if matches!(
         config.transport.profile,
-        TransportProfileKind::Nostr | TransportProfileKind::Hybrid
+        TransportProfileKind::Nostr | TransportProfileKind::MultiTarget
     ) && config.transport.nostr_relay_urls.is_empty()
     {
         return FarmPublishReadiness {
@@ -977,9 +977,43 @@ fn component_idempotency_key(
     args.idempotency_key
         .as_deref()
         .map(|value| {
-            required_text(value, "idempotency_key").map(|key| format!("{key}:{component}"))
+            required_text(value, "idempotency_key")
+                .and_then(|key| derive_component_idempotency_key(key.as_str(), component))
         })
         .transpose()
+}
+
+fn derive_component_idempotency_key(key: &str, component: &str) -> Result<String, RuntimeError> {
+    if !is_uuid_v7_idempotency_key(key) {
+        return Err(RuntimeError::Config(
+            "idempotency_key must be a UUIDv7".to_owned(),
+        ));
+    }
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in key
+        .bytes()
+        .chain(std::iter::once(b':'))
+        .chain(component.bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Ok(format!("{}{:012x}", &key[..24], hash & 0xffff_ffff_ffff))
+}
+
+fn is_uuid_v7_idempotency_key(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 36
+        && bytes[8] == b'-'
+        && bytes[13] == b'-'
+        && bytes[18] == b'-'
+        && bytes[23] == b'-'
+        && bytes[14] == b'7'
+        && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit())
 }
 
 fn preview_component(

@@ -11,7 +11,7 @@ use radroots_runtime_store::{
     PublishOutboxStatus, RuntimeStore, RuntimeStoreRecord, RuntimeStoreRecordFamily,
     RuntimeStoreRecordInput, RuntimeStoreRecordStatus, SourceRuntime,
 };
-use radroots_sql_core::SqliteExecutor;
+use radroots_sql_core::SqlxSqliteExecutor;
 use serde_json::Value;
 
 use crate::runtime::RuntimeError;
@@ -79,7 +79,7 @@ pub fn list_shared_records_latest(
     if !database_path.exists() {
         return Ok(Vec::new());
     }
-    let executor = SqliteExecutor::open(database_path)?;
+    let executor = SqlxSqliteExecutor::open(database_path)?;
     let store = RuntimeStore::new(executor);
     Ok(store.list_records_changed_latest(limit)?)
 }
@@ -94,7 +94,7 @@ pub fn list_shared_records_before(
     if !database_path.exists() {
         return Ok(Vec::new());
     }
-    let executor = SqliteExecutor::open(database_path)?;
+    let executor = SqlxSqliteExecutor::open(database_path)?;
     let store = RuntimeStore::new(executor);
     Ok(store.list_records_changed_before(before_change_seq, before_seq, limit)?)
 }
@@ -107,15 +107,16 @@ pub fn get_shared_record(
     if !database_path.exists() {
         return Ok(None);
     }
-    let executor = SqliteExecutor::open(database_path)?;
+    let executor = SqlxSqliteExecutor::open(database_path)?;
     let store = RuntimeStore::new(executor);
     Ok(store.get_record(record_id)?)
 }
 
-fn open_store(config: &RuntimeConfig) -> Result<RuntimeStore<SqliteExecutor>, RuntimeError> {
+fn open_store(config: &RuntimeConfig) -> Result<RuntimeStore<SqlxSqliteExecutor>, RuntimeError> {
     let root = shared_runtime_store_root_from_paths(&config.paths)?;
     fs::create_dir_all(&root)?;
-    let executor = SqliteExecutor::open(shared_runtime_store_db_path_from_paths(&config.paths)?)?;
+    let executor =
+        SqlxSqliteExecutor::open(shared_runtime_store_db_path_from_paths(&config.paths)?)?;
     let store = RuntimeStore::new(executor);
     store.migrate_up()?;
     Ok(store)

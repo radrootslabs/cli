@@ -20,9 +20,10 @@ use radroots_sdk::{
     PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt, PushOutboxRequest,
     PushOutboxTargetOutcomeKind, PushOutboxTargetReceipt, SyncStatusReceipt, SyncStatusRequest,
 };
-use radroots_sql_core::{SqlExecutor, SqliteExecutor};
+use radroots_sql_core::{SqlExecutor, SqlxSqliteExecutor};
 use radroots_transport::{
-    RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
+    RADROOTS_RETICULUM_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
+    RadrootsTransportCapabilityAvailability, RadrootsTransportCapabilityMaturity,
     RadrootsTransportImplementationState, RadrootsTransportKind, RadrootsTransportStatus,
     RadrootsTransportTarget,
 };
@@ -257,7 +258,7 @@ where
             let failed_transport_targets = relay_failures(receipt.failed_relays);
             let reason = relay_failure_reason(&failed_transport_targets);
             let failure_reason = format!("Nostr transport fetch failed: {reason}");
-            let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+            let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
             migrations::run_all_up(&executor)?;
             record_sync_run(
                 &executor,
@@ -282,7 +283,7 @@ where
         Ok(receipt) => receipt,
         Err(error) => {
             let failure_reason = error.to_string();
-            let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+            let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
             migrations::run_all_up(&executor)?;
             record_sync_run(
                 &executor,
@@ -305,7 +306,7 @@ where
         }
     };
 
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     let ingest = ingest_events(&executor, &receipt, scope)?;
     record_sync_run(
@@ -612,6 +613,8 @@ fn sdk_transport_status_view(
         endpoint_uri: status.endpoint_uri.clone(),
         configured: status.configured,
         implementation: status.implementation.clone(),
+        maturity: status.maturity.clone(),
+        availability: status.availability.clone(),
         usable_for_delivery: status.usable_for_delivery,
         capabilities: TransportOperationCapabilitiesView {
             deliver: status.capabilities.deliver,
@@ -634,7 +637,7 @@ fn sdk_sync_status_actions(receipt: &SyncStatusReceipt) -> Vec<String> {
 
 fn sdk_sync_push_actions(state: &str, retryable: bool) -> Vec<String> {
     match state {
-        "published" | "ready" | "preview_unavailable" | "deferred_until_implemented" => {
+        "published" | "ready" | "deferred_until_implemented" => {
             vec!["radroots sync status get".to_owned()]
         }
         "dry_run" | "partial" | "unavailable" if retryable => {
@@ -652,7 +655,6 @@ fn sdk_sync_push_reason_code(state: &str) -> Option<&'static str> {
         "dry_run" => Some("dry_run"),
         "partial" => Some("sdk_outbox_push_partial"),
         "unavailable" => Some("sdk_outbox_push_failed"),
-        "preview_unavailable" => Some("sdk_outbox_push_preview_unavailable"),
         "deferred_until_implemented" => Some("sdk_outbox_push_deferred_until_implemented"),
         _ => None,
     }
@@ -660,7 +662,7 @@ fn sdk_sync_push_reason_code(state: &str) -> Option<&'static str> {
 
 fn sdk_push_state(receipt: &PushOutboxReceipt, failed_count: usize) -> &'static str {
     if receipt.attempted_events == 0 {
-        return sdk_push_reported_preview_state(receipt).unwrap_or("ready");
+        return sdk_push_reported_deferred_state(receipt).unwrap_or("ready");
     }
     if receipt.published_events > 0 && failed_count > 0 {
         "partial"
@@ -673,19 +675,15 @@ fn sdk_push_state(receipt: &PushOutboxReceipt, failed_count: usize) -> &'static 
     }
 }
 
-fn sdk_push_reported_preview_state(receipt: &PushOutboxReceipt) -> Option<&'static str> {
+fn sdk_push_reported_deferred_state(receipt: &PushOutboxReceipt) -> Option<&'static str> {
     let mut deferred = false;
     for event in &receipt.events {
         match event.final_state {
-            PushOutboxEventState::PreviewUnavailable => return Some("preview_unavailable"),
             PushOutboxEventState::DeferredUntilImplemented => deferred = true,
             _ => {}
         }
         for target in &event.targets {
             match target.outcome_kind {
-                PushOutboxTargetOutcomeKind::PreviewUnavailable => {
-                    return Some("preview_unavailable");
-                }
                 PushOutboxTargetOutcomeKind::DeferredUntilImplemented => deferred = true,
                 _ => {}
             }
@@ -696,15 +694,12 @@ fn sdk_push_reported_preview_state(receipt: &PushOutboxReceipt) -> Option<&'stat
 
 fn sdk_push_reason(receipt: &PushOutboxReceipt, failed_count: usize) -> Option<String> {
     if receipt.attempted_events == 0 {
-        if let Some(state) = sdk_push_reported_preview_state(receipt) {
+        if let Some(state) = sdk_push_reported_deferred_state(receipt) {
             return Some(match state {
-                "preview_unavailable" => {
-                    "SDK outbox push reported Reticulum preview work as preview unavailable without network delivery"
-                }
                 "deferred_until_implemented" => {
-                    "SDK outbox push reported Reticulum preview work as deferred until implemented without network delivery"
+                    "SDK outbox push reported Reticulum work as deferred until implemented without network delivery"
                 }
-                _ => "SDK outbox push reported Reticulum preview work without network delivery",
+                _ => "SDK outbox push reported Reticulum work without network delivery",
             }
             .to_owned());
         }
@@ -738,7 +733,6 @@ fn sdk_sync_queue(receipt: &SyncStatusReceipt) -> SyncQueueView {
         retryable_count: Some(usize_from_i64(receipt.outbox.retryable_events)),
         terminal_count: Some(usize_from_i64(receipt.outbox.terminal_events)),
         failed_terminal_count: Some(usize_from_i64(receipt.outbox.failed_terminal_events)),
-        preview_unavailable_count: Some(usize_from_i64(receipt.outbox.preview_unavailable_events)),
         deferred_until_implemented_count: Some(usize_from_i64(
             receipt.outbox.deferred_until_implemented_events,
         )),
@@ -757,7 +751,6 @@ fn derived_projection_sync_queue(expected_count: usize, pending_count: usize) ->
         retryable_count: None,
         terminal_count: None,
         failed_terminal_count: None,
-        preview_unavailable_count: None,
         deferred_until_implemented_count: None,
         ready_signed_count: None,
         publishing_count: None,
@@ -887,13 +880,13 @@ fn sync_configured_transport_targets(
                 )?);
             }
         }
-        TransportProfileKind::ReticulumPreview => {
+        TransportProfileKind::Reticulum => {
             targets.push(sync_transport_target_view(
                 RadrootsTransportKind::Reticulum,
-                RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI,
+                RADROOTS_RETICULUM_ENDPOINT_URI,
             )?);
         }
-        TransportProfileKind::Hybrid => {
+        TransportProfileKind::MultiTarget => {
             for relay_url in &config.transport.nostr_relay_urls {
                 targets.push(sync_transport_target_view(
                     RadrootsTransportKind::Nostr,
@@ -902,13 +895,7 @@ fn sync_configured_transport_targets(
             }
             targets.push(sync_transport_target_view(
                 RadrootsTransportKind::Reticulum,
-                RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI,
-            )?);
-        }
-        TransportProfileKind::Proxy => {
-            targets.push(sync_transport_target_view(
-                RadrootsTransportKind::Proxy,
-                config.transport.proxy.url.as_str(),
+                RADROOTS_RETICULUM_ENDPOINT_URI,
             )?);
         }
     }
@@ -922,17 +909,9 @@ fn sync_transport_target_view(
     let target = match kind {
         RadrootsTransportKind::Nostr => RadrootsTransportTarget::nostr_relay(endpoint_uri),
         RadrootsTransportKind::Reticulum => {
-            if endpoint_uri != RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI {
-                Err(radroots_transport::RadrootsTransportError::InvalidTargetUri)
-            } else {
-                RadrootsTransportTarget::reticulum_preview()
-            }
+            RadrootsTransportTarget::reticulum_with_metadata(endpoint_uri, None, None)
         }
         RadrootsTransportKind::Local => RadrootsTransportTarget::local(endpoint_uri),
-        RadrootsTransportKind::Proxy => RadrootsTransportTarget::proxy(endpoint_uri),
-        RadrootsTransportKind::Mesh | RadrootsTransportKind::Custom(_) => {
-            RadrootsTransportTarget::new(kind, endpoint_uri)
-        }
     }
     .map_err(|error| RuntimeError::Config(format!("invalid transport target: {error}")))?;
     Ok(SyncTransportTargetView {
@@ -964,37 +943,18 @@ fn sync_transport_statuses(config: &RuntimeConfig) -> Vec<SyncTransportStatusVie
                 nostr_targets_configured,
             ))]
         }
-        TransportProfileKind::ReticulumPreview => {
-            vec![sync_transport_status_view(
-                reticulum_preview_transport_status(profile_id),
-            )]
+        TransportProfileKind::Reticulum => {
+            vec![sync_transport_status_view(reticulum_transport_status(
+                profile_id,
+            ))]
         }
-        TransportProfileKind::Hybrid => vec![
+        TransportProfileKind::MultiTarget => vec![
             sync_transport_status_view(nostr_transport_status(
                 profile_id,
                 nostr_targets_configured,
             )),
-            sync_transport_status_view(reticulum_preview_transport_status(profile_id)),
+            sync_transport_status_view(reticulum_transport_status(profile_id)),
         ],
-        TransportProfileKind::Proxy => {
-            let auth_configured = config.transport.proxy.token_file.is_some()
-                || config.transport.proxy.token_secret_id.is_some();
-            vec![sync_transport_status_view(
-                RadrootsTransportStatus::new(
-                    RadrootsTransportKind::Proxy,
-                    auth_configured,
-                    RadrootsTransportImplementationState::Real,
-                    auth_configured,
-                    if auth_configured {
-                        "Proxy transport delegates delivery to the configured endpoint"
-                    } else {
-                        "Proxy transport requires a configured token file or token secret id"
-                    },
-                )
-                .with_profile_id(profile_id)
-                .with_endpoint_uri(config.transport.proxy.url.as_str()),
-            )]
-        }
     }
 }
 
@@ -1013,16 +973,18 @@ fn nostr_transport_status(profile_id: &str, targets_configured: bool) -> Radroot
     .with_profile_id(profile_id)
 }
 
-fn reticulum_preview_transport_status(profile_id: &str) -> RadrootsTransportStatus {
+fn reticulum_transport_status(profile_id: &str) -> RadrootsTransportStatus {
     RadrootsTransportStatus::new(
         RadrootsTransportKind::Reticulum,
         true,
-        RadrootsTransportImplementationState::PreviewUnavailable,
+        RadrootsTransportImplementationState::Real,
         false,
         RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
     )
     .with_profile_id(profile_id)
-    .with_endpoint_uri(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI)
+    .with_endpoint_uri(RADROOTS_RETICULUM_ENDPOINT_URI)
+    .with_maturity(RadrootsTransportCapabilityMaturity::Preview)
+    .with_availability(RadrootsTransportCapabilityAvailability::Unavailable)
 }
 
 fn sync_transport_status_view(status: RadrootsTransportStatus) -> SyncTransportStatusView {
@@ -1032,6 +994,8 @@ fn sync_transport_status_view(status: RadrootsTransportStatus) -> SyncTransportS
         endpoint_uri: status.endpoint_uri,
         configured: status.configured,
         implementation: transport_implementation_label(status.implementation).to_owned(),
+        maturity: transport_maturity_label(status.maturity).to_owned(),
+        availability: transport_availability_label(status.availability).to_owned(),
         usable_for_delivery: status.usable_for_delivery,
         capabilities: TransportOperationCapabilitiesView {
             deliver: status.capabilities.deliver,
@@ -1045,7 +1009,23 @@ fn transport_implementation_label(state: RadrootsTransportImplementationState) -
     match state {
         RadrootsTransportImplementationState::Real => "real",
         RadrootsTransportImplementationState::Mock => "mock",
-        RadrootsTransportImplementationState::PreviewUnavailable => "preview_unavailable",
+    }
+}
+
+fn transport_maturity_label(maturity: RadrootsTransportCapabilityMaturity) -> &'static str {
+    match maturity {
+        RadrootsTransportCapabilityMaturity::Preview => "preview",
+        RadrootsTransportCapabilityMaturity::Stable => "stable",
+    }
+}
+
+fn transport_availability_label(
+    availability: RadrootsTransportCapabilityAvailability,
+) -> &'static str {
+    match availability {
+        RadrootsTransportCapabilityAvailability::Available => "available",
+        RadrootsTransportCapabilityAvailability::Degraded => "degraded",
+        RadrootsTransportCapabilityAvailability::Unavailable => "unavailable",
     }
 }
 
@@ -1068,7 +1048,7 @@ fn inspect_sync(config: &RuntimeConfig) -> Result<SyncSnapshot, RuntimeError> {
         });
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     let queue = radroots_replica_sync_status(&executor)?;
     let freshness =
@@ -1147,7 +1127,7 @@ pub(crate) fn freshness_for_scope(
     config: &RuntimeConfig,
     scope: RelayIngestScope,
 ) -> Result<SyncFreshnessView, RuntimeError> {
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     freshness_for_scope_from_executor(config, &executor, scope)
 }
@@ -1159,7 +1139,7 @@ pub(crate) fn relay_provenance_relays_for_scope(
     if !config.local.replica_store_path.exists() {
         return Ok(Vec::new());
     }
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     migrations::run_all_up(&executor)?;
     ensure_sync_run_table(&executor)?;
     let current_fingerprint = relay_set_fingerprint(&config.transport.nostr_relay_urls);
@@ -1178,7 +1158,7 @@ pub(crate) fn relay_provenance_relays_for_scope(
 
 pub(crate) fn freshness_for_scope_from_executor(
     config: &RuntimeConfig,
-    executor: &SqliteExecutor,
+    executor: &SqlxSqliteExecutor,
     scope: RelayIngestScope,
 ) -> Result<SyncFreshnessView, RuntimeError> {
     let last_event_at = ReplicaSql::new(executor).nostr_event_last_created_at()?;
@@ -1305,7 +1285,7 @@ fn sync_run_freshness_view(
     }
 }
 
-pub(crate) fn ensure_sync_run_table(executor: &SqliteExecutor) -> Result<(), RuntimeError> {
+pub(crate) fn ensure_sync_run_table(executor: &SqlxSqliteExecutor) -> Result<(), RuntimeError> {
     executor.exec(
         "CREATE TABLE IF NOT EXISTS radroots_cli_sync_run (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1332,7 +1312,7 @@ pub(crate) fn ensure_sync_run_table(executor: &SqliteExecutor) -> Result<(), Run
 }
 
 fn latest_sync_run(
-    executor: &SqliteExecutor,
+    executor: &SqlxSqliteExecutor,
     scope: RelayIngestScope,
 ) -> Result<Option<SyncRunRecord>, RuntimeError> {
     let rows = executor.query_raw(
@@ -1381,7 +1361,10 @@ fn sync_run_record_from_row(row: SyncRunRow) -> SyncRunRecord {
     }
 }
 
-fn record_sync_run(executor: &SqliteExecutor, record: &SyncRunRecord) -> Result<(), RuntimeError> {
+fn record_sync_run(
+    executor: &SqlxSqliteExecutor,
+    record: &SyncRunRecord,
+) -> Result<(), RuntimeError> {
     ensure_sync_run_table(executor)?;
     executor.exec(
         &format!(
@@ -1657,7 +1640,7 @@ impl RelayIngestScope {
 }
 
 fn ingest_events(
-    executor: &SqliteExecutor,
+    executor: &SqlxSqliteExecutor,
     receipt: &RadrootsRelayFetchedEventsReceipt,
     scope: RelayIngestScope,
 ) -> Result<RelayIngestCounts, RuntimeError> {
@@ -1801,7 +1784,7 @@ mod tests {
     };
     use radroots_secret_vault::RadrootsSecretBackend;
     use radroots_transport::{
-        RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
+        RADROOTS_RETICULUM_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
     };
     use radroots_transport_nostr::{
         RadrootsRelayFetchFailure, RadrootsRelayFetchedEvent, RadrootsRelayFetchedEventsReceipt,
@@ -1818,7 +1801,7 @@ mod tests {
     use crate::runtime::config::{
         AccountConfig, AccountSecretContractConfig, HyfConfig, IdentityConfig, InteractionConfig,
         LocalConfig, LoggingConfig, MycConfig, OutputConfig, OutputFormat, PathsConfig,
-        ReticulumPreviewBehavior, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig,
+        ReticulumBehavior, RpcConfig, RuntimeConfig, SignerBackend, SignerConfig,
         TransportProfileKind, Verbosity,
     };
 
@@ -1903,12 +1886,13 @@ mod tests {
     }
 
     #[test]
-    fn sync_pull_hybrid_reports_profile_targets_and_nostr_fetch_detail() {
+    fn sync_pull_multi_target_reports_profile_targets_and_nostr_fetch_detail() {
         let dir = tempdir().expect("tempdir");
-        let config = hybrid_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        let config = multi_target_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
         crate::runtime::store::init(&config).expect("store init");
 
-        let view = pull_with_fetcher(&config, fake_fetcher(Vec::new())).expect("sync pull hybrid");
+        let view =
+            pull_with_fetcher(&config, fake_fetcher(Vec::new())).expect("sync pull multi_target");
 
         assert_eq!(view.state, "ready");
         assert_eq!(view.configured_transport_target_count, 2);
@@ -1929,10 +1913,9 @@ mod tests {
         assert!(!view.transport_statuses[0].capabilities.fetch);
         assert_eq!(view.transport_statuses[1].transport, "reticulum");
         assert!(view.transport_statuses[1].configured);
-        assert_eq!(
-            view.transport_statuses[1].implementation,
-            "preview_unavailable"
-        );
+        assert_eq!(view.transport_statuses[1].implementation, "real");
+        assert_eq!(view.transport_statuses[1].maturity, "preview");
+        assert_eq!(view.transport_statuses[1].availability, "unavailable");
         assert!(!view.transport_statuses[1].usable_for_delivery);
         assert!(!view.transport_statuses[1].capabilities.deliver);
         assert!(!view.transport_statuses[1].capabilities.fetch);
@@ -1947,15 +1930,15 @@ mod tests {
     }
 
     #[test]
-    fn sync_pull_empty_hybrid_profile_reports_nostr_misconfigured() {
+    fn sync_pull_empty_multi_target_profile_reports_nostr_misconfigured() {
         let dir = tempdir().expect("tempdir");
-        let config = hybrid_config(dir.path(), Vec::new());
+        let config = multi_target_config(dir.path(), Vec::new());
         crate::runtime::store::init(&config).expect("store init");
 
         let view = pull_with_fetcher(&config, |_, _| {
-            panic!("empty Hybrid profile sync pull must not fetch")
+            panic!("empty MultiTarget profile sync pull must not fetch")
         })
-        .expect("sync pull empty Hybrid profile");
+        .expect("sync pull empty MultiTarget profile");
 
         assert_eq!(view.state, "unavailable");
         assert_eq!(view.configured_transport_target_count, 1);
@@ -1968,7 +1951,7 @@ mod tests {
         assert_eq!(view.transport_statuses[0].transport, "nostr");
         assert_eq!(
             view.transport_statuses[0].profile_id.as_deref(),
-            Some("hybrid")
+            Some("multi_target")
         );
         assert!(!view.transport_statuses[0].configured);
         assert_eq!(view.transport_statuses[0].implementation, "real");
@@ -1977,10 +1960,9 @@ mod tests {
         assert!(!view.transport_statuses[0].capabilities.fetch);
         assert_eq!(view.transport_statuses[1].transport, "reticulum");
         assert!(view.transport_statuses[1].configured);
-        assert_eq!(
-            view.transport_statuses[1].implementation,
-            "preview_unavailable"
-        );
+        assert_eq!(view.transport_statuses[1].implementation, "real");
+        assert_eq!(view.transport_statuses[1].maturity, "preview");
+        assert_eq!(view.transport_statuses[1].availability, "unavailable");
         assert!(!view.transport_statuses[1].usable_for_delivery);
         assert!(!view.transport_statuses[1].capabilities.deliver);
         assert!(!view.transport_statuses[1].capabilities.fetch);
@@ -1989,34 +1971,33 @@ mod tests {
     }
 
     #[test]
-    fn sync_inspect_hybrid_uses_profile_target_count() {
+    fn sync_inspect_multi_target_uses_profile_target_count() {
         let dir = tempdir().expect("tempdir");
-        let config = hybrid_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        let config = multi_target_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
         crate::runtime::store::init(&config).expect("store init");
 
-        let snapshot = inspect_sync(&config).expect("inspect sync hybrid");
+        let snapshot = inspect_sync(&config).expect("inspect sync multi_target");
 
         assert_eq!(snapshot.state, "ready");
         assert_eq!(snapshot.configured_transport_target_count, 2);
         assert_eq!(snapshot.configured_transport_targets.len(), 2);
         assert_eq!(snapshot.transport_statuses.len(), 2);
         assert_eq!(snapshot.transport_statuses[1].transport, "reticulum");
-        assert_eq!(
-            snapshot.transport_statuses[1].implementation,
-            "preview_unavailable"
-        );
+        assert_eq!(snapshot.transport_statuses[1].implementation, "real");
+        assert_eq!(snapshot.transport_statuses[1].maturity, "preview");
+        assert_eq!(snapshot.transport_statuses[1].availability, "unavailable");
     }
 
     #[test]
-    fn sync_pull_reticulum_preview_does_not_report_fetch_success() {
+    fn sync_pull_reticulum_does_not_report_fetch_success() {
         let dir = tempdir().expect("tempdir");
-        let config = reticulum_preview_config(dir.path());
+        let config = reticulum_config(dir.path());
         crate::runtime::store::init(&config).expect("store init");
 
         let view = pull_with_fetcher(&config, |_, _| {
-            panic!("reticulum preview sync pull must not run Nostr fetch")
+            panic!("reticulum sync pull must not run Nostr fetch")
         })
-        .expect("sync pull reticulum preview");
+        .expect("sync pull reticulum");
 
         assert_eq!(view.state, "unavailable");
         assert_eq!(view.configured_transport_target_count, 1);
@@ -2025,10 +2006,9 @@ mod tests {
             "reticulum"
         );
         assert!(view.transport_statuses[0].configured);
-        assert_eq!(
-            view.transport_statuses[0].implementation,
-            "preview_unavailable"
-        );
+        assert_eq!(view.transport_statuses[0].implementation, "real");
+        assert_eq!(view.transport_statuses[0].maturity, "preview");
+        assert_eq!(view.transport_statuses[0].availability, "unavailable");
         assert!(!view.transport_statuses[0].usable_for_delivery);
         assert!(!view.transport_statuses[0].capabilities.deliver);
         assert!(!view.transport_statuses[0].capabilities.fetch);
@@ -2037,7 +2017,7 @@ mod tests {
         assert!(
             view.reason
                 .as_deref()
-                .expect("reticulum preview reason")
+                .expect("reticulum unavailable reason")
                 .contains("does not expose Nostr relay fetch targets")
         );
     }
@@ -2065,7 +2045,6 @@ mod tests {
                 0,
                 0,
                 0,
-                0,
                 None,
                 None,
                 &["wss://relay-a.example.com", "wss://relay-b.example.com"],
@@ -2080,18 +2059,16 @@ mod tests {
         assert_eq!(view.queue.pending_count, 0);
         assert_eq!(view.queue.retryable_count, Some(0));
         assert_eq!(view.queue.terminal_count, Some(0));
-        assert_eq!(view.queue.preview_unavailable_count, Some(0));
         assert_eq!(view.queue.deferred_until_implemented_count, Some(0));
         assert_eq!(view.queue.ready_signed_count, Some(0));
         assert_eq!(view.actions, vec!["radroots sync pull"]);
     }
 
     #[test]
-    fn sync_status_hybrid_reports_profile_targets_and_statuses() {
+    fn sync_status_multi_target_reports_profile_targets_and_statuses() {
         let dir = tempdir().expect("tempdir");
-        let config = hybrid_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        let config = multi_target_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
         let mut receipt = sdk_status_receipt(
-            0,
             0,
             0,
             0,
@@ -2106,7 +2083,7 @@ mod tests {
             &["wss://relay.example.com"],
         );
         receipt.transport_profile = SyncTransportProfileSummary {
-            transport_profile_id: "hybrid".to_owned(),
+            transport_profile_id: "multi_target".to_owned(),
             configured_transport_target_count: 2,
             configured_transport_targets: vec![
                 SyncTransportTargetSummary {
@@ -2118,19 +2095,21 @@ mod tests {
                 },
                 SyncTransportTargetSummary {
                     transport_kind: "reticulum".to_owned(),
-                    endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
+                    endpoint_uri: RADROOTS_RETICULUM_ENDPOINT_URI.to_owned(),
                     endpoint_fingerprint: "1".repeat(64),
-                    target_scope: Some("local_preview".to_owned()),
+                    target_scope: Some("local".to_owned()),
                     target_label: None,
                 },
             ],
             transport_statuses: vec![
                 SyncTransportStatusSummary {
                     transport: "nostr".to_owned(),
-                    profile_id: Some("hybrid".to_owned()),
+                    profile_id: Some("multi_target".to_owned()),
                     endpoint_uri: None,
                     configured: true,
                     implementation: "real".to_owned(),
+                    maturity: "stable".to_owned(),
+                    availability: "available".to_owned(),
                     usable_for_delivery: true,
                     capabilities: SyncTransportOperationCapabilitiesSummary {
                         deliver: true,
@@ -2140,10 +2119,12 @@ mod tests {
                 },
                 SyncTransportStatusSummary {
                     transport: "reticulum".to_owned(),
-                    profile_id: Some("hybrid".to_owned()),
-                    endpoint_uri: Some(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned()),
+                    profile_id: Some("multi_target".to_owned()),
+                    endpoint_uri: Some(RADROOTS_RETICULUM_ENDPOINT_URI.to_owned()),
                     configured: true,
-                    implementation: "preview_unavailable".to_owned(),
+                    implementation: "real".to_owned(),
+                    maturity: "preview".to_owned(),
+                    availability: "unavailable".to_owned(),
                     usable_for_delivery: false,
                     capabilities: SyncTransportOperationCapabilitiesSummary {
                         deliver: false,
@@ -2164,10 +2145,9 @@ mod tests {
             "reticulum"
         );
         assert_eq!(view.transport_statuses.len(), 2);
-        assert_eq!(
-            view.transport_statuses[1].implementation,
-            "preview_unavailable"
-        );
+        assert_eq!(view.transport_statuses[1].implementation, "real");
+        assert_eq!(view.transport_statuses[1].maturity, "preview");
+        assert_eq!(view.transport_statuses[1].availability, "unavailable");
         assert!(!view.transport_statuses[1].usable_for_delivery);
         assert!(!view.transport_statuses[1].capabilities.deliver);
         assert!(!view.transport_statuses[1].capabilities.fetch);
@@ -2188,7 +2168,6 @@ mod tests {
                 2,
                 1,
                 0,
-                0,
                 1,
                 0,
                 Some(1_700_000_010_000),
@@ -2203,7 +2182,6 @@ mod tests {
         assert_eq!(view.queue.retryable_count, Some(1));
         assert_eq!(view.queue.terminal_count, Some(2));
         assert_eq!(view.queue.failed_terminal_count, Some(1));
-        assert_eq!(view.queue.preview_unavailable_count, Some(0));
         assert_eq!(view.queue.deferred_until_implemented_count, Some(0));
         assert_eq!(view.queue.ready_signed_count, Some(1));
         assert_eq!(view.queue.last_attempt_at_ms, Some(1_700_000_010_000));
@@ -2226,7 +2204,6 @@ mod tests {
                 1,
                 1,
                 1,
-                0,
                 0,
                 0,
                 0,
@@ -2279,7 +2256,6 @@ mod tests {
                 0,
                 0,
                 0,
-                0,
                 None,
                 None,
                 &["wss://relay.example.com"],
@@ -2298,15 +2274,14 @@ mod tests {
     }
 
     #[test]
-    fn sync_push_reticulum_preview_reports_non_attempted_preview_work() {
+    fn sync_push_reticulum_reports_non_attempted_deferred_work() {
         let cases = [
             (
-                PushOutboxEventState::PreviewUnavailable,
-                PushOutboxTargetOutcomeKind::PreviewUnavailable,
-                "preview_unavailable",
-                "sdk_outbox_push_preview_unavailable",
-                "SDK outbox push reported Reticulum preview work as preview unavailable without network delivery",
-                1,
+                PushOutboxEventState::DeferredUntilImplemented,
+                PushOutboxTargetOutcomeKind::DeferredUntilImplemented,
+                "deferred_until_implemented",
+                "sdk_outbox_push_deferred_until_implemented",
+                "SDK outbox push reported Reticulum work as deferred until implemented without network delivery",
                 0,
             ),
             (
@@ -2314,8 +2289,7 @@ mod tests {
                 PushOutboxTargetOutcomeKind::DeferredUntilImplemented,
                 "deferred_until_implemented",
                 "sdk_outbox_push_deferred_until_implemented",
-                "SDK outbox push reported Reticulum preview work as deferred until implemented without network delivery",
-                0,
+                "SDK outbox push reported Reticulum work as deferred until implemented without network delivery",
                 1,
             ),
         ];
@@ -2326,24 +2300,23 @@ mod tests {
             expected_state,
             expected_reason_code,
             expected_reason,
-            preview_count,
             deferred_count,
         ) in cases
         {
             let dir = tempdir().expect("tempdir");
-            let config = reticulum_preview_config(dir.path());
+            let config = reticulum_config(dir.path());
             let receipt = PushOutboxReceipt {
                 attempted_events: 0,
                 published_events: 0,
                 retryable_events: 0,
                 terminal_events: 0,
-                events: vec![sdk_reticulum_preview_push_event(final_state, outcome_kind)],
+                events: vec![sdk_reticulum_push_event(final_state, outcome_kind)],
             };
 
             let view = sdk_push_view(
                 &config,
                 receipt,
-                sdk_reticulum_preview_status_receipt(preview_count, deferred_count),
+                sdk_reticulum_status_receipt(deferred_count),
             );
 
             assert_eq!(view.state, expected_state);
@@ -2354,7 +2327,7 @@ mod tests {
             assert_eq!(view.reason.as_deref(), Some(expected_reason));
             assert_eq!(
                 view.target_transport_endpoints,
-                vec![RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned()]
+                vec![RADROOTS_RETICULUM_ENDPOINT_URI.to_owned()]
             );
             assert!(view.attempted_transport_endpoints.is_empty());
             assert!(view.accepted_transport_endpoints.is_empty());
@@ -2362,7 +2335,7 @@ mod tests {
             assert_eq!(view.failed_transport_targets[0].transport_kind, "reticulum");
             assert_eq!(
                 view.failed_transport_targets[0].endpoint_uri,
-                RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI
+                RADROOTS_RETICULUM_ENDPOINT_URI
             );
             assert_eq!(
                 view.failed_transport_targets[0].reason,
@@ -2414,7 +2387,6 @@ mod tests {
                 0,
                 1,
                 1,
-                0,
                 0,
                 0,
                 0,
@@ -2471,7 +2443,6 @@ mod tests {
         retryable_events: i64,
         terminal_events: i64,
         failed_terminal_events: i64,
-        preview_unavailable_events: i64,
         deferred_until_implemented_events: i64,
         ready_signed_events: i64,
         publishing_events: i64,
@@ -2499,7 +2470,6 @@ mod tests {
                 retryable_events,
                 terminal_events,
                 failed_terminal_events,
-                preview_unavailable_events,
                 deferred_until_implemented_events,
                 ready_signed_events,
                 publishing_events,
@@ -2526,6 +2496,8 @@ mod tests {
                     endpoint_uri: None,
                     configured: true,
                     implementation: "real".to_owned(),
+                    maturity: "stable".to_owned(),
+                    availability: "available".to_owned(),
                     usable_for_delivery: true,
                     capabilities: SyncTransportOperationCapabilitiesSummary {
                         deliver: true,
@@ -2537,10 +2509,7 @@ mod tests {
         }
     }
 
-    fn sdk_reticulum_preview_status_receipt(
-        preview_unavailable_events: i64,
-        deferred_until_implemented_events: i64,
-    ) -> SyncStatusReceipt {
+    fn sdk_reticulum_status_receipt(deferred_until_implemented_events: i64) -> SyncStatusReceipt {
         SyncStatusReceipt {
             source: SyncStatusSource::SdkCanonicalStores,
             observed_at_ms: 1_700_000_030_000,
@@ -2557,7 +2526,6 @@ mod tests {
                 retryable_events: 0,
                 terminal_events: 0,
                 failed_terminal_events: 0,
-                preview_unavailable_events,
                 deferred_until_implemented_events,
                 ready_signed_events: 0,
                 publishing_events: 0,
@@ -2565,21 +2533,23 @@ mod tests {
                 last_error: None,
             },
             transport_profile: SyncTransportProfileSummary {
-                transport_profile_id: "reticulum_preview".to_owned(),
+                transport_profile_id: "reticulum".to_owned(),
                 configured_transport_target_count: 1,
                 configured_transport_targets: vec![SyncTransportTargetSummary {
                     transport_kind: "reticulum".to_owned(),
-                    endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
+                    endpoint_uri: RADROOTS_RETICULUM_ENDPOINT_URI.to_owned(),
                     endpoint_fingerprint: "1".repeat(64),
-                    target_scope: Some("local_preview".to_owned()),
+                    target_scope: Some("local".to_owned()),
                     target_label: None,
                 }],
                 transport_statuses: vec![SyncTransportStatusSummary {
                     transport: "reticulum".to_owned(),
-                    profile_id: Some("reticulum_preview".to_owned()),
-                    endpoint_uri: Some(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned()),
+                    profile_id: Some("reticulum".to_owned()),
+                    endpoint_uri: Some(RADROOTS_RETICULUM_ENDPOINT_URI.to_owned()),
                     configured: true,
-                    implementation: "preview_unavailable".to_owned(),
+                    implementation: "real".to_owned(),
+                    maturity: "preview".to_owned(),
+                    availability: "unavailable".to_owned(),
                     usable_for_delivery: false,
                     capabilities: SyncTransportOperationCapabilitiesSummary {
                         deliver: false,
@@ -2644,7 +2614,7 @@ mod tests {
         }
     }
 
-    fn sdk_reticulum_preview_push_event(
+    fn sdk_reticulum_push_event(
         final_state: PushOutboxEventState,
         outcome_kind: PushOutboxTargetOutcomeKind,
     ) -> PushOutboxEventReceipt {
@@ -2660,8 +2630,8 @@ mod tests {
             quorum_met: false,
             targets: vec![PushOutboxTargetReceipt {
                 transport_kind: "reticulum".to_owned(),
-                endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
-                target_scope: Some("local_preview".to_owned()),
+                endpoint_uri: RADROOTS_RETICULUM_ENDPOINT_URI.to_owned(),
+                target_scope: Some("local".to_owned()),
                 target_label: None,
                 outcome_kind,
                 transport_outcome_kind: test_transport_outcome_kind(outcome_kind),
@@ -2685,9 +2655,6 @@ mod tests {
             PushOutboxTargetOutcomeKind::Timeout => PushOutboxTransportOutcomeKind::Timeout,
             PushOutboxTargetOutcomeKind::ConnectionFailed => {
                 PushOutboxTransportOutcomeKind::ConnectionFailed
-            }
-            PushOutboxTargetOutcomeKind::PreviewUnavailable => {
-                PushOutboxTransportOutcomeKind::TransportUnavailable
             }
             PushOutboxTargetOutcomeKind::AuthRequired
             | PushOutboxTargetOutcomeKind::Blocked
@@ -3256,10 +3223,10 @@ mod tests {
         }
     }
 
-    fn hybrid_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {
+    fn multi_target_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {
         let mut config = sample_config(root, relays);
-        config.transport.profile = TransportProfileKind::Hybrid;
-        config.transport.reticulum_preview_behavior = ReticulumPreviewBehavior::DeferDeliveryPlans;
+        config.transport.profile = TransportProfileKind::MultiTarget;
+        config.transport.reticulum_behavior = ReticulumBehavior::DeferDeliveryPlans;
         config
     }
 
@@ -3269,10 +3236,10 @@ mod tests {
         config
     }
 
-    fn reticulum_preview_config(root: &Path) -> RuntimeConfig {
+    fn reticulum_config(root: &Path) -> RuntimeConfig {
         let mut config = sample_config(root, Vec::new());
-        config.transport.profile = TransportProfileKind::ReticulumPreview;
-        config.transport.reticulum_preview_behavior = ReticulumPreviewBehavior::DeferDeliveryPlans;
+        config.transport.profile = TransportProfileKind::Reticulum;
+        config.transport.reticulum_behavior = ReticulumBehavior::DeferDeliveryPlans;
         config
     }
 }

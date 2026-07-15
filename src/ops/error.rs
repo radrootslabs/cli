@@ -552,7 +552,6 @@ fn sdk_error_exit_code(class: RadrootsSdkErrorClass) -> CliExitCode {
         RadrootsSdkErrorClass::Clock
         | RadrootsSdkErrorClass::Configuration
         | RadrootsSdkErrorClass::Request => CliExitCode::InvalidInput,
-        RadrootsSdkErrorClass::LocalMutation => CliExitCode::Conflict,
         RadrootsSdkErrorClass::Storage => CliExitCode::RuntimeUnavailable,
         RadrootsSdkErrorClass::Transport => CliExitCode::SyncOrNetworkFailure,
         RadrootsSdkErrorClass::Unsupported => CliExitCode::RuntimeUnavailable,
@@ -565,7 +564,6 @@ fn sdk_error_class_name(class: RadrootsSdkErrorClass) -> &'static str {
         RadrootsSdkErrorClass::Authorization => "authorization",
         RadrootsSdkErrorClass::Clock => "clock",
         RadrootsSdkErrorClass::Configuration => "configuration",
-        RadrootsSdkErrorClass::LocalMutation => "local_mutation",
         RadrootsSdkErrorClass::Request => "request",
         RadrootsSdkErrorClass::Storage => "storage",
         RadrootsSdkErrorClass::Transport => "transport",
@@ -581,8 +579,7 @@ fn sdk_recovery_next_actions(
     recovery_actions
         .iter()
         .filter_map(|action| match action {
-            RadrootsSdkRecoveryAction::RetryOutboxEnqueue
-            | RadrootsSdkRecoveryAction::RetryOperationWithSameIdempotencyKey
+            RadrootsSdkRecoveryAction::RetryOperationWithSameIdempotencyKey
             | RadrootsSdkRecoveryAction::FixRequest => Some(operation_retry_action(operation_id)),
             RadrootsSdkRecoveryAction::InspectLocalStores => {
                 Some("radroots store status get".to_owned())
@@ -772,10 +769,7 @@ fn classify_runtime_failure(
             },
         };
     }
-    if contains_any(
-        &lowered,
-        &["provider", "write-plane", "write plane", "rpc", "proxy"],
-    ) {
+    if contains_any(&lowered, &["provider", "write-plane", "write plane", "rpc"]) {
         return match availability {
             RuntimeFailureAvailability::Unconfigured => {
                 OperationAdapterError::ProviderUnconfigured {
@@ -804,7 +798,7 @@ fn looks_like_auth_failure(value: &str) -> bool {
         value,
         &[
             "authentication",
-            "daemon proxy auth",
+            "daemon execution auth",
             "authorization",
             "authorize",
             "unauthorized",
@@ -843,7 +837,7 @@ fn looks_like_provider_failure(value: &str) -> bool {
             "provider unconfigured",
             "provider runtime",
             "provider failed",
-            "proxy provider",
+            "execution provider",
         ],
     )
 }
@@ -858,7 +852,7 @@ fn looks_like_operation_failure(value: &str) -> bool {
             "unsupported operation",
             "operation unavailable",
             "operation disabled",
-            "publish proxy disabled",
+            "publish execution disabled",
             "publish.event is disabled",
         ],
     )

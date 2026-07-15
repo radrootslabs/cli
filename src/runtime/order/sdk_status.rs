@@ -112,7 +112,7 @@ fn sdk_status_evidence_view(
         has_decision: evidence.has_decision,
         has_agreement: evidence.has_agreement,
         has_validation_receipt: evidence.has_validation_receipt,
-        has_pending_revision: evidence.has_pending_revision,
+        has_pending_revision: false,
         has_cancellation: evidence.has_cancellation,
         has_issues: evidence.has_issues,
     }
@@ -148,8 +148,8 @@ fn sdk_status_validation_trust_view(
 fn sdk_status_eligibility_view(eligibility: &TradeStatusEligibility) -> OrderStatusEligibilityView {
     OrderStatusEligibilityView {
         can_decide: eligibility.can_decide,
-        can_propose_revision: eligibility.can_propose_revision,
-        can_decide_revision: eligibility.can_decide_revision,
+        can_propose_revision: false,
+        can_decide_revision: false,
         can_cancel: eligibility.can_cancel,
     }
 }
@@ -159,8 +159,7 @@ fn sdk_status_next_action(kind: TradeStatusNextActionKind) -> &'static str {
         TradeStatusNextActionKind::NoLocalOrder => "no_local_order",
         TradeStatusNextActionKind::InspectEvidenceIssues => "inspect_evidence_issues",
         TradeStatusNextActionKind::AwaitSellerDecision => "await_seller_decision",
-        TradeStatusNextActionKind::DecideRevision => "decide_revision",
-        TradeStatusNextActionKind::AwaitRhiValidation => "await_rhi_validation",
+        TradeStatusNextActionKind::AwaitValidation => "await_validation",
         TradeStatusNextActionKind::Terminal => "terminal",
         _ => "unknown",
     }
@@ -171,11 +170,11 @@ fn sdk_order_status_state(status: TradeStatusKind) -> &'static str {
         TradeStatusKind::Missing => "missing",
         TradeStatusKind::Ambiguous => "ambiguous",
         TradeStatusKind::Requested => "requested",
-        TradeStatusKind::RevisionProposed => "revision_proposed",
-        TradeStatusKind::AgreedPendingRhi => "pending_rhi",
+        TradeStatusKind::AgreedPendingValidation => "pending_validation",
         TradeStatusKind::Committed => "committed",
         TradeStatusKind::Declined => "declined",
         TradeStatusKind::Cancelled => "cancelled",
+        TradeStatusKind::ValidationExpired => "validation_expired",
         TradeStatusKind::Invalid => "invalid",
         _ => "unknown",
     }
@@ -226,11 +225,11 @@ fn sdk_order_status_lifecycle_phase(receipt: &TradeStatusReceipt) -> &'static st
         TradeStatusKind::Missing => "missing",
         TradeStatusKind::Ambiguous => "ambiguous",
         TradeStatusKind::Requested => "requested",
-        TradeStatusKind::RevisionProposed => "revision_proposed",
-        TradeStatusKind::AgreedPendingRhi => "pending_rhi",
+        TradeStatusKind::AgreedPendingValidation => "pending_validation",
         TradeStatusKind::Committed => "committed",
         TradeStatusKind::Declined => "declined",
         TradeStatusKind::Cancelled => "cancelled",
+        TradeStatusKind::ValidationExpired => "validation_expired",
         TradeStatusKind::Invalid => "invalid",
         _ => "unknown",
     }
@@ -294,7 +293,6 @@ mod tests {
                 has_decision: false,
                 has_agreement: false,
                 has_validation_receipt: false,
-                has_pending_revision: false,
                 has_cancellation: false,
                 has_issues: false,
             },
@@ -302,8 +300,6 @@ mod tests {
             online_evidence: None,
             eligibility: TradeStatusEligibility {
                 can_decide: false,
-                can_propose_revision: false,
-                can_decide_revision: false,
                 can_cancel: false,
             },
             next_action: TradeStatusNextActionKind::InspectEvidenceIssues,
@@ -312,7 +308,6 @@ mod tests {
             decision_event_id: None,
             agreement_event_id: None,
             rhi_receipt_event_id: None,
-            pending_revision_event_id: None,
             cancellation_event_id: None,
             last_event_id: None,
             issues: Vec::new(),

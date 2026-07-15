@@ -4,8 +4,6 @@ use radroots_sdk::{
     TradeValidationReceiptListReceipt, TradeValidationReceiptListRequest,
     TradeValidationReceiptNostrRelayOutcomeKind, TradeValidationReceiptNostrRelayOutcomeReceipt,
     TradeValidationReceiptTags, TradeValidationReceiptVerifyRequest,
-    TradeValidationReceiptWorkerEvidence,
-    TradeValidationReceiptWorkerEvidenceSelection as SdkWorkerEvidenceSelection,
 };
 use radroots_trade::validation_receipt::{
     RadrootsTradeCommitmentConfidence, RadrootsTradeValidationAuthority,
@@ -240,11 +238,7 @@ pub fn list(config: &RuntimeConfig, args: &ValidationReceiptListArgs) -> Validat
             "validation receipt list requires non-empty `order_id`",
         );
     }
-    let request = match TradeValidationReceiptListRequest::parse(order_id).and_then(|request| {
-        request.try_with_trusted_worker_pubkeys(
-            config.rhi.trusted_worker_pubkeys.iter().map(String::as_str),
-        )
-    }) {
+    let request = match TradeValidationReceiptListRequest::parse(order_id) {
         Ok(request) => request,
         Err(error) => {
             return list_sdk_error_view(order_id, CliSdkAdapterError::Sdk(error));
@@ -274,16 +268,13 @@ fn inspect_event(
             "validation receipt command requires non-empty `receipt_event_id`",
         );
     }
-    let trusted_worker_pubkeys = config.rhi.trusted_worker_pubkeys.iter().map(String::as_str);
     let session = match CliSdkSession::connect(config) {
         Ok(session) => session,
         Err(error) => return inspection_sdk_error_view(receipt_event_id, error),
     };
     match intent {
         ValidationReceiptCommandIntent::Inspect => {
-            let request = match TradeValidationReceiptInspectRequest::parse(receipt_event_id)
-                .and_then(|request| request.try_with_trusted_worker_pubkeys(trusted_worker_pubkeys))
-            {
+            let request = match TradeValidationReceiptInspectRequest::parse(receipt_event_id) {
                 Ok(request) => request,
                 Err(error) => {
                     return inspection_sdk_error_view(
@@ -308,9 +299,7 @@ fn inspect_event(
             }
         }
         ValidationReceiptCommandIntent::Verify => {
-            let request = match TradeValidationReceiptVerifyRequest::parse(receipt_event_id)
-                .and_then(|request| request.try_with_trusted_worker_pubkeys(trusted_worker_pubkeys))
-            {
+            let request = match TradeValidationReceiptVerifyRequest::parse(receipt_event_id) {
                 Ok(request) => request,
                 Err(error) => {
                     return inspection_sdk_error_view(
@@ -398,7 +387,7 @@ fn inspected_event_view(
     let order_id = sdk_receipt.tags.order_id.clone();
     let proof_verification = proof_verification_view_for_receipt(
         &sdk_receipt.receipt,
-        sdk_worker_evidence_selection(sdk_receipt.worker_evidence),
+        ValidationReceiptWorkerEvidenceSelection::default(),
     );
     let accepted = match intent {
         ValidationReceiptCommandIntent::Inspect => {
@@ -492,7 +481,7 @@ fn list_from_sdk_receipt(
     for sdk_event in sdk_receipt.receipts {
         let proof_verification = proof_verification_view_for_receipt(
             &sdk_event.receipt,
-            sdk_worker_evidence_selection(sdk_event.worker_evidence),
+            ValidationReceiptWorkerEvidenceSelection::default(),
         );
         if proof_state_is_invalid(proof_verification.state.as_str()) {
             invalid_receipts.push(ValidationReceiptInvalidCandidateView {
@@ -639,8 +628,7 @@ fn sdk_error_parts(error: RadrootsSdkError) -> ValidationReceiptSdkErrorParts {
             radroots_sdk::RadrootsSdkErrorClass::Transport
             | radroots_sdk::RadrootsSdkErrorClass::Storage
             | radroots_sdk::RadrootsSdkErrorClass::Clock
-            | radroots_sdk::RadrootsSdkErrorClass::Authorization
-            | radroots_sdk::RadrootsSdkErrorClass::LocalMutation => "network_unavailable",
+            | radroots_sdk::RadrootsSdkErrorClass::Authorization => "network_unavailable",
             _ => "network_unavailable",
         },
     };
@@ -1194,39 +1182,6 @@ fn invalid_candidate_view(
         reason_code: candidate.reason_code,
         reason: candidate.reason,
         proof_verification: None,
-    }
-}
-
-fn sdk_worker_evidence_selection(
-    selection: SdkWorkerEvidenceSelection,
-) -> ValidationReceiptWorkerEvidenceSelection {
-    ValidationReceiptWorkerEvidenceSelection {
-        trusted: selection.trusted.map(worker_evidence_view),
-        untrusted: selection.untrusted.map(worker_evidence_view),
-    }
-}
-
-fn worker_evidence_view(
-    evidence: TradeValidationReceiptWorkerEvidence,
-) -> ValidationReceiptWorkerEvidenceView {
-    ValidationReceiptWorkerEvidenceView {
-        result_event_id: evidence.result_event_id.as_str().to_owned(),
-        author: evidence.author.as_str().to_owned(),
-        validation_authority: evidence
-            .validation_authority
-            .map(|authority| authority.as_str().to_owned()),
-        commitment_confidence: evidence
-            .commitment_confidence
-            .map(|confidence| confidence.as_str().to_owned()),
-        status: evidence.status,
-        prover_backend: evidence.prover_backend,
-        proof_mode: evidence.proof_mode,
-        proof_system: evidence.proof_system,
-        proof_generated: evidence.proof_generated,
-        sp1_execute_checked: evidence.sp1_execute_checked,
-        sp1_execute_public_values_hash: evidence.sp1_execute_public_values_hash,
-        cryptographic_proof_verified: evidence.cryptographic_proof_verified,
-        public_values_hash: evidence.public_values_hash,
     }
 }
 

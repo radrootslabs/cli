@@ -16,17 +16,16 @@ use radroots_event::RadrootsEventPtr;
 use radroots_event::contract::RadrootsActorRole;
 use radroots_event::ids::{
     RadrootsEventId, RadrootsInventoryBinId, RadrootsListingAddress, RadrootsOrderId,
-    RadrootsOrderQuoteId, RadrootsOrderRevisionId, RadrootsPublicKey,
+    RadrootsOrderQuoteId, RadrootsPublicKey,
 };
 use radroots_event::kinds::{
     KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
-    KIND_ORDER_REVISION_DECISION, KIND_ORDER_REVISION_PROPOSAL,
 };
 use radroots_event::order::{
     RadrootsOrderEconomicActor, RadrootsOrderEconomicEffect, RadrootsOrderEconomicItem,
     RadrootsOrderEconomicLine, RadrootsOrderEconomicLineKind, RadrootsOrderEconomics,
     RadrootsOrderEventType, RadrootsOrderInventoryCommitment, RadrootsOrderItem,
-    RadrootsOrderPricingBasis, RadrootsOrderRequest, RadrootsOrderRevisionOutcome,
+    RadrootsOrderPricingBasis, RadrootsOrderRequest,
 };
 use radroots_event_codec::d_tag::is_d_tag_base64url;
 use radroots_event_codec::order::{order_event_context_from_tags, order_request_from_event};
@@ -54,12 +53,10 @@ use radroots_sdk::{
     SdkMutationState, SdkTradeStatusSource, TargetPolicy, TradeAcceptRequest, TradeCancelRequest,
     TradeCancellationPlan, TradeCancellationReceipt, TradeDecisionPlan, TradeDecisionReceipt,
     TradeDeclineRequest, TradeEvidenceMode, TradeMutationOutcome, TradeProposeRequest,
-    TradeRevisionDecisionPlan, TradeRevisionDecisionReceipt, TradeRevisionDecisionRequest,
-    TradeRevisionProposalPlan, TradeRevisionProposalReceipt, TradeRevisionProposalRequest,
     TradeStatusReceipt, TradeStatusRequest, TradeSubmitPlan, TradeSubmitReceipt,
     TradeWorkflowEnqueueReceipt,
 };
-use radroots_sql_core::SqliteExecutor;
+use radroots_sql_core::SqlxSqliteExecutor;
 use radroots_trade::identity::RadrootsTradeLocator;
 use radroots_trade::order::canonicalize_order_request_for_signer;
 use radroots_transport_nostr::{
@@ -226,6 +223,7 @@ fn protocol_listing_addr(value: &str, field: &str) -> Result<RadrootsListingAddr
     })
 }
 
+#[cfg(any())]
 fn protocol_revision_id(value: &str, field: &str) -> Result<RadrootsOrderRevisionId, RuntimeError> {
     value.parse().map_err(|error| {
         RuntimeError::Config(format!("{field} is not a valid trade revision id: {error}"))
@@ -1241,18 +1239,12 @@ pub fn revision_propose(
     if let Some(view) = order_revision_args_preflight_view(config, args) {
         return Ok(view);
     }
-    let seller = match account::resolve_account(config)? {
-        Some(account) => account,
-        None => {
-            let mut view =
-                order_revision_base_view(config, args, "unconfigured", config.output.dry_run);
-            view.reason =
-                Some("trade revision propose requires a selected seller account".to_owned());
-            view.actions = vec!["radroots account create".to_owned()];
-            return Ok(view);
-        }
-    };
-    propose_revision_via_sdk(config, args, &seller)
+    let mut view = order_revision_base_view(config, args, "unavailable", config.output.dry_run);
+    view.reason = Some(
+        "trade revision proposal is not supported by the current SDK trade runtime".to_owned(),
+    );
+    view.actions = vec![format!("radroots trade status get {}", args.key)];
+    Ok(view)
 }
 
 pub fn revision_decide(
@@ -1262,22 +1254,13 @@ pub fn revision_decide(
     if let Some(view) = order_revision_decision_args_preflight_view(config, args) {
         return Ok(view);
     }
-    let actor_context = match order_buyer_write_actor_context(config, args.key.as_str())? {
-        Some(context) => context,
-        None => {
-            let mut view = order_revision_decision_base_view(
-                config,
-                args,
-                "unconfigured",
-                config.output.dry_run,
-            );
-            view.reason =
-                Some("trade revision decision requires a selected buyer account".to_owned());
-            view.actions = vec!["radroots account create".to_owned()];
-            return Ok(view);
-        }
-    };
-    decide_revision_via_sdk(config, args, actor_context)
+    let mut view =
+        order_revision_decision_base_view(config, args, "unavailable", config.output.dry_run);
+    view.reason = Some(
+        "trade revision decision is not supported by the current SDK trade runtime".to_owned(),
+    );
+    view.actions = vec![format!("radroots trade status get {}", args.key)];
+    Ok(view)
 }
 
 pub fn cancel(
@@ -1372,6 +1355,7 @@ fn decide_trade_via_sdk(
     ))
 }
 
+#[cfg(any())]
 fn propose_revision_via_sdk(
     config: &RuntimeConfig,
     args: &TradeRevisionProposeArgs,
@@ -1411,6 +1395,7 @@ fn propose_revision_via_sdk(
     ))
 }
 
+#[cfg(any())]
 fn decide_revision_via_sdk(
     config: &RuntimeConfig,
     args: &TradeRevisionDecisionArgs,
@@ -1547,6 +1532,7 @@ fn inventory_commitments_from_status(
         .collect())
 }
 
+#[cfg(any())]
 #[derive(Debug, Clone)]
 struct SdkRevisionRequestParts {
     revision_id: RadrootsOrderRevisionId,
@@ -1554,6 +1540,7 @@ struct SdkRevisionRequestParts {
     economics: RadrootsOrderEconomics,
 }
 
+#[cfg(any())]
 fn revision_request_parts_from_status(
     args: &TradeRevisionProposeArgs,
     status: &OrderStatusView,
@@ -1610,6 +1597,7 @@ fn sdk_trade_decision_outcome_view(
     }
 }
 
+#[cfg(any())]
 fn sdk_trade_revision_outcome_view(
     config: &RuntimeConfig,
     args: &TradeRevisionProposeArgs,
@@ -1655,6 +1643,7 @@ fn sdk_trade_revision_outcome_view(
     }
 }
 
+#[cfg(any())]
 fn sdk_trade_revision_decision_outcome_view(
     config: &RuntimeConfig,
     args: &TradeRevisionDecisionArgs,
@@ -2109,6 +2098,7 @@ fn apply_order_decision_status(view: &mut OrderDecisionView, status: &OrderStatu
     view.inventory = status.inventory.clone();
 }
 
+#[cfg(any())]
 fn apply_order_revision_status(view: &mut OrderRevisionProposalView, status: &OrderStatusView) {
     view.order_id = status.order_id.clone();
     view.locator = order_locator_view_from_status(status);
@@ -2130,6 +2120,7 @@ fn apply_order_revision_status(view: &mut OrderRevisionProposalView, status: &Or
     view.issues = status.reducer_issues.clone();
 }
 
+#[cfg(any())]
 fn apply_order_revision_decision_status(
     view: &mut OrderRevisionDecisionView,
     status: &OrderStatusView,
@@ -2259,6 +2250,7 @@ fn order_revision_decision_args_preflight_view(
     Some(view)
 }
 
+#[cfg(any())]
 fn revised_order_economics(
     args: &TradeRevisionProposeArgs,
     revision_id: &str,
@@ -2325,6 +2317,7 @@ fn revised_order_economics(
     Ok(economics)
 }
 
+#[cfg(any())]
 fn revision_adjustment_line(
     args: &TradeRevisionProposeArgs,
     expected_currency: RadrootsCoreCurrency,
@@ -2489,6 +2482,7 @@ fn sdk_order_decision_actions(push_event: Option<&PushOutboxEventReceipt>) -> Ve
     Vec::new()
 }
 
+#[cfg(any())]
 fn sdk_enqueued_order_revision_view(
     config: &RuntimeConfig,
     args: &TradeRevisionProposeArgs,
@@ -2539,6 +2533,7 @@ fn sdk_enqueued_order_revision_view(
     view
 }
 
+#[cfg(any())]
 fn sdk_enqueued_order_revision_decision_view(
     config: &RuntimeConfig,
     args: &TradeRevisionDecisionArgs,
@@ -2796,7 +2791,7 @@ fn resolve_order_listing(
         )));
     }
 
-    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_store_path)?);
+    let db = ReplicaSql::new(SqlxSqliteExecutor::open(&config.local.replica_store_path)?);
     let rows = db.trade_product_lookup(listing_lookup)?;
     match rows.len() {
         0 => Err(RuntimeError::Config(format!(
@@ -2864,7 +2859,7 @@ fn resolve_trade_product_by_listing_addr(
         return Ok(None);
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     let product_rows = trade_product::find_many(
         &executor,
         &ITradeProductFindMany {
@@ -2895,7 +2890,7 @@ fn resolve_active_listing_event_id(
         return Ok(None);
     }
 
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     let product_rows = trade_product::find_many(
         &executor,
         &ITradeProductFindMany {
@@ -4874,33 +4869,14 @@ fn propose_trade_via_sdk(
     let actor = sdk_trade_actor(account, RadrootsActorRole::Buyer, "propose")?;
     let publish_mode = trade_publish_mode(config);
     let ack_policy = trade_satisfaction_policy(publish_mode)?;
-    let economics =
-        loaded.document.order.economics.clone().ok_or_else(|| {
-            RuntimeError::Config("trade draft is missing quote economics".to_owned())
-        })?;
-    let items = loaded
-        .document
-        .order
-        .items
-        .iter()
-        .map(|item| {
-            Ok(RadrootsOrderItem {
-                bin_id: protocol_inventory_bin_id(item.bin_id.as_str(), "order item bin_id")?,
-                bin_count: item.bin_count,
-            })
-        })
-        .collect::<Result<Vec<_>, RuntimeError>>()?;
+    let order_request = canonical_order_request_payload_from_loaded(
+        loaded,
+        account.record.public_identity.public_key_hex.as_str(),
+    )?;
     let mut request = TradeProposeRequest::new(
         actor,
         order_submit_listing_event_ptr(loaded)?,
-        protocol_order_id(loaded.document.order.order_id.as_str(), "order_id")?,
-        protocol_listing_addr(loaded.document.order.listing_addr.as_str(), "listing_addr")?,
-        protocol_pubkey(
-            loaded.document.order.seller_pubkey.as_str(),
-            "seller_pubkey",
-        )?,
-        items,
-        economics,
+        order_request,
         trade_target_policy(),
         publish_mode,
         ack_policy,
@@ -5483,6 +5459,7 @@ fn next_order_id() -> String {
     )
 }
 
+#[cfg(any())]
 fn next_revision_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

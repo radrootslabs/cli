@@ -1,16 +1,15 @@
-use std::fs;
-use std::path::PathBuf;
-
 use radroots_sdk::{
     PushOutboxEventState, PushOutboxReceipt, PushOutboxRequest, PushOutboxTargetOutcomeKind,
     SyncStatusRequest,
 };
 use radroots_transport::{
-    RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_PREVIEW_SCOPE_ID,
-    RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE, RadrootsTransportImplementationState,
+    RADROOTS_RETICULUM_ENDPOINT_URI, RADROOTS_RETICULUM_SCOPE_ID,
+    RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE, RadrootsTransportCapabilityAvailability,
+    RadrootsTransportCapabilityMaturity, RadrootsTransportImplementationState,
     RadrootsTransportKind, RadrootsTransportStatus,
 };
 use serde_json::Value as JsonValue;
+use std::fs;
 use toml::{Value, map::Map};
 
 use crate::ops::OperationData;
@@ -51,80 +50,50 @@ pub fn set_profile(
             );
             transport.insert("nostr".to_owned(), Value::Table(nostr));
         }
-        "reticulum_preview" => {
-            let behavior = string_input(input, "reticulum_preview_behavior")
-                .unwrap_or("reject_delivery_attempts");
-            let scope = string_input(input, "reticulum_preview_scope")
-                .unwrap_or(RADROOTS_RETICULUM_PREVIEW_SCOPE_ID);
-            let mut preview = Map::new();
-            preview.insert("behavior".to_owned(), Value::String(behavior.to_owned()));
-            preview.insert("scope".to_owned(), Value::String(scope.to_owned()));
-            if let Some(agent_endpoint) = string_input(input, "reticulum_preview_agent_endpoint") {
-                preview.insert(
+        "reticulum" => {
+            let behavior =
+                string_input(input, "reticulum_behavior").unwrap_or("reject_delivery_attempts");
+            let scope =
+                string_input(input, "reticulum_scope").unwrap_or(RADROOTS_RETICULUM_SCOPE_ID);
+            let mut reticulum = Map::new();
+            reticulum.insert("behavior".to_owned(), Value::String(behavior.to_owned()));
+            reticulum.insert("scope".to_owned(), Value::String(scope.to_owned()));
+            if let Some(agent_endpoint) = string_input(input, "reticulum_agent_endpoint") {
+                reticulum.insert(
                     "agent_endpoint".to_owned(),
                     Value::String(agent_endpoint.to_owned()),
                 );
             }
-            transport.insert("reticulum_preview".to_owned(), Value::Table(preview));
+            transport.insert("reticulum".to_owned(), Value::Table(reticulum));
         }
-        "hybrid" => {
+        "multi_target" => {
             let relays = string_array_input(input, "nostr_relays");
             if relays.is_empty() {
                 return Err(RuntimeError::Config(
-                    "transport profile `hybrid` requires at least one --nostr-relay".to_owned(),
+                    "transport profile `multi_target` requires at least one --nostr-relay"
+                        .to_owned(),
                 ));
             }
-            let behavior = string_input(input, "reticulum_preview_behavior")
-                .unwrap_or("reject_delivery_attempts");
-            let scope = string_input(input, "reticulum_preview_scope")
-                .unwrap_or(RADROOTS_RETICULUM_PREVIEW_SCOPE_ID);
+            let behavior =
+                string_input(input, "reticulum_behavior").unwrap_or("reject_delivery_attempts");
+            let scope =
+                string_input(input, "reticulum_scope").unwrap_or(RADROOTS_RETICULUM_SCOPE_ID);
             let mut nostr = Map::new();
             nostr.insert(
                 "relay_urls".to_owned(),
                 Value::Array(relays.into_iter().map(Value::String).collect()),
             );
-            let mut preview = Map::new();
-            preview.insert("behavior".to_owned(), Value::String(behavior.to_owned()));
-            preview.insert("scope".to_owned(), Value::String(scope.to_owned()));
-            if let Some(agent_endpoint) = string_input(input, "reticulum_preview_agent_endpoint") {
-                preview.insert(
+            let mut reticulum = Map::new();
+            reticulum.insert("behavior".to_owned(), Value::String(behavior.to_owned()));
+            reticulum.insert("scope".to_owned(), Value::String(scope.to_owned()));
+            if let Some(agent_endpoint) = string_input(input, "reticulum_agent_endpoint") {
+                reticulum.insert(
                     "agent_endpoint".to_owned(),
                     Value::String(agent_endpoint.to_owned()),
                 );
             }
             transport.insert("nostr".to_owned(), Value::Table(nostr));
-            transport.insert("reticulum_preview".to_owned(), Value::Table(preview));
-        }
-        "proxy" => {
-            let Some(url) = string_input(input, "proxy_url") else {
-                return Err(RuntimeError::Config(
-                    "transport profile `proxy` requires --proxy-url".to_owned(),
-                ));
-            };
-            let token_file = string_input(input, "proxy_token_file").map(str::to_owned);
-            let token_secret_id = string_input(input, "proxy_token_secret_id").map(str::to_owned);
-            validate_proxy_token_source(token_file.as_deref(), token_secret_id.as_deref())?;
-            validate_proxy_token_material(
-                config,
-                url,
-                token_file.as_deref(),
-                token_secret_id.as_deref(),
-            )?;
-            let mut proxy = Map::new();
-            proxy.insert("url".to_owned(), Value::String(url.to_owned()));
-            if let Some(token_file) = token_file.as_ref() {
-                proxy.insert(
-                    "token_file".to_owned(),
-                    Value::String(token_file.to_owned()),
-                );
-            }
-            if let Some(token_secret_id) = token_secret_id.as_ref() {
-                proxy.insert(
-                    "token_secret_id".to_owned(),
-                    Value::String(token_secret_id.to_owned()),
-                );
-            }
-            transport.insert("proxy".to_owned(), Value::Table(proxy));
+            transport.insert("reticulum".to_owned(), Value::Table(reticulum));
         }
         other => {
             return Err(RuntimeError::Config(format!(
@@ -136,12 +105,9 @@ pub fn set_profile(
     Ok(profile_view_from_parts(
         kind,
         string_array_input(input, "nostr_relays"),
-        string_input(input, "reticulum_preview_behavior").map(str::to_owned),
-        reticulum_preview_scope_for_profile(kind, input),
-        string_input(input, "reticulum_preview_agent_endpoint").map(str::to_owned),
-        string_input(input, "proxy_url").map(str::to_owned),
-        string_input(input, "proxy_token_file").map(str::to_owned),
-        string_input(input, "proxy_token_secret_id").map(str::to_owned),
+        string_input(input, "reticulum_behavior").map(str::to_owned),
+        reticulum_scope_for_profile(kind, input),
+        string_input(input, "reticulum_agent_endpoint").map(str::to_owned),
         "configured",
     ))
 }
@@ -180,7 +146,6 @@ pub fn outbox_status(
         pending_count: receipt.outbox.pending_events,
         retryable_count: receipt.outbox.retryable_events,
         terminal_count: receipt.outbox.terminal_events,
-        preview_unavailable_count: receipt.outbox.preview_unavailable_events,
         deferred_until_implemented_count: receipt.outbox.deferred_until_implemented_events,
         ready_signed_count: receipt.outbox.ready_signed_events,
         publishing_count: receipt.outbox.publishing_events,
@@ -231,7 +196,7 @@ pub fn outbox_push(config: &RuntimeConfig) -> Result<TransportOutboxPushView, Cl
 
 fn transport_outbox_push_state(receipt: &PushOutboxReceipt, failed_count: usize) -> &'static str {
     if receipt.attempted_events == 0 {
-        return transport_outbox_reported_preview_state(receipt).unwrap_or("ready");
+        return transport_outbox_reported_deferred_state(receipt).unwrap_or("ready");
     }
     if receipt.published_events > 0 && failed_count > 0 {
         "partial"
@@ -244,19 +209,15 @@ fn transport_outbox_push_state(receipt: &PushOutboxReceipt, failed_count: usize)
     }
 }
 
-fn transport_outbox_reported_preview_state(receipt: &PushOutboxReceipt) -> Option<&'static str> {
+fn transport_outbox_reported_deferred_state(receipt: &PushOutboxReceipt) -> Option<&'static str> {
     let mut deferred = false;
     for event in &receipt.events {
         match event.final_state {
-            PushOutboxEventState::PreviewUnavailable => return Some("preview_unavailable"),
             PushOutboxEventState::DeferredUntilImplemented => deferred = true,
             _ => {}
         }
         for target in &event.targets {
             match target.outcome_kind {
-                PushOutboxTargetOutcomeKind::PreviewUnavailable => {
-                    return Some("preview_unavailable");
-                }
                 PushOutboxTargetOutcomeKind::DeferredUntilImplemented => deferred = true,
                 _ => {}
             }
@@ -267,15 +228,12 @@ fn transport_outbox_reported_preview_state(receipt: &PushOutboxReceipt) -> Optio
 
 fn transport_outbox_push_reason(receipt: &PushOutboxReceipt) -> Option<String> {
     if receipt.attempted_events == 0 {
-        if let Some(state) = transport_outbox_reported_preview_state(receipt) {
+        if let Some(state) = transport_outbox_reported_deferred_state(receipt) {
             return Some(match state {
-                "preview_unavailable" => {
-                    "SDK outbox push reported Reticulum preview work as preview unavailable without network delivery"
-                }
                 "deferred_until_implemented" => {
-                    "SDK outbox push reported Reticulum preview work as deferred until implemented without network delivery"
+                    "SDK outbox push reported Reticulum work as deferred until implemented without network delivery"
                 }
-                _ => "SDK outbox push reported Reticulum preview work without network delivery",
+                _ => "SDK outbox push reported Reticulum work without network delivery",
             }
             .to_owned());
         }
@@ -292,9 +250,6 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
             None,
             None,
             None,
-            None,
-            None,
-            None,
             "configured",
         ),
         TransportProfileKind::Nostr => profile_view_from_parts(
@@ -303,47 +258,26 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
             None,
             None,
             None,
-            None,
-            None,
-            None,
             if config.transport.nostr_relay_urls.is_empty() {
                 "unconfigured"
             } else {
                 "configured"
             },
         ),
-        TransportProfileKind::ReticulumPreview => profile_view_from_parts(
-            "reticulum_preview",
+        TransportProfileKind::Reticulum => profile_view_from_parts(
+            "reticulum",
             Vec::new(),
-            Some(
-                config
-                    .transport
-                    .reticulum_preview_behavior
-                    .as_str()
-                    .to_owned(),
-            ),
-            Some(config.transport.reticulum_preview_scope.clone()),
-            config.transport.reticulum_preview_agent_endpoint.clone(),
-            None,
-            None,
-            None,
-            "preview_unavailable",
+            Some(config.transport.reticulum_behavior.as_str().to_owned()),
+            Some(config.transport.reticulum_scope.clone()),
+            config.transport.reticulum_agent_endpoint.clone(),
+            "configured",
         ),
-        TransportProfileKind::Hybrid => profile_view_from_parts(
-            "hybrid",
+        TransportProfileKind::MultiTarget => profile_view_from_parts(
+            "multi_target",
             config.transport.nostr_relay_urls.clone(),
-            Some(
-                config
-                    .transport
-                    .reticulum_preview_behavior
-                    .as_str()
-                    .to_owned(),
-            ),
-            Some(config.transport.reticulum_preview_scope.clone()),
-            config.transport.reticulum_preview_agent_endpoint.clone(),
-            None,
-            None,
-            None,
+            Some(config.transport.reticulum_behavior.as_str().to_owned()),
+            Some(config.transport.reticulum_scope.clone()),
+            config.transport.reticulum_agent_endpoint.clone(),
             if config.transport.nostr_relay_urls.is_empty() {
                 "unconfigured"
             } else {
@@ -351,82 +285,33 @@ fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
             },
         )
         .with_message(
-            "Hybrid transport publishes through configured Nostr relays and reports Reticulum preview status"
+            "Multi-target transport publishes through configured Nostr relays and reports Reticulum availability"
                 .to_owned(),
         ),
-        TransportProfileKind::Proxy => {
-            let proxy_readiness = proxy_token_ready(config);
-            profile_view_from_parts(
-                "proxy",
-                Vec::new(),
-                None,
-                None,
-                None,
-                Some(config.transport.proxy.url.clone()),
-                config
-                    .transport
-                    .proxy
-                    .token_file
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
-                config.transport.proxy.token_secret_id.clone(),
-                if proxy_readiness.is_ok() {
-                    "configured"
-                } else {
-                    "unconfigured"
-                },
-            )
-            .with_message(proxy_readiness.err().map_or_else(
-                || "Proxy transport delegates delivery to the configured endpoint".to_owned(),
-                |error| error.to_string(),
-            ))
-        }
     }
 }
 
 fn profile_view_from_parts(
     profile_id: &str,
     nostr_relays: Vec<String>,
-    reticulum_preview_behavior: Option<String>,
-    reticulum_preview_scope: Option<String>,
-    reticulum_preview_agent_endpoint: Option<String>,
-    proxy_url: Option<String>,
-    proxy_token_file: Option<String>,
-    proxy_token_secret_id: Option<String>,
+    reticulum_behavior: Option<String>,
+    reticulum_scope: Option<String>,
+    reticulum_agent_endpoint: Option<String>,
     configured_state: &str,
 ) -> TransportProfileView {
-    let transport_statuses = transport_statuses_from_parts(
-        profile_id,
-        nostr_relays.as_slice(),
-        proxy_url.as_deref(),
-        configured_state,
-    );
+    let transport_statuses = transport_statuses_from_parts(profile_id, nostr_relays.as_slice());
     let profile_delivery_usable = transport_statuses
         .iter()
         .any(|status| status.usable_for_delivery);
     let message = match profile_id {
         "nostr" if profile_delivery_usable => "Nostr relay transport is configured for delivery",
         "nostr" => "Nostr transport requires configured Nostr relay targets",
-        "reticulum_preview" => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
-        "hybrid" if profile_delivery_usable => {
-            "Hybrid transport publishes through configured Nostr relays and reports Reticulum preview status"
+        "reticulum" => RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
+        "multi_target" if profile_delivery_usable => {
+            "Multi-target transport publishes through configured Nostr relays and reports Reticulum availability"
         }
-        "hybrid" => "Hybrid transport requires configured Nostr relay targets",
-        "proxy" if profile_delivery_usable => {
-            "Proxy transport delegates delivery to the configured endpoint"
-        }
-        "proxy" => "Proxy transport requires a configured token file or token secret id",
+        "multi_target" => "Multi-target transport requires configured Nostr relay targets",
         _ => "Local-only profile does not deliver to network transports",
-    };
-    let proxy_token_source = match (
-        proxy_token_file.as_ref().filter(|value| !value.is_empty()),
-        proxy_token_secret_id
-            .as_ref()
-            .filter(|value| !value.is_empty()),
-    ) {
-        (Some(_), None) => Some("token_file".to_owned()),
-        (None, Some(_)) => Some("token_secret_id".to_owned()),
-        _ => None,
     };
     TransportProfileView {
         state: configured_state.to_owned(),
@@ -437,13 +322,9 @@ fn profile_view_from_parts(
         profile_delivery_usable,
         message: message.to_owned(),
         nostr_relays,
-        reticulum_preview_behavior,
-        reticulum_preview_scope,
-        reticulum_preview_agent_endpoint,
-        proxy_url,
-        proxy_token_source,
-        proxy_token_file,
-        proxy_token_secret_id,
+        reticulum_behavior,
+        reticulum_scope,
+        reticulum_agent_endpoint,
         transport_statuses,
         actions: profile_actions(profile_id, profile_delivery_usable),
     }
@@ -452,31 +333,24 @@ fn profile_view_from_parts(
 fn transport_statuses_from_parts(
     profile_id: &str,
     nostr_relays: &[String],
-    proxy_url: Option<&str>,
-    configured_state: &str,
 ) -> Vec<TransportRuntimeStatusView> {
     match profile_id {
         "nostr" => vec![transport_runtime_status_view(nostr_transport_status(
             profile_id,
             !nostr_relays.is_empty(),
         ))],
-        "reticulum_preview" => {
-            vec![transport_runtime_status_view(
-                reticulum_preview_transport_status(profile_id),
-            )]
+        "reticulum" => {
+            vec![transport_runtime_status_view(reticulum_transport_status(
+                profile_id,
+            ))]
         }
-        "hybrid" => vec![
+        "multi_target" => vec![
             transport_runtime_status_view(nostr_transport_status(
                 profile_id,
                 !nostr_relays.is_empty(),
             )),
-            transport_runtime_status_view(reticulum_preview_transport_status(profile_id)),
+            transport_runtime_status_view(reticulum_transport_status(profile_id)),
         ],
-        "proxy" => vec![transport_runtime_status_view(proxy_transport_status(
-            profile_id,
-            proxy_url,
-            configured_state == "configured",
-        ))],
         _ => vec![transport_runtime_status_view(local_transport_status(
             profile_id,
         ))],
@@ -509,39 +383,18 @@ fn nostr_transport_status(profile_id: &str, targets_configured: bool) -> Radroot
     .with_profile_id(profile_id)
 }
 
-fn reticulum_preview_transport_status(profile_id: &str) -> RadrootsTransportStatus {
+fn reticulum_transport_status(profile_id: &str) -> RadrootsTransportStatus {
     RadrootsTransportStatus::new(
         RadrootsTransportKind::Reticulum,
         true,
-        RadrootsTransportImplementationState::PreviewUnavailable,
+        RadrootsTransportImplementationState::Real,
         false,
         RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
     )
     .with_profile_id(profile_id)
-    .with_endpoint_uri(RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI)
-}
-
-fn proxy_transport_status(
-    profile_id: &str,
-    proxy_url: Option<&str>,
-    token_ready: bool,
-) -> RadrootsTransportStatus {
-    let mut status = RadrootsTransportStatus::new(
-        RadrootsTransportKind::Proxy,
-        token_ready,
-        RadrootsTransportImplementationState::Real,
-        token_ready,
-        if token_ready {
-            "Proxy transport delegates delivery to the configured endpoint"
-        } else {
-            "Proxy transport requires a configured token file or token secret id"
-        },
-    )
-    .with_profile_id(profile_id);
-    if let Some(proxy_url) = proxy_url {
-        status = status.with_endpoint_uri(proxy_url);
-    }
-    status
+    .with_endpoint_uri(RADROOTS_RETICULUM_ENDPOINT_URI)
+    .with_maturity(RadrootsTransportCapabilityMaturity::Preview)
+    .with_availability(RadrootsTransportCapabilityAvailability::Unavailable)
 }
 
 fn transport_runtime_status_view(status: RadrootsTransportStatus) -> TransportRuntimeStatusView {
@@ -551,6 +404,8 @@ fn transport_runtime_status_view(status: RadrootsTransportStatus) -> TransportRu
         endpoint_uri: status.endpoint_uri,
         configured: status.configured,
         implementation: transport_implementation_label(status.implementation).to_owned(),
+        maturity: transport_maturity_label(status.maturity).to_owned(),
+        availability: transport_availability_label(status.availability).to_owned(),
         usable_for_delivery: status.usable_for_delivery,
         capabilities: TransportOperationCapabilitiesView {
             deliver: status.capabilities.deliver,
@@ -564,15 +419,31 @@ fn transport_implementation_label(state: RadrootsTransportImplementationState) -
     match state {
         RadrootsTransportImplementationState::Real => "real",
         RadrootsTransportImplementationState::Mock => "mock",
-        RadrootsTransportImplementationState::PreviewUnavailable => "preview_unavailable",
     }
 }
 
-fn reticulum_preview_scope_for_profile(profile_id: &str, input: &OperationData) -> Option<String> {
+fn transport_maturity_label(maturity: RadrootsTransportCapabilityMaturity) -> &'static str {
+    match maturity {
+        RadrootsTransportCapabilityMaturity::Preview => "preview",
+        RadrootsTransportCapabilityMaturity::Stable => "stable",
+    }
+}
+
+fn transport_availability_label(
+    availability: RadrootsTransportCapabilityAvailability,
+) -> &'static str {
+    match availability {
+        RadrootsTransportCapabilityAvailability::Available => "available",
+        RadrootsTransportCapabilityAvailability::Degraded => "degraded",
+        RadrootsTransportCapabilityAvailability::Unavailable => "unavailable",
+    }
+}
+
+fn reticulum_scope_for_profile(profile_id: &str, input: &OperationData) -> Option<String> {
     match profile_id {
-        "reticulum_preview" | "hybrid" => Some(
-            string_input(input, "reticulum_preview_scope")
-                .unwrap_or(RADROOTS_RETICULUM_PREVIEW_SCOPE_ID)
+        "reticulum" | "multi_target" => Some(
+            string_input(input, "reticulum_scope")
+                .unwrap_or(RADROOTS_RETICULUM_SCOPE_ID)
                 .to_owned(),
         ),
         _ => None,
@@ -584,7 +455,7 @@ fn profile_actions(profile_id: &str, profile_delivery_usable: bool) -> Vec<Strin
         return Vec::new();
     }
     match profile_id {
-        "reticulum_preview" => vec![
+        "reticulum" => vec![
             "radroots mesh status".to_owned(),
             "radroots transport profile get".to_owned(),
         ],
@@ -594,59 +465,14 @@ fn profile_actions(profile_id: &str, profile_delivery_usable: bool) -> Vec<Strin
                     .to_owned(),
             ]
         }
-        "hybrid" => {
+        "multi_target" => {
             vec![
-                "radroots transport profile set --kind hybrid --nostr-relay wss://relay.example.com"
+                "radroots transport profile set --kind multi-target --nostr-relay wss://relay.example.com"
                     .to_owned(),
             ]
         }
-        "proxy" => vec![
-            "radroots transport profile set --kind proxy --proxy-url http://127.0.0.1:7070 --proxy-token-file <path>"
-                .to_owned(),
-        ],
         _ => vec!["radroots transport profile get".to_owned()],
     }
-}
-
-fn validate_proxy_token_source(
-    token_file: Option<&str>,
-    token_secret_id: Option<&str>,
-) -> Result<(), RuntimeError> {
-    match (token_file, token_secret_id) {
-        (None, None) => Err(RuntimeError::Config(
-            "transport profile `proxy` requires --proxy-token-file or --proxy-token-secret-id"
-                .to_owned(),
-        )),
-        (Some(file), None) if file.trim().is_empty() => Err(RuntimeError::Config(
-            "transport profile `proxy` requires a non-empty --proxy-token-file".to_owned(),
-        )),
-        (None, Some(secret_id)) if secret_id.trim().is_empty() => Err(RuntimeError::Config(
-            "transport profile `proxy` requires a non-empty --proxy-token-secret-id".to_owned(),
-        )),
-        (Some(_), Some(_)) => Err(RuntimeError::Config(
-            "transport profile `proxy` cannot set both --proxy-token-file and --proxy-token-secret-id"
-                .to_owned(),
-        )),
-        _ => Ok(()),
-    }
-}
-
-pub fn proxy_token_ready(config: &RuntimeConfig) -> Result<(), RuntimeError> {
-    crate::runtime::sdk::validate_proxy_bearer_token(config)
-}
-
-fn validate_proxy_token_material(
-    config: &RuntimeConfig,
-    url: &str,
-    token_file: Option<&str>,
-    token_secret_id: Option<&str>,
-) -> Result<(), RuntimeError> {
-    let mut validation_config = config.clone();
-    validation_config.transport.profile = TransportProfileKind::Proxy;
-    validation_config.transport.proxy.url = url.to_owned();
-    validation_config.transport.proxy.token_file = token_file.map(PathBuf::from);
-    validation_config.transport.proxy.token_secret_id = token_secret_id.map(str::to_owned);
-    proxy_token_ready(&validation_config)
 }
 
 trait TransportProfileViewMessage {
@@ -725,24 +551,16 @@ mod tests {
     };
 
     #[test]
-    fn transport_outbox_push_reports_reticulum_preview_without_attempts() {
-        let cases = [
-            (
-                PushOutboxEventState::PreviewUnavailable,
-                PushOutboxTargetOutcomeKind::PreviewUnavailable,
-                "preview_unavailable",
-                "SDK outbox push reported Reticulum preview work as preview unavailable without network delivery",
-            ),
-            (
-                PushOutboxEventState::DeferredUntilImplemented,
-                PushOutboxTargetOutcomeKind::DeferredUntilImplemented,
-                "deferred_until_implemented",
-                "SDK outbox push reported Reticulum preview work as deferred until implemented without network delivery",
-            ),
-        ];
+    fn transport_outbox_push_reports_reticulum_deferred_without_attempts() {
+        let cases = [(
+            PushOutboxEventState::DeferredUntilImplemented,
+            PushOutboxTargetOutcomeKind::DeferredUntilImplemented,
+            "deferred_until_implemented",
+            "SDK outbox push reported Reticulum work as deferred until implemented without network delivery",
+        )];
 
         for (final_state, outcome_kind, expected_state, expected_reason) in cases {
-            let receipt = reticulum_preview_receipt(final_state, outcome_kind);
+            let receipt = reticulum_receipt(final_state, outcome_kind);
 
             assert_eq!(transport_outbox_push_state(&receipt, 0), expected_state);
             assert_eq!(
@@ -752,7 +570,7 @@ mod tests {
         }
     }
 
-    fn reticulum_preview_receipt(
+    fn reticulum_receipt(
         final_state: PushOutboxEventState,
         outcome_kind: PushOutboxTargetOutcomeKind,
     ) -> PushOutboxReceipt {
@@ -773,16 +591,13 @@ mod tests {
                 quorum_met: false,
                 targets: vec![PushOutboxTargetReceipt {
                     transport_kind: "reticulum".to_owned(),
-                    endpoint_uri: RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI.to_owned(),
-                    target_scope: Some("local_preview".to_owned()),
+                    endpoint_uri: RADROOTS_RETICULUM_ENDPOINT_URI.to_owned(),
+                    target_scope: Some(RADROOTS_RETICULUM_SCOPE_ID.to_owned()),
                     target_label: None,
                     outcome_kind,
                     transport_outcome_kind: Some(match outcome_kind {
                         PushOutboxTargetOutcomeKind::DeferredUntilImplemented => {
                             PushOutboxTransportOutcomeKind::DeferredUntilImplemented
-                        }
-                        PushOutboxTargetOutcomeKind::PreviewUnavailable => {
-                            PushOutboxTransportOutcomeKind::TransportUnavailable
                         }
                         _ => PushOutboxTransportOutcomeKind::TransportUnavailable,
                     }),

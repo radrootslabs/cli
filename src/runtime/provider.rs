@@ -97,24 +97,19 @@ pub fn resolve_write_plane_provider(
     publish: &PublishRuntimeView,
 ) -> WritePlaneProviderView {
     let (provider_runtime_id, binding_model, detail) = match config.transport.profile {
-        TransportProfileKind::Nostr | TransportProfileKind::Hybrid => (
+        TransportProfileKind::Nostr | TransportProfileKind::MultiTarget => (
             config.transport.profile.as_str(),
             "nostr_transport",
             "configured transport profile publishes through Nostr; readiness is reported under publish",
-        ),
-        TransportProfileKind::Proxy => (
-            "proxy",
-            "proxy_transport",
-            "proxy transport profile is selected; readiness is reported under publish",
         ),
         TransportProfileKind::LocalOnly => (
             "local_only",
             "local_transport",
             "local_only transport profile does not provide network publish",
         ),
-        TransportProfileKind::ReticulumPreview => (
-            "reticulum_preview",
-            "reticulum_preview",
+        TransportProfileKind::Reticulum => (
+            "reticulum",
+            "reticulum_transport",
             RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
         ),
     };

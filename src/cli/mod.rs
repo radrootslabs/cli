@@ -92,7 +92,7 @@ pub enum TargetCommand {
     Signer(SignerArgs),
     #[command(about = "Manage transport profiles and outbox delivery.")]
     Transport(TransportArgs),
-    #[command(about = "Inspect mesh scope and Reticulum preview policy.")]
+    #[command(about = "Inspect mesh scope and Reticulum admission policy.")]
     Mesh(MeshArgs),
     #[command(about = "Initialize and inspect the local replica store.")]
     Store(StoreArgs),

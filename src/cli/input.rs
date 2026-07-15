@@ -331,28 +331,17 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
                         Value::String(args.kind.as_str().to_owned()),
                     );
                     insert_string_array(&mut input, "nostr_relays", args.nostr_relay.as_slice());
-                    if let Some(behavior) = args.reticulum_preview_behavior {
+                    if let Some(behavior) = args.reticulum_behavior {
                         input.insert(
-                            "reticulum_preview_behavior".to_owned(),
+                            "reticulum_behavior".to_owned(),
                             Value::String(behavior.as_str().to_owned()),
                         );
                     }
+                    insert_string(&mut input, "reticulum_scope", &args.reticulum_scope);
                     insert_string(
                         &mut input,
-                        "reticulum_preview_scope",
-                        &args.reticulum_preview_scope,
-                    );
-                    insert_string(
-                        &mut input,
-                        "reticulum_preview_agent_endpoint",
-                        &args.reticulum_preview_agent_endpoint,
-                    );
-                    insert_string(&mut input, "proxy_url", &args.proxy_url);
-                    insert_path(&mut input, "proxy_token_file", &args.proxy_token_file);
-                    insert_string(
-                        &mut input,
-                        "proxy_token_secret_id",
-                        &args.proxy_token_secret_id,
+                        "reticulum_agent_endpoint",
+                        &args.reticulum_agent_endpoint,
                     );
                 }
                 TransportProfileCommand::Get => {}

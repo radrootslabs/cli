@@ -598,7 +598,7 @@ mod tests {
             (
                 OperationAdapterError::unavailable(
                     "listing.publish",
-                    "proxy provider is unavailable".to_owned(),
+                    "transport provider is unavailable".to_owned(),
                 ),
                 "provider_unavailable",
                 "provider",

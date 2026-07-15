@@ -34,14 +34,14 @@ pub struct MeshScopeSetArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum MeshScopeArg {
     Disabled,
-    LocalPreview,
+    Local,
 }
 
 impl MeshScopeArg {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
-            Self::LocalPreview => "local_preview",
+            Self::Local => "local",
         }
     }
 }

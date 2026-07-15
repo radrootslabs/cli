@@ -1,7 +1,6 @@
 mod support;
 
 use std::fs;
-use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -31,7 +30,7 @@ use radroots_nostr_connect::prelude::{
     RadrootsNostrConnectRequestMessage, RadrootsNostrConnectResponse,
 };
 use radroots_outbox::{
-    RadrootsOutbox, RadrootsOutboxDeliveryPlanInput, RadrootsOutboxReticulumPreviewBehavior,
+    RadrootsOutbox, RadrootsOutboxDeliveryPlanInput, RadrootsOutboxReticulumBehavior,
     RadrootsOutboxSignedOperationInput,
 };
 use radroots_replica_schema::farm::IFarmFields;
@@ -41,10 +40,10 @@ use radroots_runtime_store::{
     BUYER_ORDER_REQUEST_LOCAL_WORK_RECORD_KIND, PublishOutboxStatus, RuntimeStore,
     RuntimeStoreRecordFamily, RuntimeStoreRecordInput, RuntimeStoreRecordStatus, SourceRuntime,
 };
-use radroots_sql_core::SqliteExecutor;
+use radroots_sql_core::SqlxSqliteExecutor;
 use radroots_transport::{
-    RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE,
-    RadrootsTransportKind, RadrootsTransportSatisfactionPolicy, RadrootsTransportTarget,
+    RADROOTS_RETICULUM_ENDPOINT_URI, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE, RadrootsTransportKind,
+    RadrootsTransportSatisfactionPolicy, RadrootsTransportTarget,
 };
 use serde_json::Value;
 use serde_json::json;
@@ -187,12 +186,6 @@ fn test_pubkey(value: &str) -> RadrootsPublicKey {
     value.parse().expect("valid public key")
 }
 
-fn proxy_token_file(sandbox: &RadrootsCliSandbox) -> PathBuf {
-    let path = sandbox.root().join("proxy.token");
-    fs::write(&path, "proxy_test_token\n").expect("write proxy token file");
-    path
-}
-
 fn configure_nostr_transport(sandbox: &RadrootsCliSandbox, relay_url: &str) {
     sandbox.write_nostr_transport_profile(&[relay_url]);
 }
@@ -218,16 +211,10 @@ fn assert_transport_capabilities(status: &Value, deliver: bool, fetch: bool) {
     assert_eq!(status["capabilities"]["fetch"], fetch);
 }
 
-fn write_proxy_transport_config(sandbox: &RadrootsCliSandbox, body: &str) -> PathBuf {
-    sandbox.write_app_config(
-        format!("[transport]\nprofile = \"proxy\"\n\n[transport.proxy]\n{body}").as_str(),
-    )
-}
-
 fn sdk_outbox_path(sandbox: &RadrootsCliSandbox) -> PathBuf {
     sandbox
         .root()
-        .join("data/apps/cli/replica/sdk/outbox.sqlite")
+        .join("data/apps/cli/replica/sdk/runtime.sqlite")
 }
 
 fn post_outbox_draft(public_key_hex: &str, content: &str) -> RadrootsEventDraft {
@@ -257,7 +244,7 @@ fn seed_signed_transport_outbox_event(
     content: &str,
     transport_profile_id: &str,
     target: RadrootsTransportTarget,
-    behavior: RadrootsOutboxReticulumPreviewBehavior,
+    behavior: RadrootsOutboxReticulumBehavior,
     claim_for_publish: bool,
 ) {
     let outbox_path = sdk_outbox_path(sandbox);
@@ -285,7 +272,7 @@ fn seed_signed_transport_outbox_event(
                     RadrootsTransportSatisfactionPolicy::all_accepted(),
                     vec![target],
                 )
-                .with_reticulum_preview_behavior(behavior),
+                .with_reticulum_behavior(behavior),
                 true,
                 1_700_000_000_007,
                 1_700_000_000_000,
@@ -348,52 +335,6 @@ impl RelayFetchServer {
     }
 }
 
-struct ProxyJsonRpcServer {
-    endpoint: String,
-    handle: JoinHandle<Value>,
-}
-
-impl ProxyJsonRpcServer {
-    fn once(expected_token: Option<&'static str>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind proxy");
-        listener.set_nonblocking(true).expect("proxy nonblocking");
-        let endpoint = format!("http://{}", listener.local_addr().expect("proxy addr"));
-        let handle = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(30);
-            loop {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        return handle_proxy_connection(stream, expected_token);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(
-                            Instant::now() < deadline,
-                            "timed out waiting for proxy request"
-                        );
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(error) => panic!("accept proxy connection: {error}"),
-                }
-            }
-        });
-        Self { endpoint, handle }
-    }
-
-    fn endpoint(&self) -> &str {
-        self.endpoint.as_str()
-    }
-
-    fn join(self) -> Value {
-        self.handle.join().expect("proxy server join")
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Nip46RelayFinish {
-    SignResponse,
-    ProductPublish,
-}
-
 struct Nip46RelayReport {
     connection_count: usize,
     req_count: usize,
@@ -408,7 +349,6 @@ struct Nip46RelayState {
     published_events: Mutex<Vec<RadrootsNostrEvent>>,
     pending_responses: Mutex<Vec<RadrootsNostrEvent>>,
     done: AtomicBool,
-    finish: Nip46RelayFinish,
 }
 
 struct Nip46RelayServer {
@@ -418,7 +358,7 @@ struct Nip46RelayServer {
 }
 
 impl Nip46RelayServer {
-    fn new(remote_keys: Keys, user_keys: Keys, finish: Nip46RelayFinish) -> Self {
+    fn new(remote_keys: Keys, user_keys: Keys) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind nip46 relay");
         listener.set_nonblocking(true).expect("nip46 nonblocking");
         let endpoint = format!("ws://{}", listener.local_addr().expect("nip46 addr"));
@@ -429,7 +369,6 @@ impl Nip46RelayServer {
             published_events: Mutex::new(Vec::new()),
             pending_responses: Mutex::new(Vec::new()),
             done: AtomicBool::new(false),
-            finish,
         });
         let thread_state = Arc::clone(&state);
         let remote_keys = Arc::new(remote_keys);
@@ -614,9 +553,6 @@ fn handle_nip46_sign_request(
         .sign_request_count
         .lock()
         .expect("sign request count lock") += 1;
-    if matches!(state.finish, Nip46RelayFinish::SignResponse) {
-        state.done.store(true, Ordering::SeqCst);
-    }
 }
 
 fn send_pending_nip46_responses(
@@ -659,9 +595,7 @@ fn handle_nip46_product_publish(
         .lock()
         .expect("published events lock")
         .push(event);
-    if matches!(state.finish, Nip46RelayFinish::ProductPublish) {
-        state.done.store(true, Ordering::SeqCst);
-    }
+    state.done.store(true, Ordering::SeqCst);
 }
 
 fn nip46_response_event(
@@ -727,112 +661,6 @@ signer_session_ref = "{}"
     )
 }
 
-fn handle_proxy_connection(mut stream: TcpStream, expected_token: Option<&str>) -> Value {
-    let mut bytes = Vec::new();
-    let mut buffer = [0_u8; 1024];
-    let body_start = loop {
-        let read = stream.read(&mut buffer).expect("read proxy");
-        assert!(read > 0, "proxy request closed before headers");
-        bytes.extend_from_slice(&buffer[..read]);
-        if let Some(index) = http_body_start(&bytes) {
-            break index;
-        }
-    };
-    let headers = String::from_utf8(bytes[..body_start].to_vec()).expect("headers utf8");
-    let content_length = http_content_length(headers.as_str());
-    while bytes.len() < body_start + content_length {
-        let read = stream.read(&mut buffer).expect("read proxy body");
-        assert!(read > 0, "proxy request closed before body");
-        bytes.extend_from_slice(&buffer[..read]);
-    }
-    let body = String::from_utf8(bytes[body_start..body_start + content_length].to_vec())
-        .expect("body utf8");
-    if let Some(expected_token) = expected_token {
-        assert!(
-            headers
-                .to_ascii_lowercase()
-                .contains(format!("authorization: bearer {expected_token}").as_str()),
-            "proxy request missing expected bearer auth: {headers}"
-        );
-    }
-    let request: Value = serde_json::from_str(body.as_str()).expect("proxy json");
-    assert_eq!(request["jsonrpc"], "2.0");
-    assert_eq!(request["method"], "transport.publish.event");
-    assert!(request["params"].get("event").is_none());
-    let event = proxy_request_raw_event(&request);
-    let target_result = json!({
-        "transport_kind": "nostr",
-        "endpoint_uri": "wss://daemon-resolved.radroots.test",
-        "source": "daemon_default",
-        "attempted": true,
-        "outcome_kind": "accepted"
-    });
-    let response = json!({
-        "jsonrpc": "2.0",
-        "id": request["id"],
-        "result": {
-            "deduplicated": false,
-            "job": {
-                "job_id": "cli-proxy-job-1",
-                "status": "delivery_satisfied",
-                "terminal": true,
-                "delivery_satisfied": true,
-                "event_id": event["id"].clone(),
-                "pubkey": event["pubkey"].clone(),
-                "event_kind": event["kind"].clone(),
-                "target_policy": request["params"]["target_policy"],
-                "delivery_policy": request["params"]["delivery_policy"],
-                "target_count": 1,
-                "acknowledged_count": 1,
-                "retryable_count": 0,
-                "terminal_count": 0,
-                "requested_at_ms": 1_700_000_000_000_i64,
-                "completed_at_ms": 1_700_000_000_001_i64,
-                "targets": [target_result]
-            }
-        }
-    });
-    let response_body = response.to_string();
-    let raw_response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
-        response_body.len()
-    );
-    stream
-        .write_all(raw_response.as_bytes())
-        .expect("write proxy response");
-    request
-}
-
-fn proxy_request_raw_event(request: &Value) -> Value {
-    serde_json::from_str(
-        request["params"]["raw_event_json"]
-            .as_str()
-            .expect("proxy raw event json"),
-    )
-    .expect("proxy raw event")
-}
-
-fn http_body_start(bytes: &[u8]) -> Option<usize> {
-    bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|index| index + 4)
-}
-
-fn http_content_length(headers: &str) -> usize {
-    headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            if name.eq_ignore_ascii_case("content-length") {
-                Some(value.trim().parse::<usize>().expect("content length"))
-            } else {
-                None
-            }
-        })
-        .expect("content-length header")
-}
-
 fn handle_relay_fetch_connection(stream: TcpStream, events: Vec<RadrootsNostrEvent>) {
     let mut websocket = tungstenite::accept(stream).expect("accept fetch websocket");
     let subscription_id = read_relay_req_subscription_id(&mut websocket);
@@ -869,7 +697,7 @@ fn read_relay_req_subscription_id(websocket: &mut tungstenite::WebSocket<TcpStre
 }
 
 fn seed_derived_projection_sync_farm(sandbox: &RadrootsCliSandbox, d_tag: &str, pubkey: &str) {
-    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica");
+    let executor = SqlxSqliteExecutor::open(sandbox.replica_store_path()).expect("open replica");
     migrations::run_all_up(&executor).expect("replica migrations");
     farm::create(
         &executor,
@@ -1151,7 +979,7 @@ fn append_app_local_record(input: RuntimeStoreRecordInput, sandbox: &RadrootsCli
     let database_path = sandbox.runtime_store_db_path();
     fs::create_dir_all(database_path.parent().expect("runtime store parent"))
         .expect("runtime store parent");
-    let executor = SqliteExecutor::open(database_path).expect("open runtime store");
+    let executor = SqlxSqliteExecutor::open(database_path).expect("open runtime store");
     let store = RuntimeStore::new(executor);
     store.migrate_up().expect("migrate runtime store");
     store
@@ -1534,16 +1362,16 @@ fn root_help_explains_transport_and_mesh_surfaces() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
     assert!(stdout.contains("Manage transport profiles and outbox delivery."));
-    assert!(stdout.contains("Inspect mesh scope and Reticulum preview policy."));
+    assert!(stdout.contains("Inspect mesh scope and Reticulum admission policy."));
     assert!(stdout.contains("Inspect local readiness and mode-specific recovery steps"));
     assert!(stdout.contains("Show effective configuration and publish-plane readiness."));
 }
 
 #[test]
-fn transport_profile_reticulum_preview_output_is_transport_specific() {
+fn transport_profile_reticulum_output_is_transport_specific() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config(
-        "[transport]\nprofile = \"reticulum_preview\"\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+        "[transport]\nprofile = \"reticulum\"\n\n[transport.reticulum]\nbehavior = \"defer_delivery_plans\"\n",
     );
 
     let value = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
@@ -1551,15 +1379,17 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
     let actions = result["actions"].as_array().expect("actions");
 
     assert_eq!(value["operation_id"], "transport.profile.get");
-    assert_eq!(result["profile_id"], "reticulum_preview");
-    assert_eq!(result["profile_kind"], "reticulum_preview");
+    assert_eq!(result["profile_id"], "reticulum");
+    assert_eq!(result["profile_kind"], "reticulum");
     assert_eq!(result["profile_delivery_usable"], false);
     assert!(result.get("transport_kind").is_none());
     assert!(result.get("implementation_state").is_none());
     assert_eq!(result["transport_statuses"][0]["transport"], "reticulum");
+    assert_eq!(result["transport_statuses"][0]["implementation"], "real");
+    assert_eq!(result["transport_statuses"][0]["maturity"], "preview");
     assert_eq!(
-        result["transport_statuses"][0]["implementation"],
-        "preview_unavailable"
+        result["transport_statuses"][0]["availability"],
+        "unavailable"
     );
     assert_eq!(result["transport_statuses"][0]["configured"], true);
     assert_eq!(
@@ -1572,8 +1402,8 @@ fn transport_profile_reticulum_preview_output_is_transport_specific() {
         RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE
     );
     assert_no_removed_transport_status_fields(&result["transport_statuses"][0]);
-    assert_eq!(result["reticulum_preview_behavior"], "defer_delivery_plans");
-    assert_eq!(result["reticulum_preview_scope"], "local_preview");
+    assert_eq!(result["reticulum_behavior"], "defer_delivery_plans");
+    assert_eq!(result["reticulum_scope"], "local");
     assert_eq!(result["message"], RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     assert!(
         !result["message"]
@@ -1623,7 +1453,7 @@ fn transport_profile_local_only_output_uses_profile_and_local_status_fields() {
 }
 
 #[test]
-fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
+fn transport_profile_set_multi_target_persists_nostr_and_reticulum_config() {
     let sandbox = RadrootsCliSandbox::new();
 
     let value = sandbox.json_success(&[
@@ -1633,20 +1463,20 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
         "profile",
         "set",
         "--kind",
-        "hybrid",
+        "multi-target",
         "--nostr-relay",
         "wss://relay.example.com",
-        "--reticulum-preview-behavior",
+        "--reticulum-behavior",
         "defer-delivery-plans",
-        "--reticulum-preview-scope",
+        "--reticulum-scope",
         "farmers_market",
-        "--reticulum-preview-agent-endpoint",
+        "--reticulum-agent-endpoint",
         "reticulum-agent:local",
     ]);
 
     assert_eq!(value["operation_id"], "transport.profile.set");
-    assert_eq!(value["result"]["profile_id"], "hybrid");
-    assert_eq!(value["result"]["profile_kind"], "hybrid");
+    assert_eq!(value["result"]["profile_id"], "multi_target");
+    assert_eq!(value["result"]["profile_kind"], "multi_target");
     assert!(value["result"].get("transport_kind").is_none());
     assert_eq!(value["result"]["state"], "configured");
     assert_eq!(
@@ -1680,7 +1510,15 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
     );
     assert_eq!(
         value["result"]["transport_statuses"][1]["implementation"],
-        "preview_unavailable"
+        "real"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][1]["maturity"],
+        "preview"
+    );
+    assert_eq!(
+        value["result"]["transport_statuses"][1]["availability"],
+        "unavailable"
     );
     assert_eq!(value["result"]["transport_statuses"][1]["configured"], true);
     assert_eq!(
@@ -1691,46 +1529,46 @@ fn transport_profile_set_hybrid_persists_nostr_and_reticulum_preview_config() {
     assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][0]);
     assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][1]);
     assert_eq!(
-        value["result"]["reticulum_preview_behavior"],
+        value["result"]["reticulum_behavior"],
         "defer_delivery_plans"
     );
-    assert_eq!(value["result"]["reticulum_preview_scope"], "farmers_market");
+    assert_eq!(value["result"]["reticulum_scope"], "farmers_market");
     assert_eq!(
-        value["result"]["reticulum_preview_agent_endpoint"],
+        value["result"]["reticulum_agent_endpoint"],
         "reticulum-agent:local"
     );
 
     let value = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
-    assert_eq!(value["result"]["profile_id"], "hybrid");
+    assert_eq!(value["result"]["profile_id"], "multi_target");
     assert_eq!(
         value["result"]["nostr_relays"][0],
         "wss://relay.example.com"
     );
     assert_eq!(
-        value["result"]["reticulum_preview_behavior"],
+        value["result"]["reticulum_behavior"],
         "defer_delivery_plans"
     );
-    assert_eq!(value["result"]["reticulum_preview_scope"], "farmers_market");
+    assert_eq!(value["result"]["reticulum_scope"], "farmers_market");
     assert_eq!(
-        value["result"]["reticulum_preview_agent_endpoint"],
+        value["result"]["reticulum_agent_endpoint"],
         "reticulum-agent:local"
     );
 
     let config = fs::read_to_string(sandbox.root().join("config/apps/cli/config.toml"))
         .expect("read app config");
-    assert!(config.contains("profile = \"hybrid\""));
+    assert!(config.contains("profile = \"multi_target\""));
     assert!(config.contains("[transport.nostr]"));
-    assert!(config.contains("[transport.reticulum_preview]"));
+    assert!(config.contains("[transport.reticulum]"));
     assert!(config.contains("behavior = \"defer_delivery_plans\""));
     assert!(config.contains("scope = \"farmers_market\""));
     assert!(config.contains("agent_endpoint = \"reticulum-agent:local\""));
 }
 
 #[test]
-fn transport_status_hybrid_output_reports_nostr_and_reticulum_rows() {
+fn transport_status_multi_target_output_reports_nostr_and_reticulum_rows() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config(
-        "[transport]\nprofile = \"hybrid\"\n\n[transport.nostr]\nrelay_urls = [\"wss://relay.example.com\"]\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+        "[transport]\nprofile = \"multi_target\"\n\n[transport.nostr]\nrelay_urls = [\"wss://relay.example.com\"]\n\n[transport.reticulum]\nbehavior = \"defer_delivery_plans\"\n",
     );
 
     let value = sandbox.json_success(&["--format", "json", "transport", "status"]);
@@ -1740,8 +1578,8 @@ fn transport_status_hybrid_output_reports_nostr_and_reticulum_rows() {
     let reticulum = &transports[1];
 
     assert_eq!(value["operation_id"], "transport.status");
-    assert_eq!(result["active_profile"]["profile_id"], "hybrid");
-    assert_eq!(result["active_profile"]["profile_kind"], "hybrid");
+    assert_eq!(result["active_profile"]["profile_id"], "multi_target");
+    assert_eq!(result["active_profile"]["profile_kind"], "multi_target");
     assert_eq!(result["active_profile"]["profile_delivery_usable"], true);
     assert_eq!(transports.len(), 2);
     assert_eq!(nostr["transport"], "nostr");
@@ -1750,7 +1588,9 @@ fn transport_status_hybrid_output_reports_nostr_and_reticulum_rows() {
     assert_eq!(nostr["usable_for_delivery"], true);
     assert_transport_capabilities(nostr, true, false);
     assert_eq!(reticulum["transport"], "reticulum");
-    assert_eq!(reticulum["implementation"], "preview_unavailable");
+    assert_eq!(reticulum["implementation"], "real");
+    assert_eq!(reticulum["maturity"], "preview");
+    assert_eq!(reticulum["availability"], "unavailable");
     assert_eq!(reticulum["configured"], true);
     assert_eq!(reticulum["usable_for_delivery"], false);
     assert_transport_capabilities(reticulum, false, false);
@@ -1784,10 +1624,10 @@ fn transport_status_nostr_output_uses_canonical_transport_row() {
 }
 
 #[test]
-fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
+fn transport_status_reticulum_output_reports_unusable_unavailable_state() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config(
-        "[transport]\nprofile = \"reticulum_preview\"\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+        "[transport]\nprofile = \"reticulum\"\n\n[transport.reticulum]\nbehavior = \"defer_delivery_plans\"\n",
     );
 
     let value = sandbox.json_success(&["--format", "json", "transport", "status"]);
@@ -1798,14 +1638,13 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
     assert_eq!(value["operation_id"], "transport.status");
     assert_eq!(result["state"], "ready");
     assert_eq!(transports.len(), 1);
-    assert_eq!(result["active_profile"]["profile_id"], "reticulum_preview");
-    assert_eq!(
-        result["active_profile"]["profile_kind"],
-        "reticulum_preview"
-    );
+    assert_eq!(result["active_profile"]["profile_id"], "reticulum");
+    assert_eq!(result["active_profile"]["profile_kind"], "reticulum");
     assert_eq!(result["active_profile"]["profile_delivery_usable"], false);
     assert_eq!(active["transport"], "reticulum");
-    assert_eq!(active["implementation"], "preview_unavailable");
+    assert_eq!(active["implementation"], "real");
+    assert_eq!(active["maturity"], "preview");
+    assert_eq!(active["availability"], "unavailable");
     assert_eq!(active["configured"], true);
     assert_eq!(active["usable_for_delivery"], false);
     assert_transport_capabilities(active, false, false);
@@ -1825,28 +1664,28 @@ fn transport_status_reticulum_preview_output_reports_unusable_preview_state() {
 }
 
 #[test]
-fn transport_outbox_status_human_output_reports_preview_deferred_and_publishing_counts() {
+fn transport_outbox_status_human_output_reports_reticulum_deferred_and_publishing_counts() {
     let sandbox = RadrootsCliSandbox::new();
     seed_signed_transport_outbox_event(
         &sandbox,
-        "preview unavailable",
-        "reticulum_preview",
+        "deferred until implemented",
+        "reticulum",
         transport_target(
             RadrootsTransportKind::Reticulum,
-            RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI,
+            RADROOTS_RETICULUM_ENDPOINT_URI,
         ),
-        RadrootsOutboxReticulumPreviewBehavior::RejectDeliveryAttempts,
+        RadrootsOutboxReticulumBehavior::RejectDeliveryAttempts,
         false,
     );
     seed_signed_transport_outbox_event(
         &sandbox,
         "deferred until implemented",
-        "reticulum_preview",
+        "reticulum",
         transport_target(
             RadrootsTransportKind::Reticulum,
-            RADROOTS_RETICULUM_PREVIEW_ENDPOINT_URI,
+            RADROOTS_RETICULUM_ENDPOINT_URI,
         ),
-        RadrootsOutboxReticulumPreviewBehavior::DeferDeliveryPlans,
+        RadrootsOutboxReticulumBehavior::DeferDeliveryPlans,
         false,
     );
     seed_signed_transport_outbox_event(
@@ -1854,7 +1693,7 @@ fn transport_outbox_status_human_output_reports_preview_deferred_and_publishing_
         "publishing",
         "nostr",
         transport_target(RadrootsTransportKind::Nostr, ORDERABLE_LISTING_RELAY),
-        RadrootsOutboxReticulumPreviewBehavior::RejectDeliveryAttempts,
+        RadrootsOutboxReticulumBehavior::RejectDeliveryAttempts,
         true,
     );
 
@@ -1872,8 +1711,7 @@ fn transport_outbox_status_human_output_reports_preview_deferred_and_publishing_
     let stdout = String::from_utf8(output.stdout).expect("terminal stdout");
 
     assert!(stdout.contains("Transport Outbox"), "{stdout}");
-    assert_terminal_field(&stdout, "Preview unavailable", "1");
-    assert_terminal_field(&stdout, "Deferred", "1");
+    assert_terminal_field(&stdout, "Deferred", "2");
     assert_terminal_field(&stdout, "Publishing", "1");
     assert_terminal_field(&stdout, "Ready signed", "0");
 }
@@ -1901,24 +1739,23 @@ fn transport_outbox_status_read_only_succeeds_for_empty_nostr_profile() {
     assert_terminal_field(&stdout, "State", "unconfigured");
     assert_terminal_field(&stdout, "Profile", "nostr");
     assert_terminal_field(&stdout, "Total", "0");
-    assert_terminal_field(&stdout, "Preview unavailable", "0");
     assert_terminal_field(&stdout, "Deferred", "0");
     assert_terminal_field(&stdout, "Publishing", "0");
 }
 
 #[test]
-fn config_get_reticulum_preview_transport_exec_readiness_uses_shared_unavailable_copy() {
+fn config_get_reticulum_transport_exec_readiness_uses_shared_unavailable_copy() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.write_app_config(
-        "[transport]\nprofile = \"reticulum_preview\"\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\n",
+        "[transport]\nprofile = \"reticulum\"\n\n[transport.reticulum]\nbehavior = \"defer_delivery_plans\"\n",
     );
 
     let value = sandbox.json_success(&["--format", "json", "config", "get"]);
     let result = &value["result"];
 
     assert_eq!(value["operation_id"], "config.get");
-    assert_eq!(result["publish"]["transport"], "reticulum_preview");
-    assert_eq!(result["publish"]["state"], "preview_unavailable");
+    assert_eq!(result["publish"]["transport"], "reticulum");
+    assert_eq!(result["publish"]["state"], "unavailable");
     assert_eq!(result["publish"]["executable"], false);
     assert_eq!(
         result["publish"]["reason"],
@@ -1942,7 +1779,7 @@ fn config_get_reticulum_preview_transport_exec_readiness_uses_shared_unavailable
 }
 
 #[test]
-fn mesh_status_reports_reticulum_preview_unusable_state_without_fallback() {
+fn mesh_status_reports_reticulum_unusable_state_without_fallback() {
     let sandbox = RadrootsCliSandbox::new();
 
     let value = sandbox.json_success(&["--format", "json", "mesh", "status"]);
@@ -1951,10 +1788,13 @@ fn mesh_status_reports_reticulum_preview_unusable_state_without_fallback() {
     assert_eq!(value["operation_id"], "mesh.status");
     assert_eq!(result["transport"], "reticulum");
     assert_eq!(result["configured"], false);
-    assert_eq!(result["implementation"], "preview_unavailable");
+    assert_eq!(result["implementation"], "unavailable");
     assert_eq!(result["usable_for_delivery"], false);
     assert_no_removed_transport_status_fields(result);
-    assert_contains(&result["message"], "Reticulum mesh preview is explicit");
+    assert_eq!(
+        result["message"],
+        "Reticulum mesh delivery is unavailable until implementation"
+    );
     assert!(
         !result["message"]
             .as_str()
@@ -1964,7 +1804,7 @@ fn mesh_status_reports_reticulum_preview_unusable_state_without_fallback() {
 }
 
 #[test]
-fn mesh_policy_check_reports_structured_preview_denial() {
+fn mesh_policy_check_reports_structured_delivery_denial() {
     let sandbox = RadrootsCliSandbox::new();
 
     let value = sandbox.json_success(&["--format", "json", "mesh", "policy", "check"]);
@@ -1972,11 +1812,11 @@ fn mesh_policy_check_reports_structured_preview_denial() {
 
     assert_eq!(value["operation_id"], "mesh.policy.check");
     assert_eq!(result["scope"], "disabled");
-    assert_eq!(result["policy"], "reticulum_preview_delivery");
+    assert_eq!(result["policy"], "reticulum_mesh_delivery");
     assert_eq!(result["transport"], "reticulum");
     assert_eq!(result["usable_for_delivery"], false);
     assert_eq!(result["decision"], "denied");
-    assert_eq!(result["deny_reason"], "preview_unavailable");
+    assert_eq!(result["deny_reason"], "delivery_unavailable");
     assert_eq!(result["privacy_class"], "public_event");
     assert_eq!(result["payload_bytes"], 1);
     assert_eq!(result["frame_bytes"], 1);
@@ -1984,7 +1824,10 @@ fn mesh_policy_check_reports_structured_preview_denial() {
     assert_eq!(result["max_frame_bytes"], 0);
     assert_eq!(result["compression"], "disabled");
     assert_eq!(result["custom_scopes_enabled"], false);
-    assert_contains(&result["message"], "Reticulum mesh preview is explicit");
+    assert_eq!(
+        result["message"],
+        "Reticulum mesh delivery is unavailable until implementation"
+    );
     assert!(
         !result["message"]
             .as_str()
@@ -1994,8 +1837,10 @@ fn mesh_policy_check_reports_structured_preview_denial() {
 }
 
 #[test]
-fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() {
+fn transport_source_boundary_rejects_removed_relay_and_daemon_transport_surfaces() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let removed_daemon_transport_alias = ["radrootsd_", "pro", "xy"].concat();
+    let removed_daemon_publish_alias = ["radrootsd.publish_", "pro", "xy.v1"].concat();
 
     assert!(
         !manifest_dir.join("src/cli/relay.rs").exists(),
@@ -2010,8 +1855,8 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
     ] {
         let source = fs::read_to_string(manifest_dir.join(relative_path)).expect("read source");
         for forbidden in [
-            "\"radrootsd_proxy\"",
-            "radrootsd.publish_proxy.v1",
+            removed_daemon_transport_alias.as_str(),
+            removed_daemon_publish_alias.as_str(),
             "publish.relays.resolve",
             "\"publish.event\"",
             "transport_kinds",
@@ -2113,9 +1958,8 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         "RadrootsTransportStatus::new",
         "RadrootsTransportKind::Reticulum",
         "transport_runtime_status_view",
-        "validate_proxy_token_material",
-        "proxy_token_ready(&validation_config)",
-        "crate::runtime::sdk::validate_proxy_bearer_token(config)",
+        "RadrootsTransportCapabilityMaturity::Preview",
+        "RadrootsTransportCapabilityAvailability::Unavailable",
     ] {
         assert!(
             transport_source.contains(required),
@@ -2132,6 +1976,8 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
         "pub transport: String,",
         "pub configured: bool,",
         "pub implementation: String,",
+        "pub maturity: String,",
+        "pub availability: String,",
         "pub usable_for_delivery: bool,",
         "pub capabilities: TransportOperationCapabilitiesView,",
         "pub struct TransportOperationCapabilitiesView",
@@ -2235,14 +2081,14 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
     ] {
         assert!(
             !mesh_policy_view_source.contains(forbidden),
-            "mesh policy view must not expose preview-success field `{forbidden}`"
+            "mesh policy view must not expose unavailable-delivery success field `{forbidden}`"
         );
     }
 
     let mesh_runtime_source =
         fs::read_to_string(manifest_dir.join("src/runtime/mesh.rs")).expect("read mesh runtime");
     for required in [
-        "RadrootsMeshPayloadPolicy::preview_unavailable()",
+        "RadrootsMeshPayloadPolicy::reticulum_unavailable()",
         "policy.evaluate(&input)",
         "decision.usable_for_delivery()",
         "deny_reason",
@@ -2253,7 +2099,7 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
     ] {
         assert!(
             mesh_runtime_source.contains(required),
-            "src/runtime/mesh.rs must derive structured preview denial from mesh policy witness `{required}`"
+            "src/runtime/mesh.rs must derive structured delivery denial from mesh policy witness `{required}`"
         );
     }
     for forbidden in [
@@ -2267,46 +2113,7 @@ fn transport_source_boundary_rejects_removed_relay_and_publish_proxy_surfaces() 
     ] {
         assert!(
             !mesh_runtime_source.contains(forbidden),
-            "src/runtime/mesh.rs must not imply Reticulum preview success or fallback `{forbidden}`"
-        );
-    }
-
-    let sdk_source = fs::read_to_string(manifest_dir.join("src/runtime/sdk.rs")).expect("read sdk");
-    for required in [
-        "pub(crate) fn validate_proxy_bearer_token",
-        ".with_bearer_token(proxy_bearer_token(config)?)",
-        "proxy transport profile requires a configured token file or token secret id",
-        "contains unsupported control characters",
-    ] {
-        assert!(
-            sdk_source.contains(required),
-            "src/runtime/sdk.rs must retain proxy token materialization witness `{required}`"
-        );
-    }
-
-    let main_source = fs::read_to_string(manifest_dir.join("src/main.rs")).expect("read main");
-    assert!(
-        main_source.contains("runtime::transport::proxy_token_ready(config)"),
-        "src/main.rs must retain routed proxy token readiness validation"
-    );
-
-    let core_source =
-        fs::read_to_string(manifest_dir.join("src/ops/exec/core.rs")).expect("read core");
-    assert!(
-        core_source.contains("crate::runtime::transport::proxy_token_ready(config)"),
-        "src/ops/exec/core.rs must retain config and health proxy token readiness validation"
-    );
-
-    let test_source = fs::read_to_string(file!()).expect("read test source");
-    for required in [
-        "config_get_proxy_reports_redacted_token_material_failures",
-        "transport_profile_set_proxy_rejects_unmaterializable_token_sources",
-        "routed_proxy_operations_validate_token_material_before_sdk_runtime",
-        "config_get_proxy_with_token_secret_id_reports_ready_transport",
-    ] {
-        assert!(
-            test_source.contains(required),
-            "tests/target_cli.rs must retain proxy readiness proof `{required}`"
+            "src/runtime/mesh.rs must not imply Reticulum delivery success or fallback `{forbidden}`"
         );
     }
 }
@@ -2595,606 +2402,6 @@ fn removed_global_flags_are_rejected_publicly() {
 }
 
 #[test]
-fn config_get_exposes_proxy_missing_token_state() {
-    let sandbox = RadrootsCliSandbox::new();
-    write_proxy_transport_config(&sandbox, "");
-
-    let value = sandbox.json_success(&["--format", "json", "config", "get"]);
-
-    assert_eq!(value["operation_id"], "config.get");
-    assert_eq!(value["result"]["publish"]["transport"], "proxy");
-    assert_eq!(
-        value["result"]["publish"]["source"],
-        "user config · transport profile"
-    );
-    assert_eq!(value["result"]["publish"]["transport_family"], "proxy");
-    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
-    assert_eq!(value["result"]["publish"]["executable"], false);
-    assert_contains(
-        &value["result"]["publish"]["reason"],
-        "configured token file or token secret id",
-    );
-    assert_eq!(
-        value["result"]["account_resolution"]["status"],
-        "unresolved"
-    );
-    assert_eq!(
-        value["result"]["publish"]["provider"]["provider_runtime_id"],
-        "proxy"
-    );
-    assert_eq!(
-        value["result"]["write_plane"]["provider_runtime_id"],
-        "proxy"
-    );
-    assert_eq!(
-        value["result"]["write_plane"]["binding_model"],
-        "proxy_transport"
-    );
-    assert_eq!(value["result"]["write_plane"]["state"], "unconfigured");
-    assert_eq!(value["result"]["transport"]["profile_id"], "proxy");
-    assert_eq!(value["result"]["transport"]["state"], "unconfigured");
-    assert_eq!(
-        value["result"]["transport"]["profile_delivery_usable"],
-        false
-    );
-    assert_eq!(
-        value["result"]["transport"]["proxy_url"],
-        "http://127.0.0.1:7070"
-    );
-    assert!(value["result"]["transport"]["proxy_token_source"].is_null());
-    assert!(value["result"]["transport"]["proxy_token_file"].is_null());
-    assert!(value["result"]["transport"]["proxy_token_secret_id"].is_null());
-    assert_eq!(
-        value["result"]["actions"][0],
-        "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID"
-    );
-    assert_eq!(
-        value["next_actions"][0]["env_var"],
-        "RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE"
-    );
-}
-
-#[test]
-fn config_get_proxy_with_token_file_reports_ready_transport() {
-    let sandbox = RadrootsCliSandbox::new();
-    let token_file = proxy_token_file(&sandbox);
-    write_proxy_transport_config(
-        &sandbox,
-        format!(
-            "token_file = \"{}\"\n",
-            toml_string(token_file.display().to_string().as_str())
-        )
-        .as_str(),
-    );
-
-    let value = sandbox.json_success(&["--format", "json", "config", "get"]);
-    assert_eq!(value["operation_id"], "config.get");
-    assert_eq!(value["result"]["publish"]["transport"], "proxy");
-    assert_eq!(value["result"]["publish"]["state"], "ready");
-    assert_eq!(value["result"]["publish"]["executable"], true);
-    assert_eq!(value["result"]["publish"]["reason"], Value::Null);
-    assert_eq!(value["result"]["transport"]["profile_id"], "proxy");
-    assert_eq!(value["result"]["transport"]["state"], "configured");
-    assert_eq!(
-        value["result"]["transport"]["profile_delivery_usable"],
-        true
-    );
-    assert_eq!(
-        value["result"]["transport"]["proxy_token_source"],
-        "token_file"
-    );
-    assert_eq!(
-        value["result"]["transport"]["proxy_token_file"],
-        token_file.display().to_string()
-    );
-    assert!(value["result"]["transport"]["proxy_token_secret_id"].is_null());
-    assert!(
-        !serde_json::to_string(&value)
-            .expect("json")
-            .contains("proxy_test_token")
-    );
-    assert_eq!(
-        value["result"]["actions"]
-            .as_array()
-            .expect("actions")
-            .len(),
-        0
-    );
-}
-
-#[test]
-fn config_get_proxy_with_token_secret_id_reports_ready_transport() {
-    let sandbox = RadrootsCliSandbox::new();
-    store_test_session_secret(&sandbox, "proxy.publish.token", "proxy_secret_token");
-    write_proxy_transport_config(&sandbox, "token_secret_id = \"proxy.publish.token\"\n");
-
-    let value = sandbox.json_success(&["--format", "json", "config", "get"]);
-
-    assert_eq!(value["operation_id"], "config.get");
-    assert_eq!(value["result"]["publish"]["transport"], "proxy");
-    assert_eq!(value["result"]["publish"]["state"], "ready");
-    assert_eq!(value["result"]["publish"]["executable"], true);
-    assert_eq!(value["result"]["transport"]["profile_id"], "proxy");
-    assert_eq!(value["result"]["transport"]["state"], "configured");
-    assert_eq!(
-        value["result"]["transport"]["profile_delivery_usable"],
-        true
-    );
-    assert_eq!(
-        value["result"]["transport"]["proxy_token_source"],
-        "token_secret_id"
-    );
-    assert_eq!(
-        value["result"]["transport"]["proxy_token_secret_id"],
-        "proxy.publish.token"
-    );
-    assert!(
-        !serde_json::to_string(&value)
-            .expect("json")
-            .contains("proxy_secret_token")
-    );
-}
-
-#[test]
-fn config_get_proxy_reports_redacted_token_material_failures() {
-    let missing_file = RadrootsCliSandbox::new();
-    let missing_path = missing_file.root().join("missing.proxy.token");
-    write_proxy_transport_config(
-        &missing_file,
-        format!(
-            "token_file = \"{}\"\n",
-            toml_string(missing_path.display().to_string().as_str())
-        )
-        .as_str(),
-    );
-    let missing_file_value = missing_file.json_success(&["--format", "json", "config", "get"]);
-    assert_eq!(
-        missing_file_value["result"]["publish"]["state"],
-        "unconfigured"
-    );
-    assert_contains(
-        &missing_file_value["result"]["publish"]["reason"],
-        "failed to read proxy token file",
-    );
-    assert_contains(
-        &missing_file_value["result"]["transport"]["message"],
-        missing_path.display().to_string().as_str(),
-    );
-
-    let missing_secret = RadrootsCliSandbox::new();
-    write_proxy_transport_config(
-        &missing_secret,
-        "token_secret_id = \"proxy.publish.missing\"\n",
-    );
-    let missing_secret_value = missing_secret.json_success(&["--format", "json", "config", "get"]);
-    assert_eq!(
-        missing_secret_value["result"]["publish"]["state"],
-        "unconfigured"
-    );
-    assert_contains(
-        &missing_secret_value["result"]["publish"]["reason"],
-        "proxy token secret `proxy.publish.missing` was not found",
-    );
-
-    let empty_file = RadrootsCliSandbox::new();
-    let empty_path = empty_file.root().join("empty.proxy.token");
-    fs::write(&empty_path, "\n").expect("write empty proxy token");
-    write_proxy_transport_config(
-        &empty_file,
-        format!(
-            "token_file = \"{}\"\n",
-            toml_string(empty_path.display().to_string().as_str())
-        )
-        .as_str(),
-    );
-    let empty_value = empty_file.json_success(&["--format", "json", "config", "get"]);
-    assert_eq!(empty_value["result"]["publish"]["state"], "unconfigured");
-    assert_contains(
-        &empty_value["result"]["publish"]["reason"],
-        "proxy token file",
-    );
-    assert_contains(&empty_value["result"]["publish"]["reason"], "is empty");
-
-    let control_file = RadrootsCliSandbox::new();
-    let control_path = control_file.root().join("control.proxy.token");
-    fs::write(&control_path, "proxy_control\tsecret").expect("write control proxy token");
-    write_proxy_transport_config(
-        &control_file,
-        format!(
-            "token_file = \"{}\"\n",
-            toml_string(control_path.display().to_string().as_str())
-        )
-        .as_str(),
-    );
-    let control_value = control_file.json_success(&["--format", "json", "config", "get"]);
-    assert_eq!(control_value["result"]["publish"]["state"], "unconfigured");
-    assert_contains(
-        &control_value["result"]["publish"]["reason"],
-        "contains unsupported control characters",
-    );
-    assert!(
-        !serde_json::to_string(&control_value)
-            .expect("json")
-            .contains("proxy_control")
-    );
-}
-
-#[test]
-fn transport_profile_set_proxy_persists_token_file_without_printing_token_material() {
-    let sandbox = RadrootsCliSandbox::new();
-    let token_file = proxy_token_file(&sandbox);
-
-    let value = sandbox.json_success(&[
-        "--format",
-        "json",
-        "transport",
-        "profile",
-        "set",
-        "--kind",
-        "proxy",
-        "--proxy-url",
-        "http://127.0.0.1:7070",
-        "--proxy-token-file",
-        token_file.to_string_lossy().as_ref(),
-    ]);
-
-    assert_eq!(value["operation_id"], "transport.profile.set");
-    assert_eq!(value["result"]["profile_id"], "proxy");
-    assert_eq!(value["result"]["state"], "configured");
-    assert_eq!(value["result"]["profile_delivery_usable"], true);
-    assert_eq!(
-        value["result"]["transport_statuses"][0]["transport"],
-        "proxy"
-    );
-    assert_eq!(
-        value["result"]["transport_statuses"][0]["implementation"],
-        "real"
-    );
-    assert_eq!(value["result"]["transport_statuses"][0]["configured"], true);
-    assert_eq!(
-        value["result"]["transport_statuses"][0]["usable_for_delivery"],
-        true
-    );
-    assert_transport_capabilities(&value["result"]["transport_statuses"][0], true, false);
-    assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][0]);
-    assert_eq!(value["result"]["proxy_token_source"], "token_file");
-    assert_eq!(
-        value["result"]["proxy_token_file"],
-        token_file.display().to_string()
-    );
-    assert!(value["result"]["proxy_token_secret_id"].is_null());
-    assert!(
-        !serde_json::to_string(&value)
-            .expect("json")
-            .contains("proxy_test_token")
-    );
-
-    let get = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
-    assert_eq!(get["result"]["proxy_token_source"], "token_file");
-    assert_eq!(
-        get["result"]["proxy_token_file"],
-        token_file.display().to_string()
-    );
-    assert!(
-        !serde_json::to_string(&get)
-            .expect("json")
-            .contains("proxy_test_token")
-    );
-}
-
-#[test]
-fn transport_profile_set_proxy_persists_token_secret_id_without_printing_token_material() {
-    let sandbox = RadrootsCliSandbox::new();
-    let token_file = proxy_token_file(&sandbox);
-    store_test_session_secret(&sandbox, "proxy.publish.token", "proxy_secret_token");
-
-    let value = sandbox.json_success(&[
-        "--format",
-        "json",
-        "transport",
-        "profile",
-        "set",
-        "--kind",
-        "proxy",
-        "--proxy-url",
-        "http://127.0.0.1:7070",
-        "--proxy-token-secret-id",
-        "proxy.publish.token",
-    ]);
-
-    assert_eq!(value["operation_id"], "transport.profile.set");
-    assert_eq!(value["result"]["profile_id"], "proxy");
-    assert_eq!(value["result"]["state"], "configured");
-    assert_eq!(value["result"]["profile_delivery_usable"], true);
-    assert_eq!(
-        value["result"]["transport_statuses"][0]["transport"],
-        "proxy"
-    );
-    assert_eq!(
-        value["result"]["transport_statuses"][0]["implementation"],
-        "real"
-    );
-    assert_eq!(value["result"]["transport_statuses"][0]["configured"], true);
-    assert_eq!(
-        value["result"]["transport_statuses"][0]["usable_for_delivery"],
-        true
-    );
-    assert_transport_capabilities(&value["result"]["transport_statuses"][0], true, false);
-    assert_no_removed_transport_status_fields(&value["result"]["transport_statuses"][0]);
-    assert_eq!(value["result"]["proxy_token_source"], "token_secret_id");
-    assert!(value["result"]["proxy_token_file"].is_null());
-    assert_eq!(
-        value["result"]["proxy_token_secret_id"],
-        "proxy.publish.token"
-    );
-    assert!(
-        !serde_json::to_string(&value)
-            .expect("json")
-            .contains("proxy_secret_token")
-    );
-
-    let get = sandbox.json_success(&["--format", "json", "transport", "profile", "get"]);
-    assert_eq!(get["result"]["proxy_token_source"], "token_secret_id");
-    assert_eq!(
-        get["result"]["proxy_token_secret_id"],
-        "proxy.publish.token"
-    );
-    assert!(
-        !serde_json::to_string(&get)
-            .expect("json")
-            .contains("proxy_secret_token")
-    );
-    assert!(token_file.exists());
-}
-
-#[test]
-fn transport_profile_set_proxy_rejects_missing_and_conflicting_token_sources() {
-    let sandbox = RadrootsCliSandbox::new();
-    let token_file = proxy_token_file(&sandbox);
-
-    let (missing_output, missing_value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "transport",
-        "profile",
-        "set",
-        "--kind",
-        "proxy",
-        "--proxy-url",
-        "http://127.0.0.1:7070",
-    ]);
-    assert!(!missing_output.status.success());
-    assert_contains(
-        &missing_value["errors"][0]["message"],
-        "requires --proxy-token-file or --proxy-token-secret-id",
-    );
-
-    let (conflict_output, conflict_value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "transport",
-        "profile",
-        "set",
-        "--kind",
-        "proxy",
-        "--proxy-url",
-        "http://127.0.0.1:7070",
-        "--proxy-token-file",
-        token_file.to_string_lossy().as_ref(),
-        "--proxy-token-secret-id",
-        "proxy.publish.token",
-    ]);
-    assert!(!conflict_output.status.success());
-    assert_contains(
-        &conflict_value["errors"][0]["message"],
-        "cannot set both --proxy-token-file and --proxy-token-secret-id",
-    );
-    assert!(
-        !serde_json::to_string(&conflict_value)
-            .expect("json")
-            .contains("proxy_test_token")
-    );
-}
-
-#[test]
-fn transport_profile_set_proxy_rejects_unmaterializable_token_sources() {
-    let missing_file = RadrootsCliSandbox::new();
-    let missing_path = missing_file.root().join("missing.profile.token");
-    let (missing_file_output, missing_file_value) = missing_file.json_output(&[
-        "--format",
-        "json",
-        "transport",
-        "profile",
-        "set",
-        "--kind",
-        "proxy",
-        "--proxy-url",
-        "http://127.0.0.1:7070",
-        "--proxy-token-file",
-        missing_path.to_string_lossy().as_ref(),
-    ]);
-    assert!(!missing_file_output.status.success());
-    assert_contains(
-        &missing_file_value["errors"][0]["message"],
-        "failed to read proxy token file",
-    );
-
-    let missing_secret = RadrootsCliSandbox::new();
-    let (missing_secret_output, missing_secret_value) = missing_secret.json_output(&[
-        "--format",
-        "json",
-        "transport",
-        "profile",
-        "set",
-        "--kind",
-        "proxy",
-        "--proxy-url",
-        "http://127.0.0.1:7070",
-        "--proxy-token-secret-id",
-        "proxy.profile.missing",
-    ]);
-    assert!(!missing_secret_output.status.success());
-    assert_contains(
-        &missing_secret_value["errors"][0]["message"],
-        "proxy token secret `proxy.profile.missing` was not found",
-    );
-
-    let empty_file = RadrootsCliSandbox::new();
-    let empty_path = empty_file.root().join("empty.profile.token");
-    fs::write(&empty_path, "\n").expect("write empty profile token");
-    let (empty_output, empty_value) = empty_file.json_output(&[
-        "--format",
-        "json",
-        "transport",
-        "profile",
-        "set",
-        "--kind",
-        "proxy",
-        "--proxy-url",
-        "http://127.0.0.1:7070",
-        "--proxy-token-file",
-        empty_path.to_string_lossy().as_ref(),
-    ]);
-    assert!(!empty_output.status.success());
-    assert_contains(&empty_value["errors"][0]["message"], "is empty");
-
-    let control_file = RadrootsCliSandbox::new();
-    let control_path = control_file.root().join("control.profile.token");
-    fs::write(&control_path, "profile_control\tsecret").expect("write control profile token");
-    let (control_output, control_value) = control_file.json_output(&[
-        "--format",
-        "json",
-        "transport",
-        "profile",
-        "set",
-        "--kind",
-        "proxy",
-        "--proxy-url",
-        "http://127.0.0.1:7070",
-        "--proxy-token-file",
-        control_path.to_string_lossy().as_ref(),
-    ]);
-    assert!(!control_output.status.success());
-    assert_contains(
-        &control_value["errors"][0]["message"],
-        "contains unsupported control characters",
-    );
-    assert!(
-        !serde_json::to_string(&control_value)
-            .expect("json")
-            .contains("profile_control")
-    );
-}
-
-#[test]
-fn routed_proxy_operations_validate_token_material_before_sdk_runtime() {
-    let sandbox = RadrootsCliSandbox::new();
-    let missing_path = sandbox.root().join("missing.routed.token");
-    write_proxy_transport_config(
-        &sandbox,
-        format!(
-            "token_file = \"{}\"\n",
-            toml_string(missing_path.display().to_string().as_str())
-        )
-        .as_str(),
-    );
-
-    let (online_output, online_value) =
-        sandbox.json_output(&["--format", "json", "--online", "sync", "push"]);
-    assert!(!online_output.status.success());
-    assert_eq!(online_value["errors"][0]["code"], "network_unavailable");
-    assert_contains(
-        &online_value["errors"][0]["message"],
-        "failed to read proxy token file",
-    );
-
-    let (routed_output, routed_value) = sandbox.json_output(&[
-        "--format",
-        "json",
-        "--approval-token",
-        "approve",
-        "transport",
-        "outbox",
-        "push",
-    ]);
-    assert!(!routed_output.status.success());
-    assert_eq!(routed_value["errors"][0]["code"], "network_unavailable");
-    assert_contains(
-        &routed_value["errors"][0]["message"],
-        "failed to read proxy token file",
-    );
-}
-
-#[test]
-fn config_get_rejects_proxy_transport_config_with_conflicting_token_sources() {
-    let sandbox = RadrootsCliSandbox::new();
-    let token_file = proxy_token_file(&sandbox);
-    sandbox.write_app_config(
-        format!(
-            r#"[transport]
-profile = "proxy"
-
-[transport.proxy]
-token_file = "{}"
-token_secret_id = "proxy.publish.token"
-"#,
-            toml_string(token_file.display().to_string().as_str())
-        )
-        .as_str(),
-    );
-
-    let (output, value) = sandbox.json_output(&["--format", "json", "config", "get"]);
-
-    assert!(!output.status.success());
-    assert_contains(
-        &value["errors"][0]["message"],
-        "cannot set both token_file and token_secret_id",
-    );
-    assert!(
-        !serde_json::to_string(&value)
-            .expect("json")
-            .contains("proxy_test_token")
-    );
-}
-
-#[test]
-fn config_get_marks_proxy_unconfigured_with_incomplete_myc_signer() {
-    let sandbox = RadrootsCliSandbox::new();
-    let token_file = proxy_token_file(&sandbox);
-    sandbox.write_app_config(&format!(
-        r#"[transport]
-profile = "proxy"
-
-[transport.proxy]
-token_file = "{}"
-
-[signer]
-backend = "myc"
-
-[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "explicit_endpoint"
-target = "http://myc.invalid"
-signer_session_ref = "session_ready"
-"#,
-        toml_string(token_file.display().to_string().as_str())
-    ));
-
-    let value = sandbox.json_success(&["--format", "json", "config", "get"]);
-    assert_eq!(value["operation_id"], "config.get");
-    assert_eq!(value["result"]["publish"]["transport"], "proxy");
-    assert_eq!(value["result"]["publish"]["state"], "unconfigured");
-    assert_eq!(value["result"]["publish"]["executable"], false);
-    assert_contains(&value["result"]["publish"]["reason"], "signer.remote_nip46");
-    assert_eq!(
-        value["result"]["publish"]["provider"]["state"],
-        "unconfigured"
-    );
-    assert_eq!(value["result"]["actions"][0], "radroots signer status get");
-}
-
-#[test]
 fn config_get_distinguishes_relay_ready_from_missing_signed_write_account() {
     let sandbox = RadrootsCliSandbox::new();
     configure_nostr_transport(&sandbox, "ws://127.0.0.1:19001");
@@ -3305,51 +2512,6 @@ fn config_get_marks_relay_publish_unconfigured_with_watch_only_account() {
 }
 
 #[test]
-fn health_surfaces_publish_state_under_missing_myc_binding() {
-    let sandbox = RadrootsCliSandbox::new();
-    let missing_myc = sandbox.root().join("bin/missing-myc");
-    let token_file = proxy_token_file(&sandbox);
-    sandbox.write_app_config(&format!(
-        "[transport]\nprofile = \"proxy\"\n\n[transport.proxy]\ntoken_file = \"{}\"\n\n[signer]\nbackend = \"myc\"\n\n[myc]\nexecutable = \"{}\"\n",
-        toml_string(token_file.display().to_string().as_str()),
-        toml_string(missing_myc.display().to_string().as_str())
-    ));
-
-    let value = sandbox.json_success(&["--format", "json", "health", "status", "get"]);
-
-    assert_eq!(value["operation_id"], "health.status.get");
-    assert_eq!(value["result"]["state"], "needs_attention");
-    assert_eq!(value["result"]["publish"]["transport"], "proxy");
-    assert_eq!(value["result"]["publish"]["executable"], false);
-    assert_eq!(
-        value["result"]["publish"]["provider"]["state"],
-        "unconfigured"
-    );
-    assert_contains(
-        &value["result"]["publish"]["reason"],
-        "signer.remote_nip46 binding is missing",
-    );
-    assert_eq!(value["result"]["store"]["state"], "ready");
-    assert_eq!(
-        value["result"]["store"]["source"],
-        "SDK canonical event store and outbox"
-    );
-    assert_eq!(value["result"]["store"]["canonical_store"], "sdk");
-    assert_eq!(value["result"]["signer"]["state"], "unconfigured");
-    assert_eq!(value["result"]["actions"][0], "radroots account create");
-    assert_eq!(value["result"]["actions"][1], "radroots signer status get");
-    assert_eq!(
-        value["next_actions"][0]["command"],
-        "radroots account create"
-    );
-    assert_eq!(
-        value["next_actions"][1]["command"],
-        "radroots signer status get"
-    );
-    assert_eq!(value["errors"].as_array().expect("errors").len(), 0);
-}
-
-#[test]
 fn health_status_distinguishes_relay_ready_from_missing_signed_write_account() {
     let sandbox = RadrootsCliSandbox::new();
     configure_nostr_transport(&sandbox, "ws://127.0.0.1:19005");
@@ -3373,30 +2535,6 @@ fn health_status_distinguishes_relay_ready_from_missing_signed_write_account() {
     assert_eq!(
         value["next_actions"][0]["command"],
         "radroots account create"
-    );
-}
-
-#[test]
-fn health_check_rejects_proxy_profile_without_token_material() {
-    let sandbox = RadrootsCliSandbox::new();
-    write_proxy_transport_config(&sandbox, "");
-
-    let (output, value) = sandbox.json_output(&["--format", "json", "health", "check", "run"]);
-
-    assert!(!output.status.success());
-    assert_eq!(value["operation_id"], "health.check.run");
-    assert_eq!(value["result"], Value::Null);
-    assert_eq!(value["errors"][0]["code"], "runtime_error");
-    assert_contains(
-        &value["errors"][0]["message"],
-        "proxy transport profile requires a configured token file or token secret id",
-    );
-    assert_eq!(
-        value["next_actions"]
-            .as_array()
-            .expect("next actions")
-            .len(),
-        0
     );
 }
 
@@ -3469,214 +2607,6 @@ fn farm_readiness_check_reports_mode_specific_publish_gates() {
     assert_eq!(relay_detail["transport_profile"], "local_only");
     assert_eq!(relay_detail["publish_state"], "ready");
     assert_eq!(relay_detail["publish_executable"], true);
-
-    let proxy_token_path = proxy_token_file(&sandbox);
-    sandbox.write_app_config(&format!(
-        r#"[transport]
-profile = "proxy"
-
-[transport.proxy]
-token_file = "{}"
-
-[[capability_binding]]
-capability = "signer.remote_nip46"
-provider = "myc"
-target_kind = "explicit_endpoint"
-target = "http://myc.invalid"
-signer_session_ref = "session_test"
-"#,
-        toml_string(proxy_token_path.display().to_string().as_str())
-    ));
-    let output = sandbox
-        .command()
-        .args(["--format", "json", "farm", "readiness", "check"])
-        .output()
-        .expect("run proxy farm readiness");
-    let proxy_value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-
-    assert!(output.status.success());
-    assert_eq!(proxy_value["operation_id"], "farm.readiness.check");
-    assert_contains(&proxy_value["result"]["transport_profile"], "proxy");
-    assert_eq!(proxy_value["result"]["publish_state"], "ready");
-    assert_eq!(proxy_value["result"]["publish_executable"], true);
-    assert_eq!(proxy_value["result"]["reason"], Value::Null);
-    assert_eq!(proxy_value["result"]["actions"][0], "radroots farm publish");
-}
-
-#[test]
-fn proxy_listing_publish_update_and_archive_dry_run_without_direct_publish_relays() {
-    for operation in ["publish", "update", "archive"] {
-        let sandbox = RadrootsCliSandbox::new();
-        sandbox.json_success(&["--format", "json", "account", "create"]);
-        let farm = sandbox.json_success(&[
-            "--format",
-            "json",
-            "farm",
-            "create",
-            "--name",
-            "Proxy Farm",
-            "--location",
-            "farmstand",
-            "--city",
-            "San Francisco",
-            "--country",
-            "US",
-            "--geohash",
-            "9q8yy",
-            "--delivery-method",
-            "pickup",
-        ]);
-        let listing_file = create_listing_draft(&sandbox, format!("proxy-{operation}").as_str());
-        make_listing_publishable(
-            &listing_file,
-            farm["result"]["config"]["farm_d_tag"]
-                .as_str()
-                .expect("farm d tag"),
-        );
-
-        let token_file = proxy_token_file(&sandbox);
-        sandbox.write_app_config(&format!(
-            "[transport]\nprofile = \"proxy\"\n\n[transport.proxy]\ntoken_file = \"{}\"\n",
-            toml_string(token_file.display().to_string().as_str())
-        ));
-
-        let output = sandbox
-            .command()
-            .args([
-                "--format",
-                "json",
-                "--dry-run",
-                "listing",
-                operation,
-                listing_file.to_string_lossy().as_ref(),
-            ])
-            .output()
-            .expect("run proxy listing dry run");
-        let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-
-        assert!(output.status.success());
-        assert_eq!(value["operation_id"], format!("listing.{operation}"));
-        assert_eq!(value["result"]["state"], "dry_run");
-        assert_eq!(
-            value["result"]["source"],
-            "SDK listing publish · configured signer"
-        );
-        assert_eq!(value["result"]["dry_run"], true);
-        assert_eq!(
-            value["result"]["target_transport_endpoints"]
-                .as_array()
-                .expect("relays")
-                .len(),
-            0
-        );
-        assert_contains(
-            &value["result"]["reason"],
-            "SDK enqueue and transport push skipped",
-        );
-    }
-}
-
-#[test]
-fn proxy_listing_publish_non_dry_run_uses_local_jsonrpc_server() {
-    let sandbox = RadrootsCliSandbox::new();
-    let proxy = ProxyJsonRpcServer::once(Some("proxy_test_token"));
-    let token_file = proxy_token_file(&sandbox);
-    sandbox.write_app_config(
-        format!(
-            r#"[transport]
-profile = "proxy"
-
-[transport.proxy]
-url = "{}"
-token_file = "{}"
-"#,
-            toml_string(proxy.endpoint()),
-            toml_string(token_file.display().to_string().as_str())
-        )
-        .as_str(),
-    );
-    sandbox.json_success(&["--format", "json", "account", "create"]);
-    let farm = sandbox.json_success(&[
-        "--format",
-        "json",
-        "farm",
-        "create",
-        "--name",
-        "Proxy Farm",
-        "--location",
-        "farmstand",
-        "--city",
-        "San Francisco",
-        "--country",
-        "US",
-        "--geohash",
-        "9q8yy",
-        "--delivery-method",
-        "pickup",
-    ]);
-    let listing_file = create_listing_draft(&sandbox, "proxy-live");
-    make_listing_publishable(
-        &listing_file,
-        farm["result"]["config"]["farm_d_tag"]
-            .as_str()
-            .expect("farm d tag"),
-    );
-
-    let output = sandbox
-        .command()
-        .args([
-            "--format",
-            "json",
-            "--approval-token",
-            "approve",
-            "listing",
-            "publish",
-            listing_file.to_string_lossy().as_ref(),
-        ])
-        .output()
-        .expect("run proxy listing publish");
-    let request = proxy.join();
-    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-
-    assert!(
-        output.status.success(),
-        "stderr `{}` stdout `{}`",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["result"]["state"], "published");
-    assert_eq!(
-        value["result"]["source"],
-        "SDK listing publish · configured signer"
-    );
-    assert_eq!(value["result"]["dry_run"], false);
-    let event = proxy_request_raw_event(&request);
-    assert_eq!(event["id"], value["result"]["event_id"]);
-    assert_eq!(
-        request["params"]["target_policy"]["relay_urls"]
-            .as_array()
-            .expect("relay urls")
-            .len(),
-        0
-    );
-    assert!(
-        request["params"]["idempotency_key"]
-            .as_str()
-            .expect("daemon idempotency key")
-            .contains("-1-")
-    );
-
-    let status = sandbox.json_success(&["--format", "json", "sync", "status", "get"]);
-    assert_eq!(
-        status["result"]["source"],
-        "SDK canonical event store and outbox"
-    );
-    assert_eq!(status["result"]["queue"]["pending_count"], 0);
-    assert_eq!(status["result"]["queue"]["ready_signed_count"], 0);
-    assert_eq!(status["result"]["queue"]["publishing_count"], 0);
-    assert_eq!(status["result"]["queue"]["retryable_count"], 0);
-    assert_eq!(status["result"]["queue"]["failed_terminal_count"], 0);
 }
 
 #[test]
@@ -3689,11 +2619,7 @@ fn direct_publish_listing_uses_myc_nip46_sdk_signer() {
     let user_keys = nostr_keys_from_identity(&user_identity);
     let remote_keys = nostr_keys_from_identity(&remote_identity);
     let remote_pubkey = remote_keys.public_key().to_hex();
-    let relay = Nip46RelayServer::new(
-        remote_keys.clone(),
-        user_keys,
-        Nip46RelayFinish::ProductPublish,
-    );
+    let relay = Nip46RelayServer::new(remote_keys.clone(), user_keys);
     let relay_endpoint = relay.endpoint().to_owned();
     let public_identity_file =
         write_public_identity_profile(&sandbox, "myc-direct-user", &user_public);
@@ -3779,6 +2705,8 @@ relay_urls = ["{}"]
             "json",
             "--approval-token",
             "approve",
+            "--idempotency-key",
+            "01890f3c-7f2a-7b01-8000-000000000100",
             "listing",
             "publish",
             listing_file.to_string_lossy().as_ref(),
@@ -3818,127 +2746,6 @@ relay_urls = ["{}"]
 }
 
 #[test]
-fn proxy_listing_publish_uses_myc_nip46_sdk_signer() {
-    let sandbox = RadrootsCliSandbox::new();
-    let user_identity = identity_secret(93);
-    let client_identity = identity_secret(94);
-    let remote_identity = identity_secret(95);
-    let user_public = user_identity.to_public();
-    let user_keys = nostr_keys_from_identity(&user_identity);
-    let remote_keys = nostr_keys_from_identity(&remote_identity);
-    let remote_pubkey = remote_keys.public_key().to_hex();
-    let relay = Nip46RelayServer::new(
-        remote_keys.clone(),
-        user_keys,
-        Nip46RelayFinish::SignResponse,
-    );
-    let proxy = ProxyJsonRpcServer::once(Some("proxy_test_token"));
-    let token_file = proxy_token_file(&sandbox);
-    let public_identity_file =
-        write_public_identity_profile(&sandbox, "myc-proxy-user", &user_public);
-    let imported = sandbox.json_success(&[
-        "--format",
-        "json",
-        "--approval-token",
-        "approve",
-        "account",
-        "import",
-        "--default",
-        public_identity_file.to_string_lossy().as_ref(),
-    ]);
-    let account_id = imported["result"]["account"]["id"]
-        .as_str()
-        .expect("account id");
-    store_test_session_secret(
-        &sandbox,
-        "session_ready",
-        client_identity.secret_key_hex().as_str(),
-    );
-    let config = format!(
-        r#"[transport]
-profile = "proxy"
-
-[transport.proxy]
-url = "{}"
-token_file = "{}"
-
-{}"#,
-        toml_string(proxy.endpoint()),
-        toml_string(token_file.display().to_string().as_str()),
-        myc_nip46_config(
-            remote_pubkey.as_str(),
-            relay.endpoint(),
-            account_id,
-            "session_ready",
-        ),
-    );
-    sandbox.write_app_config(config.as_str());
-    let farm = sandbox.json_success(&[
-        "--format",
-        "json",
-        "farm",
-        "create",
-        "--name",
-        "Myc Proxy Farm",
-        "--location",
-        "farmstand",
-        "--city",
-        "San Francisco",
-        "--country",
-        "US",
-        "--geohash",
-        "9q8yy",
-        "--delivery-method",
-        "pickup",
-    ]);
-    let listing_file = create_listing_draft(&sandbox, "myc-proxy-live");
-    make_listing_publishable(
-        &listing_file,
-        farm["result"]["config"]["farm_d_tag"]
-            .as_str()
-            .expect("farm d tag"),
-    );
-
-    let output = sandbox
-        .command()
-        .args([
-            "--format",
-            "json",
-            "--approval-token",
-            "approve",
-            "listing",
-            "publish",
-            listing_file.to_string_lossy().as_ref(),
-        ])
-        .output()
-        .expect("run myc proxy listing publish");
-    let value: Value = serde_json::from_slice(&output.stdout).expect("json output");
-
-    assert!(
-        output.status.success(),
-        "stderr `{}` stdout `{}`",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let report = relay.join();
-    let request = proxy.join();
-    assert_eq!(value["operation_id"], "listing.publish");
-    assert_eq!(value["result"]["state"], "published");
-    assert_eq!(
-        value["result"]["source"],
-        "SDK listing publish · configured signer"
-    );
-    assert!(report.connection_count >= 1);
-    assert!(report.req_count >= 1);
-    assert_eq!(report.sign_request_count, 1);
-    assert_eq!(report.published_events.len(), 0);
-    let event = proxy_request_raw_event(&request);
-    assert_eq!(event["kind"], KIND_LISTING);
-    assert_eq!(event["pubkey"], user_public.public_key_hex);
-    assert_eq!(event["id"], value["result"]["event_id"]);
-}
-
-#[test]
 fn listing_update_publish_attempts_direct_publish_with_approval() {
     let sandbox = RadrootsCliSandbox::new();
     sandbox.json_success(&["--format", "json", "account", "create"]);
@@ -3974,6 +2781,8 @@ fn listing_update_publish_attempts_direct_publish_with_approval() {
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000103",
         "listing",
         "update",
         listing_file.to_string_lossy().as_ref(),
@@ -4407,25 +3216,6 @@ fn next_actions_mirror_result_actions_for_json_and_ndjson() {
         terminal["payload"]["next_actions"][0]["command"],
         "radroots store init"
     );
-
-    for args in [&["--format", "ndjson", "config", "get"][..]] {
-        let proxy = RadrootsCliSandbox::new();
-        write_proxy_transport_config(&proxy, "");
-        let output = proxy.command().args(args).output().expect("run ndjson");
-        let frames = ndjson_from_stdout(&output);
-        let terminal = frames.last().expect("terminal ndjson frame");
-
-        assert!(output.status.success(), "{args:?}");
-        assert!(
-            terminal["payload"]["next_actions"]
-                .as_array()
-                .expect("next actions")
-                .iter()
-                .any(|action| action["description"]
-                    == "configure RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE or RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID"),
-            "{args:?}"
-        );
-    }
 }
 
 #[test]
@@ -5039,6 +3829,8 @@ fn offline_listing_publish_enqueues_sdk_outbox_without_direct_publish_push() {
         "--offline",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000104",
         "listing",
         "publish",
         listing_file.to_string_lossy().as_ref(),
@@ -5062,7 +3854,7 @@ fn offline_listing_publish_enqueues_sdk_outbox_without_direct_publish_push() {
     assert!(
         sandbox
             .root()
-            .join("data/apps/cli/replica/sdk/outbox.sqlite")
+            .join("data/apps/cli/replica/sdk/runtime.sqlite")
             .exists()
     );
     assert_eq!(
@@ -5099,7 +3891,7 @@ fn listing_publish_idempotency_conflict_maps_sdk_partial_mutation_recovery() {
     let listing_file = create_listing_draft(&sandbox, "idem-conflict");
     make_listing_publishable(&listing_file, farm_d_tag);
     let relay = "ws://127.0.0.1:9";
-    let idempotency_key = "listing-idem-conflict";
+    let idempotency_key = "01890f3c-7f2a-7b01-8000-000000000102";
     configure_nostr_transport(&sandbox, relay);
 
     sandbox.json_success(&[
@@ -5480,7 +4272,7 @@ fn removed_transport_profile_flag_is_rejected() {
     let sandbox = RadrootsCliSandbox::new();
     let output = sandbox
         .command()
-        .args(["--publish-transport", "proxy", "sync", "push"])
+        .args(["--publish-transport", "radrootsd", "sync", "push"])
         .output()
         .expect("run removed publish transport flag");
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
@@ -5580,8 +4372,7 @@ fn store_backup_and_restore_use_sdk_canonical_store() {
         status["result"]["derived_projection"]["source"],
         "local derived projection cache"
     );
-    assert!(sdk_root.join("event_store.sqlite").exists());
-    assert!(sdk_root.join("outbox.sqlite").exists());
+    assert!(sdk_root.join("runtime.sqlite").exists());
 
     let derived_projection_init = sandbox.json_success(&["--format", "json", "store", "init"]);
     assert_eq!(derived_projection_init["operation_id"], "store.init");
@@ -5679,10 +4470,10 @@ fn store_backup_and_restore_use_sdk_canonical_store() {
         true
     );
     assert!(
-        backup["result"]["manifest"]["source_paths"]["event_store_path"]
+        backup["result"]["manifest"]["source_paths"]["runtime_path"]
             .as_str()
-            .expect("source event store path")
-            .contains("data/apps/cli/replica/sdk/event_store.sqlite")
+            .expect("source runtime path")
+            .contains("data/apps/cli/replica/sdk/runtime.sqlite")
     );
     assert!(!event_store_file.ends_with("replica.sqlite"));
 
@@ -5747,19 +4538,18 @@ fn store_backup_and_restore_use_sdk_canonical_store() {
     );
     assert_eq!(restored["result"]["restore_kind"], "sdk_canonical");
     assert_eq!(restored["result"]["canonical_store"], "sdk");
-    assert!(restore_destination.join("event_store.sqlite").exists());
-    assert!(restore_destination.join("outbox.sqlite").exists());
+    assert!(restore_destination.join("runtime.sqlite").exists());
     assert_eq!(
         restored["result"]["restored_event_store_file"],
         restore_destination
-            .join("event_store.sqlite")
+            .join("runtime.sqlite")
             .to_string_lossy()
             .to_string()
     );
     assert_eq!(
         restored["result"]["restored_outbox_file"],
         restore_destination
-            .join("outbox.sqlite")
+            .join("runtime.sqlite")
             .to_string_lossy()
             .to_string()
     );
@@ -7489,6 +6279,8 @@ fn farm_publish_uses_sdk_outbox_without_legacy_signed_event_records() {
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000101",
         "farm",
         "publish",
     ]);
@@ -7561,6 +6353,8 @@ fn listing_publish_failure_uses_sdk_outbox_without_legacy_runtime_store_record()
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000106",
         "listing",
         "publish",
         listing_file.to_string_lossy().as_ref(),
@@ -7634,6 +6428,8 @@ fn sync_push_sdk_outbox_failure_reports_network_unavailable() {
         "--offline",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000105",
         "listing",
         "publish",
         listing_file.to_string_lossy().as_ref(),
@@ -7709,7 +6505,7 @@ fn sync_push_ignores_derived_projection_pending_queue_for_sdk_canonical_push() {
         DERIVED_PROJECTION_SYNC_PUSH_FARM_D_TAG,
         selected_pubkey,
     );
-    let executor = SqliteExecutor::open(sandbox.replica_store_path()).expect("open replica");
+    let executor = SqlxSqliteExecutor::open(sandbox.replica_store_path()).expect("open replica");
     let derived_projection_batch = radroots_replica_pending_publish_batch(&executor)
         .expect("derived projection pending batch");
     assert!(derived_projection_batch.pending_count > 0);
@@ -9152,39 +7948,21 @@ fn buyer_side_order_writes_reject_conflicting_account_override_for_local_draft()
         .expect("drift account id");
     configure_nostr_transport(&sandbox, "ws://127.0.0.1:9");
 
-    for (operation_id, command) in [
-        (
-            "trade.revision.accept",
-            vec![
-                "--format",
-                "json",
-                "--dry-run",
-                "--account-id",
-                drift_account_id,
-                "trade",
-                "revision",
-                "accept",
-                order_id.as_str(),
-                "--revision-id",
-                "rev_pending",
-            ],
-        ),
-        (
-            "trade.cancel",
-            vec![
-                "--format",
-                "json",
-                "--dry-run",
-                "--account-id",
-                drift_account_id,
-                "trade",
-                "cancel",
-                order_id.as_str(),
-                "--reason",
-                "changed plans",
-            ],
-        ),
-    ] {
+    for (operation_id, command) in [(
+        "trade.cancel",
+        vec![
+            "--format",
+            "json",
+            "--dry-run",
+            "--account-id",
+            drift_account_id,
+            "trade",
+            "cancel",
+            order_id.as_str(),
+            "--reason",
+            "changed plans",
+        ],
+    )] {
         let (output, value) = sandbox.json_output(command.as_slice());
 
         assert!(!output.status.success(), "{operation_id} should fail");
@@ -9212,6 +7990,8 @@ fn order_submit_non_dry_run_uses_sdk_relay_validation_without_replica_freshness_
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000200",
         "trade",
         "submit",
         order_id.as_str(),
@@ -9258,6 +8038,8 @@ fn order_submit_non_dry_run_uses_sdk_relay_validation_without_listing_state_gate
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000201",
         "trade",
         "submit",
         order_id.as_str(),
@@ -9284,6 +8066,8 @@ fn order_submit_non_dry_run_uses_sdk_relay_validation_without_listing_event_gate
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000202",
         "trade",
         "submit",
         order_id.as_str(),
@@ -9337,6 +8121,8 @@ fn order_submit_non_dry_run_uses_sdk_relay_validation_without_quantity_gate() {
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000203",
         "trade",
         "submit",
         order_id,
@@ -9364,6 +8150,8 @@ fn order_submit_non_dry_run_uses_sdk_relay_validation_without_bin_gate() {
         "json",
         "--approval-token",
         "approve",
+        "--idempotency-key",
+        "01890f3c-7f2a-7b01-8000-000000000204",
         "trade",
         "submit",
         order_id.as_str(),

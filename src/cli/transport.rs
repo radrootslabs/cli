@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use clap::{Args, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone, Args)]
@@ -33,27 +31,20 @@ pub struct TransportProfileSetArgs {
     pub kind: TransportProfileKindArg,
     #[arg(long = "nostr-relay")]
     pub nostr_relay: Vec<String>,
-    #[arg(long = "reticulum-preview-behavior", value_enum)]
-    pub reticulum_preview_behavior: Option<ReticulumPreviewBehaviorArg>,
-    #[arg(long = "reticulum-preview-scope")]
-    pub reticulum_preview_scope: Option<String>,
-    #[arg(long = "reticulum-preview-agent-endpoint")]
-    pub reticulum_preview_agent_endpoint: Option<String>,
-    #[arg(long = "proxy-url")]
-    pub proxy_url: Option<String>,
-    #[arg(long = "proxy-token-file", value_name = "PATH")]
-    pub proxy_token_file: Option<PathBuf>,
-    #[arg(long = "proxy-token-secret-id", value_name = "SECRET_ID")]
-    pub proxy_token_secret_id: Option<String>,
+    #[arg(long = "reticulum-behavior", value_enum)]
+    pub reticulum_behavior: Option<ReticulumBehaviorArg>,
+    #[arg(long = "reticulum-scope")]
+    pub reticulum_scope: Option<String>,
+    #[arg(long = "reticulum-agent-endpoint")]
+    pub reticulum_agent_endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum TransportProfileKindArg {
     LocalOnly,
     Nostr,
-    ReticulumPreview,
-    Hybrid,
-    Proxy,
+    Reticulum,
+    MultiTarget,
 }
 
 impl TransportProfileKindArg {
@@ -61,20 +52,19 @@ impl TransportProfileKindArg {
         match self {
             Self::LocalOnly => "local_only",
             Self::Nostr => "nostr",
-            Self::ReticulumPreview => "reticulum_preview",
-            Self::Hybrid => "hybrid",
-            Self::Proxy => "proxy",
+            Self::Reticulum => "reticulum",
+            Self::MultiTarget => "multi_target",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum ReticulumPreviewBehaviorArg {
+pub enum ReticulumBehaviorArg {
     RejectDeliveryAttempts,
     DeferDeliveryPlans,
 }
 
-impl ReticulumPreviewBehaviorArg {
+impl ReticulumBehaviorArg {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RejectDeliveryAttempts => "reject_delivery_attempts",

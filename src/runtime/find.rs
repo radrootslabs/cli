@@ -1,5 +1,5 @@
 use radroots_replica_store::ReplicaSql;
-use radroots_sql_core::SqliteExecutor;
+use radroots_sql_core::SqlxSqliteExecutor;
 
 use crate::cli::global::FindQueryArgs;
 use crate::runtime::RuntimeError;
@@ -62,7 +62,7 @@ pub fn search(config: &RuntimeConfig, args: &FindQueryArgs) -> Result<FindView, 
     }
 
     refresh_market_if_needed(config)?;
-    let db = ReplicaSql::new(SqliteExecutor::open(&config.local.replica_store_path)?);
+    let db = ReplicaSql::new(SqlxSqliteExecutor::open(&config.local.replica_store_path)?);
     let freshness =
         freshness_for_scope_from_executor(config, db.executor(), RelayIngestScope::MarketRefresh)?;
     let applied_query_rewrite = attempt_query_rewrite(config, query.as_str(), &args.query);
@@ -162,7 +162,7 @@ fn refresh_market_if_needed(config: &RuntimeConfig) -> Result<(), RuntimeError> 
     if config.output.dry_run || config.transport.nostr_relay_urls.is_empty() {
         return Ok(());
     }
-    let executor = SqliteExecutor::open(&config.local.replica_store_path)?;
+    let executor = SqlxSqliteExecutor::open(&config.local.replica_store_path)?;
     let freshness =
         freshness_for_scope_from_executor(config, &executor, RelayIngestScope::MarketRefresh)?;
     if freshness_requires_refresh(&freshness) {

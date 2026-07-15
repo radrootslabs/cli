@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use radroots_runtime::{parse_bool_value, parse_strict_env_file, parse_u64_value};
 use radroots_runtime_paths::RadrootsPathResolver;
 use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
-use radroots_transport::{RADROOTS_RETICULUM_PREVIEW_SCOPE_ID, RadrootsTransportMeshScopeId};
+use radroots_transport::{RADROOTS_RETICULUM_SCOPE_ID, RadrootsTransportMeshScopeId};
 use radroots_transport_nostr::{
     RadrootsRelayTransportError, RadrootsRelayUrl, RadrootsRelayUrlPolicy,
 };
@@ -44,16 +44,14 @@ const ENV_CLI_IDENTITY_PATH: &str = "RADROOTS_CLI_IDENTITY_PATH";
 const ENV_CLI_SIGNER_BACKEND: &str = "RADROOTS_CLI_SIGNER_BACKEND";
 const ENV_CLI_TRANSPORT_PROFILE: &str = "RADROOTS_CLI_TRANSPORT_PROFILE";
 const ENV_CLI_TRANSPORT_NOSTR_RELAY_URLS: &str = "RADROOTS_CLI_TRANSPORT_NOSTR_RELAY_URLS";
-const ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_BEHAVIOR: &str =
-    "RADROOTS_CLI_TRANSPORT_RETICULUM_PREVIEW_BEHAVIOR";
-const ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE: &str =
-    "RADROOTS_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE";
-const ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT: &str =
-    "RADROOTS_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT";
-const ENV_CLI_TRANSPORT_PROXY_URL: &str = "RADROOTS_CLI_TRANSPORT_PROXY_URL";
-const ENV_CLI_TRANSPORT_PROXY_TOKEN_FILE: &str = "RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_FILE";
-const ENV_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID: &str =
-    "RADROOTS_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID";
+const ENV_CLI_TRANSPORT_RETICULUM_BEHAVIOR: &str = "RADROOTS_CLI_TRANSPORT_RETICULUM_BEHAVIOR";
+const ENV_CLI_TRANSPORT_RETICULUM_SCOPE: &str = "RADROOTS_CLI_TRANSPORT_RETICULUM_SCOPE";
+const ENV_CLI_TRANSPORT_RETICULUM_AGENT_ENDPOINT: &str =
+    "RADROOTS_CLI_TRANSPORT_RETICULUM_AGENT_ENDPOINT";
+const ENV_CLI_RADROOTSD_EXECUTION_URL: &str = "RADROOTS_CLI_RADROOTSD_EXECUTION_URL";
+const ENV_CLI_RADROOTSD_EXECUTION_TOKEN_FILE: &str = "RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_FILE";
+const ENV_CLI_RADROOTSD_EXECUTION_TOKEN_SECRET_ID: &str =
+    "RADROOTS_CLI_RADROOTSD_EXECUTION_TOKEN_SECRET_ID";
 const ENV_CLI_MYC_EXECUTABLE: &str = "RADROOTS_CLI_MYC_EXECUTABLE";
 const ENV_CLI_MYC_STATUS_TIMEOUT_MS: &str = "RADROOTS_CLI_MYC_STATUS_TIMEOUT_MS";
 const ENV_CLI_HYF_ENABLED: &str = "RADROOTS_CLI_HYF_ENABLED";
@@ -73,12 +71,12 @@ const SUPPORTED_ENV_FILE_KEYS: &[&str] = &[
     ENV_CLI_SIGNER_BACKEND,
     ENV_CLI_TRANSPORT_PROFILE,
     ENV_CLI_TRANSPORT_NOSTR_RELAY_URLS,
-    ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_BEHAVIOR,
-    ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE,
-    ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT,
-    ENV_CLI_TRANSPORT_PROXY_URL,
-    ENV_CLI_TRANSPORT_PROXY_TOKEN_FILE,
-    ENV_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID,
+    ENV_CLI_TRANSPORT_RETICULUM_BEHAVIOR,
+    ENV_CLI_TRANSPORT_RETICULUM_SCOPE,
+    ENV_CLI_TRANSPORT_RETICULUM_AGENT_ENDPOINT,
+    ENV_CLI_RADROOTSD_EXECUTION_URL,
+    ENV_CLI_RADROOTSD_EXECUTION_TOKEN_FILE,
+    ENV_CLI_RADROOTSD_EXECUTION_TOKEN_SECRET_ID,
     ENV_CLI_MYC_EXECUTABLE,
     ENV_CLI_MYC_STATUS_TIMEOUT_MS,
     ENV_CLI_HYF_ENABLED,
@@ -192,9 +190,8 @@ pub struct SignerConfig {
 pub enum TransportProfileKind {
     LocalOnly,
     Nostr,
-    ReticulumPreview,
-    Hybrid,
-    Proxy,
+    Reticulum,
+    MultiTarget,
 }
 
 impl TransportProfileKind {
@@ -202,9 +199,8 @@ impl TransportProfileKind {
         match self {
             Self::LocalOnly => "local_only",
             Self::Nostr => "nostr",
-            Self::ReticulumPreview => "reticulum_preview",
-            Self::Hybrid => "hybrid",
-            Self::Proxy => "proxy",
+            Self::Reticulum => "reticulum",
+            Self::MultiTarget => "multi_target",
         }
     }
 
@@ -212,20 +208,19 @@ impl TransportProfileKind {
         match self {
             Self::LocalOnly => "local",
             Self::Nostr => "nostr",
-            Self::ReticulumPreview => "reticulum",
-            Self::Hybrid => "hybrid",
-            Self::Proxy => "proxy",
+            Self::Reticulum => "reticulum",
+            Self::MultiTarget => "multi_target",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReticulumPreviewBehavior {
+pub enum ReticulumBehavior {
     RejectDeliveryAttempts,
     DeferDeliveryPlans,
 }
 
-impl ReticulumPreviewBehavior {
+impl ReticulumBehavior {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RejectDeliveryAttempts => "reject_delivery_attempts",
@@ -258,10 +253,10 @@ pub struct TransportConfig {
     pub profile: TransportProfileKind,
     pub source: TransportConfigSource,
     pub nostr_relay_urls: Vec<String>,
-    pub reticulum_preview_behavior: ReticulumPreviewBehavior,
-    pub reticulum_preview_scope: String,
-    pub reticulum_preview_agent_endpoint: Option<String>,
-    pub proxy: ProxyTransportConfig,
+    pub reticulum_behavior: ReticulumBehavior,
+    pub reticulum_scope: String,
+    pub reticulum_agent_endpoint: Option<String>,
+    pub radrootsd_execution: RadrootsdExecutionConfig,
 }
 
 impl TransportConfig {
@@ -270,10 +265,10 @@ impl TransportConfig {
             profile: TransportProfileKind::LocalOnly,
             source: TransportConfigSource::Defaults,
             nostr_relay_urls: Vec::new(),
-            reticulum_preview_behavior: ReticulumPreviewBehavior::RejectDeliveryAttempts,
-            reticulum_preview_scope: RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned(),
-            reticulum_preview_agent_endpoint: None,
-            proxy: ProxyTransportConfig::default(),
+            reticulum_behavior: ReticulumBehavior::RejectDeliveryAttempts,
+            reticulum_scope: RADROOTS_RETICULUM_SCOPE_ID.to_owned(),
+            reticulum_agent_endpoint: None,
+            radrootsd_execution: RadrootsdExecutionConfig::default(),
         }
     }
 
@@ -285,22 +280,22 @@ impl TransportConfig {
             profile: TransportProfileKind::Nostr,
             source: TransportConfigSource::Defaults,
             nostr_relay_urls,
-            reticulum_preview_behavior: ReticulumPreviewBehavior::RejectDeliveryAttempts,
-            reticulum_preview_scope: RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned(),
-            reticulum_preview_agent_endpoint: None,
-            proxy: ProxyTransportConfig::default(),
+            reticulum_behavior: ReticulumBehavior::RejectDeliveryAttempts,
+            reticulum_scope: RADROOTS_RETICULUM_SCOPE_ID.to_owned(),
+            reticulum_agent_endpoint: None,
+            radrootsd_execution: RadrootsdExecutionConfig::default(),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProxyTransportConfig {
+pub struct RadrootsdExecutionConfig {
     pub url: String,
     pub token_file: Option<PathBuf>,
     pub token_secret_id: Option<String>,
 }
 
-impl Default for ProxyTransportConfig {
+impl Default for RadrootsdExecutionConfig {
     fn default() -> Self {
         Self {
             url: DEFAULT_RPC_URL.to_owned(),
@@ -333,14 +328,14 @@ pub struct HyfConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeshScope {
     Disabled,
-    LocalPreview,
+    Local,
 }
 
 impl MeshScope {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",
-            Self::LocalPreview => "local_preview",
+            Self::Local => "local",
         }
     }
 }
@@ -537,8 +532,8 @@ struct IdentityFileConfig {
 struct TransportFileConfig {
     profile: Option<String>,
     nostr: Option<NostrTransportFileConfig>,
-    reticulum_preview: Option<ReticulumPreviewFileConfig>,
-    proxy: Option<TransportProxyFileConfig>,
+    reticulum: Option<ReticulumFileConfig>,
+    radrootsd_execution: Option<RadrootsdExecutionFileConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -549,7 +544,7 @@ struct NostrTransportFileConfig {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct ReticulumPreviewFileConfig {
+struct ReticulumFileConfig {
     behavior: Option<String>,
     scope: Option<String>,
     agent_endpoint: Option<String>,
@@ -557,7 +552,7 @@ struct ReticulumPreviewFileConfig {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct TransportProxyFileConfig {
+struct RadrootsdExecutionFileConfig {
     url: Option<String>,
     token_file: Option<PathBuf>,
     token_secret_id: Option<String>,
@@ -988,41 +983,25 @@ fn resolve_transport_config(
 ) -> Result<TransportConfig, RuntimeError> {
     if let Some((key, value)) = env_value_entry(env, env_file, &[ENV_CLI_TRANSPORT_PROFILE]) {
         let profile = parse_transport_profile_kind(key.as_str(), value.as_str())?;
-        let reticulum_preview_behavior = env_value(
-            env,
-            env_file,
-            &[ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_BEHAVIOR],
-        )
-        .map(|value| {
-            parse_reticulum_preview_behavior(
-                ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_BEHAVIOR,
-                value.as_str(),
-            )
-        })
-        .transpose()?
-        .unwrap_or(ReticulumPreviewBehavior::RejectDeliveryAttempts);
-        let reticulum_preview_scope =
-            env_value(env, env_file, &[ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE])
+        let reticulum_behavior = env_value(env, env_file, &[ENV_CLI_TRANSPORT_RETICULUM_BEHAVIOR])
+            .map(|value| {
+                parse_reticulum_behavior(ENV_CLI_TRANSPORT_RETICULUM_BEHAVIOR, value.as_str())
+            })
+            .transpose()?
+            .unwrap_or(ReticulumBehavior::RejectDeliveryAttempts);
+        let reticulum_scope = env_value(env, env_file, &[ENV_CLI_TRANSPORT_RETICULUM_SCOPE])
+            .map(|value| parse_reticulum_scope(ENV_CLI_TRANSPORT_RETICULUM_SCOPE, value.as_str()))
+            .transpose()?
+            .unwrap_or_else(|| RADROOTS_RETICULUM_SCOPE_ID.to_owned());
+        let reticulum_agent_endpoint =
+            env_value(env, env_file, &[ENV_CLI_TRANSPORT_RETICULUM_AGENT_ENDPOINT])
                 .map(|value| {
-                    parse_reticulum_preview_scope(
-                        ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_SCOPE,
+                    parse_reticulum_agent_endpoint(
+                        ENV_CLI_TRANSPORT_RETICULUM_AGENT_ENDPOINT,
                         value.as_str(),
                     )
                 })
-                .transpose()?
-                .unwrap_or_else(|| RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned());
-        let reticulum_preview_agent_endpoint = env_value(
-            env,
-            env_file,
-            &[ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT],
-        )
-        .map(|value| {
-            parse_reticulum_preview_agent_endpoint(
-                ENV_CLI_TRANSPORT_RETICULUM_PREVIEW_AGENT_ENDPOINT,
-                value.as_str(),
-            )
-        })
-        .transpose()?;
+                .transpose()?;
         return Ok(TransportConfig {
             profile,
             source: TransportConfigSource::Environment,
@@ -1032,10 +1011,10 @@ fn resolve_transport_config(
                 })
                 .transpose()?
                 .unwrap_or_default(),
-            reticulum_preview_behavior,
-            reticulum_preview_scope,
-            reticulum_preview_agent_endpoint,
-            proxy: resolve_transport_proxy_env(env, env_file)?,
+            reticulum_behavior,
+            reticulum_scope,
+            reticulum_agent_endpoint,
+            radrootsd_execution: resolve_radrootsd_execution_env(env, env_file)?,
         });
     }
 
@@ -1059,10 +1038,10 @@ fn resolve_transport_config(
         profile: TransportProfileKind::LocalOnly,
         source: TransportConfigSource::Defaults,
         nostr_relay_urls: Vec::new(),
-        reticulum_preview_behavior: ReticulumPreviewBehavior::RejectDeliveryAttempts,
-        reticulum_preview_scope: RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned(),
-        reticulum_preview_agent_endpoint: None,
-        proxy: ProxyTransportConfig::default(),
+        reticulum_behavior: ReticulumBehavior::RejectDeliveryAttempts,
+        reticulum_scope: RADROOTS_RETICULUM_SCOPE_ID.to_owned(),
+        reticulum_agent_endpoint: None,
+        radrootsd_execution: RadrootsdExecutionConfig::default(),
     })
 }
 
@@ -1073,8 +1052,8 @@ fn resolve_transport_file_config(
 ) -> Result<TransportConfig, RuntimeError> {
     let Some(profile_value) = transport.profile.as_deref() else {
         if transport.nostr.is_some()
-            || transport.reticulum_preview.is_some()
-            || transport.proxy.is_some()
+            || transport.reticulum.is_some()
+            || transport.radrootsd_execution.is_some()
         {
             return Err(RuntimeError::Config(format!(
                 "{source_label}.profile must be set when profile-specific transport tables are present"
@@ -1084,10 +1063,10 @@ fn resolve_transport_file_config(
             profile: TransportProfileKind::LocalOnly,
             source,
             nostr_relay_urls: Vec::new(),
-            reticulum_preview_behavior: ReticulumPreviewBehavior::RejectDeliveryAttempts,
-            reticulum_preview_scope: RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned(),
-            reticulum_preview_agent_endpoint: None,
-            proxy: ProxyTransportConfig::default(),
+            reticulum_behavior: ReticulumBehavior::RejectDeliveryAttempts,
+            reticulum_scope: RADROOTS_RETICULUM_SCOPE_ID.to_owned(),
+            reticulum_agent_endpoint: None,
+            radrootsd_execution: RadrootsdExecutionConfig::default(),
         });
     };
     let profile =
@@ -1099,37 +1078,31 @@ fn resolve_transport_file_config(
         .map(|urls| normalize_relay_urls(urls, format!("{source_label}.nostr.relay_urls").as_str()))
         .transpose()?
         .unwrap_or_default();
-    let reticulum_preview_behavior = transport
-        .reticulum_preview
+    let reticulum_behavior = transport
+        .reticulum
         .as_ref()
-        .and_then(|preview| preview.behavior.as_deref())
+        .and_then(|reticulum| reticulum.behavior.as_deref())
         .map(|value| {
-            parse_reticulum_preview_behavior(
-                format!("{source_label}.reticulum_preview.behavior").as_str(),
-                value,
-            )
+            parse_reticulum_behavior(format!("{source_label}.reticulum.behavior").as_str(), value)
         })
         .transpose()?
-        .unwrap_or(ReticulumPreviewBehavior::RejectDeliveryAttempts);
-    let reticulum_preview_scope = transport
-        .reticulum_preview
+        .unwrap_or(ReticulumBehavior::RejectDeliveryAttempts);
+    let reticulum_scope = transport
+        .reticulum
         .as_ref()
-        .and_then(|preview| preview.scope.as_deref())
+        .and_then(|reticulum| reticulum.scope.as_deref())
         .map(|value| {
-            parse_reticulum_preview_scope(
-                format!("{source_label}.reticulum_preview.scope").as_str(),
-                value,
-            )
+            parse_reticulum_scope(format!("{source_label}.reticulum.scope").as_str(), value)
         })
         .transpose()?
-        .unwrap_or_else(|| RADROOTS_RETICULUM_PREVIEW_SCOPE_ID.to_owned());
-    let reticulum_preview_agent_endpoint = transport
-        .reticulum_preview
+        .unwrap_or_else(|| RADROOTS_RETICULUM_SCOPE_ID.to_owned());
+    let reticulum_agent_endpoint = transport
+        .reticulum
         .as_ref()
-        .and_then(|preview| preview.agent_endpoint.as_deref())
+        .and_then(|reticulum| reticulum.agent_endpoint.as_deref())
         .map(|value| {
-            parse_reticulum_preview_agent_endpoint(
-                format!("{source_label}.reticulum_preview.agent_endpoint").as_str(),
+            parse_reticulum_agent_endpoint(
+                format!("{source_label}.reticulum.agent_endpoint").as_str(),
                 value,
             )
         })
@@ -1138,53 +1111,61 @@ fn resolve_transport_file_config(
         profile,
         source,
         nostr_relay_urls,
-        reticulum_preview_behavior,
-        reticulum_preview_scope,
-        reticulum_preview_agent_endpoint,
-        proxy: resolve_transport_proxy_file(transport.proxy.as_ref(), source_label)?,
+        reticulum_behavior,
+        reticulum_scope,
+        reticulum_agent_endpoint,
+        radrootsd_execution: resolve_radrootsd_execution_file(
+            transport.radrootsd_execution.as_ref(),
+            source_label,
+        )?,
     })
 }
 
-fn resolve_transport_proxy_env(
+fn resolve_radrootsd_execution_env(
     env: &dyn Environment,
     env_file: &EnvFileValues,
-) -> Result<ProxyTransportConfig, RuntimeError> {
-    let url = env_value(env, env_file, &[ENV_CLI_TRANSPORT_PROXY_URL])
+) -> Result<RadrootsdExecutionConfig, RuntimeError> {
+    let url = env_value(env, env_file, &[ENV_CLI_RADROOTSD_EXECUTION_URL])
         .unwrap_or_else(|| DEFAULT_RPC_URL.to_owned());
     let token_file =
-        env_value(env, env_file, &[ENV_CLI_TRANSPORT_PROXY_TOKEN_FILE]).map(PathBuf::from);
-    let token_secret_id = env_value(env, env_file, &[ENV_CLI_TRANSPORT_PROXY_TOKEN_SECRET_ID]);
-    validate_proxy_token_source(
+        env_value(env, env_file, &[ENV_CLI_RADROOTSD_EXECUTION_TOKEN_FILE]).map(PathBuf::from);
+    let token_secret_id = env_value(
+        env,
+        env_file,
+        &[ENV_CLI_RADROOTSD_EXECUTION_TOKEN_SECRET_ID],
+    );
+    validate_radrootsd_execution_token_source(
         token_file.as_ref(),
         token_secret_id.as_deref(),
-        "environment proxy transport",
+        "environment radrootsd execution",
     )?;
-    Ok(ProxyTransportConfig {
+    Ok(RadrootsdExecutionConfig {
         url: validate_rpc_url(url.as_str())?,
         token_file,
         token_secret_id,
     })
 }
 
-fn resolve_transport_proxy_file(
-    proxy: Option<&TransportProxyFileConfig>,
+fn resolve_radrootsd_execution_file(
+    radrootsd_execution: Option<&RadrootsdExecutionFileConfig>,
     source_label: &str,
-) -> Result<ProxyTransportConfig, RuntimeError> {
-    let url = proxy
-        .and_then(|proxy| proxy.url.clone())
+) -> Result<RadrootsdExecutionConfig, RuntimeError> {
+    let url = radrootsd_execution
+        .and_then(|execution| execution.url.clone())
         .unwrap_or_else(|| DEFAULT_RPC_URL.to_owned());
-    let token_file = proxy.and_then(|proxy| proxy.token_file.clone());
-    let token_secret_id = proxy.and_then(|proxy| proxy.token_secret_id.clone());
-    validate_proxy_token_source(
+    let token_file = radrootsd_execution.and_then(|execution| execution.token_file.clone());
+    let token_secret_id =
+        radrootsd_execution.and_then(|execution| execution.token_secret_id.clone());
+    validate_radrootsd_execution_token_source(
         token_file.as_ref(),
         token_secret_id.as_deref(),
-        format!("{source_label}.proxy").as_str(),
+        format!("{source_label}.radrootsd_execution").as_str(),
     )?;
-    Ok(ProxyTransportConfig {
+    Ok(RadrootsdExecutionConfig {
         url: validate_rpc_url(url.as_str()).map_err(|error| match error {
-            RuntimeError::Config(message) => {
-                RuntimeError::Config(format!("{source_label}.proxy.url is invalid: {message}"))
-            }
+            RuntimeError::Config(message) => RuntimeError::Config(format!(
+                "{source_label}.radrootsd_execution.url is invalid: {message}"
+            )),
             other => other,
         })?,
         token_file,
@@ -1192,7 +1173,7 @@ fn resolve_transport_proxy_file(
     })
 }
 
-fn validate_proxy_token_source(
+fn validate_radrootsd_execution_token_source(
     token_file: Option<&PathBuf>,
     token_secret_id: Option<&str>,
     source_label: &str,
@@ -1607,9 +1588,9 @@ fn resolve_mesh_config(
 fn parse_mesh_scope(source: &str, value: &str) -> Result<MeshScope, RuntimeError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "disabled" => Ok(MeshScope::Disabled),
-        "local_preview" => Ok(MeshScope::LocalPreview),
+        "local" => Ok(MeshScope::Local),
         other => Err(RuntimeError::Config(format!(
-            "{source} must be `disabled` or `local_preview`, got `{other}`"
+            "{source} must be `disabled` or `local`, got `{other}`"
         ))),
     }
 }
@@ -1955,38 +1936,31 @@ fn parse_transport_profile_kind(
     match value.trim().to_ascii_lowercase().as_str() {
         "local_only" => Ok(TransportProfileKind::LocalOnly),
         "nostr" => Ok(TransportProfileKind::Nostr),
-        "reticulum_preview" => Ok(TransportProfileKind::ReticulumPreview),
-        "hybrid" => Ok(TransportProfileKind::Hybrid),
-        "proxy" => Ok(TransportProfileKind::Proxy),
+        "reticulum" => Ok(TransportProfileKind::Reticulum),
+        "multi_target" => Ok(TransportProfileKind::MultiTarget),
         other => Err(RuntimeError::Config(format!(
-            "{source} must be `local_only`, `nostr`, `reticulum_preview`, `hybrid`, or `proxy`, got `{other}`"
+            "{source} must be `local_only`, `nostr`, `reticulum`, or `multi_target`, got `{other}`"
         ))),
     }
 }
 
-fn parse_reticulum_preview_behavior(
-    source: &str,
-    value: &str,
-) -> Result<ReticulumPreviewBehavior, RuntimeError> {
+fn parse_reticulum_behavior(source: &str, value: &str) -> Result<ReticulumBehavior, RuntimeError> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "reject_delivery_attempts" => Ok(ReticulumPreviewBehavior::RejectDeliveryAttempts),
-        "defer_delivery_plans" => Ok(ReticulumPreviewBehavior::DeferDeliveryPlans),
+        "reject_delivery_attempts" => Ok(ReticulumBehavior::RejectDeliveryAttempts),
+        "defer_delivery_plans" => Ok(ReticulumBehavior::DeferDeliveryPlans),
         other => Err(RuntimeError::Config(format!(
             "{source} must be `reject_delivery_attempts` or `defer_delivery_plans`, got `{other}`"
         ))),
     }
 }
 
-fn parse_reticulum_preview_scope(source: &str, value: &str) -> Result<String, RuntimeError> {
+fn parse_reticulum_scope(source: &str, value: &str) -> Result<String, RuntimeError> {
     RadrootsTransportMeshScopeId::parse(value)
         .map(|scope| scope.as_str().to_owned())
         .map_err(|error| RuntimeError::Config(format!("{source} is invalid: {error}")))
 }
 
-fn parse_reticulum_preview_agent_endpoint(
-    source: &str,
-    value: &str,
-) -> Result<String, RuntimeError> {
+fn parse_reticulum_agent_endpoint(source: &str, value: &str) -> Result<String, RuntimeError> {
     if value.is_empty()
         || value != value.trim()
         || value
@@ -2431,7 +2405,7 @@ mod tests {
                 "old-identity.json".to_owned(),
             ),
             ("RADROOTS_SIGNER".to_owned(), "myc".to_owned()),
-            ("RADROOTS_PUBLISH_MODE".to_owned(), "proxy".to_owned()),
+            ("RADROOTS_PUBLISH_MODE".to_owned(), "legacy".to_owned()),
             (
                 "RADROOTS_RELAYS".to_owned(),
                 "wss://old-relay.example".to_owned(),
@@ -2740,7 +2714,7 @@ path = "identity/from-toml.json"
             .expect_err("invalid transport profile");
         assert!(error.to_string().contains("RADROOTS_CLI_TRANSPORT_PROFILE"));
         assert!(error.to_string().contains("local_only"));
-        assert!(error.to_string().contains("reticulum_preview"));
+        assert!(error.to_string().contains("reticulum"));
 
         let args = RuntimeInvocationArgs {
             myc_status_timeout_ms: Some(0),
@@ -2953,7 +2927,7 @@ RADROOTS_CLI_LOGGING_STDOUT=true
     }
 
     #[test]
-    fn hybrid_transport_config_uses_nostr_targets_and_reticulum_preview_behavior() {
+    fn multi_target_transport_config_uses_nostr_targets_and_reticulum_behavior() {
         let temp = tempdir().expect("tempdir");
         let workspace_root = temp.path().join("workspace");
         let repo_local_root = workspace_root.join("infra/local/runtime/radroots");
@@ -2963,16 +2937,19 @@ RADROOTS_CLI_LOGGING_STDOUT=true
         fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
             app_config_dir.join("config.toml"),
-            "[transport]\nprofile = \"hybrid\"\n\n[transport.nostr]\nrelay_urls = [\"wss://relay.user\", \"wss://relay.backup\"]\n\n[transport.reticulum_preview]\nbehavior = \"defer_delivery_plans\"\nscope = \"farmers_market\"\nagent_endpoint = \"reticulum-agent:local\"\n",
+            "[transport]\nprofile = \"multi_target\"\n\n[transport.nostr]\nrelay_urls = [\"wss://relay.user\", \"wss://relay.backup\"]\n\n[transport.reticulum]\nbehavior = \"defer_delivery_plans\"\nscope = \"farmers_market\"\nagent_endpoint = \"reticulum-agent:local\"\n",
         )
         .expect("write user config");
 
         let env = repo_local_env(workspace_root, repo_local_root, user_home, BTreeMap::new());
         let resolved =
             RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
-                .expect("resolve hybrid transport profile");
+                .expect("resolve multi-target transport profile");
 
-        assert_eq!(resolved.transport.profile, TransportProfileKind::Hybrid);
+        assert_eq!(
+            resolved.transport.profile,
+            TransportProfileKind::MultiTarget
+        );
         assert_eq!(resolved.transport.source, TransportConfigSource::UserConfig);
         assert_eq!(
             resolved.transport.nostr_relay_urls,
@@ -2982,15 +2959,12 @@ RADROOTS_CLI_LOGGING_STDOUT=true
             ]
         );
         assert_eq!(
-            resolved.transport.reticulum_preview_behavior,
-            super::ReticulumPreviewBehavior::DeferDeliveryPlans
+            resolved.transport.reticulum_behavior,
+            super::ReticulumBehavior::DeferDeliveryPlans
         );
-        assert_eq!(resolved.transport.reticulum_preview_scope, "farmers_market");
+        assert_eq!(resolved.transport.reticulum_scope, "farmers_market");
         assert_eq!(
-            resolved
-                .transport
-                .reticulum_preview_agent_endpoint
-                .as_deref(),
+            resolved.transport.reticulum_agent_endpoint.as_deref(),
             Some("reticulum-agent:local")
         );
     }
@@ -3006,7 +2980,7 @@ RADROOTS_CLI_LOGGING_STDOUT=true
         fs::create_dir_all(&app_config_dir).expect("app config dir");
         fs::write(
             repo_local_root.join("config.toml"),
-            "[transport]\nprofile = \"proxy\"\n\n[transport.proxy]\nurl = \"http://127.0.0.1:7070\"\n",
+            "[transport]\nprofile = \"reticulum\"\n",
         )
         .expect("write workspace config");
         fs::write(
@@ -3021,13 +2995,13 @@ RADROOTS_CLI_LOGGING_STDOUT=true
             user_home.clone(),
             BTreeMap::from([(
                 "RADROOTS_CLI_TRANSPORT_PROFILE".to_owned(),
-                "proxy".to_owned(),
+                "reticulum".to_owned(),
             )]),
         );
         let resolved =
             RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
                 .expect("resolve environment transport profile");
-        assert_eq!(resolved.transport.profile, TransportProfileKind::Proxy);
+        assert_eq!(resolved.transport.profile, TransportProfileKind::Reticulum);
         assert_eq!(
             resolved.transport.source,
             TransportConfigSource::Environment
@@ -3053,7 +3027,7 @@ RADROOTS_CLI_LOGGING_STDOUT=true
         let resolved =
             RuntimeConfig::resolve_with_env_file(&runtime_args(), &env, &EnvFileValues::default())
                 .expect("resolve workspace transport profile");
-        assert_eq!(resolved.transport.profile, TransportProfileKind::Proxy);
+        assert_eq!(resolved.transport.profile, TransportProfileKind::Reticulum);
         assert_eq!(
             resolved.transport.source,
             TransportConfigSource::WorkspaceConfig
@@ -3269,7 +3243,7 @@ RADROOTS_CLI_LOGGING_STDOUT=true
         let message = error.to_string();
         assert!(message.contains("workspace config [transport].profile"));
         assert!(message.contains("local_only"));
-        assert!(message.contains("reticulum_preview"));
+        assert!(message.contains("reticulum"));
     }
 
     #[test]
@@ -3359,7 +3333,7 @@ target = "bin/user-hyfd"
             r#"
 [[capability_binding]]
 capability = "write_plane.trade_jsonrpc"
-	provider = "legacy_proxy"
+	provider = "legacy_provider"
 target_kind = "explicit_endpoint"
 target = "https://rpc.workspace.test/jsonrpc"
 "#,
