@@ -246,7 +246,7 @@ impl CliSdkLocalSigner {
             .public_identity
             .public_key_hex
             .clone();
-        let keys: RadrootsNostrKeys = signing.identity.into_keys();
+        let keys = signing.identity.into_keys();
         let signer = RadrootsLocalEventSigner::new(keys)
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
         Ok(Self {
@@ -270,7 +270,7 @@ impl CliSdkLocalSigner {
 }
 
 enum CliSdkSignerInput {
-    LocalKey(RadrootsNostrKeys),
+    LocalSigner(RadrootsLocalEventSigner),
     MycNip46 {
         client_keys: RadrootsNostrKeys,
         target: RadrootsNostrConnectClientTarget,
@@ -286,8 +286,9 @@ fn configured_signer_input(
 ) -> Result<CliSdkSignerInput, RuntimeError> {
     match config.signer.backend {
         SignerBackend::Local => {
-            let keys = local_key_signer_input(config, actor_account_id, actor_pubkey, actor_label)?;
-            Ok(CliSdkSignerInput::LocalKey(keys))
+            let signer =
+                local_key_signer_input(config, actor_account_id, actor_pubkey, actor_label)?;
+            Ok(CliSdkSignerInput::LocalSigner(signer))
         }
         SignerBackend::Myc => myc_nip46_signer_input(config, actor_account_id, actor_pubkey),
     }
@@ -298,7 +299,7 @@ fn local_key_signer_input(
     actor_account_id: Option<&str>,
     actor_pubkey: &str,
     actor_label: &str,
-) -> Result<RadrootsNostrKeys, RuntimeError> {
+) -> Result<RadrootsLocalEventSigner, RuntimeError> {
     let signing = match actor_account_id {
         Some(account_id) => {
             account::resolve_local_signing_identity_for_account(config, account_id)?
@@ -318,7 +319,8 @@ fn local_key_signer_input(
         ))
         .into());
     }
-    Ok(signing.identity.into_keys())
+    RadrootsLocalEventSigner::new(signing.identity.into_keys())
+        .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 fn myc_nip46_signer_input(
@@ -383,8 +385,8 @@ async fn signer_provider(
     signer_input: CliSdkSignerInput,
 ) -> Result<RadrootsSdkSignerProvider, RuntimeError> {
     match signer_input {
-        CliSdkSignerInput::LocalKey(keys) => {
-            let signer = RadrootsSdkLocalKeySigner::new(keys)
+        CliSdkSignerInput::LocalSigner(signer) => {
+            let signer = RadrootsSdkLocalKeySigner::from_event_signer(signer)
                 .map_err(|error| RuntimeError::Config(error.to_string()))?;
             Ok(RadrootsSdkSignerProvider::LocalKey(signer))
         }
