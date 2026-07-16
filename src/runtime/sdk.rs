@@ -846,7 +846,7 @@ mod tests {
             section: "dependencies",
             name: "radroots_event",
             owner: "cli-drafts-and-non-migrated-workflows",
-            reason: "event DTOs for local drafts, views, relay reads, and validation receipt surfaces",
+            reason: "event DTOs for local drafts, views, relay reads, and release-product mutation inspection",
             lifecycle: "retain until the remaining event-authoring and inspection surfaces migrate",
         },
         DirectRrRsDependency {
@@ -977,13 +977,6 @@ mod tests {
         },
         DirectRrRsDependency {
             section: "dependencies",
-            name: "radroots_trade_sp1_host",
-            owner: "validation-receipts",
-            reason: "validation receipt SP1 proof inspection and verification",
-            lifecycle: "retain until validation receipt verification moves behind SDK APIs",
-        },
-        DirectRrRsDependency {
-            section: "dependencies",
             name: "radroots_sql_core",
             owner: "derived-projection-and-runtime-store",
             reason: "SQLite executor for derived projection and shared runtime-store storage",
@@ -993,7 +986,7 @@ mod tests {
             section: "dependencies",
             name: "radroots_trade",
             owner: "cli-drafts-and-validation",
-            reason: "listing draft validation, order economics, order reducer helpers, and validation receipt parsing",
+            reason: "listing draft validation, trade economics, reducer helpers, and release-product mutation parsing",
             lifecycle: "retain until remaining trade validation and draft behavior migrates",
         },
         DirectRrRsDependency {

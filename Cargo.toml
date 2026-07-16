@@ -18,8 +18,7 @@ resolver = "2"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
 
 [features]
-default = ["sp1-verify"]
-sp1-verify = ["radroots_trade_sp1_host/sp1_verify"]
+default = []
 test-fixture-geonames-asset = ["radroots_sdk/test-fixture-geonames-asset"]
 
 [dependencies]
@@ -53,7 +52,6 @@ radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
 radroots_sdk = { path = "../sdk/crates/sdk", features = ["local-runtime-radrootsd-execution", "transport-nostr-runtime"] }
 radroots_secret_vault = { path = "../lib/crates/secret_vault", features = ["std", "os-keyring"] }
 radroots_sql_core = { path = "../lib/crates/sql_core", features = ["native"] }
-radroots_trade_sp1_host = { path = "../lib/crates/trade_sp1_host" }
 radroots_trade = { path = "../lib/crates/trade" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

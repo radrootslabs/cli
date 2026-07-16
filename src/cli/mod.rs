@@ -104,7 +104,7 @@ pub enum TargetCommand {
     Basket(BasketArgs),
     #[command(about = "Coordinate buyer and farmer trade agreement events.")]
     Trade(TradeArgs),
-    #[command(about = "Inspect validation receipts and proof state.")]
+    #[command(about = "Inspect validation status.")]
     Validation(ValidationArgs),
     #[command(about = "Inspect runtime diagnostics.")]
     Diagnostics(DiagnosticsArgs),
@@ -218,10 +218,6 @@ impl TargetCommand {
             },
             Self::Validation(args) => match &args.command {
                 ValidationCommand::Status => "validation.status",
-                ValidationCommand::Receipt(receipt) => match &receipt.command {
-                    ValidationReceiptCommand::Get(_) => "validation.receipt.get",
-                    ValidationReceiptCommand::Verify(_) => "validation.receipt.verify",
-                },
             },
             Self::Diagnostics(args) => match args.command {
                 DiagnosticsCommand::Inspect => "diagnostics.inspect",
@@ -378,7 +374,8 @@ mod tests {
                 "radroots".to_owned(),
                 "validation".to_owned(),
                 "receipt".to_owned(),
-                "list".to_owned(),
+                "get".to_owned(),
+                "abc".to_owned(),
             ],
         ];
 

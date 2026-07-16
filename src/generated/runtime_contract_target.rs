@@ -47,8 +47,6 @@ target_operation_contracts! {
     TradePrivateArtifactOpen => (TradePrivateArtifactOpenRequest, TradePrivateArtifactOpenResult, "trade.private_artifact.open"),
     TradePrivateArtifactDelete => (TradePrivateArtifactDeleteRequest, TradePrivateArtifactDeleteResult, "trade.private_artifact.delete"),
     ValidationStatus => (ValidationStatusRequest, ValidationStatusResult, "validation.status"),
-    ValidationReceiptGet => (ValidationReceiptGetRequest, ValidationReceiptGetResult, "validation.receipt.get"),
-    ValidationReceiptVerify => (ValidationReceiptVerifyRequest, ValidationReceiptVerifyResult, "validation.receipt.verify"),
     SyncStatus => (SyncStatusRequest, SyncStatusResult, "sync.status"),
     SyncPull => (SyncPullRequest, SyncPullResult, "sync.pull"),
     SyncPush => (SyncPushRequest, SyncPushResult, "sync.push"),

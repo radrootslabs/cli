@@ -263,12 +263,6 @@ fn execute_request(
         TargetOperationRequest::ValidationStatus(request) => {
             execute_with(ValidationOperationService::new(config), request)
         }
-        TargetOperationRequest::ValidationReceiptGet(request) => {
-            execute_with(ValidationOperationService::new(config), request)
-        }
-        TargetOperationRequest::ValidationReceiptVerify(request) => {
-            execute_with(ValidationOperationService::new(config), request)
-        }
         TargetOperationRequest::HealthInspect(request) => {
             execute_with(CoreOperationService::new(config, logging), request)
         }

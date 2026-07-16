@@ -16,7 +16,6 @@ pub mod store;
 pub mod sync;
 pub mod trade;
 pub mod transport;
-pub mod validation_receipt;
 
 use std::process::ExitCode;
 

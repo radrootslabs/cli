@@ -47,7 +47,6 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
         TradeEvidenceCommand, TradeOperationCommand, TradePrivateArtifactCommand,
         TradeProposalCommand, TradeRevisionCommand, TransportCapabilityCommand, TransportCommand,
         TransportConfigCommand, TransportDeliveryCommand, ValidationCommand,
-        ValidationReceiptCommand,
     };
 
     let mut input = OperationData::new();
@@ -246,11 +245,6 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
         },
         TargetCommand::Validation(args) => match &args.command {
             ValidationCommand::Status => {}
-            ValidationCommand::Receipt(receipt) => match &receipt.command {
-                ValidationReceiptCommand::Get(args) | ValidationReceiptCommand::Verify(args) => {
-                    insert_string(&mut input, "receipt_event_id", &args.receipt_event_id);
-                }
-            },
         },
         TargetCommand::Transport(args) => match &args.command {
             TransportCommand::Config(config) => match &config.command {
