@@ -42,7 +42,7 @@ mod tests {
     fn builds_terminal_error_document() {
         let error = OutputError::new("invalid_input", "missing input", CliExitCode::InvalidInput);
         let envelope = OutputEnvelope::failure(
-            "trade.request",
+            "trade.proposal.submit",
             error,
             EnvelopeContext::new("req_test", false),
         );

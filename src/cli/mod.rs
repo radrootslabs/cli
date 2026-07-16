@@ -189,12 +189,32 @@ impl TargetCommand {
                 BasketCommand::Quote(_) => "basket.quote",
             },
             Self::Trade(args) => match &args.command {
-                TradeCommand::Request(_) => "trade.request",
+                TradeCommand::Proposal(args) => match &args.command {
+                    TradeProposalCommand::Submit(_) => "trade.proposal.submit",
+                },
+                TradeCommand::Revision(args) => match &args.command {
+                    TradeRevisionCommand::Propose(_) => "trade.revision.propose",
+                },
+                TradeCommand::Candidate(args) => match &args.command {
+                    TradeCandidateCommand::Decide(_) => "trade.candidate.decide",
+                },
+                TradeCommand::Cancellation(args) => match &args.command {
+                    TradeCancellationCommand::Submit(_) => "trade.cancellation.submit",
+                },
+                TradeCommand::Operation(args) => match &args.command {
+                    TradeOperationCommand::Resume(_) => "trade.operation.resume",
+                },
                 TradeCommand::Get(_) => "trade.get",
-                TradeCommand::List => "trade.list",
-                TradeCommand::Accept(_) => "trade.accept",
-                TradeCommand::Decline(_) => "trade.decline",
-                TradeCommand::Cancel(_) => "trade.cancel",
+                TradeCommand::List(_) => "trade.list",
+                TradeCommand::Evidence(args) => match &args.command {
+                    TradeEvidenceCommand::Refresh(_) => "trade.evidence.refresh",
+                    TradeEvidenceCommand::Inspect(_) => "trade.evidence.inspect",
+                },
+                TradeCommand::PrivateArtifact(args) => match &args.command {
+                    TradePrivateArtifactCommand::Seal(_) => "trade.private_artifact.seal",
+                    TradePrivateArtifactCommand::Open(_) => "trade.private_artifact.open",
+                    TradePrivateArtifactCommand::Delete(_) => "trade.private_artifact.delete",
+                },
             },
             Self::Validation(args) => match &args.command {
                 ValidationCommand::Status => "validation.status",
@@ -327,6 +347,30 @@ mod tests {
             ],
             vec![
                 "radroots".to_owned(),
+                "trade".to_owned(),
+                "request".to_owned(),
+                "abc".to_owned(),
+            ],
+            vec![
+                "radroots".to_owned(),
+                "trade".to_owned(),
+                "accept".to_owned(),
+                "abc".to_owned(),
+            ],
+            vec![
+                "radroots".to_owned(),
+                "trade".to_owned(),
+                "decline".to_owned(),
+                "abc".to_owned(),
+            ],
+            vec![
+                "radroots".to_owned(),
+                "trade".to_owned(),
+                "cancel".to_owned(),
+                "abc".to_owned(),
+            ],
+            vec![
+                "radroots".to_owned(),
                 "listing".to_owned(),
                 "archive".to_owned(),
             ],
@@ -368,11 +412,11 @@ mod tests {
         let trade = TargetCliArgs::try_parse_from([
             "radroots",
             "trade",
-            "request",
-            "trade_test",
-            "--confirm-public-note",
+            "proposal",
+            "submit",
+            "proposal.json",
         ])
-        .expect("trade request parses");
-        assert_eq!(trade.command.operation_id(), "trade.request");
+        .expect("trade proposal submit parses");
+        assert_eq!(trade.command.operation_id(), "trade.proposal.submit");
     }
 }

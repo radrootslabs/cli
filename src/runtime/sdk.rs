@@ -22,8 +22,7 @@ use radroots_sdk::{
     RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
     RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
     RadrootsdExecutionProfile, ReticulumAgentEndpoint, ReticulumBehavior as SdkReticulumBehavior,
-    ReticulumProfile, TargetPolicy, TradeValidationReceiptNostrRelayOutcomeKind,
-    TradeValidationReceiptNostrRelayTransportOutcomeKind, TransportProfile,
+    ReticulumProfile, TargetPolicy, TransportProfile,
 };
 use radroots_transport_nostr::{
     RadrootsNostrClientFetchAdapter, RadrootsRelayFetchRequest, RadrootsRelayFetchedEventsReceipt,
@@ -58,18 +57,6 @@ pub fn sdk_transport_outcome_kind_label(kind: PushOutboxTransportOutcomeKind) ->
 }
 
 pub fn sdk_target_outcome_kind_label(kind: PushOutboxTargetOutcomeKind) -> String {
-    kind.as_str().to_owned()
-}
-
-pub fn sdk_validation_transport_outcome_kind_label(
-    kind: TradeValidationReceiptNostrRelayTransportOutcomeKind,
-) -> String {
-    kind.as_str().to_owned()
-}
-
-pub fn sdk_validation_relay_outcome_kind_label(
-    kind: TradeValidationReceiptNostrRelayOutcomeKind,
-) -> String {
     kind.as_str().to_owned()
 }
 
@@ -806,8 +793,7 @@ mod tests {
     use radroots_authority::RadrootsEventSigner;
     use radroots_sdk::{
         PushOutboxTargetOutcomeKind, PushOutboxTransportOutcomeKind, RadrootsdExecutionAuth,
-        SdkStorageKind, StorageStatusRequest, TradeValidationReceiptNostrRelayOutcomeKind,
-        TradeValidationReceiptNostrRelayTransportOutcomeKind,
+        SdkStorageKind, StorageStatusRequest,
     };
     use radroots_secret_vault::RadrootsSecretBackend;
     use tempfile::tempdir;
@@ -1044,10 +1030,6 @@ mod tests {
             concat!("fn sdk_target", "_outcome_kind("),
             "local SDK target outcome label helper",
         ),
-        (
-            concat!("fn sdk_relay", "_outcome_kind("),
-            "local SDK validation receipt relay label helper",
-        ),
     ];
 
     const SDK_OUTCOME_LABEL_HELPER_GUARDS: &[SdkOutcomeLabelHelperGuard] = &[
@@ -1059,16 +1041,6 @@ mod tests {
         SdkOutcomeLabelHelperGuard {
             label: "push outbox target outcome label helper",
             start: "pub fn sdk_target_outcome_kind_label(",
-            end: "pub fn sdk_validation_transport_outcome_kind_label(",
-        },
-        SdkOutcomeLabelHelperGuard {
-            label: "validation transport outcome label helper",
-            start: "pub fn sdk_validation_transport_outcome_kind_label(",
-            end: "pub fn sdk_validation_relay_outcome_kind_label(",
-        },
-        SdkOutcomeLabelHelperGuard {
-            label: "validation relay outcome label helper",
-            start: "pub fn sdk_validation_relay_outcome_kind_label(",
             end: "#[derive(Debug, Clone, PartialEq, Eq)]",
         },
     ];
@@ -1111,115 +1083,51 @@ mod tests {
             required_tokens: &["session.sdk().sync().push_outbox", "PushOutboxRequest::new"],
         },
         MigratedCliPathGuard {
-            label: "order public status",
-            path: "src/runtime/order.rs",
-            start: "pub fn status(\n    config: &RuntimeConfig",
-            end: "fn decide_trade_via_sdk(",
+            label: "trade release product commands",
+            path: "src/runtime/trade.rs",
+            start: "pub fn submit_proposal(",
+            end: "pub fn get_trade(",
             required_tokens: &[
-                "TradeStatusRequest::parse",
-                ".with_validation_trust_policy(",
-                "trade_validation_trust_policy(config)?",
-                "session.sdk().trades().status",
+                "SubmitProposalRequest::new",
+                "ProposeRevisionRequest::new",
+                "DecideCandidateRequest::new",
+                "CancelTradeRequest::new",
+                "ResumeOperationRequest::new",
+                "session.sdk().trades().commands().submit_proposal",
+                "session.sdk().trades().commands().propose_revision",
+                "session.sdk().trades().commands().decide_candidate",
+                "session.sdk().trades().commands().cancel_trade",
+                "session.sdk().trades().commands().resume_operation",
             ],
         },
         MigratedCliPathGuard {
-            label: "order locator status helper",
-            path: "src/runtime/order.rs",
-            start: "fn trade_status_for_locator(",
-            end: "fn inventory_commitments_from_status(",
+            label: "trade release product queries",
+            path: "src/runtime/trade.rs",
+            start: "pub fn get_trade(",
+            end: "pub fn seal_private_artifact(",
             required_tokens: &[
-                "TradeStatusRequest::new(locator)",
-                "SdkTradeStatusSource::ResyncThenLocal",
-                "session.block_on(",
-                ".sdk()",
-                ".trades()",
-                ".with_source(SdkTradeStatusSource::ResyncThenLocal)",
-                ".with_validation_trust_policy(",
-                "trade_validation_trust_policy(config)?",
+                "GetTradeRequest::new",
+                "ListTradesRequest::new",
+                "RefreshTradeEvidenceRequest::new",
+                "InspectEvidenceRequest::new",
+                "session.sdk().trades().queries().get_trade",
+                "session.sdk().trades().queries().list_trades",
+                "session.sdk().trades().queries().refresh_evidence",
+                "session.sdk().trades().queries().inspect_evidence",
             ],
         },
         MigratedCliPathGuard {
-            label: "order SDK status adapter",
-            path: "src/runtime/order/sdk_status.rs",
-            start: "pub(super) fn sdk_order_status_view(",
-            end: "fn sdk_event_id_string(",
+            label: "trade private artifact SDK",
+            path: "src/runtime/trade.rs",
+            start: "pub fn seal_private_artifact(",
+            end: "pub fn scaffold_proposal_draft(",
             required_tokens: &[
-                "TradeStatusReceipt",
-                "OrderStatusView",
-                "OrderStatusLifecycleView",
-                "OrderStatusSdkReceiptView",
-                "TradeValidationTrustDecision",
-                "validation_trust",
-                "has_validation_receipt",
-                "ambiguity_candidates",
-                "TradeStatusAmbiguityCandidate",
-                "TradeStatusRequest::locator_selector",
-            ],
-        },
-        MigratedCliPathGuard {
-            label: "validation receipt SDK list",
-            path: "src/runtime/validation_receipt.rs",
-            start: "pub fn list(",
-            end: "fn inspect_event(",
-            required_tokens: &[
-                "TradeValidationReceiptListRequest::parse",
-                ".validation_receipts()",
-                ".list(request)",
-            ],
-        },
-        MigratedCliPathGuard {
-            label: "validation receipt SDK inspection",
-            path: "src/runtime/validation_receipt.rs",
-            start: "fn inspect_event(",
-            end: "fn inspection_from_sdk_receipt(",
-            required_tokens: &[
-                "TradeValidationReceiptInspectRequest::parse",
-                "TradeValidationReceiptVerifyRequest::parse",
-                ".validation_receipts()",
-                ".inspect(request)",
-                ".verify(request)",
-            ],
-        },
-        MigratedCliPathGuard {
-            label: "trade request",
-            path: "src/runtime/order.rs",
-            start: "fn canonical_order_request_payload_from_loaded(",
-            end: "fn sdk_trade_submit_outcome_view(",
-            required_tokens: &[
-                "propose_trade_via_sdk",
-                "TradeProposeRequest::new",
-                "protocol_order_id",
-                "protocol_listing_addr",
-                "protocol_pubkey",
-                "args.confirm_public_note",
-                "session.sdk().trades().buyer().propose_trade",
-                "trade_publish_mode(config)",
-            ],
-        },
-        MigratedCliPathGuard {
-            label: "order decision",
-            path: "src/runtime/order.rs",
-            start: "fn decide_trade_via_sdk(",
-            end: "fn cancel_trade_via_sdk(",
-            required_tokens: &[
-                "decide_trade_via_sdk",
-                "TradeAcceptRequest::new",
-                "TradeDeclineRequest::new",
-                "TradeEvidenceMode::ResyncBeforeMutation",
-                "session.sdk().trades().seller().accept_trade",
-                "session.sdk().trades().seller().decline_trade",
-            ],
-        },
-        MigratedCliPathGuard {
-            label: "order lifecycle",
-            path: "src/runtime/order.rs",
-            start: "fn cancel_trade_via_sdk(",
-            end: "fn trade_status_for_locator(",
-            required_tokens: &[
-                "cancel_trade_via_sdk",
-                "TradeCancelRequest::new",
-                "TradeEvidenceMode::ResyncBeforeMutation",
-                "session.sdk().trades().buyer().cancel_trade",
+                "TradePrivateArtifactSealRequest::binding_terms",
+                "TradePrivateArtifactOpenRequest::new",
+                "TradePrivateArtifactDeleteRequest::new",
+                "session.sdk().trades().seal_private_artifact",
+                "session.sdk().trades().open_private_artifact",
+                "session.sdk().trades().delete_private_artifact",
             ],
         },
         MigratedCliPathGuard {
@@ -1658,93 +1566,6 @@ mod tests {
             ),
         ] {
             assert_eq!(sdk_transport_outcome_kind_label(kind), label);
-        }
-
-        for (kind, label) in [
-            (TradeValidationReceiptNostrRelayOutcomeKind::Eose, "eose"),
-            (
-                TradeValidationReceiptNostrRelayOutcomeKind::Closed,
-                "closed",
-            ),
-            (
-                TradeValidationReceiptNostrRelayOutcomeKind::Notice,
-                "notice",
-            ),
-        ] {
-            assert_eq!(sdk_validation_relay_outcome_kind_label(kind), label);
-        }
-
-        for (kind, label) in [
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::Accepted,
-                "accepted",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::DuplicateAccepted,
-                "duplicate_accepted",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::Blocked,
-                "blocked",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::RateLimited,
-                "rate_limited",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::Invalid,
-                "invalid",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::PowRequired,
-                "pow_required",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::Restricted,
-                "restricted",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::AuthRequired,
-                "auth_required",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::Muted,
-                "muted",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::Unsupported,
-                "unsupported",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::PaymentRequired,
-                "payment_required",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::Error,
-                "error",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::Timeout,
-                "timeout",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::ConnectionFailed,
-                "connection_failed",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::RelayUrlRejected,
-                "relay_url_rejected",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::SkippedAlreadyAccepted,
-                "skipped_already_accepted",
-            ),
-            (
-                TradeValidationReceiptNostrRelayTransportOutcomeKind::Unknown,
-                "unknown",
-            ),
-        ] {
-            assert_eq!(sdk_validation_transport_outcome_kind_label(kind), label);
         }
     }
 
@@ -2365,16 +2186,6 @@ mod tests {
 {transport_body}\
 }}\n\
 pub fn sdk_target_outcome_kind_label(kind: PushOutboxTargetOutcomeKind) -> String {{\n\
-    kind.as_str().to_owned()\n\
-}}\n\
-pub fn sdk_validation_transport_outcome_kind_label(\n\
-    kind: TradeValidationReceiptNostrRelayTransportOutcomeKind,\n\
-) -> String {{\n\
-    kind.as_str().to_owned()\n\
-}}\n\
-pub fn sdk_validation_relay_outcome_kind_label(\n\
-    kind: TradeValidationReceiptNostrRelayOutcomeKind,\n\
-) -> String {{\n\
     kind.as_str().to_owned()\n\
 }}\n\
 #[derive(Debug, Clone, PartialEq, Eq)]\n\

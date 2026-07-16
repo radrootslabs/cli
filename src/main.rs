@@ -224,7 +224,19 @@ fn execute_request(
         TargetOperationRequest::BasketQuote(request) => {
             execute_with(BasketOperationService::new(config), request)
         }
-        TargetOperationRequest::TradeRequest(request) => {
+        TargetOperationRequest::TradeProposalSubmit(request) => {
+            execute_with(TradeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TradeRevisionPropose(request) => {
+            execute_with(TradeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TradeCandidateDecide(request) => {
+            execute_with(TradeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TradeCancellationSubmit(request) => {
+            execute_with(TradeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TradeOperationResume(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
         TargetOperationRequest::TradeGet(request) => {
@@ -233,13 +245,19 @@ fn execute_request(
         TargetOperationRequest::TradeList(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::TradeAccept(request) => {
+        TargetOperationRequest::TradeEvidenceRefresh(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::TradeDecline(request) => {
+        TargetOperationRequest::TradeEvidenceInspect(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
-        TargetOperationRequest::TradeCancel(request) => {
+        TargetOperationRequest::TradePrivateArtifactSeal(request) => {
+            execute_with(TradeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TradePrivateArtifactOpen(request) => {
+            execute_with(TradeOperationService::new(config), request)
+        }
+        TargetOperationRequest::TradePrivateArtifactDelete(request) => {
             execute_with(TradeOperationService::new(config), request)
         }
         TargetOperationRequest::ValidationStatus(request) => {

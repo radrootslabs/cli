@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::cli::global::{RuntimeInvocationArgs, RuntimeOutputFormatArg};
 use crate::cli::{TargetCliArgs, TargetCommand, TargetOutputFormat};
 use crate::ops::OperationData;
@@ -41,7 +43,9 @@ pub fn operation_id_from_target(args: &TargetCliArgs) -> &'static str {
 pub fn target_operation_input(command: &TargetCommand) -> OperationData {
     use crate::cli::{
         AccountCommand, BasketCommand, BasketItemCommand, FarmCommand, ListingCommand,
-        MarketCommand, StoreCommand, TradeCommand, TransportCapabilityCommand, TransportCommand,
+        MarketCommand, StoreCommand, TradeCancellationCommand, TradeCandidateCommand, TradeCommand,
+        TradeEvidenceCommand, TradeOperationCommand, TradePrivateArtifactCommand,
+        TradeProposalCommand, TradeRevisionCommand, TransportCapabilityCommand, TransportCommand,
         TransportConfigCommand, TransportDeliveryCommand, ValidationCommand,
         ValidationReceiptCommand,
     };
@@ -155,23 +159,90 @@ pub fn target_operation_input(command: &TargetCommand) -> OperationData {
             BasketCommand::List => {}
         },
         TargetCommand::Trade(args) => match &args.command {
-            TradeCommand::Request(args) => {
-                insert_string(&mut input, "trade_id", &args.trade_id);
-                insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
-            }
+            TradeCommand::Proposal(args) => match &args.command {
+                TradeProposalCommand::Submit(args) => {
+                    insert_path_required(&mut input, "file", &args.file)
+                }
+            },
+            TradeCommand::Revision(args) => match &args.command {
+                TradeRevisionCommand::Propose(args) => {
+                    insert_path_required(&mut input, "file", &args.file)
+                }
+            },
+            TradeCommand::Candidate(args) => match &args.command {
+                TradeCandidateCommand::Decide(args) => {
+                    insert_path_required(&mut input, "file", &args.file);
+                    insert_bool(
+                        &mut input,
+                        "acknowledge_private_terms",
+                        args.acknowledge_private_terms,
+                    );
+                }
+            },
+            TradeCommand::Cancellation(args) => match &args.command {
+                TradeCancellationCommand::Submit(args) => {
+                    insert_path_required(&mut input, "file", &args.file)
+                }
+            },
+            TradeCommand::Operation(args) => match &args.command {
+                TradeOperationCommand::Resume(args) => {
+                    insert_path_required(&mut input, "file", &args.file);
+                    if let Some(operation_kind) = args.operation_kind {
+                        input.insert(
+                            "operation_kind".to_owned(),
+                            Value::String(operation_kind.as_sdk_operation_kind().to_owned()),
+                        );
+                    }
+                    insert_bool(
+                        &mut input,
+                        "acknowledge_private_terms",
+                        args.acknowledge_private_terms,
+                    );
+                }
+            },
             TradeCommand::Get(args) => insert_string(&mut input, "trade_id", &args.trade_id),
-            TradeCommand::Accept(args) => insert_string(&mut input, "trade_id", &args.trade_id),
-            TradeCommand::Decline(args) => {
-                insert_string(&mut input, "trade_id", &args.trade_id);
-                insert_string(&mut input, "reason", &args.reason);
-                insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
+            TradeCommand::List(args) => {
+                insert_u32(&mut input, "limit", args.limit);
+                insert_string(&mut input, "cursor", &args.cursor);
             }
-            TradeCommand::Cancel(args) => {
-                insert_string(&mut input, "trade_id", &args.trade_id);
-                insert_string(&mut input, "reason", &args.reason);
-                insert_bool(&mut input, "confirm_public_note", args.confirm_public_note);
-            }
-            TradeCommand::List => {}
+            TradeCommand::Evidence(args) => match &args.command {
+                TradeEvidenceCommand::Refresh(args) => {
+                    insert_string(&mut input, "trade_id", &args.trade_id)
+                }
+                TradeEvidenceCommand::Inspect(args) => {
+                    insert_string(&mut input, "trade_id", &args.trade_id);
+                    insert_u32(&mut input, "limit", args.limit);
+                    insert_string(&mut input, "cursor", &args.cursor);
+                }
+            },
+            TradeCommand::PrivateArtifact(args) => match &args.command {
+                TradePrivateArtifactCommand::Seal(args) => {
+                    insert_string(&mut input, "trade_id", &args.trade_id);
+                    insert_string(&mut input, "artifact_id", &args.artifact_id);
+                    insert_string(&mut input, "schema_id", &args.schema_id);
+                    insert_path(&mut input, "input", &args.input);
+                    input.insert(
+                        "kind".to_owned(),
+                        Value::String(args.kind.as_str().to_owned()),
+                    );
+                    insert_string(&mut input, "candidate_id", &args.candidate_id);
+                    insert_string(&mut input, "retention_class", &args.retention_class);
+                    insert_i64(&mut input, "expires_at_ms", args.expires_at_ms);
+                }
+                TradePrivateArtifactCommand::Open(args) => {
+                    input.insert(
+                        "artifact_id".to_owned(),
+                        Value::String(args.artifact_id.clone()),
+                    );
+                    insert_path(&mut input, "output", &args.output);
+                }
+                TradePrivateArtifactCommand::Delete(args) => {
+                    input.insert(
+                        "artifact_id".to_owned(),
+                        Value::String(args.artifact_id.clone()),
+                    );
+                }
+            },
         },
         TargetCommand::Validation(args) => match &args.command {
             ValidationCommand::Status => {}
@@ -252,5 +323,24 @@ fn insert_path(input: &mut OperationData, key: &str, value: &Option<std::path::P
             key.to_owned(),
             Value::String(value.to_string_lossy().into_owned()),
         );
+    }
+}
+
+fn insert_path_required(input: &mut OperationData, key: &str, value: &Path) {
+    input.insert(
+        key.to_owned(),
+        Value::String(value.to_string_lossy().into_owned()),
+    );
+}
+
+fn insert_u32(input: &mut OperationData, key: &str, value: Option<u32>) {
+    if let Some(value) = value {
+        input.insert(key.to_owned(), Value::Number(value.into()));
+    }
+}
+
+fn insert_i64(input: &mut OperationData, key: &str, value: Option<i64>) {
+    if let Some(value) = value {
+        input.insert(key.to_owned(), Value::Number(value.into()));
     }
 }

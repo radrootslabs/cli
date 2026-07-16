@@ -670,10 +670,7 @@ fn transport_farm_publish_readiness(
                 account::AccountRuntimeFailure::watch_only(&account.record.account_id).to_string(),
             ),
             missing: vec!["Write-capable farm-bound seller account".to_owned()],
-            actions: vec![format!(
-                "radroots account attach-secret {} <path>",
-                account.record.account_id
-            )],
+            actions: vec!["radroots account create".to_owned()],
         };
     }
 

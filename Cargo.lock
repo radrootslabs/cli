@@ -3683,11 +3683,13 @@ dependencies = [
 name = "radroots_event_store"
 version = "0.1.0-alpha.2"
 dependencies = [
+ "hex",
  "radroots_event",
  "radroots_nostr",
  "radroots_transport",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "thiserror 1.0.69",
 ]
@@ -3924,6 +3926,7 @@ dependencies = [
 name = "radroots_sdk"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures",
  "hex",
  "nostr",

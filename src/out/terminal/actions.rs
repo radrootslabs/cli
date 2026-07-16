@@ -88,10 +88,8 @@ pub fn terminal_action_from_command(command: &str) -> TerminalAction {
 }
 
 fn command_requires_placeholder(command: &str) -> bool {
-    matches!(
-        command,
-        "radroots account attach-secret" | "radroots listing publish"
-    ) || basket_item_add_requires_placeholder(command)
+    matches!(command, "radroots listing publish")
+        || basket_item_add_requires_placeholder(command)
         || basket_item_update_requires_placeholder(command)
         || basket_adjustment_add_requires_placeholder(command)
         || basket_adjustment_remove_requires_placeholder(command)
@@ -115,9 +113,6 @@ fn command_with_placeholder(command: &str) -> String {
         return basket_quote_create_placeholder(command);
     }
     match command {
-        "radroots account attach-secret" => {
-            "radroots account attach-secret <account> <identity.json>"
-        }
         "radroots listing publish" => "radroots listing publish <file>",
         other => other,
     }

@@ -315,7 +315,7 @@ pub fn attach_identity_secret(
     snapshot_account(
         &snapshot,
         &attached.account_id,
-        "attached account missing after account attach-secret",
+        "attached account missing after account secret attachment",
     )
 }
 

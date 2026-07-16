@@ -1134,6 +1134,7 @@ pub(crate) fn freshness_for_scope(
     freshness_for_scope_from_executor(config, &executor, scope)
 }
 
+#[cfg(test)]
 pub(crate) fn relay_provenance_relays_for_scope(
     config: &RuntimeConfig,
     scope: RelayIngestScope,

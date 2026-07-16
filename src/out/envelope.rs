@@ -547,14 +547,14 @@ mod tests {
             CliExitCode::ApprovalRequiredOrDenied,
         );
         let envelope = OutputEnvelope::failure(
-            "trade.request",
+            "trade.proposal.submit",
             error,
             EnvelopeContext::new("req_order", false),
         );
         let value = serde_json::to_value(envelope).expect("serialize envelope");
 
         assert_eq!(value["schema_version"], OUTPUT_SCHEMA_VERSION);
-        assert_eq!(value["operation_id"], "trade.request");
+        assert_eq!(value["operation_id"], "trade.proposal.submit");
         assert_eq!(value["status"], "error");
         assert_eq!(value["reason_code"], "approval_required");
         assert_eq!(value["result"], Value::Null);
@@ -577,7 +577,7 @@ mod tests {
             ]
         }));
         let envelope = OutputEnvelope::failure(
-            "trade.request",
+            "trade.proposal.submit",
             error,
             EnvelopeContext::new("req_order", true),
         );

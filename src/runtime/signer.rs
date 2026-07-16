@@ -10,8 +10,8 @@ use crate::view::runtime::{
     SignerStatusView, SignerWriteKindReadinessView,
 };
 use radroots_event::kinds::{
-    KIND_FARM, KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
-    KIND_PROFILE,
+    KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION,
+    KIND_TRADE_PROPOSAL, KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
 };
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
 use radroots_nostr_connect::prelude::RadrootsNostrConnectPermissions;
@@ -294,7 +294,7 @@ fn disabled_binding_status() -> SignerBindingStatusView {
     }
 }
 
-fn cli_write_kinds() -> [CliWriteKind; 9] {
+fn cli_write_kinds() -> [CliWriteKind; 10] {
     [
         CliWriteKind {
             command: "sync.push",
@@ -317,20 +317,24 @@ fn cli_write_kinds() -> [CliWriteKind; 9] {
             event_kind: KIND_LISTING,
         },
         CliWriteKind {
-            command: "trade.request",
-            event_kind: KIND_ORDER_REQUEST,
+            command: "trade.proposal.submit",
+            event_kind: KIND_TRADE_PROPOSAL,
         },
         CliWriteKind {
-            command: "trade.accept",
-            event_kind: KIND_ORDER_DECISION,
+            command: "trade.candidate.decide",
+            event_kind: KIND_TRADE_DECISION,
         },
         CliWriteKind {
-            command: "trade.decline",
-            event_kind: KIND_ORDER_DECISION,
+            command: "trade.revision.propose",
+            event_kind: KIND_TRADE_REVISION_PROPOSAL,
         },
         CliWriteKind {
-            command: "trade.cancel",
-            event_kind: KIND_ORDER_CANCELLATION,
+            command: "trade.revision.candidate.decide",
+            event_kind: KIND_TRADE_REVISION_DECISION,
+        },
+        CliWriteKind {
+            command: "trade.cancellation.submit",
+            event_kind: KIND_TRADE_CANCELLATION,
         },
     ]
 }
@@ -582,15 +586,14 @@ fn sign_event_permission_for_kind(event_kind: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        KIND_FARM, KIND_LISTING, KIND_ORDER_CANCELLATION, KIND_ORDER_DECISION, KIND_ORDER_REQUEST,
-        KIND_PROFILE, cli_write_kinds, myc_managed_account_ref_matches, myc_write_kind_readiness,
+        KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION,
+        KIND_TRADE_PROPOSAL, KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
+        cli_write_kinds, myc_managed_account_ref_matches, myc_write_kind_readiness,
         myc_write_kind_readiness_for_permissions, sign_event_permission_for_kind,
     };
     use radroots_nostr_connect::prelude::{
         RadrootsNostrConnectMethod, RadrootsNostrConnectPermission, RadrootsNostrConnectPermissions,
     };
-
-    const RESERVED_ORDER_KIND_3431: u32 = 3431;
 
     #[test]
     fn write_kind_readiness_matches_active_signed_mutations() {
@@ -607,47 +610,35 @@ mod tests {
                 "listing.publish",
                 "listing.update",
                 "listing.withdraw",
-                "trade.request",
-                "trade.accept",
-                "trade.decline",
-                "trade.cancel",
+                "trade.proposal.submit",
+                "trade.candidate.decide",
+                "trade.revision.propose",
+                "trade.revision.candidate.decide",
+                "trade.cancellation.submit",
             ]
         );
         assert!(!commands.contains(&"signer.status"));
     }
 
     #[test]
-    fn order_submit_readiness_uses_active_order_request_kind() {
-        let write_kind = cli_write_kinds()
-            .into_iter()
-            .find(|kind| kind.command == "trade.request")
-            .expect("order submit readiness");
-
-        assert_eq!(write_kind.event_kind, KIND_ORDER_REQUEST);
-        assert_ne!(write_kind.event_kind, RESERVED_ORDER_KIND_3431);
-    }
-
-    #[test]
-    fn order_decision_readiness_uses_active_order_decision_kind() {
-        for command in ["trade.accept", "trade.decline"] {
+    fn trade_readiness_uses_canonical_mutation_kinds() {
+        for (command, event_kind) in [
+            ("trade.proposal.submit", KIND_TRADE_PROPOSAL),
+            ("trade.candidate.decide", KIND_TRADE_DECISION),
+            ("trade.revision.propose", KIND_TRADE_REVISION_PROPOSAL),
+            (
+                "trade.revision.candidate.decide",
+                KIND_TRADE_REVISION_DECISION,
+            ),
+            ("trade.cancellation.submit", KIND_TRADE_CANCELLATION),
+        ] {
             let write_kind = cli_write_kinds()
                 .into_iter()
                 .find(|kind| kind.command == command)
-                .expect("order decision readiness");
+                .expect("trade readiness");
 
-            assert_eq!(write_kind.event_kind, KIND_ORDER_DECISION);
-            assert_ne!(write_kind.event_kind, RESERVED_ORDER_KIND_3431);
+            assert_eq!(write_kind.event_kind, event_kind);
         }
-    }
-
-    #[test]
-    fn order_cancel_readiness_uses_order_cancellation_kind() {
-        let cancel = cli_write_kinds()
-            .into_iter()
-            .find(|kind| kind.command == "trade.cancel")
-            .expect("order cancel readiness");
-        assert_eq!(cancel.event_kind, KIND_ORDER_CANCELLATION);
-        assert_ne!(cancel.event_kind, RESERVED_ORDER_KIND_3431);
     }
 
     #[test]
@@ -669,7 +660,7 @@ mod tests {
         for (command, event_kind) in [
             ("farm.publish", KIND_FARM),
             ("listing.publish", KIND_LISTING),
-            ("trade.request", KIND_ORDER_REQUEST),
+            ("trade.proposal.submit", KIND_TRADE_PROPOSAL),
         ] {
             let entry = readiness
                 .iter()

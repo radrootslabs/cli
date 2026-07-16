@@ -614,7 +614,7 @@ fn health_actions(
     }
     if let Some(resolved) = account.resolved_account.as_ref() {
         if !resolved.write_capable {
-            push_unique(&mut actions, "radroots account attach-secret");
+            push_unique(&mut actions, "radroots account create");
         }
     } else {
         push_unique(&mut actions, "radroots account create");
@@ -700,7 +700,7 @@ fn publish_recovery_actions(
                     push_unique(&mut actions, "radroots signer status");
                 } else if let Some(resolved) = account.resolved_account.as_ref() {
                     if !resolved.write_capable {
-                        push_unique(&mut actions, "radroots account attach-secret");
+                        push_unique(&mut actions, "radroots account create");
                     }
                 } else {
                     push_unique(&mut actions, "radroots account create");

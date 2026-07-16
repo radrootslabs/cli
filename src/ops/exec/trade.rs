@@ -1,20 +1,25 @@
+use std::path::PathBuf;
+
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::cli::global::{
-    RecordLookupArgs, TradeCancelArgs, TradeDecisionArg, TradeDecisionArgs, TradeRequestArgs,
-};
 use crate::ops::{
     OperationAdapterError, OperationRequest, OperationRequestData, OperationRequestPayload,
-    OperationResult, OperationResultData, OperationService, TradeAcceptRequest, TradeAcceptResult,
-    TradeCancelRequest, TradeCancelResult, TradeDeclineRequest, TradeDeclineResult,
-    TradeGetRequest, TradeGetResult, TradeListRequest, TradeListResult, TradeRequestRequest,
-    TradeRequestResult,
+    OperationResult, OperationResultData, OperationService, TradeCancellationSubmitRequest,
+    TradeCancellationSubmitResult, TradeCandidateDecideRequest, TradeCandidateDecideResult,
+    TradeEvidenceInspectRequest, TradeEvidenceInspectResult, TradeEvidenceRefreshRequest,
+    TradeEvidenceRefreshResult, TradeGetRequest, TradeGetResult, TradeListRequest, TradeListResult,
+    TradeOperationResumeRequest, TradeOperationResumeResult, TradePrivateArtifactDeleteRequest,
+    TradePrivateArtifactDeleteResult, TradePrivateArtifactOpenRequest,
+    TradePrivateArtifactOpenResult, TradePrivateArtifactSealRequest,
+    TradePrivateArtifactSealResult, TradeProposalSubmitRequest, TradeProposalSubmitResult,
+    TradeRevisionProposeRequest, TradeRevisionProposeResult,
 };
-use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::view::runtime::{
-    CommandDisposition, OrderCancellationView, OrderDecisionView, OrderSubmitView,
+use crate::runtime::trade::{
+    TradeEnvelopeFileRuntimeArgs, TradeEvidenceInspectRuntimeArgs, TradeIdRuntimeArgs,
+    TradePageRuntimeArgs, TradePrivateArtifactDeleteRuntimeArgs,
+    TradePrivateArtifactOpenRuntimeArgs, TradePrivateArtifactSealRuntimeArgs,
 };
 
 pub struct TradeOperationService<'a> {
@@ -27,31 +32,73 @@ impl<'a> TradeOperationService<'a> {
     }
 }
 
-impl OperationService<TradeRequestRequest> for TradeOperationService<'_> {
-    type Result = TradeRequestResult;
+impl OperationService<TradeProposalSubmitRequest> for TradeOperationService<'_> {
+    type Result = TradeProposalSubmitResult;
 
     fn execute(
         &self,
-        request: OperationRequest<TradeRequestRequest>,
+        request: OperationRequest<TradeProposalSubmitRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let key = required_trade_key(&request)?;
-        let args = TradeRequestArgs {
-            key,
-            idempotency_key: request
-                .context
-                .idempotency_key
-                .clone()
-                .or_else(|| string_input(&request, "idempotency_key")),
-            confirm_public_note: bool_input(&request, "confirm_public_note").unwrap_or(false),
-        };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = crate::runtime::order::submit(&config, &args).map_err(|error| {
-            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
-        })?;
-        submit_result::<TradeRequestResult>(request.operation_id(), &view)
+        let args = envelope_args(&request)?;
+        let receipt = crate::runtime::trade::submit_proposal(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&receipt)
+    }
+}
+
+impl OperationService<TradeRevisionProposeRequest> for TradeOperationService<'_> {
+    type Result = TradeRevisionProposeResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<TradeRevisionProposeRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = envelope_args(&request)?;
+        let receipt = crate::runtime::trade::propose_revision(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&receipt)
+    }
+}
+
+impl OperationService<TradeCandidateDecideRequest> for TradeOperationService<'_> {
+    type Result = TradeCandidateDecideResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<TradeCandidateDecideRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = envelope_args(&request)?;
+        let receipt = crate::runtime::trade::decide_candidate(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&receipt)
+    }
+}
+
+impl OperationService<TradeCancellationSubmitRequest> for TradeOperationService<'_> {
+    type Result = TradeCancellationSubmitResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<TradeCancellationSubmitRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = envelope_args(&request)?;
+        let receipt = crate::runtime::trade::cancel_trade(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&receipt)
+    }
+}
+
+impl OperationService<TradeOperationResumeRequest> for TradeOperationService<'_> {
+    type Result = TradeOperationResumeResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<TradeOperationResumeRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = envelope_args(&request)?;
+        let receipt = crate::runtime::trade::resume_operation(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&receipt)
     }
 }
 
@@ -62,11 +109,12 @@ impl OperationService<TradeGetRequest> for TradeOperationService<'_> {
         &self,
         request: OperationRequest<TradeGetRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = RecordLookupArgs {
-            key: required_trade_key(&request)?,
+        let args = TradeIdRuntimeArgs {
+            trade_id: required_string(&request, "trade_id")?,
         };
-        let view = map_runtime(crate::runtime::order::get(self.config, &args))?;
-        serialized_target_result::<TradeGetResult, _>(&view)
+        let view = crate::runtime::trade::get_trade(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&view)
     }
 }
 
@@ -75,302 +123,134 @@ impl OperationService<TradeListRequest> for TradeOperationService<'_> {
 
     fn execute(
         &self,
-        _request: OperationRequest<TradeListRequest>,
+        request: OperationRequest<TradeListRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let view = map_runtime(crate::runtime::order::list(self.config))?;
-        serialized_target_result::<TradeListResult, _>(&view)
+        let args = TradePageRuntimeArgs {
+            limit: u32_input(&request, "limit")?,
+            cursor: string_input(&request, "cursor"),
+        };
+        let page = crate::runtime::trade::list_trades(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&page)
     }
 }
 
-impl OperationService<TradeAcceptRequest> for TradeOperationService<'_> {
-    type Result = TradeAcceptResult;
+impl OperationService<TradeEvidenceRefreshRequest> for TradeOperationService<'_> {
+    type Result = TradeEvidenceRefreshResult;
 
     fn execute(
         &self,
-        request: OperationRequest<TradeAcceptRequest>,
+        request: OperationRequest<TradeEvidenceRefreshRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let args = TradeDecisionArgs {
-            key: required_trade_key(&request)?,
-            decision: TradeDecisionArg::Accept,
-            reason: None,
-            idempotency_key: request
-                .context
-                .idempotency_key
-                .clone()
-                .or_else(|| string_input(&request, "idempotency_key")),
-            confirm_public_note: false,
+        let args = TradeIdRuntimeArgs {
+            trade_id: required_string(&request, "trade_id")?,
         };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = crate::runtime::order::decide(&config, &args).map_err(|error| {
-            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
-        })?;
-        decision_result::<TradeAcceptResult>(request.operation_id(), &view)
+        let receipt = crate::runtime::trade::refresh_evidence(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&receipt)
     }
 }
 
-impl OperationService<TradeDeclineRequest> for TradeOperationService<'_> {
-    type Result = TradeDeclineResult;
+impl OperationService<TradeEvidenceInspectRequest> for TradeOperationService<'_> {
+    type Result = TradeEvidenceInspectResult;
 
     fn execute(
         &self,
-        request: OperationRequest<TradeDeclineRequest>,
+        request: OperationRequest<TradeEvidenceInspectRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let reason = string_input(&request, "reason")
-            .map(|reason| reason.trim().to_owned())
-            .filter(|reason| !reason.is_empty())
-            .ok_or_else(|| {
-                invalid_input(
-                    request.operation_id(),
-                    "missing required `reason` input".to_owned(),
-                )
-            })?;
-
-        let args = TradeDecisionArgs {
-            key: required_trade_key(&request)?,
-            decision: TradeDecisionArg::Decline,
-            reason: Some(reason),
-            idempotency_key: request
-                .context
-                .idempotency_key
-                .clone()
-                .or_else(|| string_input(&request, "idempotency_key")),
-            confirm_public_note: bool_input(&request, "confirm_public_note").unwrap_or(false),
+        let args = TradeEvidenceInspectRuntimeArgs {
+            trade_id: required_string(&request, "trade_id")?,
+            limit: u32_input(&request, "limit")?,
+            cursor: string_input(&request, "cursor"),
         };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = crate::runtime::order::decide(&config, &args).map_err(|error| {
-            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
-        })?;
-        decision_result::<TradeDeclineResult>(request.operation_id(), &view)
+        let page = crate::runtime::trade::inspect_evidence(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&page)
     }
 }
 
-impl OperationService<TradeCancelRequest> for TradeOperationService<'_> {
-    type Result = TradeCancelResult;
+impl OperationService<TradePrivateArtifactSealRequest> for TradeOperationService<'_> {
+    type Result = TradePrivateArtifactSealResult;
 
     fn execute(
         &self,
-        request: OperationRequest<TradeCancelRequest>,
+        request: OperationRequest<TradePrivateArtifactSealRequest>,
     ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
-        let reason = string_input(&request, "reason")
-            .map(|reason| reason.trim().to_owned())
-            .filter(|reason| !reason.is_empty())
-            .ok_or_else(|| {
-                invalid_input(
-                    request.operation_id(),
-                    "missing required `reason` input".to_owned(),
-                )
-            })?;
-
-        let args = TradeCancelArgs {
-            key: required_trade_key(&request)?,
-            reason,
-            idempotency_key: request
-                .context
-                .idempotency_key
-                .clone()
-                .or_else(|| string_input(&request, "idempotency_key")),
-            confirm_public_note: bool_input(&request, "confirm_public_note").unwrap_or(false),
+        let args = TradePrivateArtifactSealRuntimeArgs {
+            trade_id: required_string(&request, "trade_id")?,
+            artifact_id: required_string(&request, "artifact_id")?,
+            schema_id: required_string(&request, "schema_id")?,
+            input: required_path(&request, "input")?,
+            kind: string_input(&request, "kind").unwrap_or_else(|| "binding_terms".to_owned()),
+            candidate_id: string_input(&request, "candidate_id"),
+            retention_class: string_input(&request, "retention_class"),
+            expires_at_ms: i64_input(&request, "expires_at_ms")?,
         };
-        let mut config = self.config.clone();
-        if request.context.dry_run {
-            config.output.dry_run = true;
-        }
-        let view = crate::runtime::order::cancel(&config, &args).map_err(|error| {
-            OperationAdapterError::sdk_adapter_failure(request.operation_id(), error)
-        })?;
-        cancellation_result::<TradeCancelResult>(request.operation_id(), &view)
+        let receipt = crate::runtime::trade::seal_private_artifact(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&receipt)
     }
 }
 
-fn decision_result<R>(
-    operation_id: &str,
-    view: &OrderDecisionView,
-) -> Result<OperationResult<R>, OperationAdapterError>
+impl OperationService<TradePrivateArtifactOpenRequest> for TradeOperationService<'_> {
+    type Result = TradePrivateArtifactOpenResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<TradePrivateArtifactOpenRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = TradePrivateArtifactOpenRuntimeArgs {
+            artifact_id: required_string(&request, "artifact_id")?,
+            output: required_path(&request, "output")?,
+        };
+        let view = crate::runtime::trade::open_private_artifact(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        if view.state == "missing" {
+            return Err(OperationAdapterError::not_found_with_detail(
+                request.operation_id(),
+                format!("private artifact `{}` was not found", view.artifact_id),
+                json!({
+                    "artifact_id": view.artifact_id,
+                    "output": view.output,
+                }),
+            ));
+        }
+        serialized_target_result(&view)
+    }
+}
+
+impl OperationService<TradePrivateArtifactDeleteRequest> for TradeOperationService<'_> {
+    type Result = TradePrivateArtifactDeleteResult;
+
+    fn execute(
+        &self,
+        request: OperationRequest<TradePrivateArtifactDeleteRequest>,
+    ) -> Result<OperationResult<Self::Result>, OperationAdapterError> {
+        let args = TradePrivateArtifactDeleteRuntimeArgs {
+            artifact_id: required_string(&request, "artifact_id")?,
+        };
+        let receipt = crate::runtime::trade::delete_private_artifact(self.config, &args)
+            .map_err(|error| sdk_failure(request.operation_id(), error))?;
+        serialized_target_result(&receipt)
+    }
+}
+
+fn envelope_args<P>(
+    request: &OperationRequest<P>,
+) -> Result<TradeEnvelopeFileRuntimeArgs, OperationAdapterError>
 where
-    R: OperationResultData,
+    P: OperationRequestPayload + OperationRequestData,
 {
-    match view.disposition() {
-        CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        CommandDisposition::ValidationFailed => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!(
-                    "order decision failed validation with state `{}`",
-                    view.state
-                )
-            });
-            Err(OperationAdapterError::validation_failed_with_detail(
-                operation_id,
-                message,
-                order_decision_error_detail(view),
-            ))
-        }
-        disposition => {
-            let message = view
-                .reason
-                .clone()
-                .unwrap_or_else(|| format!("order decision finished with state `{}`", view.state));
-            if disposition == CommandDisposition::ExternalUnavailable {
-                let detail = order_decision_error_detail(view);
-                if !view.failed_transport_targets.is_empty()
-                    && view.attempted_transport_endpoints.is_empty()
-                {
-                    Err(OperationAdapterError::network_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                } else {
-                    Err(OperationAdapterError::operation_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                }
-            } else if disposition == CommandDisposition::Unconfigured {
-                Err(OperationAdapterError::operation_unavailable_with_detail(
-                    operation_id,
-                    message,
-                    order_decision_error_detail(view),
-                ))
-            } else if disposition == CommandDisposition::NotFound {
-                Err(OperationAdapterError::not_found_with_detail(
-                    operation_id,
-                    message,
-                    order_decision_error_detail(view),
-                ))
-            } else {
-                Err(OperationAdapterError::from_command_disposition(
-                    operation_id,
-                    disposition,
-                    message,
-                ))
-            }
-        }
-    }
-}
-
-fn order_decision_error_detail(view: &OrderDecisionView) -> Value {
-    json!({
-        "state": &view.state,
-        "trade_id": &view.order_id,
-        "locator": &view.locator,
-        "listing_addr": &view.listing_addr,
-        "listing_event_id": &view.listing_event_id,
-        "request_event_id": &view.request_event_id,
-        "root_event_id": &view.root_event_id,
-        "prev_event_id": &view.prev_event_id,
-        "event_id": &view.event_id,
-        "event_kind": view.event_kind,
-        "inventory": &view.inventory,
-        "buyer_pubkey": &view.buyer_pubkey,
-        "seller_pubkey": &view.seller_pubkey,
-        "decision": &view.decision,
-        "dry_run": view.dry_run,
-        "target_transport_endpoints": &view.target_transport_endpoints,
-        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
-        "accepted_transport_endpoints": &view.accepted_transport_endpoints,
-        "failed_transport_targets": &view.failed_transport_targets,
-        "fetched_count": view.fetched_count,
-        "decoded_count": view.decoded_count,
-        "skipped_count": view.skipped_count,
-        "idempotency_key": &view.idempotency_key,
-        "signer_mode": &view.signer_mode,
-        "issues": &view.issues,
-        "actions": &view.actions,
-    })
-}
-
-fn cancellation_result<R>(
-    operation_id: &str,
-    view: &OrderCancellationView,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    match view.disposition() {
-        CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        CommandDisposition::ValidationFailed => {
-            let message = view.reason.clone().unwrap_or_else(|| {
-                format!("order cancel failed validation with state `{}`", view.state)
-            });
-            Err(OperationAdapterError::validation_failed_with_detail(
-                operation_id,
-                message,
-                order_cancellation_error_detail(view),
-            ))
-        }
-        disposition => {
-            let message = view
-                .reason
-                .clone()
-                .unwrap_or_else(|| format!("order cancel finished with state `{}`", view.state));
-            if disposition == CommandDisposition::ExternalUnavailable {
-                let detail = order_cancellation_error_detail(view);
-                if !view.failed_transport_targets.is_empty()
-                    && view.attempted_transport_endpoints.is_empty()
-                {
-                    Err(OperationAdapterError::network_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                } else {
-                    Err(OperationAdapterError::operation_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                }
-            } else if disposition == CommandDisposition::Unconfigured {
-                Err(OperationAdapterError::operation_unavailable_with_detail(
-                    operation_id,
-                    message,
-                    order_cancellation_error_detail(view),
-                ))
-            } else {
-                Err(OperationAdapterError::from_command_disposition(
-                    operation_id,
-                    disposition,
-                    message,
-                ))
-            }
-        }
-    }
-}
-
-fn order_cancellation_error_detail(view: &OrderCancellationView) -> Value {
-    json!({
-        "state": &view.state,
-        "trade_id": &view.order_id,
-        "locator": &view.locator,
-        "listing_addr": &view.listing_addr,
-        "request_event_id": &view.request_event_id,
-        "decision_event_id": &view.decision_event_id,
-        "root_event_id": &view.root_event_id,
-        "prev_event_id": &view.prev_event_id,
-        "event_id": &view.event_id,
-        "event_kind": view.event_kind,
-        "buyer_pubkey": &view.buyer_pubkey,
-        "seller_pubkey": &view.seller_pubkey,
-        "cancellation_reason": &view.cancellation_reason,
-        "dry_run": view.dry_run,
-        "target_transport_endpoints": &view.target_transport_endpoints,
-        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
-        "accepted_transport_endpoints": &view.accepted_transport_endpoints,
-        "failed_transport_targets": &view.failed_transport_targets,
-        "fetched_count": view.fetched_count,
-        "decoded_count": view.decoded_count,
-        "skipped_count": view.skipped_count,
-        "idempotency_key": &view.idempotency_key,
-        "signer_mode": &view.signer_mode,
-        "issues": &view.issues,
-        "actions": &view.actions,
+    Ok(TradeEnvelopeFileRuntimeArgs {
+        file: required_path(request, "file")?,
+        idempotency_key: request
+            .context
+            .idempotency_key
+            .clone()
+            .or_else(|| string_input(request, "idempotency_key")),
+        acknowledge_private_terms: bool_input(request, "acknowledge_private_terms")
+            .unwrap_or(false),
+        operation_kind: string_input(request, "operation_kind"),
     })
 }
 
@@ -382,105 +262,17 @@ where
     OperationResult::new(R::from_serializable(value)?)
 }
 
-fn submit_result<R>(
-    operation_id: &str,
-    view: &OrderSubmitView,
-) -> Result<OperationResult<R>, OperationAdapterError>
-where
-    R: OperationResultData,
-{
-    match view.disposition() {
-        CommandDisposition::Success => serialized_target_result::<R, _>(view),
-        disposition => {
-            let message = view
-                .reason
-                .clone()
-                .unwrap_or_else(|| format!("order submit finished with state `{}`", view.state));
-            let detail = order_submit_error_detail(view);
-            match disposition {
-                CommandDisposition::NotFound => Err(OperationAdapterError::not_found_with_detail(
-                    operation_id,
-                    message,
-                    detail,
-                )),
-                CommandDisposition::ValidationFailed => {
-                    Err(OperationAdapterError::validation_failed_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                }
-                CommandDisposition::Unconfigured => {
-                    Err(OperationAdapterError::operation_unavailable_with_detail(
-                        operation_id,
-                        message,
-                        detail,
-                    ))
-                }
-                CommandDisposition::ExternalUnavailable => {
-                    if !view.failed_transport_targets.is_empty()
-                        && view.attempted_transport_endpoints.is_empty()
-                    {
-                        Err(OperationAdapterError::network_unavailable_with_detail(
-                            operation_id,
-                            message,
-                            detail,
-                        ))
-                    } else {
-                        Err(OperationAdapterError::operation_unavailable_with_detail(
-                            operation_id,
-                            message,
-                            detail,
-                        ))
-                    }
-                }
-                _ => Err(OperationAdapterError::from_command_disposition(
-                    operation_id,
-                    disposition,
-                    message,
-                )),
-            }
-        }
-    }
-}
-
-fn order_submit_error_detail(view: &OrderSubmitView) -> Value {
-    json!({
-        "state": &view.state,
-        "source": &view.source,
-        "trade_id": &view.order_id,
-        "locator": &view.locator,
-        "file": &view.file,
-        "listing_lookup": &view.listing_lookup,
-        "listing_addr": &view.listing_addr,
-        "listing_event_id": &view.listing_event_id,
-        "listing_relays": &view.listing_relays,
-        "buyer_account_id": &view.buyer_account_id,
-        "buyer_pubkey": &view.buyer_pubkey,
-        "seller_pubkey": &view.seller_pubkey,
-        "event_id": &view.event_id,
-        "event_kind": view.event_kind,
-        "dry_run": view.dry_run,
-        "deduplicated": view.deduplicated,
-        "target_transport_endpoints": &view.target_transport_endpoints,
-        "attempted_transport_endpoints": &view.attempted_transport_endpoints,
-        "accepted_transport_endpoints": &view.accepted_transport_endpoints,
-        "failed_transport_targets": &view.failed_transport_targets,
-        "idempotency_key": &view.idempotency_key,
-        "signer_mode": &view.signer_mode,
-        "issues": &view.issues,
-        "actions": &view.actions,
-    })
-}
-
-fn required_trade_key<P>(request: &OperationRequest<P>) -> Result<String, OperationAdapterError>
+fn required_string<P>(
+    request: &OperationRequest<P>,
+    key: &str,
+) -> Result<String, OperationAdapterError>
 where
     P: OperationRequestPayload + OperationRequestData,
 {
-    string_input(request, "trade_id").ok_or_else(|| {
+    string_input(request, key).ok_or_else(|| {
         invalid_input(
             request.operation_id(),
-            "missing required `trade_id` input".to_owned(),
+            format!("missing required `{key}` input"),
         )
     })
 }
@@ -494,6 +286,8 @@ where
         .input()
         .get(key)
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(str::to_owned)
 }
 
@@ -504,8 +298,75 @@ where
     request.payload.input().get(key).and_then(Value::as_bool)
 }
 
-fn map_runtime<T>(result: Result<T, RuntimeError>) -> Result<T, OperationAdapterError> {
-    result.map_err(|error| OperationAdapterError::Runtime(error.to_string()))
+fn u32_input<P>(
+    request: &OperationRequest<P>,
+    key: &str,
+) -> Result<Option<u32>, OperationAdapterError>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    request
+        .payload
+        .input()
+        .get(key)
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| {
+                    invalid_input(
+                        request.operation_id(),
+                        format!("`{key}` must be an unsigned 32-bit integer"),
+                    )
+                })
+        })
+        .transpose()
+}
+
+fn i64_input<P>(
+    request: &OperationRequest<P>,
+    key: &str,
+) -> Result<Option<i64>, OperationAdapterError>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    request
+        .payload
+        .input()
+        .get(key)
+        .map(|value| {
+            value.as_i64().ok_or_else(|| {
+                invalid_input(
+                    request.operation_id(),
+                    format!("`{key}` must be a signed 64-bit integer"),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn required_path<P>(
+    request: &OperationRequest<P>,
+    key: &str,
+) -> Result<PathBuf, OperationAdapterError>
+where
+    P: OperationRequestPayload + OperationRequestData,
+{
+    string_input(request, key)
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            invalid_input(
+                request.operation_id(),
+                format!("missing required `{key}` input"),
+            )
+        })
+}
+
+fn sdk_failure(
+    operation_id: &str,
+    error: crate::runtime::sdk::CliSdkAdapterError,
+) -> OperationAdapterError {
+    OperationAdapterError::sdk_adapter_failure(operation_id, error)
 }
 
 fn invalid_input(operation_id: &str, message: String) -> OperationAdapterError {

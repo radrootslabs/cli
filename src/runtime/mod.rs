@@ -7,7 +7,6 @@ pub mod hyf;
 pub mod listing;
 pub mod logging;
 pub mod mesh;
-pub mod order;
 pub mod paths;
 pub mod provider;
 pub mod runtime_store;
@@ -15,6 +14,7 @@ pub mod sdk;
 pub mod signer;
 pub mod store;
 pub mod sync;
+pub mod trade;
 pub mod transport;
 pub mod validation_receipt;
 

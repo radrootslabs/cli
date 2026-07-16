@@ -3,14 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use radroots_event::order::RadrootsOrderEconomics;
 use radroots_replica_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
 use radroots_replica_store::{ReplicaSql, trade_product};
 use radroots_sql_core::SqlxSqliteExecutor;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::cli::global::{OrderDraftAdjustmentArgs, OrderDraftCreateArgs};
 use crate::ops::{
     BasketCreateRequest, BasketCreateResult, BasketGetRequest, BasketGetResult,
     BasketItemAddRequest, BasketItemAddResult, BasketItemRemoveRequest, BasketItemRemoveResult,
@@ -20,7 +18,7 @@ use crate::ops::{
     OperationService,
 };
 use crate::runtime::config::RuntimeConfig;
-use crate::view::runtime::OrderNewView;
+use crate::runtime::trade::{TradeCandidateDraftCreateArgs, TradeCandidateDraftView};
 
 const BASKET_KIND: &str = "basket_v1";
 const BASKET_SOURCE: &str = "local baskets - local first";
@@ -81,7 +79,7 @@ struct BasketQuote {
     trade_id: String,
     trade_file: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    economics: Option<RadrootsOrderEconomics>,
+    economics: Option<Value>,
     ready_for_submit: bool,
     created_at_unix: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -382,14 +380,13 @@ impl OperationService<BasketQuoteRequest> for BasketOperationService<'_> {
             .expect("validated basket has one item")
             .clone();
         if request.context.dry_run {
-            let order = crate::runtime::order::scaffold_preflight(
+            let trade = crate::runtime::trade::scaffold_proposal_draft_preflight(
                 self.config,
-                &OrderDraftCreateArgs {
+                &TradeCandidateDraftCreateArgs {
                     listing: item.listing.clone(),
                     listing_addr: item.listing_addr.clone(),
-                    bin_id: Some(item.bin_id.clone()),
-                    bin_count: Some(item.quantity),
-                    adjustments: order_adjustments_from_basket(&loaded.document),
+                    bin_id: item.bin_id.clone(),
+                    quantity: item.quantity,
                 },
             )
             .map_err(|error| {
@@ -401,38 +398,31 @@ impl OperationService<BasketQuoteRequest> for BasketOperationService<'_> {
                 "basket_id": basket_id,
                 "file": loaded.file.display().to_string(),
                 "item": item,
-                "trade": order,
-                "actions": ["radroots basket quote create"],
+                "trade": trade,
+                "actions": [format!("radroots basket quote {basket_id}")],
             }));
         }
 
-        let order = crate::runtime::order::scaffold(
+        let trade = crate::runtime::trade::scaffold_proposal_draft(
             self.config,
-            &OrderDraftCreateArgs {
+            &TradeCandidateDraftCreateArgs {
                 listing: item.listing.clone(),
                 listing_addr: item.listing_addr.clone(),
-                bin_id: Some(item.bin_id.clone()),
-                bin_count: Some(item.quantity),
-                adjustments: order_adjustments_from_basket(&loaded.document),
+                bin_id: item.bin_id.clone(),
+                quantity: item.quantity,
             },
         )
         .map_err(|error| OperationAdapterError::runtime_failure(request.operation_id(), error))?;
-        let quote_economics = order.economics.clone();
+        let quote_economics = serde_json::to_value(&trade.economics).ok();
         let quote = BasketQuote {
-            quote_id: quote_economics
-                .as_ref()
-                .map(|economics| economics.quote_id.to_string())
-                .unwrap_or_else(|| format!("quote_{}", loaded.document.basket.basket_id)),
-            quote_version: quote_economics
-                .as_ref()
-                .map(|economics| economics.quote_version)
-                .unwrap_or(1),
-            trade_id: order.order_id.clone(),
-            trade_file: order.file.clone(),
+            quote_id: format!("quote_{}", trade.trade_id),
+            quote_version: 1,
+            trade_id: trade.trade_id.clone(),
+            trade_file: trade.file.clone(),
             economics: quote_economics,
-            ready_for_submit: order.ready_for_submit,
+            ready_for_submit: trade.ready_for_submit,
             created_at_unix: now_unix(),
-            issues: quote_issues_from_order(&order),
+            issues: quote_issues_from_trade(&trade),
         };
         loaded.document.quote = Some(quote.clone());
         touch_basket(&mut loaded.document);
@@ -444,8 +434,8 @@ impl OperationService<BasketQuoteRequest> for BasketOperationService<'_> {
             "basket_id": loaded.document.basket.basket_id,
             "file": loaded.file.display().to_string(),
             "quote": quote,
-            "trade": order,
-            "actions": quote_actions(&order),
+            "trade": trade,
+            "actions": quote_actions(&trade),
         }))
     }
 }
@@ -886,39 +876,24 @@ fn basket_actions(document: &BasketDocument, issues: &[BasketIssue]) -> Vec<Stri
     }
 }
 
-fn quote_actions(order: &OrderNewView) -> Vec<String> {
-    if order.ready_for_submit {
-        vec![format!("radroots trade request {}", order.order_id)]
+fn quote_actions(trade: &TradeCandidateDraftView) -> Vec<String> {
+    if trade.ready_for_submit {
+        vec![format!("radroots trade proposal submit {}", trade.file)]
     } else {
-        let mut actions = vec![format!("radroots trade get {}", order.order_id)];
-        actions.extend(order.actions.iter().cloned());
+        let mut actions = vec![format!("radroots trade get {}", trade.trade_id)];
+        actions.extend(trade.actions.iter().cloned());
         actions
     }
 }
 
-fn quote_issues_from_order(order: &OrderNewView) -> Vec<BasketIssue> {
-    order
+fn quote_issues_from_trade(trade: &TradeCandidateDraftView) -> Vec<BasketIssue> {
+    trade
         .issues
         .iter()
         .map(|issue| BasketIssue {
             code: issue.code.clone(),
             field: issue.field.clone(),
             message: issue.message.clone(),
-        })
-        .collect()
-}
-
-fn order_adjustments_from_basket(document: &BasketDocument) -> Vec<OrderDraftAdjustmentArgs> {
-    document
-        .basket
-        .adjustments
-        .iter()
-        .map(|adjustment| OrderDraftAdjustmentArgs {
-            id: adjustment.id.clone(),
-            effect: adjustment.effect.clone(),
-            amount: adjustment.amount.clone(),
-            currency: adjustment.currency.clone(),
-            reason: adjustment.reason.clone(),
         })
         .collect()
 }
