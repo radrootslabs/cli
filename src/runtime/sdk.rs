@@ -494,7 +494,7 @@ impl CliSdkNip46RelayTransport {
                 "failed to build signer.remote_nip46 filter: {error}"
             ))
         })?;
-        let notifications = client.notifications();
+        let notifications = client.clone().into_inner().notifications();
         let subscribe_output = client.subscribe(filter, None).await.map_err(|error| {
             RuntimeError::Network(format!(
                 "failed to subscribe to signer.remote_nip46 response relays: {error}"

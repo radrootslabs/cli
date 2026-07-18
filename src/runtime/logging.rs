@@ -28,13 +28,14 @@ pub fn to_radroots_logging_options(config: &LoggingConfig) -> LoggingOptions {
         file_name: CLI_LOG_FILE_NAME.to_owned(),
         stdout: config.stdout,
         default_level: Some(config.filter.clone()),
-        file_layout: LogFileLayout::PrefixedDate,
+        file_layout: LogFileLayout::StableFileName,
+        ..LoggingOptions::default()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::to_radroots_logging_options;
+    use super::{LogFileLayout, to_radroots_logging_options};
     use crate::runtime::config::LoggingConfig;
     use std::path::PathBuf;
 
@@ -49,5 +50,8 @@ mod tests {
         assert_eq!(options.default_level.as_deref(), Some("info"));
         assert_eq!(options.dir, Some(PathBuf::from("logs")));
         assert!(!options.stdout);
+        assert_eq!(options.file_layout, LogFileLayout::StableFileName);
+        assert!(options.rotation.max_file_bytes > 0);
+        assert!(options.rotation.retained_files > 0);
     }
 }

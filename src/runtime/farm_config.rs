@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use radroots_event::farm::RadrootsFarm;
 use radroots_event::listing::{RadrootsListingDeliveryMethod, RadrootsListingPublicLocation};
-use radroots_event::profile::RadrootsProfile;
 use radroots_event_codec::d_tag::is_d_tag_base64url;
 use serde::{Deserialize, Serialize};
 
@@ -34,11 +33,31 @@ impl FarmConfigScope {
 pub struct FarmConfigDocument {
     pub version: u32,
     pub selection: FarmConfigSelection,
-    pub profile: RadrootsProfile,
+    pub profile: FarmProfileDraft,
     pub farm: RadrootsFarm,
     pub listing_defaults: FarmListingDefaults,
     #[serde(default)]
     pub publication: FarmPublicationStatus,
+}
+
+/// CLI-owned local draft for a future kind-0 Profile replacement.
+///
+/// String media references are deliberately retained only as local draft data.
+/// They are not proof of Blossom byte verification or BUD-02 upload completion
+/// and therefore cannot cross the Profile publication boundary.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FarmProfileDraft {
+    pub name: String,
+    pub display_name: Option<String>,
+    pub nip05: Option<String>,
+    pub about: Option<String>,
+    pub website: Option<String>,
+    pub picture: Option<String>,
+    pub banner: Option<String>,
+    pub lud06: Option<String>,
+    pub lud16: Option<String>,
+    pub bot: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -425,7 +444,7 @@ mod tests {
                 account: "seller".to_owned(),
                 farm_d_tag: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             },
-            profile: RadrootsProfile {
+            profile: FarmProfileDraft {
                 name: "La Huerta".to_owned(),
                 display_name: Some("La Huerta".to_owned()),
                 nip05: None,
@@ -525,6 +544,10 @@ mod tests {
             "AAAAAAAAAAAAAAAAAAAAAA"
         );
         assert_eq!(resolved.document.farm.d_tag, "AAAAAAAAAAAAAAAAAAAAAA");
+        assert_eq!(
+            resolved.document.profile.website.as_deref(),
+            Some("https://example.invalid/la-huerta")
+        );
         assert_eq!(
             resolved.document.listing_defaults.location.primary,
             "San Francisco, CA"

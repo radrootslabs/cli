@@ -7,9 +7,9 @@ use radroots_event::farm::{RadrootsFarm, RadrootsFarmPublicLocation};
 use radroots_event::ids::RadrootsAddressableCoordinate;
 use radroots_event::kinds::{KIND_FARM, KIND_PROFILE};
 use radroots_event::listing::RadrootsListingPublicLocation;
-use radroots_event::profile::{RadrootsProfile, RadrootsProfileType};
+use radroots_event::profile::{RadrootsAuthoredProfile, RadrootsNip05Identifier};
 use radroots_event_codec::d_tag::is_d_tag_base64url;
-use radroots_event_codec::profile::encode::to_wire_parts_with_profile_type;
+use radroots_event_codec::profile::authored::authored_profile_to_wire_parts;
 use radroots_sdk::{
     FarmEnqueuePublishRequest, FarmEnqueueReceipt, FarmPreparePublishRequest,
     FarmPrivateLocationClearRequest, FarmPrivateLocationInput, FarmPrivateLocationLookupCandidate,
@@ -30,7 +30,8 @@ use crate::runtime::account::{self, AccountRecordView};
 use crate::runtime::config::{RuntimeConfig, SignerBackend, TransportProfileKind};
 use crate::runtime::farm_config::{
     self, FarmConfigDocument, FarmConfigScope, FarmConfigSelection, FarmListingDefaults,
-    FarmMissingField, FarmPublicationStatus, ResolvedFarmConfig, SUPPORTED_FARM_CONFIG_VERSION,
+    FarmMissingField, FarmProfileDraft, FarmPublicationStatus, ResolvedFarmConfig,
+    SUPPORTED_FARM_CONFIG_VERSION,
 };
 use crate::runtime::runtime_store::append_local_work;
 use crate::runtime::sdk::{
@@ -41,9 +42,9 @@ use crate::runtime::signer::ActorWriteBindingError;
 use crate::view::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
     FarmPrivateExactLocationView, FarmPrivateLocationCandidateView, FarmPrivateLocationView,
-    FarmPrivatePublicLocalityView, FarmPublicationView, FarmPublishComponentView,
-    FarmPublishEventView, FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView,
-    FarmSetupView, FarmStatusView, TransportTargetFailureView,
+    FarmPrivatePublicLocalityView, FarmProfileDraftView, FarmPublicationView,
+    FarmPublishComponentView, FarmPublishEventView, FarmPublishView, FarmRebindView,
+    FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView, TransportTargetFailureView,
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
@@ -957,9 +958,10 @@ fn build_publish_previews(
     document: &FarmConfigDocument,
     account_pubkey: &str,
 ) -> Result<FarmPublishPreviews, RuntimeError> {
-    let profile_parts =
-        to_wire_parts_with_profile_type(&document.profile, Some(RadrootsProfileType::Farm))
-            .map_err(|error| RuntimeError::Config(format!("invalid farm profile: {error}")))?;
+    require_verified_publish_media(&document.profile, &document.farm)?;
+    let profile = authored_profile_from_draft(&document.profile)?;
+    let profile_parts = authored_profile_to_wire_parts(&profile)
+        .map_err(|error| RuntimeError::Config(format!("invalid farm profile: {error}")))?;
 
     Ok(FarmPublishPreviews {
         profile: FarmPublishEventDraft {
@@ -973,6 +975,60 @@ fn build_publish_previews(
             },
         },
     })
+}
+
+fn authored_profile_from_draft(
+    draft: &FarmProfileDraft,
+) -> Result<RadrootsAuthoredProfile, RuntimeError> {
+    let mut profile = RadrootsAuthoredProfile::new(draft.name.clone())
+        .map_err(|error| RuntimeError::Config(format!("invalid farm profile: {error}")))?;
+    if let Some(display_name) = draft.display_name.as_deref().and_then(non_empty) {
+        profile = profile.with_display_name(display_name);
+    }
+    if let Some(about) = draft.about.as_deref().and_then(non_empty) {
+        profile = profile.with_about(about);
+    }
+    if let Some(nip05) = draft.nip05.as_deref().and_then(non_empty) {
+        let identifier = RadrootsNip05Identifier::parse(nip05.as_str()).map_err(|error| {
+            RuntimeError::Config(format!("invalid farm profile NIP-05 identifier: {error}"))
+        })?;
+        profile = profile.with_nip05(identifier);
+    }
+    if let Some(bot) = draft.bot.as_deref().and_then(non_empty) {
+        let bot = match bot.as_str() {
+            "true" => true,
+            "false" => false,
+            _ => {
+                return Err(RuntimeError::Config(
+                    "farm profile bot must be `true` or `false`".to_owned(),
+                ));
+            }
+        };
+        profile = profile.with_bot(bot);
+    }
+    Ok(profile)
+}
+
+fn require_verified_publish_media(
+    profile: &FarmProfileDraft,
+    farm: &RadrootsFarm,
+) -> Result<(), RuntimeError> {
+    let contains_unverified_media = [
+        profile.picture.as_deref(),
+        profile.banner.as_deref(),
+        farm.picture.as_deref(),
+        farm.banner.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| !value.trim().is_empty());
+    if contains_unverified_media {
+        return Err(RuntimeError::Config(
+            "farm publish cannot use raw picture or banner URLs; publish media only after byte-verifying the Blossom descriptor and retaining proof of successful BUD-02 upload completion"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn component_idempotency_key(
@@ -1695,7 +1751,7 @@ fn init_document(
             account: account.record.account_id.to_string(),
             farm_d_tag: farm_d_tag.clone(),
         },
-        profile: RadrootsProfile {
+        profile: FarmProfileDraft {
             name: name.clone(),
             display_name,
             nip05: None,
@@ -2060,7 +2116,18 @@ fn document_view(document: &FarmConfigDocument) -> FarmConfigDocumentView {
             seller_account_id: document.selection.account.clone(),
             farm_d_tag: document.selection.farm_d_tag.clone(),
         },
-        profile: document.profile.clone(),
+        profile: FarmProfileDraftView {
+            name: document.profile.name.clone(),
+            display_name: document.profile.display_name.clone(),
+            nip05: document.profile.nip05.clone(),
+            about: document.profile.about.clone(),
+            website: document.profile.website.clone(),
+            picture: document.profile.picture.clone(),
+            banner: document.profile.banner.clone(),
+            lud06: document.profile.lud06.clone(),
+            lud16: document.profile.lud16.clone(),
+            bot: document.profile.bot.clone(),
+        },
         farm: document.farm.clone(),
         listing_defaults: FarmListingDefaultsView {
             delivery_method: document.listing_defaults.delivery_method.clone(),
@@ -2308,11 +2375,97 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::generate_d_tag;
+    use super::{authored_profile_from_draft, generate_d_tag, require_verified_publish_media};
+    use crate::runtime::RuntimeError;
+    use crate::runtime::farm_config::FarmProfileDraft;
+    use radroots_event::farm::RadrootsFarm;
     use radroots_event_codec::d_tag::is_d_tag_base64url;
+    use radroots_event_codec::profile::authored::authored_profile_to_wire_parts;
+    use serde_json::json;
 
     #[test]
     fn generated_farm_d_tag_is_valid_base64url() {
         assert!(is_d_tag_base64url(&generate_d_tag()));
+    }
+
+    #[test]
+    fn farm_profile_draft_uses_strict_tagless_profile_authoring() {
+        let draft = FarmProfileDraft {
+            name: "moss street farm".to_owned(),
+            display_name: Some("Moss Street Farm".to_owned()),
+            nip05: Some("farm@example.com".to_owned()),
+            about: Some("Victoria produce".to_owned()),
+            website: Some("https://example.com".to_owned()),
+            bot: Some("true".to_owned()),
+            ..FarmProfileDraft::default()
+        };
+
+        let authored = authored_profile_from_draft(&draft).expect("strict authored Profile");
+        let wire = authored_profile_to_wire_parts(&authored).expect("Profile wire parts");
+
+        assert!(wire.tags.is_empty());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&wire.content).expect("Profile metadata"),
+            json!({
+                "name": "moss street farm",
+                "display_name": "Moss Street Farm",
+                "about": "Victoria produce",
+                "nip05": "farm@example.com",
+                "bot": true,
+            })
+        );
+    }
+
+    #[test]
+    fn farm_profile_draft_rejects_non_boolean_legacy_bot_values() {
+        let draft = FarmProfileDraft {
+            name: "moss street farm".to_owned(),
+            bot: Some("yes".to_owned()),
+            ..FarmProfileDraft::default()
+        };
+
+        let RuntimeError::Config(message) =
+            authored_profile_from_draft(&draft).expect_err("invalid bot must fail closed")
+        else {
+            panic!("expected config error");
+        };
+        assert_eq!(message, "farm profile bot must be `true` or `false`");
+    }
+
+    #[test]
+    fn farm_publish_rejects_raw_media_without_blossom_proofs() {
+        let mut draft = FarmProfileDraft {
+            name: "moss street farm".to_owned(),
+            picture: Some("https://media.example/picture.jpg".to_owned()),
+            ..FarmProfileDraft::default()
+        };
+        let mut farm = sample_farm();
+
+        assert_blossom_proof_error(require_verified_publish_media(&draft, &farm));
+
+        draft.picture = None;
+        farm.banner = Some("https://media.example/banner.jpg".to_owned());
+        assert_blossom_proof_error(require_verified_publish_media(&draft, &farm));
+    }
+
+    fn sample_farm() -> RadrootsFarm {
+        RadrootsFarm {
+            d_tag: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+            name: "Moss Street Farm".to_owned(),
+            about: None,
+            website: None,
+            picture: None,
+            banner: None,
+            location: None,
+            tags: None,
+        }
+    }
+
+    fn assert_blossom_proof_error(result: Result<(), RuntimeError>) {
+        let RuntimeError::Config(message) = result.expect_err("raw media must fail closed") else {
+            panic!("expected config error");
+        };
+        assert!(message.contains("Blossom descriptor"));
+        assert!(message.contains("BUD-02 upload completion"));
     }
 }

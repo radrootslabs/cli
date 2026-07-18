@@ -1768,12 +1768,12 @@ mod tests {
     use radroots_event::list::RadrootsListEntry;
     use radroots_event::list_set::RadrootsListSet;
     use radroots_event::plot::RadrootsPlot;
-    use radroots_event::profile::{RadrootsProfile, RadrootsProfileType};
+    use radroots_event::profile::RadrootsAuthoredProfile;
     use radroots_event::wire::RadrootsNip01EventWireParts;
     use radroots_event_codec::farm::encode as farm_encode;
     use radroots_event_codec::list_set::encode as list_set_encode;
     use radroots_event_codec::plot::encode as plot_encode;
-    use radroots_event_codec::profile::encode as profile_encode;
+    use radroots_event_codec::profile::authored::authored_profile_to_wire_parts;
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{
         RadrootsNostrEvent, RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_nostr_build_event,
@@ -2689,7 +2689,6 @@ mod tests {
         let seller_pubkey = seller.public_key_hex();
         let listing_addr = format!("{KIND_LISTING}:{seller_pubkey}:{LISTING_D_TAG}");
         let events = vec![
-            profile_event(&seller),
             farm_event(&seller),
             plot_event(&seller),
             listing_event(&seller),
@@ -2699,8 +2698,8 @@ mod tests {
         let view = pull_with_fetcher(&config, fake_fetcher(events)).expect("sync pull ingest");
 
         assert_eq!(view.state, "ready");
-        assert_eq!(view.fetched_count, Some(5));
-        assert_eq!(view.ingested_count, Some(5));
+        assert_eq!(view.fetched_count, Some(4));
+        assert_eq!(view.ingested_count, Some(4));
         assert_eq!(view.skipped_count, Some(0));
         assert_eq!(view.unsupported_count, Some(0));
         assert_eq!(view.failed_count, Some(0));
@@ -2729,6 +2728,30 @@ mod tests {
         .expect("listing get");
         assert_eq!(listing.state, "ready");
         assert_eq!(listing.listing_addr.as_deref(), Some(listing_addr.as_str()));
+    }
+
+    #[test]
+    fn sync_pull_keeps_tagless_profile_out_of_legacy_replica_projection() {
+        let dir = tempdir().expect("tempdir");
+        let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
+        crate::runtime::store::init(&config).expect("store init");
+        let seller = identity(17);
+
+        let view = pull_with_fetcher(&config, fake_fetcher(vec![profile_event(&seller)]))
+            .expect("sync pull Profile");
+
+        assert_eq!(view.state, "ready");
+        assert_eq!(view.fetched_count, Some(1));
+        assert_eq!(view.ingested_count, Some(0));
+        assert_eq!(view.skipped_count, Some(0));
+        assert_eq!(view.unsupported_count, Some(0));
+        assert_eq!(view.failed_count, Some(1));
+        assert_eq!(view.reason_code.as_deref(), Some("sync_ingest_failed"));
+        assert!(
+            view.reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("profile_type required"))
+        );
     }
 
     #[test]
@@ -2990,25 +3013,13 @@ mod tests {
     }
 
     fn profile_event(identity: &RadrootsIdentity) -> RadrootsNostrEvent {
-        let profile = RadrootsProfile {
-            name: "seller".to_owned(),
-            display_name: Some("Seller".to_owned()),
-            nip05: None,
-            about: Some("market seller".to_owned()),
-            website: Some("https://seller.example.com".to_owned()),
-            picture: None,
-            banner: None,
-            lud06: None,
-            lud16: None,
-            bot: None,
-        };
+        let profile = RadrootsAuthoredProfile::new("seller")
+            .expect("profile")
+            .with_display_name("Seller")
+            .with_about("market seller");
         signed_event(
             identity,
-            profile_encode::to_wire_parts_with_profile_type(
-                &profile,
-                Some(RadrootsProfileType::Farm),
-            )
-            .expect("profile parts"),
+            authored_profile_to_wire_parts(&profile).expect("profile parts"),
         )
     }
 

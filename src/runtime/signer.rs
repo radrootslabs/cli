@@ -10,8 +10,8 @@ use crate::view::runtime::{
     SignerStatusView, SignerWriteKindReadinessView,
 };
 use radroots_event::kinds::{
-    KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION,
-    KIND_TRADE_PROPOSAL, KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
+    KIND_FARM, KIND_LISTING, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION, KIND_TRADE_PROPOSAL,
+    KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
 };
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
 use radroots_nostr_connect::prelude::RadrootsNostrConnectPermissions;
@@ -294,12 +294,8 @@ fn disabled_binding_status() -> SignerBindingStatusView {
     }
 }
 
-fn cli_write_kinds() -> [CliWriteKind; 10] {
+fn cli_write_kinds() -> [CliWriteKind; 9] {
     [
-        CliWriteKind {
-            command: "sync.push",
-            event_kind: KIND_PROFILE,
-        },
         CliWriteKind {
             command: "farm.publish",
             event_kind: KIND_FARM,
@@ -586,9 +582,9 @@ fn sign_event_permission_for_kind(event_kind: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        KIND_FARM, KIND_LISTING, KIND_PROFILE, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION,
-        KIND_TRADE_PROPOSAL, KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
-        cli_write_kinds, myc_managed_account_ref_matches, myc_write_kind_readiness,
+        KIND_FARM, KIND_LISTING, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION, KIND_TRADE_PROPOSAL,
+        KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL, cli_write_kinds,
+        myc_managed_account_ref_matches, myc_write_kind_readiness,
         myc_write_kind_readiness_for_permissions, sign_event_permission_for_kind,
     };
     use radroots_nostr_connect::prelude::{
@@ -605,7 +601,6 @@ mod tests {
         assert_eq!(
             commands,
             [
-                "sync.push",
                 "farm.publish",
                 "listing.publish",
                 "listing.update",
@@ -618,6 +613,7 @@ mod tests {
             ]
         );
         assert!(!commands.contains(&"signer.status"));
+        assert!(!commands.contains(&"sync.push"));
     }
 
     #[test]
@@ -644,18 +640,7 @@ mod tests {
     #[test]
     fn myc_write_readiness_requires_exact_permissions() {
         let readiness = myc_write_kind_readiness(true, None);
-        let sync = readiness
-            .iter()
-            .find(|kind| kind.command == "sync.push")
-            .expect("sync readiness");
-
-        assert_eq!(sync.event_kind, KIND_PROFILE);
-        assert_eq!(sync.permission, "sign_event:0");
-        assert!(!sync.ready);
-        assert_eq!(
-            sync.reason.as_deref(),
-            Some("SDK Myc signer permission is not configured for this event kind")
-        );
+        assert!(readiness.iter().all(|kind| kind.command != "sync.push"));
 
         for (command, event_kind) in [
             ("farm.publish", KIND_FARM),
