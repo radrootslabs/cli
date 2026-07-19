@@ -1776,7 +1776,7 @@ mod tests {
     use radroots_event_codec::profile::authored::authored_profile_to_wire_parts;
     use radroots_identity::RadrootsIdentity;
     use radroots_nostr::prelude::{
-        RadrootsNostrEvent, RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_nostr_build_event,
+        RadrootsNostrEvent, RadrootsNostrFilter, RadrootsNostrTimestamp,
     };
     use radroots_sdk::{
         PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
@@ -3086,10 +3086,10 @@ mod tests {
         title: &str,
         created_at: u64,
     ) -> RadrootsNostrEvent {
-        let mut builder = radroots_nostr_build_event(
-            KIND_LISTING,
-            "# Pasture Eggs",
-            vec![
+        let mut builder = wire_fixture_builder(RadrootsNip01EventWireParts {
+            kind: KIND_LISTING,
+            content: "# Pasture Eggs".to_owned(),
+            tags: vec![
                 vec!["d".to_owned(), LISTING_D_TAG.to_owned()],
                 vec![
                     "a".to_owned(),
@@ -3127,8 +3127,7 @@ mod tests {
                 vec!["inventory".to_owned(), "5".to_owned()],
                 vec!["status".to_owned(), "active".to_owned()],
             ],
-        )
-        .expect("listing parts");
+        });
         if created_at > 0 {
             builder = builder.custom_created_at(RadrootsNostrTimestamp::from(created_at));
         }
@@ -3141,10 +3140,22 @@ mod tests {
         identity: &RadrootsIdentity,
         parts: RadrootsNip01EventWireParts,
     ) -> RadrootsNostrEvent {
-        radroots_nostr_build_event(parts.kind, parts.content, parts.tags)
-            .expect("event builder")
+        wire_fixture_builder(parts)
             .sign_with_keys(identity.keys())
             .expect("signed event")
+    }
+
+    fn wire_fixture_builder(parts: RadrootsNip01EventWireParts) -> nostr::EventBuilder {
+        let kind = u16::try_from(parts.kind).expect("fixture kind must fit NIP-01");
+        let tags = parts
+            .tags
+            .into_iter()
+            .filter(|tag| !tag.is_empty())
+            .map(|tag| nostr::Tag::parse(tag).expect("fixture tag must parse"))
+            .collect::<Vec<_>>();
+        nostr::EventBuilder::new(nostr::Kind::Custom(kind), parts.content)
+            .tags(tags)
+            .allow_self_tagging()
     }
 
     fn identity(seed: u8) -> RadrootsIdentity {
