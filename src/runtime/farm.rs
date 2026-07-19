@@ -6,7 +6,7 @@ use radroots_event::contract::RadrootsActorRole;
 use radroots_event::farm::{RadrootsFarm, RadrootsFarmPublicLocation};
 use radroots_event::ids::RadrootsAddressableCoordinate;
 use radroots_event::kinds::{KIND_FARM, KIND_PROFILE};
-use radroots_event::listing::RadrootsListingPublicLocation;
+use radroots_event::operational_listing::RadrootsOperationalListingPublicLocation;
 use radroots_event::profile::{RadrootsAuthoredProfile, RadrootsNip05Identifier};
 use radroots_event_codec::d_tag::is_d_tag_base64url;
 use radroots_event_codec::profile::authored::authored_profile_to_wire_parts;
@@ -1781,7 +1781,7 @@ fn init_document(
         },
         listing_defaults: FarmListingDefaults {
             delivery_method,
-            location: RadrootsListingPublicLocation {
+            location: RadrootsOperationalListingPublicLocation {
                 primary: location_primary,
                 city,
                 region,

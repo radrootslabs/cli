@@ -1,9 +1,8 @@
 use std::process::ExitCode;
 
 use radroots_event::farm::RadrootsFarm;
-use radroots_event::ids::RadrootsListingAddress;
-use radroots_event::kinds::KIND_LISTING;
-use radroots_event::listing::RadrootsListingPublicLocation;
+use radroots_event::ids::RadrootsClassifiedListingAddress;
+use radroots_event::operational_listing::RadrootsOperationalListingPublicLocation;
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
 use serde::Serialize;
 
@@ -614,12 +613,41 @@ pub struct SdkEventStoreStatusView {
     pub path: Option<String>,
     pub store: SdkSqliteStatusView,
     pub total_events: i64,
-    pub projection_eligible_events: i64,
+    pub valid_stream_events: i64,
     pub transport_observations: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_updated_at_ms: Option<i64>,
+}
+
+#[cfg(test)]
+mod sdk_event_store_status_view_tests {
+    use super::{SdkEventStoreStatusView, SdkSqliteStatusView};
+
+    #[test]
+    fn serializes_valid_stream_events_without_legacy_projection_key() {
+        let value = serde_json::to_value(SdkEventStoreStatusView {
+            path: None,
+            store: SdkSqliteStatusView {
+                schema_version: 1,
+                journal_mode: "wal".to_owned(),
+                foreign_keys_enabled: true,
+                busy_timeout_ms: 5_000,
+                integrity_ok: true,
+                integrity_result: "ok".to_owned(),
+            },
+            total_events: 11,
+            valid_stream_events: 7,
+            transport_observations: 3,
+            last_event_seq: Some(11),
+            last_event_updated_at_ms: Some(1_700_000_000_000),
+        })
+        .expect("event store status view");
+
+        assert_eq!(value["valid_stream_events"], 7);
+        assert!(value.get("projection_eligible_events").is_none());
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1118,7 +1146,7 @@ pub struct FarmSelectionView {
 #[derive(Debug, Clone, Serialize)]
 pub struct FarmListingDefaultsView {
     pub delivery_method: String,
-    pub location: RadrootsListingPublicLocation,
+    pub location: RadrootsOperationalListingPublicLocation,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1208,13 +1236,7 @@ impl MarketReadinessView {
         price_per_amount: f64,
     ) -> Self {
         let protocol_valid = listing_addr.is_some_and(|listing_addr| {
-            RadrootsListingAddress::parse(listing_addr).is_ok_and(|parsed| {
-                parsed
-                    .as_str()
-                    .split_once(':')
-                    .and_then(|(kind, _)| kind.parse::<u32>().ok())
-                    == Some(KIND_LISTING)
-            })
+            RadrootsClassifiedListingAddress::parse(listing_addr).is_ok()
         });
         let marketplace_eligible = protocol_valid
             && title.is_some_and(|title| !title.trim().is_empty())

@@ -1397,6 +1397,7 @@ mod tests {
         assert_eq!(session.config().storage_root, config.local.root.join("sdk"));
         assert_eq!(status.storage, SdkStorageKind::Directory);
         assert_eq!(status.event_store.total_events, 0);
+        assert_eq!(status.event_store.valid_stream_events, 0);
         assert_eq!(status.outbox.total_events, 0);
     }
 

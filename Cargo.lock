@@ -2113,7 +2113,7 @@ version = "1.0.0-alpha.1"
 dependencies = [
  "hex",
  "radroots_event",
- "radroots_nostr",
+ "radroots_event_codec",
  "radroots_transport",
  "serde",
  "serde_json",

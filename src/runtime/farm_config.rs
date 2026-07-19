@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use radroots_event::farm::RadrootsFarm;
-use radroots_event::listing::{RadrootsListingDeliveryMethod, RadrootsListingPublicLocation};
+use radroots_event::operational_listing::{
+    RadrootsOperationalListingDeliveryMethod, RadrootsOperationalListingPublicLocation,
+};
 use radroots_event_codec::d_tag::is_d_tag_base64url;
 use serde::{Deserialize, Serialize};
 
@@ -72,11 +74,13 @@ pub struct FarmConfigSelection {
 #[serde(deny_unknown_fields)]
 pub struct FarmListingDefaults {
     pub delivery_method: String,
-    pub location: RadrootsListingPublicLocation,
+    pub location: RadrootsOperationalListingPublicLocation,
 }
 
 impl FarmListingDefaults {
-    pub fn delivery_method_model(&self) -> Result<RadrootsListingDeliveryMethod, RuntimeError> {
+    pub fn delivery_method_model(
+        &self,
+    ) -> Result<RadrootsOperationalListingDeliveryMethod, RuntimeError> {
         parse_delivery_method(self.delivery_method.as_str())
     }
 }
@@ -371,7 +375,9 @@ fn location_geohash(document: &FarmConfigDocument) -> Option<&str> {
     })
 }
 
-fn parse_delivery_method(value: &str) -> Result<RadrootsListingDeliveryMethod, RuntimeError> {
+fn parse_delivery_method(
+    value: &str,
+) -> Result<RadrootsOperationalListingDeliveryMethod, RuntimeError> {
     let method = trimmed(value);
     if method.is_empty() {
         return Err(RuntimeError::Config(
@@ -379,10 +385,10 @@ fn parse_delivery_method(value: &str) -> Result<RadrootsListingDeliveryMethod, R
         ));
     }
     Ok(match method {
-        "pickup" => RadrootsListingDeliveryMethod::Pickup,
-        "local_delivery" => RadrootsListingDeliveryMethod::LocalDelivery,
-        "shipping" => RadrootsListingDeliveryMethod::Shipping,
-        other => RadrootsListingDeliveryMethod::Other {
+        "pickup" => RadrootsOperationalListingDeliveryMethod::Pickup,
+        "local_delivery" => RadrootsOperationalListingDeliveryMethod::LocalDelivery,
+        "shipping" => RadrootsOperationalListingDeliveryMethod::Shipping,
+        other => RadrootsOperationalListingDeliveryMethod::Other {
             method: other.to_owned(),
         },
     })
@@ -474,7 +480,7 @@ mod tests {
             },
             listing_defaults: FarmListingDefaults {
                 delivery_method: "pickup".to_owned(),
-                location: RadrootsListingPublicLocation {
+                location: RadrootsOperationalListingPublicLocation {
                     primary: "San Francisco, CA".to_owned(),
                     city: Some("San Francisco".to_owned()),
                     region: Some("CA".to_owned()),

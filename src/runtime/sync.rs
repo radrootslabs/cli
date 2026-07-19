@@ -2,11 +2,12 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use radroots_event::kinds::{
-    KIND_FARM, KIND_LIST_SET_APP_CURATION, KIND_LIST_SET_BOOKMARK, KIND_LIST_SET_CALENDAR,
-    KIND_LIST_SET_CURATION, KIND_LIST_SET_EMOJI, KIND_LIST_SET_FOLLOW, KIND_LIST_SET_GENERIC,
-    KIND_LIST_SET_INTEREST, KIND_LIST_SET_KIND_MUTE, KIND_LIST_SET_MEDIA_STARTER_PACK,
-    KIND_LIST_SET_PICTURE, KIND_LIST_SET_RELAY, KIND_LIST_SET_RELEASE_ARTIFACT,
-    KIND_LIST_SET_STARTER_PACK, KIND_LIST_SET_VIDEO, KIND_LISTING, KIND_PLOT, KIND_PROFILE,
+    KIND_CLASSIFIED_LISTING, KIND_FARM, KIND_LIST_SET_APP_CURATION, KIND_LIST_SET_BOOKMARK,
+    KIND_LIST_SET_CALENDAR, KIND_LIST_SET_CURATION, KIND_LIST_SET_EMOJI, KIND_LIST_SET_FOLLOW,
+    KIND_LIST_SET_GENERIC, KIND_LIST_SET_INTEREST, KIND_LIST_SET_KIND_MUTE,
+    KIND_LIST_SET_MEDIA_STARTER_PACK, KIND_LIST_SET_PICTURE, KIND_LIST_SET_RELAY,
+    KIND_LIST_SET_RELEASE_ARTIFACT, KIND_LIST_SET_STARTER_PACK, KIND_LIST_SET_VIDEO, KIND_PLOT,
+    KIND_PROFILE,
 };
 use radroots_nostr::prelude::{
     RadrootsNostrFilter, RadrootsNostrTimestamp, radroots_event_from_nostr, radroots_nostr_kind,
@@ -61,12 +62,12 @@ const RELAY_FETCH_MAX_PAGES: usize = 5;
 const MARKET_FRESHNESS_STALE_AFTER_SECONDS: u64 = 15 * 60;
 const SYNC_PULL_FRESHNESS_STALE_AFTER_SECONDS: u64 = 30 * 60;
 const SYNC_RUN_TABLE: &str = "radroots_cli_sync_run";
-const MARKET_REFRESH_KINDS: &[u32] = &[KIND_PROFILE, KIND_FARM, KIND_LISTING];
+const MARKET_REFRESH_KINDS: &[u32] = &[KIND_PROFILE, KIND_FARM, KIND_CLASSIFIED_LISTING];
 const SYNC_PULL_KINDS: &[u32] = &[
     KIND_PROFILE,
     KIND_FARM,
     KIND_PLOT,
-    KIND_LISTING,
+    KIND_CLASSIFIED_LISTING,
     KIND_LIST_SET_FOLLOW,
     KIND_LIST_SET_GENERIC,
     KIND_LIST_SET_RELAY,
@@ -1657,9 +1658,26 @@ fn ingest_events(
             counts.unsupported_count += 1;
             continue;
         }
-        let event = radroots_event_from_nostr(&event.event);
+        let event = match radroots_event_from_nostr(&event.event) {
+            Ok(event) => event,
+            Err(error) => {
+                counts.failed_count += 1;
+                if counts.first_failure_reason.is_none() {
+                    counts.first_failure_reason = Some(error.to_string());
+                }
+                continue;
+            }
+        };
         match radroots_replica_ingest_event(executor, &event) {
             Ok(RadrootsReplicaIngestOutcome::Applied) => counts.ingested_count += 1,
+            Ok(RadrootsReplicaIngestOutcome::Excluded) => counts.unsupported_count += 1,
+            Ok(RadrootsReplicaIngestOutcome::Rejected) => {
+                counts.failed_count += 1;
+                if counts.first_failure_reason.is_none() {
+                    counts.first_failure_reason =
+                        Some("event was rejected by the local replica projection".to_owned());
+                }
+            }
             Ok(RadrootsReplicaIngestOutcome::Skipped) => counts.skipped_count += 1,
             Err(error @ RadrootsReplicaEventsError::Sql(_)) => return Err(error.into()),
             Err(error) => {
@@ -1764,12 +1782,14 @@ mod tests {
 
     use radroots_event::farm::{RadrootsFarm, RadrootsFarmRef};
     use radroots_event::ids::RadrootsEventId;
-    use radroots_event::kinds::{KIND_FARM, KIND_LIST_SET_GENERIC, KIND_LISTING, KIND_POST};
+    use radroots_event::kinds::{
+        KIND_CLASSIFIED_LISTING, KIND_FARM, KIND_LIST_SET_GENERIC, KIND_POST,
+    };
     use radroots_event::list::RadrootsListEntry;
     use radroots_event::list_set::RadrootsListSet;
     use radroots_event::plot::RadrootsPlot;
     use radroots_event::profile::RadrootsAuthoredProfile;
-    use radroots_event::wire::RadrootsNip01EventWireParts;
+    use radroots_event::wire::{DEFAULT_CONTENT_MAX_BYTES, RadrootsNip01EventWireParts};
     use radroots_event_codec::farm::encode as farm_encode;
     use radroots_event_codec::list_set::encode as list_set_encode;
     use radroots_event_codec::plot::encode as plot_encode;
@@ -2048,6 +2068,7 @@ mod tests {
                 0,
                 0,
                 0,
+                0,
                 None,
                 None,
                 &["wss://relay-a.example.com", "wss://relay-b.example.com"],
@@ -2072,6 +2093,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = multi_target_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
         let mut receipt = sdk_status_receipt(
+            0,
             0,
             0,
             0,
@@ -2157,27 +2179,29 @@ mod tests {
     }
 
     #[test]
-    fn sync_status_reports_sdk_pending_retryable_and_terminal_outbox_counts() {
+    fn sync_status_reports_distinct_raw_valid_and_outbox_counts() {
         let dir = tempdir().expect("tempdir");
         let config = sample_config(dir.path(), vec!["wss://relay.example.com".to_owned()]);
 
-        let view = sdk_sync_status_view(
-            &config,
-            sdk_status_receipt(
-                3,
-                4,
-                1,
-                1,
-                2,
-                1,
-                0,
-                1,
-                0,
-                Some(1_700_000_010_000),
-                Some("auth-required: login".to_owned()),
-                &["wss://relay.example.com"],
-            ),
+        let receipt = sdk_status_receipt(
+            3,
+            2,
+            4,
+            1,
+            1,
+            2,
+            1,
+            0,
+            1,
+            0,
+            Some(1_700_000_010_000),
+            Some("auth-required: login".to_owned()),
+            &["wss://relay.example.com"],
         );
+        assert_eq!(receipt.event_store.total_events, 3);
+        assert_eq!(receipt.event_store.valid_stream_events, 2);
+
+        let view = sdk_sync_status_view(&config, receipt);
 
         assert_eq!(view.state, "ready");
         assert_eq!(view.queue.expected_count, 4);
@@ -2204,6 +2228,7 @@ mod tests {
         let view = sdk_push_dry_run_view(
             &config,
             sdk_status_receipt(
+                1,
                 1,
                 1,
                 1,
@@ -2250,6 +2275,7 @@ mod tests {
             &config,
             PushOutboxReceipt::default(),
             sdk_status_receipt(
+                0,
                 0,
                 0,
                 0,
@@ -2387,6 +2413,7 @@ mod tests {
             sdk_status_receipt(
                 2,
                 2,
+                2,
                 0,
                 1,
                 1,
@@ -2444,7 +2471,8 @@ mod tests {
         reason = "test fixture construction sets every storage status field explicitly"
     )]
     fn sdk_status_receipt(
-        total_events: i64,
+        raw_total_events: i64,
+        valid_stream_events: i64,
         outbox_total_events: i64,
         pending_events: i64,
         retryable_events: i64,
@@ -2465,11 +2493,11 @@ mod tests {
             source: SyncStatusSource::SdkCanonicalStores,
             observed_at_ms: 1_700_000_030_000,
             event_store: SyncEventStoreStatus {
-                total_events,
-                projection_eligible_events: total_events,
+                total_events: raw_total_events,
+                valid_stream_events,
                 transport_observations: 0,
-                last_event_seq: (total_events > 0).then_some(total_events),
-                last_event_updated_at_ms: (total_events > 0).then_some(1_700_000_000_000),
+                last_event_seq: (raw_total_events > 0).then_some(raw_total_events),
+                last_event_updated_at_ms: (raw_total_events > 0).then_some(1_700_000_000_000),
             },
             outbox: SyncOutboxStatus {
                 total_events: outbox_total_events,
@@ -2522,7 +2550,7 @@ mod tests {
             observed_at_ms: 1_700_000_030_000,
             event_store: SyncEventStoreStatus {
                 total_events: 1,
-                projection_eligible_events: 1,
+                valid_stream_events: 1,
                 transport_observations: 0,
                 last_event_seq: Some(1),
                 last_event_updated_at_ms: Some(1_700_000_000_000),
@@ -2687,7 +2715,7 @@ mod tests {
         crate::runtime::store::init(&config).expect("store init");
         let seller = identity(7);
         let seller_pubkey = seller.public_key_hex();
-        let listing_addr = format!("{KIND_LISTING}:{seller_pubkey}:{LISTING_D_TAG}");
+        let listing_addr = format!("{KIND_CLASSIFIED_LISTING}:{seller_pubkey}:{LISTING_D_TAG}");
         let events = vec![
             farm_event(&seller),
             plot_event(&seller),
@@ -2927,6 +2955,14 @@ mod tests {
             signed_event(
                 &seller,
                 RadrootsNip01EventWireParts {
+                    kind: KIND_CLASSIFIED_LISTING,
+                    content: "x".repeat(DEFAULT_CONTENT_MAX_BYTES + 1),
+                    tags: Vec::new(),
+                },
+            ),
+            signed_event(
+                &seller,
+                RadrootsNip01EventWireParts {
                     kind: KIND_POST,
                     content: "hello".to_owned(),
                     tags: Vec::new(),
@@ -2935,7 +2971,7 @@ mod tests {
             signed_event(
                 &seller,
                 RadrootsNip01EventWireParts {
-                    kind: KIND_LISTING,
+                    kind: KIND_CLASSIFIED_LISTING,
                     content: "not a listing".to_owned(),
                     tags: Vec::new(),
                 },
@@ -2945,15 +2981,15 @@ mod tests {
         let view = pull_with_fetcher(&config, fake_fetcher(events)).expect("sync pull ingest");
 
         assert_eq!(view.state, "ready");
-        assert_eq!(view.fetched_count, Some(2));
+        assert_eq!(view.fetched_count, Some(3));
         assert_eq!(view.ingested_count, Some(0));
         assert_eq!(view.unsupported_count, Some(1));
-        assert_eq!(view.failed_count, Some(1));
+        assert_eq!(view.failed_count, Some(2));
         assert!(
             view.reason
                 .as_deref()
                 .expect("failure reason")
-                .contains("failed ingest")
+                .contains("event envelope content size")
         );
     }
 
@@ -3087,7 +3123,7 @@ mod tests {
         created_at: u64,
     ) -> RadrootsNostrEvent {
         let mut builder = wire_fixture_builder(RadrootsNip01EventWireParts {
-            kind: KIND_LISTING,
+            kind: KIND_CLASSIFIED_LISTING,
             content: "# Pasture Eggs".to_owned(),
             tags: vec![
                 vec!["d".to_owned(), LISTING_D_TAG.to_owned()],

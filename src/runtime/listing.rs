@@ -12,17 +12,17 @@ use radroots_core::{
 };
 use radroots_event::contract::RadrootsActorRole;
 use radroots_event::farm::RadrootsFarmRef;
-use radroots_event::ids::{RadrootsDTag, RadrootsInventoryBinId};
-use radroots_event::kinds::KIND_LISTING;
-use radroots_event::listing::{
-    RadrootsListing, RadrootsListingAvailability, RadrootsListingBin,
-    RadrootsListingDeliveryMethod, RadrootsListingProduct, RadrootsListingPublicLocation,
-    RadrootsListingStatus,
+use radroots_event::ids::{RadrootsDTag, RadrootsInventoryBinId, RadrootsPublicKey};
+use radroots_event::kinds::KIND_CLASSIFIED_LISTING;
+use radroots_event::operational_listing::{
+    RadrootsOperationalListing, RadrootsOperationalListingAvailability,
+    RadrootsOperationalListingBin, RadrootsOperationalListingDeliveryMethod,
+    RadrootsOperationalListingProduct, RadrootsOperationalListingPublicLocation,
+    RadrootsOperationalListingStatus,
 };
-use radroots_event::trade_validation::RadrootsTradeValidationListingError;
-use radroots_event::{RadrootsEventEnvelope, RadrootsEventEnvelopeParts};
+use radroots_event::trade_validation::RadrootsOperationalListingValidationError;
 use radroots_event_codec::d_tag::is_d_tag_base64url;
-use radroots_event_codec::listing::encode::to_wire_parts_with_kind;
+use radroots_event_codec::operational_listing::encode::to_wire_parts_with_kind;
 use radroots_replica_store::ReplicaSql;
 use radroots_runtime_store::{RuntimeStoreRecord, RuntimeStoreRecordFamily, SourceRuntime};
 use radroots_sdk::{
@@ -31,7 +31,9 @@ use radroots_sdk::{
     PushOutboxRequest, PushOutboxTargetOutcomeKind, SdkMutationState,
 };
 use radroots_sql_core::SqlxSqliteExecutor;
-use radroots_trade::listing::{RadrootsListingEditDocumentV1, validation::validate_listing_event};
+use radroots_trade::operational_listing::{
+    RadrootsOperationalListingEditDocumentV1, validate_operational_listing_model,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -230,14 +232,14 @@ struct CanonicalListingDraft {
     seller_pubkey: String,
     seller_actor_source: String,
     farm_d_tag: String,
-    listing: RadrootsListing,
+    listing: RadrootsOperationalListing,
 }
 
 #[derive(Debug, Clone)]
 struct SdkListingPublishInput {
     canonical: CanonicalListingDraft,
     actor: RadrootsActorContext,
-    document: RadrootsListingEditDocumentV1,
+    document: RadrootsOperationalListingEditDocumentV1,
 }
 
 #[derive(Debug, Clone)]
@@ -576,8 +578,8 @@ pub fn validate(
 
     match canonicalize_draft(&parsed, &contents, &context) {
         Ok(canonical) => {
-            let parts = match to_wire_parts_with_kind(&canonical.listing, KIND_LISTING) {
-                Ok(parts) => parts,
+            match to_wire_parts_with_kind(&canonical.listing, KIND_CLASSIFIED_LISTING) {
+                Ok(_) => {}
                 Err(error) => {
                     return Ok(invalid_validation_view(
                         args.file.as_path(),
@@ -590,7 +592,7 @@ pub fn validate(
                         },
                     ));
                 }
-            };
+            }
             if let Some(issue) = listing_bound_account_issue(config, &canonical, &contents)? {
                 return Ok(invalid_validation_view(
                     args.file.as_path(),
@@ -599,22 +601,7 @@ pub fn validate(
                     issue,
                 ));
             }
-            let event = match listing_validation_event(&canonical, parts) {
-                Ok(event) => event,
-                Err(error) => {
-                    return Ok(invalid_validation_view(
-                        args.file.as_path(),
-                        &parsed,
-                        &context,
-                        ListingValidationIssueView {
-                            field: "listing".to_owned(),
-                            message: format!("invalid listing event envelope: {error}"),
-                            line: None,
-                        },
-                    ));
-                }
-            };
-            match validate_listing_event(&event) {
+            match validate_operational_listing_draft(&canonical) {
                 Ok(_) => Ok(ListingValidateView {
                     state: "valid".to_owned(),
                     source: LISTING_SOURCE.to_owned(),
@@ -1072,7 +1059,7 @@ fn listing_rebind_selector_error(selector: &str, error: RuntimeError) -> Runtime
 }
 
 fn listing_addr(seller_pubkey: &str, listing_id: &str) -> String {
-    format!("{KIND_LISTING}:{seller_pubkey}:{listing_id}")
+    format!("{KIND_CLASSIFIED_LISTING}:{seller_pubkey}:{listing_id}")
 }
 
 fn load_listing_draft(path: &Path) -> Result<LoadedListingDraft, ListingValidationIssueView> {
@@ -1160,8 +1147,8 @@ fn listing_ready_issues(
     canonical: &CanonicalListingDraft,
     contents: &str,
 ) -> Vec<ListingValidationIssueView> {
-    let parts = match to_wire_parts_with_kind(&canonical.listing, KIND_LISTING) {
-        Ok(parts) => parts,
+    match to_wire_parts_with_kind(&canonical.listing, KIND_CLASSIFIED_LISTING) {
+        Ok(_) => {}
         Err(error) => {
             return vec![ListingValidationIssueView {
                 field: "listing".to_owned(),
@@ -1169,18 +1156,8 @@ fn listing_ready_issues(
                 line: None,
             }];
         }
-    };
-    let event = match listing_validation_event(canonical, parts) {
-        Ok(event) => event,
-        Err(error) => {
-            return vec![ListingValidationIssueView {
-                field: "listing".to_owned(),
-                message: format!("invalid listing event envelope: {error}"),
-                line: None,
-            }];
-        }
-    };
-    match validate_listing_event(&event) {
+    }
+    match validate_operational_listing_draft(canonical) {
         Ok(_) => Vec::new(),
         Err(error) => vec![issue_from_trade_validation(error, contents)],
     }
@@ -1853,7 +1830,7 @@ fn sdk_listing_publish_input(
         [RadrootsActorRole::Seller],
     )
     .map_err(|error| RuntimeError::Config(format!("invalid listing SDK actor: {error}")))?;
-    let document = RadrootsListingEditDocumentV1::new(canonical.listing.clone());
+    let document = RadrootsOperationalListingEditDocumentV1::new(canonical.listing.clone());
     Ok(SdkListingPublishInput {
         canonical,
         actor,
@@ -1880,7 +1857,7 @@ fn sdk_prepared_publish_view(
         seller_account_id: canonical.seller_account_id.clone(),
         seller_pubkey: canonical.seller_pubkey.clone(),
         seller_actor_source: canonical.seller_actor_source.clone(),
-        event_kind: KIND_LISTING,
+        event_kind: KIND_CLASSIFIED_LISTING,
         dry_run: true,
         deduplicated: false,
         target_transport_endpoints: Vec::new(),
@@ -1938,7 +1915,7 @@ fn sdk_enqueued_publish_view(
         seller_account_id: canonical.seller_account_id.clone(),
         seller_pubkey: canonical.seller_pubkey.clone(),
         seller_actor_source: canonical.seller_actor_source.clone(),
-        event_kind: KIND_LISTING,
+        event_kind: KIND_CLASSIFIED_LISTING,
         dry_run: false,
         deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
         target_transport_endpoints,
@@ -1970,22 +1947,6 @@ fn sdk_plan_event_view(plan: &ListingPublishPlan) -> ListingMutationEventView {
         signature: None,
         event_addr: plan.public_listing_addr.as_str().to_owned(),
     }
-}
-
-fn listing_validation_event(
-    canonical: &CanonicalListingDraft,
-    parts: radroots_event::wire::RadrootsNip01EventWireParts,
-) -> Result<RadrootsEventEnvelope, String> {
-    RadrootsEventEnvelope::new(RadrootsEventEnvelopeParts {
-        id: "0".repeat(64),
-        author: canonical.seller_pubkey.clone(),
-        created_at: 0,
-        kind: KIND_LISTING,
-        tags: parts.tags,
-        content: parts.content,
-        sig: "0".repeat(128),
-    })
-    .map_err(|error| error.to_string())
 }
 
 fn sdk_push_event_for_listing<'a>(
@@ -2173,8 +2134,8 @@ fn mutate(
     ensure_listing_bound_account(config, &canonical, args.file.as_path())?;
 
     if let Some(status) = operation.listing_status() {
-        canonical.listing.availability = Some(RadrootsListingAvailability::Status {
-            status: RadrootsListingStatus::Other {
+        canonical.listing.availability = Some(RadrootsOperationalListingAvailability::Status {
+            status: RadrootsOperationalListingStatus::Other {
                 value: status.to_owned(),
             },
         });
@@ -2199,7 +2160,7 @@ fn mutate_via_sdk_from_canonical(
         [RadrootsActorRole::Seller],
     )
     .map_err(|error| RuntimeError::Config(format!("invalid listing SDK actor: {error}")))?;
-    let document = RadrootsListingEditDocumentV1::new(canonical.listing.clone());
+    let document = RadrootsOperationalListingEditDocumentV1::new(canonical.listing.clone());
     if config.output.dry_run {
         let session = CliSdkSession::connect_memory(config)?;
         let plan = session
@@ -2444,7 +2405,7 @@ fn canonicalize_draft(
             },
         )?;
 
-    let listing = RadrootsListing {
+    let listing = RadrootsOperationalListing {
         d_tag: protocol_d_tag(listing_id.as_str(), "listing d_tag").map_err(|error| {
             issue_for_field(
                 contents,
@@ -2457,7 +2418,7 @@ fn canonicalize_draft(
             pubkey: seller_pubkey.clone(),
             d_tag: farm_d_tag.clone(),
         },
-        product: RadrootsListingProduct {
+        product: RadrootsOperationalListingProduct {
             key: draft.product.key.trim().to_owned(),
             title: draft.product.title.trim().to_owned(),
             category: draft.product.category.trim().to_owned(),
@@ -2469,7 +2430,7 @@ fn canonicalize_draft(
             year: None,
         },
         primary_bin_id: primary_bin_id.clone(),
-        bins: vec![RadrootsListingBin {
+        bins: vec![RadrootsOperationalListingBin {
             bin_id: primary_bin_id,
             quantity,
             price_per_canonical_unit: price,
@@ -2502,7 +2463,7 @@ fn canonicalize_draft(
 fn build_availability(
     draft: &ListingDraftDocument,
     contents: &str,
-) -> Result<RadrootsListingAvailability, ListingValidationIssueView> {
+) -> Result<RadrootsOperationalListingAvailability, ListingValidationIssueView> {
     let kind = if draft.availability.kind.trim().is_empty() {
         if draft.availability.start.is_some() || draft.availability.end.is_some() {
             "window"
@@ -2523,17 +2484,17 @@ fn build_availability(
                     "missing availability status",
                 ));
             }
-            Ok(RadrootsListingAvailability::Status {
+            Ok(RadrootsOperationalListingAvailability::Status {
                 status: match status {
-                    "active" => RadrootsListingStatus::Active,
-                    "sold" => RadrootsListingStatus::Sold,
-                    other => RadrootsListingStatus::Other {
+                    "active" => RadrootsOperationalListingStatus::Active,
+                    "sold" => RadrootsOperationalListingStatus::Sold,
+                    other => RadrootsOperationalListingStatus::Other {
                         value: other.to_owned(),
                     },
                 },
             })
         }
-        "window" => Ok(RadrootsListingAvailability::Window {
+        "window" => Ok(RadrootsOperationalListingAvailability::Window {
             start: draft.availability.start,
             end: draft.availability.end,
         }),
@@ -2548,7 +2509,7 @@ fn build_availability(
 fn build_delivery_method(
     draft: &ListingDraftDocument,
     contents: &str,
-) -> Result<RadrootsListingDeliveryMethod, ListingValidationIssueView> {
+) -> Result<RadrootsOperationalListingDeliveryMethod, ListingValidationIssueView> {
     let method = draft.delivery.method.trim();
     if method.is_empty() {
         return Err(issue_for_field(
@@ -2559,17 +2520,17 @@ fn build_delivery_method(
     }
 
     Ok(match method {
-        "pickup" => RadrootsListingDeliveryMethod::Pickup,
-        "local_delivery" => RadrootsListingDeliveryMethod::LocalDelivery,
-        "shipping" => RadrootsListingDeliveryMethod::Shipping,
-        other => RadrootsListingDeliveryMethod::Other {
+        "pickup" => RadrootsOperationalListingDeliveryMethod::Pickup,
+        "local_delivery" => RadrootsOperationalListingDeliveryMethod::LocalDelivery,
+        "shipping" => RadrootsOperationalListingDeliveryMethod::Shipping,
+        other => RadrootsOperationalListingDeliveryMethod::Other {
             method: other.to_owned(),
         },
     })
 }
 
-fn build_location(draft: &ListingDraftDocument) -> RadrootsListingPublicLocation {
-    RadrootsListingPublicLocation {
+fn build_location(draft: &ListingDraftDocument) -> RadrootsOperationalListingPublicLocation {
+    RadrootsOperationalListingPublicLocation {
         primary: draft.location.primary.trim().to_owned(),
         city: draft.location.city.clone().and_then(non_empty),
         region: draft.location.region.clone().and_then(non_empty),
@@ -2832,48 +2793,62 @@ fn validate_configured_listing_signer(
     )
 }
 
+fn validate_operational_listing_draft(
+    canonical: &CanonicalListingDraft,
+) -> Result<(), RadrootsOperationalListingValidationError> {
+    let seller_pubkey = RadrootsPublicKey::parse(canonical.seller_pubkey.as_str())
+        .map_err(|_| RadrootsOperationalListingValidationError::InvalidSeller)?;
+    validate_operational_listing_model(canonical.listing.clone(), &seller_pubkey).map(|_| ())
+}
+
 fn issue_from_trade_validation(
-    error: RadrootsTradeValidationListingError,
+    error: RadrootsOperationalListingValidationError,
     contents: &str,
 ) -> ListingValidationIssueView {
     match error {
-        RadrootsTradeValidationListingError::InvalidSeller => issue_for_field(
+        RadrootsOperationalListingValidationError::InvalidSeller => issue_for_field(
             contents,
             "seller_actor.pubkey",
             "listing author does not match the farm pubkey",
         ),
-        RadrootsTradeValidationListingError::MissingTitle => {
+        RadrootsOperationalListingValidationError::MissingTitle => {
             issue_for_field(contents, "product.title", "missing listing title")
         }
-        RadrootsTradeValidationListingError::MissingDescription => {
+        RadrootsOperationalListingValidationError::MissingDescription => {
             issue_for_field(contents, "product.summary", "missing listing description")
         }
-        RadrootsTradeValidationListingError::MissingProductType => {
+        RadrootsOperationalListingValidationError::MissingProductType => {
             issue_for_field(contents, "product.category", "missing listing product type")
         }
-        RadrootsTradeValidationListingError::MissingBins
-        | RadrootsTradeValidationListingError::MissingPrimaryBin
-        | RadrootsTradeValidationListingError::InvalidBin => {
+        RadrootsOperationalListingValidationError::MissingBins
+        | RadrootsOperationalListingValidationError::MissingPrimaryBin
+        | RadrootsOperationalListingValidationError::InvalidBin => {
             issue_for_field(contents, "primary_bin.bin_id", error.to_string())
         }
-        RadrootsTradeValidationListingError::InvalidPrice => issue_for_field(
+        RadrootsOperationalListingValidationError::MissingPrice
+        | RadrootsOperationalListingValidationError::InvalidPrice => issue_for_field(
             contents,
             "primary_bin.price_amount",
             "invalid listing price",
         ),
-        RadrootsTradeValidationListingError::MissingInventory
-        | RadrootsTradeValidationListingError::InvalidInventory => {
+        RadrootsOperationalListingValidationError::MissingInventory
+        | RadrootsOperationalListingValidationError::InvalidInventory => {
             issue_for_field(contents, "inventory.available", error.to_string())
         }
-        RadrootsTradeValidationListingError::MissingAvailability => issue_for_field(
+        RadrootsOperationalListingValidationError::MissingAvailability => issue_for_field(
             contents,
             "availability.status",
             "missing listing availability",
         ),
-        RadrootsTradeValidationListingError::MissingLocation => {
-            issue_for_field(contents, "location.primary", "missing listing location")
+        RadrootsOperationalListingValidationError::MissingLocation
+        | RadrootsOperationalListingValidationError::MissingLocationLocality => {
+            issue_for_field(contents, "location.primary", error.to_string())
         }
-        RadrootsTradeValidationListingError::MissingDeliveryMethod => issue_for_field(
+        RadrootsOperationalListingValidationError::MissingLocationGeohash
+        | RadrootsOperationalListingValidationError::InvalidLocationGeohash => {
+            issue_for_field(contents, "location.geohash", error.to_string())
+        }
+        RadrootsOperationalListingValidationError::MissingDeliveryMethod => issue_for_field(
             contents,
             "delivery.method",
             "missing listing delivery method",
@@ -2976,7 +2951,9 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
     Ok(defaults)
 }
 
-fn draft_location_from_model(location: &RadrootsListingPublicLocation) -> ListingDraftLocation {
+fn draft_location_from_model(
+    location: &RadrootsOperationalListingPublicLocation,
+) -> ListingDraftLocation {
     ListingDraftLocation {
         primary: location.primary.clone(),
         city: location.city.clone(),
@@ -3296,7 +3273,7 @@ mod tests {
     }
 
     #[test]
-    fn listing_draft_canonicalization_preserves_discounts() {
+    fn listing_draft_canonicalization_preserves_discounts_and_validates_semantics() {
         let seller_pubkey = "a".repeat(64);
         let document = ListingDraftDocument {
             version: 1,
@@ -3339,8 +3316,8 @@ mod tests {
                 method: "pickup".to_owned(),
             },
             location: super::ListingDraftLocation {
-                primary: "Asheville".to_owned(),
-                city: None,
+                primary: "Farm stand".to_owned(),
+                city: Some("Asheville".to_owned()),
                 region: None,
                 country: None,
                 geohash: "dnqwy".to_owned(),
@@ -3373,6 +3350,17 @@ mod tests {
                 .expect("discounts")
                 .len(),
             1
+        );
+        super::validate_operational_listing_draft(&canonical)
+            .expect("canonical listing passes operational validation");
+
+        let mut missing_description = canonical;
+        missing_description.listing.product.summary = Some(" ".to_owned());
+        assert_eq!(
+            super::validate_operational_listing_draft(&missing_description),
+            Err(
+                radroots_event::trade_validation::RadrootsOperationalListingValidationError::MissingDescription
+            )
         );
     }
 

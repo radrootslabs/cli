@@ -9,10 +9,9 @@ use radroots_core::{
 };
 use radroots_event::contract::RadrootsActorRole;
 use radroots_event::ids::{
-    RadrootsAddressableCoordinate, RadrootsDTag, RadrootsInventoryBinId, RadrootsListingAddress,
-    RadrootsPublicKey, RadrootsTradeCandidateId, RadrootsTradeId, RadrootsTradeMutationId,
+    RadrootsClassifiedListingAddress, RadrootsDTag, RadrootsInventoryBinId, RadrootsPublicKey,
+    RadrootsTradeCandidateId, RadrootsTradeId, RadrootsTradeMutationId,
 };
-use radroots_event::kinds::KIND_LISTING;
 use radroots_event::trade::{
     RADROOTS_TRADE_PROPOSAL_CONTRACT_ID, RADROOTS_TRADE_SCHEMA_VERSION,
     RadrootsFulfillmentProfileV1, RadrootsTradeCancellationProfileV1, RadrootsTradeCandidateLineV1,
@@ -378,11 +377,6 @@ fn scaffold_proposal_draft_inner(
     })?;
     let product = resolve_product(config, args)?;
     let parsed_listing = parse_listing_addr(product.listing_addr.as_str())?;
-    if parsed_listing.kind != KIND_LISTING {
-        return Err(RuntimeError::Config(
-            "trade proposal draft requires a public listing address".to_owned(),
-        ));
-    }
     let listing_state =
         resolve_active_listing_state(config, product.listing_addr.as_str(), &parsed_listing)?;
     let farm_id = resolve_farm_id(config, parsed_listing.seller_pubkey.as_str())?;
@@ -736,7 +730,7 @@ fn candidate_terms(
     let line = RadrootsTradeCandidateLineV1 {
         line_id: RadrootsDTag::parse("line-1")
             .map_err(|error| RuntimeError::Config(format!("invalid line id: {error}")))?,
-        listing_addr: RadrootsAddressableCoordinate::parse(product.listing_addr.as_str())
+        listing_addr: RadrootsClassifiedListingAddress::parse(product.listing_addr.as_str())
             .map_err(|error| RuntimeError::Config(format!("invalid listing address: {error}")))?,
         listing_event_id: listing_state
             .last_event_id
@@ -856,7 +850,7 @@ fn resolve_farm_id(
 }
 
 fn parse_listing_addr(raw: &str) -> Result<ParsedListingAddress, RuntimeError> {
-    let parsed = RadrootsListingAddress::parse(raw)
+    let parsed = RadrootsClassifiedListingAddress::parse(raw)
         .map_err(|error| RuntimeError::Config(format!("listing address is invalid: {error}")))?;
     let (kind, rest) = parsed
         .as_str()

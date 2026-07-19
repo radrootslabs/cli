@@ -10,8 +10,8 @@ use crate::view::runtime::{
     SignerStatusView, SignerWriteKindReadinessView,
 };
 use radroots_event::kinds::{
-    KIND_FARM, KIND_LISTING, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION, KIND_TRADE_PROPOSAL,
-    KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
+    KIND_CLASSIFIED_LISTING, KIND_FARM, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION,
+    KIND_TRADE_PROPOSAL, KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
 };
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
 use radroots_nostr_connect::prelude::RadrootsNostrConnectPermissions;
@@ -302,15 +302,15 @@ fn cli_write_kinds() -> [CliWriteKind; 9] {
         },
         CliWriteKind {
             command: "listing.publish",
-            event_kind: KIND_LISTING,
+            event_kind: KIND_CLASSIFIED_LISTING,
         },
         CliWriteKind {
             command: "listing.update",
-            event_kind: KIND_LISTING,
+            event_kind: KIND_CLASSIFIED_LISTING,
         },
         CliWriteKind {
             command: "listing.withdraw",
-            event_kind: KIND_LISTING,
+            event_kind: KIND_CLASSIFIED_LISTING,
         },
         CliWriteKind {
             command: "trade.proposal.submit",
@@ -582,9 +582,9 @@ fn sign_event_permission_for_kind(event_kind: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        KIND_FARM, KIND_LISTING, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION, KIND_TRADE_PROPOSAL,
-        KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL, cli_write_kinds,
-        myc_managed_account_ref_matches, myc_write_kind_readiness,
+        KIND_CLASSIFIED_LISTING, KIND_FARM, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION,
+        KIND_TRADE_PROPOSAL, KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
+        cli_write_kinds, myc_managed_account_ref_matches, myc_write_kind_readiness,
         myc_write_kind_readiness_for_permissions, sign_event_permission_for_kind,
     };
     use radroots_nostr_connect::prelude::{
@@ -644,7 +644,7 @@ mod tests {
 
         for (command, event_kind) in [
             ("farm.publish", KIND_FARM),
-            ("listing.publish", KIND_LISTING),
+            ("listing.publish", KIND_CLASSIFIED_LISTING),
             ("trade.proposal.submit", KIND_TRADE_PROPOSAL),
         ] {
             let entry = readiness
@@ -666,7 +666,7 @@ mod tests {
             Ok(RadrootsNostrConnectPermissions::from(vec![
                 RadrootsNostrConnectPermission::with_parameter(
                     RadrootsNostrConnectMethod::SignEvent,
-                    format!("kind:{KIND_LISTING}"),
+                    format!("kind:{KIND_CLASSIFIED_LISTING}"),
                 ),
             ])),
         );
