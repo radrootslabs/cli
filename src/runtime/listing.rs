@@ -1845,7 +1845,7 @@ fn sdk_prepared_publish_view(
     canonical: &CanonicalListingDraft,
     plan: ListingPublishPlan,
 ) -> ListingMutationView {
-    let listing_addr = plan.public_listing_addr.as_str().to_owned();
+    let listing_addr = plan.public_listing_addr().as_str().to_owned();
     let event = sdk_plan_event_view(&plan);
     ListingMutationView {
         state: "dry_run".to_owned(),
@@ -1867,7 +1867,7 @@ fn sdk_prepared_publish_view(
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        event_id: Some(plan.expected_event_id.as_str().to_owned()),
+        event_id: Some(plan.expected_event_id().as_str().to_owned()),
         event_addr: Some(listing_addr),
         idempotency_key: args.idempotency_key.clone(),
         local_replica: None,
@@ -1938,14 +1938,14 @@ fn sdk_enqueued_publish_view(
 
 fn sdk_plan_event_view(plan: &ListingPublishPlan) -> ListingMutationEventView {
     ListingMutationEventView {
-        kind: plan.frozen_draft.kind_u32(),
-        author: plan.frozen_draft.expected_pubkey_str().to_owned(),
-        created_at: Some(plan.frozen_draft.created_at_u64()),
-        content: plan.frozen_draft.content().to_owned(),
-        tags: plan.frozen_draft.tags_as_vec(),
-        event_id: Some(plan.expected_event_id.as_str().to_owned()),
+        kind: plan.frozen_draft().kind_u32(),
+        author: plan.frozen_draft().expected_pubkey_str().to_owned(),
+        created_at: Some(plan.frozen_draft().created_at_u64()),
+        content: plan.frozen_draft().content().to_owned(),
+        tags: plan.frozen_draft().tags_as_vec(),
+        event_id: Some(plan.expected_event_id().as_str().to_owned()),
         signature: None,
-        event_addr: plan.public_listing_addr.as_str().to_owned(),
+        event_addr: plan.public_listing_addr().as_str().to_owned(),
     }
 }
 

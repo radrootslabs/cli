@@ -1212,8 +1212,8 @@ fn sdk_prepared_publish_view(
             state: "not_submitted".to_owned(),
             reason: Some("dry run requested; SDK enqueue and transport push skipped".to_owned()),
             signer_mode: Some(config.signer.backend.as_str().to_owned()),
-            event_id: Some(plan.expected_event_id.as_str().to_owned()),
-            event_addr: Some(plan.farm_addr.as_str().to_owned()),
+            event_id: Some(plan.expected_event_id().as_str().to_owned()),
+            event_addr: Some(plan.farm_addr().as_str().to_owned()),
             event: args.print_event.then_some(sdk_plan_event_view(&plan)),
             ..preview_component(
                 farm_publish_rpc_method(config),
@@ -1287,12 +1287,12 @@ fn sdk_enqueued_publish_view(
 
 fn sdk_plan_event_view(plan: &FarmPublishPlan) -> FarmPublishEventView {
     FarmPublishEventView {
-        kind: plan.frozen_draft.kind_u32(),
-        author: plan.frozen_draft.expected_pubkey_str().to_owned(),
-        content: plan.frozen_draft.content().to_owned(),
-        tags: plan.frozen_draft.tags_as_vec(),
-        event_id: Some(plan.expected_event_id.as_str().to_owned()),
-        event_addr: Some(plan.farm_addr.as_str().to_owned()),
+        kind: plan.frozen_draft().kind_u32(),
+        author: plan.frozen_draft().expected_pubkey_str().to_owned(),
+        content: plan.frozen_draft().content().to_owned(),
+        tags: plan.frozen_draft().tags_as_vec(),
+        event_id: Some(plan.expected_event_id().as_str().to_owned()),
+        event_addr: Some(plan.farm_addr().as_str().to_owned()),
     }
 }
 
