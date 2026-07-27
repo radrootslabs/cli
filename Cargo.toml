@@ -27,23 +27,23 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
 radroots_authority = { path = "../lib/crates/authority", version = "=1.0.0-alpha.1", default-features = false, features = ["std", "local_signer"] }
-radroots_core = { path = "../lib/crates/core", version = "=1.0.0-alpha.1", features = ["std", "serde"] }
-radroots_event = { path = "../lib/crates/event", version = "=1.0.0-alpha.1" }
-radroots_event_codec = { path = "../lib/crates/event_codec", version = "=1.0.0-alpha.1", features = ["nostr", "serde_json"] }
-radroots_identity = { path = "../lib/crates/identity", version = "=1.0.0-alpha.1" }
+radroots_core = { path = "../lib/crates/core", version = "=0.1.0", features = ["std", "serde"] }
+radroots_event = { path = "../lib/crates/event", version = "=0.1.0" }
+radroots_event_codec = { path = "../lib/crates/event_codec", version = "=0.1.0", features = ["nostr", "serde_json"] }
+radroots_identity = { path = "../lib/crates/identity", version = "=0.1.0" }
 radroots_runtime_store = { path = "../lib/crates/runtime_store", version = "=1.0.0-alpha.1" }
 radroots_log = { path = "../lib/crates/log", version = "=1.0.0-alpha.1" }
 radroots_mesh = { path = "../lib/crates/mesh", version = "=1.0.0-alpha.1", default-features = false }
 radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts", version = "=1.0.0-alpha.1", features = ["os-keyring"] }
-radroots_nostr = { path = "../lib/crates/nostr", version = "=1.0.0-alpha.1", features = ["client", "events"] }
-radroots_nostr_connect = { path = "../lib/crates/nostr_connect", version = "=1.0.0-alpha.1" }
+radroots_nostr = { path = "../lib/crates/nostr", version = "=0.1.0", features = ["client", "events"] }
+radroots_nostr_connect = { path = "../lib/crates/nostr_connect", version = "=0.1.0" }
 radroots_nostr_signer = { path = "../lib/crates/nostr_signer", version = "=1.0.0-alpha.1" }
 radroots_protected_store = { path = "../lib/crates/protected_store", version = "=1.0.0-alpha.1", features = ["std"] }
 radroots_replica_store = { path = "../lib/crates/replica_store", version = "=1.0.0-alpha.1" }
 radroots_replica_schema = { path = "../lib/crates/replica_schema", version = "=1.0.0-alpha.1" }
 radroots_replica_sync = { path = "../lib/crates/replica_sync", version = "=1.0.0-alpha.1" }
-radroots_transport = { path = "../lib/crates/transport", version = "=1.0.0-alpha.1", default-features = false }
-radroots_transport_nostr = { path = "../lib/crates/transport_nostr", version = "=1.0.0-alpha.1", default-features = false, features = [
+radroots_transport = { path = "../lib/crates/transport", version = "=0.1.0", default-features = false }
+radroots_transport_nostr = { path = "../lib/crates/transport_nostr", version = "=0.1.0", default-features = false, features = [
   "runtime-tokio",
 ] }
 radroots_runtime = { path = "../lib/crates/runtime", version = "=1.0.0-alpha.1" }
@@ -52,7 +52,7 @@ radroots_runtime_paths = { path = "../lib/crates/runtime_paths", version = "=1.0
 radroots_sdk = { path = "../sdk/crates/sdk", features = ["local-runtime-radrootsd-execution", "transport-nostr-runtime"] }
 radroots_secret_vault = { path = "../lib/crates/secret_vault", version = "=1.0.0-alpha.1", features = ["std", "os-keyring"] }
 radroots_sql_core = { path = "../lib/crates/sql_core", version = "=1.0.0-alpha.1", features = ["native"] }
-radroots_trade = { path = "../lib/crates/trade", version = "=1.0.0-alpha.1" }
+radroots_trade = { path = "../lib/crates/trade", version = "=0.1.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
