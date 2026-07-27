@@ -1967,7 +1967,7 @@ fn validate_relay_url(value: &str, source: &str) -> Result<String, RuntimeError>
     })
 }
 
-fn nostr_relay_url_policy_for_url(value: &str) -> RadrootsRelayUrlPolicy {
+pub(crate) fn nostr_relay_url_policy_for_url(value: &str) -> RadrootsRelayUrlPolicy {
     if value.trim_start().starts_with("ws://") {
         RadrootsRelayUrlPolicy::Localhost
     } else {
