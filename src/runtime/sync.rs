@@ -3038,10 +3038,13 @@ mod tests {
                 })
                 .collect(),
             event_receipts: Vec::new(),
+            duplicate_count: 0,
+            verification_failed_count: 0,
             malformed_count: 0,
             out_of_filter_count: 0,
             skipped_over_limit_count: 0,
             eose_count: connected_relays.len(),
+            truncated_count: 0,
             closed_count,
             notice_count: 0,
             relay_outcomes: Vec::new(),
