@@ -41,7 +41,7 @@ radroots_nostr_signer = { path = "../lib/crates/nostr_signer", version = "=1.0.0
 radroots_protected_store = { path = "../lib/crates/protected_store", version = "=1.0.0-alpha.1", features = ["std"] }
 radroots_replica_store = { path = "../lib/crates/replica_store", version = "=1.0.0-alpha.1" }
 radroots_replica_schema = { path = "../lib/crates/replica_schema", version = "=1.0.0-alpha.1" }
-radroots_replica_sync = { path = "../lib/crates/replica_sync", version = "=1.0.0-alpha.1" }
+radroots_replica_sync = { path = "../lib/crates/replica_sync", version = "=1.0.0-alpha.1", features = ["legacy-ingest"] }
 radroots_transport = { path = "../lib/crates/transport", version = "=1.0.0-alpha.1", default-features = false }
 radroots_transport_nostr = { path = "../lib/crates/transport_nostr", version = "=1.0.0-alpha.1", default-features = false, features = [
   "runtime-tokio",

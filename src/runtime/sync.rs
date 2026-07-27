@@ -918,11 +918,11 @@ fn sync_transport_target_view(
     }
     .map_err(|error| RuntimeError::Config(format!("invalid transport target: {error}")))?;
     Ok(SyncTransportTargetView {
-        transport_kind: target.kind.canonical_label(),
-        endpoint_uri: target.uri.as_str().to_owned(),
-        endpoint_fingerprint: target.fingerprint.as_str().to_owned(),
-        target_scope: target.scope.as_ref().map(|scope| scope.as_str().to_owned()),
-        target_label: target.label.as_ref().map(|label| label.as_str().to_owned()),
+        transport_kind: target.kind().canonical_label(),
+        endpoint_uri: target.uri().as_str().to_owned(),
+        endpoint_fingerprint: target.fingerprint().as_str().to_owned(),
+        target_scope: target.scope().map(|scope| scope.as_str().to_owned()),
+        target_label: target.label().map(|label| label.as_str().to_owned()),
     })
 }
 

@@ -26,7 +26,8 @@ use radroots_sdk::{
 };
 use radroots_transport_nostr::{
     RadrootsNostrClientFetchAdapter, RadrootsRelayFetchRequest, RadrootsRelayFetchedEventsReceipt,
-    RadrootsRelayTransportError, fetch_relay_events_blocking,
+    RadrootsRelayTargetSet, RadrootsRelayTransportError, RadrootsRelayUrl,
+    fetch_relay_events_blocking,
 };
 use tokio::runtime::{Builder as TokioRuntimeBuilder, Runtime};
 use tokio::sync::{Mutex, broadcast};
@@ -37,7 +38,7 @@ use crate::runtime::RuntimeError;
 use crate::runtime::account;
 use crate::runtime::config::{
     CapabilityBindingTargetKind, ReticulumBehavior, RuntimeConfig, SIGNER_REMOTE_NIP46_CAPABILITY,
-    SignerBackend, TransportProfileKind,
+    SignerBackend, TransportProfileKind, nostr_relay_url_policy_for_url,
 };
 
 const SDK_STORAGE_DIR_NAME: &str = "sdk";
@@ -631,8 +632,18 @@ pub(crate) fn fetch_relay_events_via_shared_transport(
     max_events: usize,
     filter: RadrootsNostrFilter,
 ) -> Result<RadrootsRelayFetchedEventsReceipt, RadrootsRelayTransportError> {
-    let request = RadrootsRelayFetchRequest::fetch(observed_at_ms, max_events, [filter])?
-        .with_relay_urls(relay_urls.iter().cloned())
+    let relay_targets = RadrootsRelayTargetSet::from_urls(
+        relay_urls
+            .iter()
+            .map(|url| RadrootsRelayUrl::parse(url, nostr_relay_url_policy_for_url(url)))
+            .collect::<Result<Vec<_>, _>>()?,
+    )?;
+    let request = RadrootsRelayFetchRequest::fetch(
+        observed_at_ms,
+        max_events,
+        relay_targets,
+        [filter],
+    )?
         .with_timeout_ms(CLI_RELAY_FETCH_TIMEOUT_MS)?;
     fetch_relay_events_blocking(&RadrootsNostrClientFetchAdapter, request)
 }
