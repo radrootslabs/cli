@@ -1,0 +1,29 @@
+# Migration-only local development overrides. Release manifests retain registry
+# identities; the CLI build closure resolves the governed sibling capsules here.
+[patch.crates-io]
+radroots_authority = { path = "../lib/crates/authority" }
+radroots_blossom = { path = "../lib/crates/blossom" }
+radroots_core = { path = "../lib/crates/core" }
+radroots_event_store = { path = "../lib/crates/event_store" }
+radroots_event = { path = "../lib/crates/event" }
+radroots_event_codec = { path = "../lib/crates/event_codec" }
+radroots_event_index = { path = "../lib/crates/event_index" }
+radroots_geocoder = { path = "../lib/crates/geocoder" }
+radroots_identity = { path = "../lib/crates/identity" }
+radroots_nostr = { path = "../lib/crates/nostr" }
+radroots_nostr_connect = { path = "../lib/crates/nostr_connect" }
+radroots_nostr_signer = { path = "../lib/crates/nostr_signer" }
+radroots_outbox = { path = "../lib/crates/outbox" }
+radroots_protocol_contract_v1 = { path = "../lib/crates/protocol_contract_v1" }
+radroots_protected_store = { path = "../lib/crates/protected_store" }
+radroots_secret_vault = { path = "../lib/crates/secret_vault" }
+radroots_transport = { path = "../lib/crates/transport" }
+radroots_transport_publish_protocol = { path = "../lib/crates/transport_publish_protocol" }
+radroots_transport_nostr = { path = "../lib/crates/transport_nostr" }
+radroots_transport_reticulum = { path = "../lib/crates/transport_reticulum" }
+radroots_replica_store = { path = "../lib/crates/replica_store" }
+radroots_replica_schema = { path = "../lib/crates/replica_schema" }
+radroots_replica_sync = { path = "../lib/crates/replica_sync" }
+radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
+radroots_sql_core = { path = "../lib/crates/sql_core" }
+radroots_trade = { path = "../lib/crates/trade" }
