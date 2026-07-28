@@ -26,33 +26,33 @@ chacha20poly1305 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
-radroots_authority = { path = "../lib/crates/authority", version = "=1.0.0-alpha.1", default-features = false, features = ["std", "local_signer"] }
-radroots_core = { path = "../lib/crates/core", version = "=1.0.0-alpha.1", features = ["std", "serde"] }
-radroots_event = { path = "../lib/crates/event", version = "=1.0.0-alpha.1" }
-radroots_event_codec = { path = "../lib/crates/event_codec", version = "=1.0.0-alpha.1", features = ["nostr", "serde_json"] }
-radroots_identity = { path = "../lib/crates/identity", version = "=1.0.0-alpha.1" }
-radroots_runtime_store = { path = "../lib/crates/runtime_store", version = "=1.0.0-alpha.1" }
-radroots_log = { path = "../lib/crates/log", version = "=1.0.0-alpha.1" }
-radroots_mesh = { path = "../lib/crates/mesh", version = "=1.0.0-alpha.1", default-features = false }
-radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts", version = "=1.0.0-alpha.1", features = ["os-keyring"] }
-radroots_nostr = { path = "../lib/crates/nostr", version = "=1.0.0-alpha.1", features = ["client", "events"] }
-radroots_nostr_connect = { path = "../lib/crates/nostr_connect", version = "=1.0.0-alpha.1" }
-radroots_nostr_signer = { path = "../lib/crates/nostr_signer", version = "=1.0.0-alpha.1" }
-radroots_protected_store = { path = "../lib/crates/protected_store", version = "=1.0.0-alpha.1", features = ["std"] }
-radroots_replica_store = { path = "../lib/crates/replica_store", version = "=1.0.0-alpha.1" }
-radroots_replica_schema = { path = "../lib/crates/replica_schema", version = "=1.0.0-alpha.1" }
-radroots_replica_sync = { path = "../lib/crates/replica_sync", version = "=1.0.0-alpha.1", features = ["legacy-ingest"] }
-radroots_transport = { path = "../lib/crates/transport", version = "=1.0.0-alpha.1", default-features = false }
-radroots_transport_nostr = { path = "../lib/crates/transport_nostr", version = "=1.0.0-alpha.1", default-features = false, features = [
+radroots_authority = { path = "../lib/crates/authority", version = "=0.1.0-alpha", default-features = false, features = ["std", "local_signer"] }
+radroots_core = { path = "../lib/crates/core", version = "=0.1.0-alpha", features = ["std", "serde"] }
+radroots_event = { path = "../lib/crates/event", version = "=0.1.0-alpha" }
+radroots_event_codec = { path = "../lib/crates/event_codec", version = "=0.1.0-alpha", features = ["nostr", "serde_json"] }
+radroots_identity = { path = "../lib/crates/identity", version = "=0.1.0-alpha" }
+radroots_runtime_store = { path = "../lib/crates/runtime_store", version = "=0.1.0-alpha" }
+radroots_log = { path = "../lib/crates/log", version = "=0.1.0-alpha" }
+radroots_mesh = { path = "../lib/crates/mesh", version = "=0.1.0-alpha", default-features = false }
+radroots_nostr_accounts = { path = "../lib/crates/nostr_accounts", version = "=0.1.0-alpha", features = ["os-keyring"] }
+radroots_nostr = { path = "../lib/crates/nostr", version = "=0.1.0-alpha", features = ["client", "events"] }
+radroots_nostr_connect = { path = "../lib/crates/nostr_connect", version = "=0.1.0-alpha" }
+radroots_nostr_signer = { path = "../lib/crates/nostr_signer", version = "=0.1.0-alpha" }
+radroots_protected_store = { path = "../lib/crates/protected_store", version = "=0.1.0-alpha", features = ["std"] }
+radroots_replica_store = { path = "../lib/crates/replica_store", version = "=0.1.0-alpha" }
+radroots_replica_schema = { path = "../lib/crates/replica_schema", version = "=0.1.0-alpha" }
+radroots_replica_sync = { path = "../lib/crates/replica_sync", version = "=0.1.0-alpha", features = ["legacy-ingest"] }
+radroots_transport = { path = "../lib/crates/transport", version = "=0.1.0-alpha", default-features = false }
+radroots_transport_nostr = { path = "../lib/crates/transport_nostr", version = "=0.1.0-alpha", default-features = false, features = [
   "runtime-tokio",
 ] }
-radroots_runtime = { path = "../lib/crates/runtime", version = "=1.0.0-alpha.1" }
+radroots_runtime = { path = "../lib/crates/runtime", version = "=0.1.0-alpha" }
 radroots_runtime_contract_v1 = { path = "../sdk/crates/runtime_contract_v1" }
-radroots_runtime_paths = { path = "../lib/crates/runtime_paths", version = "=1.0.0-alpha.1" }
+radroots_runtime_paths = { path = "../lib/crates/runtime_paths", version = "=0.1.0-alpha" }
 radroots_sdk = { path = "../sdk/crates/sdk", features = ["local-runtime-radrootsd-execution", "transport-nostr-runtime"] }
-radroots_secret_vault = { path = "../lib/crates/secret_vault", version = "=1.0.0-alpha.1", features = ["std", "os-keyring"] }
-radroots_sql_core = { path = "../lib/crates/sql_core", version = "=1.0.0-alpha.1", features = ["native"] }
-radroots_trade = { path = "../lib/crates/trade", version = "=1.0.0-alpha.1" }
+radroots_secret_vault = { path = "../lib/crates/secret_vault", version = "=0.1.0-alpha", features = ["std", "os-keyring"] }
+radroots_sql_core = { path = "../lib/crates/sql_core", version = "=0.1.0-alpha", features = ["native"] }
+radroots_trade = { path = "../lib/crates/trade", version = "=0.1.0-alpha" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
@@ -65,7 +65,37 @@ zeroize = "1.8"
 assert_cmd = "2.0"
 flate2 = "1"
 nostr = { version = "0.44.2", features = ["nip44"] }
-radroots_outbox = { path = "../lib/crates/outbox", version = "=1.0.0-alpha.1" }
+radroots_outbox = { path = "../lib/crates/outbox", version = "=0.1.0-alpha" }
 tar = "0.4"
 tempfile = "3.17"
 tungstenite = "0.26.2"
+
+# The SDK's release manifests use registry identities; this standalone capsule
+# resolves the governed local lib cohort explicitly during monorepo development.
+[patch.crates-io]
+radroots_authority = { path = "../lib/crates/authority" }
+radroots_blossom = { path = "../lib/crates/blossom" }
+radroots_core = { path = "../lib/crates/core" }
+radroots_event = { path = "../lib/crates/event" }
+radroots_event_codec = { path = "../lib/crates/event_codec" }
+radroots_event_index = { path = "../lib/crates/event_index" }
+radroots_event_store = { path = "../lib/crates/event_store" }
+radroots_geocoder = { path = "../lib/crates/geocoder" }
+radroots_identity = { path = "../lib/crates/identity" }
+radroots_nostr = { path = "../lib/crates/nostr" }
+radroots_nostr_connect = { path = "../lib/crates/nostr_connect" }
+radroots_nostr_signer = { path = "../lib/crates/nostr_signer" }
+radroots_outbox = { path = "../lib/crates/outbox" }
+radroots_protocol_contract_v1 = { path = "../lib/crates/protocol_contract_v1" }
+radroots_protected_store = { path = "../lib/crates/protected_store" }
+radroots_replica_schema = { path = "../lib/crates/replica_schema" }
+radroots_replica_store = { path = "../lib/crates/replica_store" }
+radroots_replica_sync = { path = "../lib/crates/replica_sync" }
+radroots_runtime_paths = { path = "../lib/crates/runtime_paths" }
+radroots_secret_vault = { path = "../lib/crates/secret_vault" }
+radroots_sql_core = { path = "../lib/crates/sql_core" }
+radroots_trade = { path = "../lib/crates/trade" }
+radroots_transport = { path = "../lib/crates/transport" }
+radroots_transport_nostr = { path = "../lib/crates/transport_nostr" }
+radroots_transport_publish_protocol = { path = "../lib/crates/transport_publish_protocol" }
+radroots_transport_reticulum = { path = "../lib/crates/transport_reticulum" }
