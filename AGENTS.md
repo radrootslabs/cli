@@ -13,5 +13,6 @@
 - avoid `unsafe` unless it is strictly necessary, locally justified, and documented with nearby invariants
 - do not expose secrets, private keys, credentials, tokens, invite codes, private identifiers, sensitive user data, or sensitive event content in code, logs, tests, fixtures, docs, or examples
 - use checked-in, repo-owned validation first; run the smallest documented validation that credibly covers the change, and use release acceptance validation for production candidates
+- `.github/**` and capsule-local CI workflows are forbidden; keep validation forge-agnostic, and place any required monorepo orchestration exclusively under the parent monorepo's root `.act/**` authority
 - if validation cannot run, report exactly what was skipped and why; never claim validation passed unless it actually ran
 - keep commits focused and reviewable, using `<scope>: <imperative summary>` unless a repo convention overrides it
