@@ -1,4 +1,5 @@
 /target/
+.cargo/local-paths.toml
 
 # Local environment files
 .env
