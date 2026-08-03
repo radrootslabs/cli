@@ -2,7 +2,7 @@ use std::fs;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use radroots_authority::RadrootsLocalEventSigner;
 use radroots_identity::RadrootsIdentity;
@@ -16,9 +16,9 @@ use radroots_nostr_connect::prelude::{
     RadrootsNostrConnectClientTarget, RadrootsNostrConnectError, RadrootsNostrConnectUri,
 };
 use radroots_sdk::{
-    MeshScopeId, MultiTargetProfile, NostrProfile, NostrRelayUrlPolicy,
-    PushOutboxTargetOutcomeKind, PushOutboxTransportOutcomeKind, RadrootsClient,
-    RadrootsClientBuilder, RadrootsSdkError, RadrootsSdkLocalKeySigner,
+    Client, ClientBuilder, Error as SdkError, MeshScopeId, MultiTargetProfile, NostrProfile,
+    NostrRelayUrlPolicy, PushOutboxTargetOutcomeKind, PushOutboxTransportOutcomeKind,
+    RadrootsClient, RadrootsClientBuilder, RadrootsSdkLocalKeySigner,
     RadrootsSdkMycNip46RequestPolicy, RadrootsSdkMycNip46Signer, RadrootsSdkNip46Transport,
     RadrootsSdkNip46TransportFuture, RadrootsSdkSignerProvider, RadrootsSdkStorageConfig,
     RadrootsdExecutionProfile, ReticulumAgentEndpoint, ReticulumBehavior as SdkReticulumBehavior,
@@ -50,7 +50,7 @@ pub enum CliSdkAdapterError {
     #[error("{0}")]
     Runtime(#[from] RuntimeError),
     #[error("{0}")]
-    Sdk(#[from] RadrootsSdkError),
+    Sdk(#[from] SdkError),
 }
 
 pub fn sdk_transport_outcome_kind_label(kind: PushOutboxTransportOutcomeKind) -> String {
@@ -91,24 +91,44 @@ impl CliSdkConfig {
         }
     }
 
-    pub fn builder(&self) -> RadrootsClientBuilder {
-        let builder = RadrootsClient::builder()
-            .storage(RadrootsSdkStorageConfig::Directory(
-                self.storage_root.clone(),
-            ))
-            .geonames_cache_root(self.geonames_cache_root.clone())
-            .transport_profile(self.transport_profile.clone());
-        if let Some(profile) = self.radrootsd_execution_profile.clone() {
-            builder.radrootsd_execution_profile(profile)
-        } else {
-            builder
+    fn sqlite_options(&self) -> Result<radroots_sdk::storage::SqliteOptions, RuntimeError> {
+        fs::create_dir_all(&self.storage_root)?;
+        let paths = radroots_sdk::storage::SqlitePaths::from_directory(&self.storage_root)
+            .map_err(|error| RuntimeError::Config(format!("invalid SDK storage paths: {error}")))?;
+        let mut options = radroots_sdk::storage::SqliteOptions::new(
+            paths,
+            radroots_sdk::storage::SqliteOpenMode::Create,
+        );
+        if !self.storage_root.join("runtime.sqlite").exists() {
+            let mut bytes = [0_u8; 32];
+            getrandom::getrandom(&mut bytes).map_err(|error| {
+                RuntimeError::Config(format!("failed to generate SDK source identity: {error}"))
+            })?;
+            let generation =
+                radroots_storage::event::SourceGeneration::new(bytes).map_err(|error| {
+                    RuntimeError::Config(format!("invalid SDK source identity: {error}"))
+                })?;
+            let created_at_unix_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| RuntimeError::Config(format!("system clock error: {error}")))?
+                .as_millis()
+                .try_into()
+                .map_err(|_| {
+                    RuntimeError::Config("system clock is outside SDK range".to_owned())
+                })?;
+            options = options
+                .with_source_generation(generation, created_at_unix_ms)
+                .map_err(|error| {
+                    RuntimeError::Config(format!("invalid SDK source identity: {error}"))
+                })?;
         }
+        Ok(options)
     }
 }
 
 pub struct CliSdkSession {
     runtime: Runtime,
-    sdk: RadrootsClient,
+    sdk: Client,
     config: CliSdkConfig,
 }
 
@@ -116,7 +136,8 @@ impl CliSdkSession {
     pub fn connect(config: &RuntimeConfig) -> Result<Self, CliSdkAdapterError> {
         let sdk_config = CliSdkConfig::from_runtime_config(config)?;
         let runtime = sdk_runtime()?;
-        let sdk = runtime.block_on(sdk_config.builder().build())?;
+        let options = sdk_config.sqlite_options()?;
+        let sdk = runtime.block_on(ClientBuilder::sqlite(options))?.build()?;
         Ok(Self {
             runtime,
             sdk,
@@ -127,7 +148,8 @@ impl CliSdkSession {
     pub fn connect_storage_status(config: &RuntimeConfig) -> Result<Self, CliSdkAdapterError> {
         let sdk_config = CliSdkConfig::from_runtime_config_for_storage_status(config);
         let runtime = sdk_runtime()?;
-        let sdk = runtime.block_on(sdk_config.builder().build())?;
+        let options = sdk_config.sqlite_options()?;
+        let sdk = runtime.block_on(ClientBuilder::sqlite(options))?.build()?;
         Ok(Self {
             runtime,
             sdk,
@@ -138,7 +160,7 @@ impl CliSdkSession {
     pub fn connect_memory(config: &RuntimeConfig) -> Result<Self, CliSdkAdapterError> {
         let sdk_config = CliSdkConfig::from_runtime_config(config)?;
         let runtime = sdk_runtime()?;
-        let sdk = runtime.block_on(memory_builder(&sdk_config).build())?;
+        let sdk = ClientBuilder::memory_default().build()?;
         Ok(Self {
             runtime,
             sdk,
@@ -193,7 +215,7 @@ impl CliSdkSession {
         })
     }
 
-    pub fn sdk(&self) -> &RadrootsClient {
+    pub fn sdk(&self) -> &Client {
         &self.sdk
     }
 

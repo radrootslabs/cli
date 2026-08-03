@@ -9,7 +9,7 @@ use crate::view::runtime::{
     IdentityPublicView, LocalSignerStatusView, MycStatusView, SignerBindingStatusView,
     SignerStatusView, SignerWriteKindReadinessView,
 };
-use radroots_event::kinds::{
+use radroots_event::envelope::kind::{
     KIND_CLASSIFIED_LISTING, KIND_FARM, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION,
     KIND_TRADE_PROPOSAL, KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
 };

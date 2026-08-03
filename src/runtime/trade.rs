@@ -3,42 +3,33 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use radroots_authority::RadrootsActorContext;
-use radroots_core::{
-    RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreUnit, convert_unit_decimal,
-};
-use radroots_event::contract::RadrootsActorRole;
-use radroots_event::ids::{
-    RadrootsClassifiedListingAddress, RadrootsDTag, RadrootsInventoryBinId, RadrootsPublicKey,
-    RadrootsTradeCandidateId, RadrootsTradeId, RadrootsTradeMutationId,
+use radroots_core::unit::convert_unit_decimal;
+use radroots_core::{Currency, Decimal, Unit};
+use radroots_event::contract::AuthorRole;
+use radroots_event::id::{
+    CandidateId, ClassifiedListingAddress, DTag, InventoryBinId, MutationId, TradeId,
 };
 use radroots_event::trade::{
-    RADROOTS_TRADE_PROPOSAL_CONTRACT_ID, RADROOTS_TRADE_SCHEMA_VERSION,
-    RadrootsFulfillmentProfileV1, RadrootsTradeCancellationProfileV1, RadrootsTradeCandidateLineV1,
-    RadrootsTradeCandidateTermsV1, RadrootsTradeEconomicsProfileV1, RadrootsTradeMutationBodyV1,
-    RadrootsTradeMutationEnvelopeV1, canonical_trade_mutation_content,
+    FulfillmentProfileV1, RADROOTS_TRADE_PROPOSAL_CONTRACT_ID, RADROOTS_TRADE_SCHEMA_VERSION,
+    TradeCancellationProfileV1, TradeCandidateLineV1, TradeCandidateTermsV1,
+    TradeEconomicsProfileV1, TradeMutationBodyV1, TradeMutationEnvelopeV1,
+    canonical_trade_mutation_content,
 };
+use radroots_identity::PublicKey;
 use radroots_replica_schema::nostr_event_head::{
     INostrEventHeadFindOne, INostrEventHeadFindOneArgs, NostrEventHeadQueryBindValues,
 };
 use radroots_replica_schema::trade_product::{ITradeProductFieldsFilter, ITradeProductFindMany};
 use radroots_replica_store::{ReplicaSql, nostr_event_head, trade_product};
-use radroots_sdk::{
-    CancelTradeRequest, DecideCandidateRequest, EvidenceRefreshReceipt, EvidenceView,
-    GetTradeRequest, InspectEvidenceRequest, ListTradesRequest, Page, ProposeRevisionRequest,
-    RefreshTradeEvidenceRequest, ResumeOperationRequest, SdkIdempotencyKey, SubmitProposalRequest,
-    TradeCommandReceipt, TradePrivateArtifactDeleteReceipt, TradePrivateArtifactDeleteRequest,
-    TradePrivateArtifactKind, TradePrivateArtifactOpenReceipt, TradePrivateArtifactOpenRequest,
-    TradePrivateArtifactSealReceipt, TradePrivateArtifactSealRequest, TradeStatusView,
-    TradeSummaryView,
-};
+use radroots_sdk::trade::{self as sdk_trade, Plan as TradePlan};
+use radroots_signing::{Actor, actor::ActorSource};
 use radroots_sql_core::SqlxSqliteExecutor;
 use serde::Serialize;
 
 use crate::runtime::RuntimeError;
 use crate::runtime::account;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_target_policy};
+use crate::runtime::sdk::{CliSdkAdapterError, validate_configured_signer_for_actor};
 
 const TRADE_CANDIDATE_DRAFTS_DIR: &str = "trades/candidates";
 const TRADE_CANDIDATE_DRAFT_SOURCE: &str = "SDK trade proposal candidate draft";
@@ -148,7 +139,7 @@ pub struct TradePrivateArtifactOpenView {
     pub artifact_id: String,
     pub trade_id: Option<String>,
     pub candidate_id: Option<String>,
-    pub artifact_kind: Option<TradePrivateArtifactKind>,
+    pub artifact_kind: Option<String>,
     pub schema_id: Option<String>,
     pub retention_class: Option<String>,
     pub output: String,
@@ -158,194 +149,207 @@ pub struct TradePrivateArtifactOpenView {
     pub deleted_at_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TradePreparedView {
+    pub state: String,
+    pub operation: String,
+    pub trade_id: String,
+    pub mutation_id: String,
+    pub mutation_kind: String,
+    pub event_id: String,
+    pub event_kind: u32,
+    pub author: String,
+    pub required_actions: Vec<String>,
+    pub idempotency_key: Option<String>,
+    pub reason: Option<String>,
+    pub actions: Vec<String>,
+}
+
 pub fn submit_proposal(
     config: &RuntimeConfig,
     args: &TradeEnvelopeFileRuntimeArgs,
-) -> Result<TradeCommandReceipt, CliSdkAdapterError> {
-    let envelope = load_trade_envelope(args.file.as_path())?;
-    let (actor, session) = actor_session_for_envelope(config, &envelope, "trade proposal")?;
-    let mut request = SubmitProposalRequest::new(actor, envelope, sdk_target_policy(config));
-    if let Some(idempotency_key) = idempotency_key(args.idempotency_key.as_deref())? {
-        request = request.with_idempotency_key(idempotency_key);
-    }
-    Ok(session.block_on(session.sdk().trades().commands().submit_proposal(request))?)
+) -> Result<TradePreparedView, CliSdkAdapterError> {
+    prepare_trade_command(config, args, "trade.submit_proposal.v1")
 }
 
 pub fn propose_revision(
     config: &RuntimeConfig,
     args: &TradeEnvelopeFileRuntimeArgs,
-) -> Result<TradeCommandReceipt, CliSdkAdapterError> {
-    let envelope = load_trade_envelope(args.file.as_path())?;
-    let (actor, session) = actor_session_for_envelope(config, &envelope, "trade revision")?;
-    let mut request = ProposeRevisionRequest::new(actor, envelope, sdk_target_policy(config));
-    if let Some(idempotency_key) = idempotency_key(args.idempotency_key.as_deref())? {
-        request = request.with_idempotency_key(idempotency_key);
-    }
-    Ok(session.block_on(session.sdk().trades().commands().propose_revision(request))?)
+) -> Result<TradePreparedView, CliSdkAdapterError> {
+    prepare_trade_command(config, args, "trade.propose_revision.v1")
 }
 
 pub fn decide_candidate(
     config: &RuntimeConfig,
     args: &TradeEnvelopeFileRuntimeArgs,
-) -> Result<TradeCommandReceipt, CliSdkAdapterError> {
-    let envelope = load_trade_envelope(args.file.as_path())?;
-    let (actor, session) =
-        actor_session_for_envelope(config, &envelope, "trade candidate decision")?;
-    let mut request = DecideCandidateRequest::new(actor, envelope, sdk_target_policy(config));
-    if args.acknowledge_private_terms {
-        request = request.acknowledge_private_terms();
-    }
-    if let Some(idempotency_key) = idempotency_key(args.idempotency_key.as_deref())? {
-        request = request.with_idempotency_key(idempotency_key);
-    }
-    Ok(session.block_on(session.sdk().trades().commands().decide_candidate(request))?)
+) -> Result<TradePreparedView, CliSdkAdapterError> {
+    prepare_trade_command(config, args, "trade.decide_candidate.v1")
 }
 
 pub fn cancel_trade(
     config: &RuntimeConfig,
     args: &TradeEnvelopeFileRuntimeArgs,
-) -> Result<TradeCommandReceipt, CliSdkAdapterError> {
-    let envelope = load_trade_envelope(args.file.as_path())?;
-    let (actor, session) = actor_session_for_envelope(config, &envelope, "trade cancellation")?;
-    let mut request = CancelTradeRequest::new(actor, envelope, sdk_target_policy(config));
-    if let Some(idempotency_key) = idempotency_key(args.idempotency_key.as_deref())? {
-        request = request.with_idempotency_key(idempotency_key);
-    }
-    Ok(session.block_on(session.sdk().trades().commands().cancel_trade(request))?)
+) -> Result<TradePreparedView, CliSdkAdapterError> {
+    prepare_trade_command(config, args, "trade.cancel.v1")
 }
 
 pub fn resume_operation(
     config: &RuntimeConfig,
     args: &TradeEnvelopeFileRuntimeArgs,
-) -> Result<TradeCommandReceipt, CliSdkAdapterError> {
+) -> Result<TradePreparedView, CliSdkAdapterError> {
     let operation_kind = args.operation_kind.as_deref().ok_or_else(|| {
         RuntimeError::Config("trade operation resume requires `--operation-kind`".to_owned())
     })?;
+    prepare_trade_command(config, args, resume_operation_kind(operation_kind)?)
+}
+
+fn prepare_trade_command(
+    config: &RuntimeConfig,
+    args: &TradeEnvelopeFileRuntimeArgs,
+    operation: &str,
+) -> Result<TradePreparedView, CliSdkAdapterError> {
     let envelope = load_trade_envelope(args.file.as_path())?;
-    let (actor, session) = actor_session_for_envelope(config, &envelope, "trade operation resume")?;
-    let mut request = ResumeOperationRequest::new(
-        actor,
-        envelope,
-        resume_operation_kind(operation_kind)?,
-        sdk_target_policy(config),
-    );
-    if args.acknowledge_private_terms {
-        request = request.acknowledge_private_terms();
+    let actor = actor_for_envelope(config, &envelope, operation)?;
+    let idempotency_key = args
+        .idempotency_key
+        .as_deref()
+        .and_then(non_empty_ref)
+        .map(radroots_storage::journal::IdempotencyKey::parse)
+        .transpose()
+        .map_err(|error| RuntimeError::Config(format!("invalid idempotency key: {error}")))?;
+    let plan = sdk_trade::prepare(sdk_trade::PrepareRequest::new(actor, envelope))
+        .map_err(|error| RuntimeError::Config(format!("invalid SDK trade plan: {error}")))?;
+    if matches!(operation, "trade.decide_candidate.v1")
+        && plan.workflow().private_terms().is_some()
+        && !args.acknowledge_private_terms
+    {
+        return Err(RuntimeError::Config(
+            "trade decision requires explicit private-terms acknowledgement".to_owned(),
+        )
+        .into());
     }
-    if let Some(idempotency_key) = idempotency_key(args.idempotency_key.as_deref())? {
-        request = request.with_idempotency_key(idempotency_key);
+    Ok(trade_prepared_view(operation, args, &plan, idempotency_key))
+}
+
+fn trade_prepared_view(
+    operation: &str,
+    args: &TradeEnvelopeFileRuntimeArgs,
+    plan: &TradePlan,
+    idempotency_key: Option<radroots_storage::journal::IdempotencyKey>,
+) -> TradePreparedView {
+    TradePreparedView {
+        state: "prepared".to_owned(),
+        operation: operation.to_owned(),
+        trade_id: plan.workflow().trade_id().as_str().to_owned(),
+        mutation_id: plan.workflow().mutation_id().as_str().to_owned(),
+        mutation_kind: format!("{:?}", plan.workflow().kind()),
+        event_id: plan.draft().expected_event_id().as_str().to_owned(),
+        event_kind: plan.draft().kind_u32(),
+        author: plan.draft().expected_pubkey().to_hex(),
+        required_actions: plan
+            .workflow()
+            .required_actions()
+            .iter()
+            .map(|action| format!("{action:?}"))
+            .collect(),
+        idempotency_key: idempotency_key.map(|value| value.as_str().to_owned()),
+        reason: Some(
+            "trade plan validated; durable enqueue requires the configured shared sync engine"
+                .to_owned(),
+        ),
+        actions: vec![format!(
+            "radroots trade operation resume {}",
+            args.file.display()
+        )],
     }
-    Ok(session.block_on(session.sdk().trades().commands().resume_operation(request))?)
 }
 
 pub fn get_trade(
-    config: &RuntimeConfig,
+    _config: &RuntimeConfig,
     args: &TradeIdRuntimeArgs,
-) -> Result<TradeStatusView, CliSdkAdapterError> {
-    let session = CliSdkSession::connect(config)?;
-    let trade_id = trade_id(args.trade_id.as_str(), "trade_id")?;
-    let request = GetTradeRequest::new(trade_id);
-    Ok(session.block_on(session.sdk().trades().queries().get_trade(request))?)
+) -> Result<serde_json::Value, CliSdkAdapterError> {
+    let _ = trade_id(args.trade_id.as_str(), "trade_id")?;
+    Err(RuntimeError::Config(
+        "trade queries require the configured SDK storage and projection adapter".to_owned(),
+    )
+    .into())
 }
 
 pub fn list_trades(
-    config: &RuntimeConfig,
+    _config: &RuntimeConfig,
     args: &TradePageRuntimeArgs,
-) -> Result<Page<TradeSummaryView>, CliSdkAdapterError> {
-    let session = CliSdkSession::connect(config)?;
-    let mut request = ListTradesRequest::new();
-    if let Some(limit) = args.limit {
-        request = request.with_limit(limit);
+) -> Result<serde_json::Value, CliSdkAdapterError> {
+    if matches!(args.limit, Some(0)) {
+        return Err(RuntimeError::Config("trade list limit must be positive".to_owned()).into());
     }
-    if let Some(cursor) = args.cursor.as_deref().and_then(non_empty_ref) {
-        request = request.with_cursor(cursor);
-    }
-    Ok(session.block_on(session.sdk().trades().queries().list_trades(request))?)
+    let _ = args.cursor.as_deref().and_then(non_empty_ref);
+    Err(RuntimeError::Config(
+        "trade queries require the configured SDK storage and projection adapter".to_owned(),
+    )
+    .into())
 }
 
 pub fn refresh_evidence(
-    config: &RuntimeConfig,
+    _config: &RuntimeConfig,
     args: &TradeIdRuntimeArgs,
-) -> Result<EvidenceRefreshReceipt, CliSdkAdapterError> {
-    let session = CliSdkSession::connect(config)?;
-    let trade_id = trade_id(args.trade_id.as_str(), "trade_id")?;
-    let request = RefreshTradeEvidenceRequest::new(trade_id);
-    Ok(session.block_on(session.sdk().trades().queries().refresh_evidence(request))?)
+) -> Result<serde_json::Value, CliSdkAdapterError> {
+    let _ = trade_id(args.trade_id.as_str(), "trade_id")?;
+    Err(RuntimeError::Config(
+        "trade projection refresh requires the configured shared sync engine".to_owned(),
+    )
+    .into())
 }
 
 pub fn inspect_evidence(
-    config: &RuntimeConfig,
+    _config: &RuntimeConfig,
     args: &TradeEvidenceInspectRuntimeArgs,
-) -> Result<Page<EvidenceView>, CliSdkAdapterError> {
-    let session = CliSdkSession::connect(config)?;
-    let mut request = InspectEvidenceRequest::new(trade_id(args.trade_id.as_str(), "trade_id")?);
-    if let Some(limit) = args.limit {
-        request = request.with_limit(limit);
+) -> Result<serde_json::Value, CliSdkAdapterError> {
+    let _ = trade_id(args.trade_id.as_str(), "trade_id")?;
+    if matches!(args.limit, Some(0)) {
+        return Err(
+            RuntimeError::Config("trade evidence limit must be positive".to_owned()).into(),
+        );
     }
-    if let Some(cursor) = args.cursor.as_deref().and_then(non_empty_ref) {
-        request = request.with_cursor(cursor);
-    }
-    Ok(session.block_on(session.sdk().trades().queries().inspect_evidence(request))?)
+    let _ = args.cursor.as_deref().and_then(non_empty_ref);
+    Err(RuntimeError::Config(
+        "trade evidence queries require the configured SDK storage adapter".to_owned(),
+    )
+    .into())
 }
 
 pub fn seal_private_artifact(
-    config: &RuntimeConfig,
+    _config: &RuntimeConfig,
     args: &TradePrivateArtifactSealRuntimeArgs,
-) -> Result<TradePrivateArtifactSealReceipt, CliSdkAdapterError> {
-    let session = CliSdkSession::connect(config)?;
-    let plaintext = fs::read(args.input.as_path()).map_err(RuntimeError::from)?;
-    let mut request = TradePrivateArtifactSealRequest::binding_terms(
-        args.artifact_id.as_str(),
-        trade_id(args.trade_id.as_str(), "trade_id")?,
-        args.schema_id.as_str(),
-        plaintext,
-    );
-    request.artifact_kind = private_artifact_kind(args.kind.as_str())?;
-    if let Some(candidate_id) = args.candidate_id.as_deref().and_then(non_empty_ref) {
-        request = request.with_candidate_id(trade_candidate_id(candidate_id, "candidate_id")?);
-    }
-    if let Some(retention_class) = args.retention_class.as_deref().and_then(non_empty_ref) {
-        request = request.with_retention_class(retention_class);
-    }
-    if let Some(expires_at_ms) = args.expires_at_ms {
-        request = request.with_expires_at_ms(expires_at_ms);
-    }
-    Ok(session.block_on(session.sdk().trades().seal_private_artifact(request))?)
+) -> Result<serde_json::Value, CliSdkAdapterError> {
+    let _ = trade_id(args.trade_id.as_str(), "trade_id")?;
+    let _ = private_artifact_kind(args.kind.as_str())?;
+    let _ = fs::metadata(args.input.as_path()).map_err(RuntimeError::from)?;
+    Err(RuntimeError::Config(
+        "private trade artifact sealing requires a host-owned secret adapter".to_owned(),
+    )
+    .into())
 }
 
 pub fn open_private_artifact(
-    config: &RuntimeConfig,
+    _config: &RuntimeConfig,
     args: &TradePrivateArtifactOpenRuntimeArgs,
 ) -> Result<TradePrivateArtifactOpenView, CliSdkAdapterError> {
-    let session = CliSdkSession::connect(config)?;
-    let request = TradePrivateArtifactOpenRequest::new(args.artifact_id.as_str());
-    let receipt = session.block_on(session.sdk().trades().open_private_artifact(request))?;
-    Ok(match receipt {
-        Some(receipt) => private_artifact_open_view(args, receipt)?,
-        None => TradePrivateArtifactOpenView {
-            state: "missing".to_owned(),
-            artifact_id: args.artifact_id.clone(),
-            trade_id: None,
-            candidate_id: None,
-            artifact_kind: None,
-            schema_id: None,
-            retention_class: None,
-            output: args.output.display().to_string(),
-            bytes_written: 0,
-            created_at_ms: None,
-            expires_at_ms: None,
-            deleted_at_ms: None,
-        },
-    })
+    Err(RuntimeError::Config(format!(
+        "private trade artifact `{}` requires a host-owned secret adapter",
+        args.artifact_id
+    ))
+    .into())
 }
 
 pub fn delete_private_artifact(
-    config: &RuntimeConfig,
+    _config: &RuntimeConfig,
     args: &TradePrivateArtifactDeleteRuntimeArgs,
-) -> Result<TradePrivateArtifactDeleteReceipt, CliSdkAdapterError> {
-    let session = CliSdkSession::connect(config)?;
-    let request = TradePrivateArtifactDeleteRequest::new(args.artifact_id.as_str());
-    Ok(session.block_on(session.sdk().trades().delete_private_artifact(request))?)
+) -> Result<serde_json::Value, CliSdkAdapterError> {
+    Err(RuntimeError::Config(format!(
+        "private trade artifact `{}` requires a host-owned secret adapter",
+        args.artifact_id
+    ))
+    .into())
 }
 
 pub fn scaffold_proposal_draft(
@@ -393,7 +397,7 @@ fn scaffold_proposal_draft_inner(
         farm_id.clone(),
         args.quantity,
     )?;
-    let envelope = RadrootsTradeMutationEnvelopeV1 {
+    let envelope = TradeMutationEnvelopeV1 {
         mutation_id: None,
         contract_id: RADROOTS_TRADE_PROPOSAL_CONTRACT_ID.to_owned(),
         schema_version: RADROOTS_TRADE_SCHEMA_VERSION,
@@ -409,7 +413,7 @@ fn scaffold_proposal_draft_inner(
         )?,
         counterparty_pubkey: seller_pubkey,
         authored_at_unix_s: now_unix(),
-        body: RadrootsTradeMutationBodyV1::Proposal { candidate },
+        body: TradeMutationBodyV1::Proposal { candidate },
     };
     let canonical = canonical_trade_mutation_content(envelope)
         .map_err(|error| RuntimeError::Config(format!("build trade proposal envelope: {error}")))?;
@@ -451,7 +455,7 @@ fn scaffold_proposal_draft_inner(
     })
 }
 
-fn load_trade_envelope(path: &Path) -> Result<RadrootsTradeMutationEnvelopeV1, RuntimeError> {
+fn load_trade_envelope(path: &Path) -> Result<TradeMutationEnvelopeV1, RuntimeError> {
     let contents = fs::read_to_string(path)?;
     serde_json::from_str(contents.as_str()).map_err(|error| {
         RuntimeError::Config(format!(
@@ -461,11 +465,11 @@ fn load_trade_envelope(path: &Path) -> Result<RadrootsTradeMutationEnvelopeV1, R
     })
 }
 
-fn actor_session_for_envelope(
+fn actor_for_envelope(
     config: &RuntimeConfig,
-    envelope: &RadrootsTradeMutationEnvelopeV1,
+    envelope: &TradeMutationEnvelopeV1,
     operation: &str,
-) -> Result<(RadrootsActorContext, CliSdkSession), CliSdkAdapterError> {
+) -> Result<Actor, CliSdkAdapterError> {
     let account = account::resolve_account(config)?.ok_or_else(|| {
         RuntimeError::Config(format!("{operation} requires a selected signer account"))
     })?;
@@ -483,40 +487,29 @@ fn actor_session_for_envelope(
         .as_str()
         .eq_ignore_ascii_case(author_pubkey)
     {
-        RadrootsActorRole::Buyer
+        AuthorRole::Buyer
     } else if envelope
         .seller_pubkey
         .as_str()
         .eq_ignore_ascii_case(author_pubkey)
     {
-        RadrootsActorRole::Seller
+        AuthorRole::Seller
     } else {
         return Err(RuntimeError::Config(format!(
             "{operation} envelope author must be the buyer or seller"
         ))
         .into());
     };
-    let actor = RadrootsActorContext::local_account(
-        author_pubkey,
-        account.record.account_id.to_string(),
-        [role],
-    )
-    .map_err(|error| RuntimeError::Config(format!("invalid trade SDK actor: {error}")))?;
-    let session = CliSdkSession::connect_for_actor(
+    let actor =
+        Actor::from_public_key_hex(author_pubkey, ActorSource::ExplicitPublicKey, [role])
+            .map_err(|error| RuntimeError::Config(format!("invalid trade SDK actor: {error}")))?;
+    validate_configured_signer_for_actor(
         config,
         Some(account.record.account_id.as_str()),
         author_pubkey,
         operation,
     )?;
-    Ok((actor, session))
-}
-
-fn idempotency_key(value: Option<&str>) -> Result<Option<SdkIdempotencyKey>, RuntimeError> {
-    value
-        .and_then(non_empty_ref)
-        .map(SdkIdempotencyKey::new)
-        .transpose()
-        .map_err(|error| RuntimeError::Config(error.to_string()))
+    Ok(actor)
 }
 
 fn resume_operation_kind(value: &str) -> Result<&'static str, RuntimeError> {
@@ -531,36 +524,12 @@ fn resume_operation_kind(value: &str) -> Result<&'static str, RuntimeError> {
     }
 }
 
-fn private_artifact_open_view(
-    args: &TradePrivateArtifactOpenRuntimeArgs,
-    receipt: TradePrivateArtifactOpenReceipt,
-) -> Result<TradePrivateArtifactOpenView, RuntimeError> {
-    if let Some(parent) = args.output.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(args.output.as_path(), &receipt.plaintext)?;
-    Ok(TradePrivateArtifactOpenView {
-        state: "opened".to_owned(),
-        artifact_id: receipt.artifact_id,
-        trade_id: Some(receipt.trade_id.to_string()),
-        candidate_id: receipt.candidate_id.as_ref().map(ToString::to_string),
-        artifact_kind: Some(receipt.artifact_kind),
-        schema_id: Some(receipt.schema_id),
-        retention_class: Some(receipt.retention_class),
-        output: args.output.display().to_string(),
-        bytes_written: receipt.plaintext.len(),
-        created_at_ms: Some(receipt.created_at_ms),
-        expires_at_ms: receipt.expires_at_ms,
-        deleted_at_ms: receipt.deleted_at_ms,
-    })
-}
-
-fn private_artifact_kind(value: &str) -> Result<TradePrivateArtifactKind, RuntimeError> {
+fn private_artifact_kind(value: &str) -> Result<&'static str, RuntimeError> {
     match value {
-        "binding_terms" => Ok(TradePrivateArtifactKind::BindingTerms),
-        "message" => Ok(TradePrivateArtifactKind::Message),
-        "contact_bundle" => Ok(TradePrivateArtifactKind::ContactBundle),
-        "delivery_instruction" => Ok(TradePrivateArtifactKind::DeliveryInstruction),
+        "binding_terms" => Ok("binding_terms"),
+        "message" => Ok("message"),
+        "contact_bundle" => Ok("contact_bundle"),
+        "delivery_instruction" => Ok("delivery_instruction"),
         other => Err(RuntimeError::Config(format!(
             "unsupported private artifact kind `{other}`"
         ))),
@@ -687,50 +656,45 @@ fn resolve_product(
 fn candidate_terms(
     product: &ProductFacts,
     listing_state: &ActiveListingState,
-    buyer_pubkey: RadrootsPublicKey,
-    seller_pubkey: RadrootsPublicKey,
-    farm_id: RadrootsDTag,
+    buyer_pubkey: PublicKey,
+    seller_pubkey: PublicKey,
+    farm_id: DTag,
     bin_count: u32,
-) -> Result<RadrootsTradeCandidateTermsV1, RuntimeError> {
+) -> Result<TradeCandidateTermsV1, RuntimeError> {
     let currency = product
         .price_currency
-        .parse::<RadrootsCoreCurrency>()
+        .parse::<Currency>()
         .map_err(|error| {
             RuntimeError::Config(format!("listing price_currency is invalid: {error}"))
         })?;
     let quantity_amount = exact_positive_decimal(product.qty_amt_exact.as_str(), "qty_amt_exact")?
-        * RadrootsCoreDecimal::from(bin_count);
+        * Decimal::from(bin_count);
     let quantity_unit = product
         .qty_unit
-        .parse::<RadrootsCoreUnit>()
+        .parse::<Unit>()
         .map_err(|error| RuntimeError::Config(format!("listing qty_unit is invalid: {error}")))?;
     let price_amount = exact_positive_decimal(product.price_amt_exact.as_str(), "price_amt_exact")?;
     let price_quantity_amount =
         exact_positive_decimal(product.price_qty_amt_exact.as_str(), "price_qty_amt_exact")?;
-    let price_unit = product
-        .price_qty_unit
-        .parse::<RadrootsCoreUnit>()
-        .map_err(|error| {
-            RuntimeError::Config(format!("listing price_qty_unit is invalid: {error}"))
-        })?;
+    let price_unit = product.price_qty_unit.parse::<Unit>().map_err(|error| {
+        RuntimeError::Config(format!("listing price_qty_unit is invalid: {error}"))
+    })?;
     let quantity_unit_in_price_units =
-        convert_unit_decimal(RadrootsCoreDecimal::ONE, quantity_unit, price_unit).map_err(
-            |error| {
-                RuntimeError::Config(format!(
-                    "listing quantity and price units are incompatible: {error}"
-                ))
-            },
-        )?;
+        convert_unit_decimal(Decimal::ONE, quantity_unit, price_unit).map_err(|error| {
+            RuntimeError::Config(format!(
+                "listing quantity and price units are incompatible: {error}"
+            ))
+        })?;
     let unit_price_amount = (price_amount / price_quantity_amount) * quantity_unit_in_price_units;
     let subtotal = unit_price_amount * quantity_amount;
     let quantity_scale = u8::try_from(quantity_amount.scale())
         .map_err(|_| RuntimeError::Config("trade quantity scale exceeds u8".to_owned()))?;
     let currency_exponent = currency.minor_unit_exponent();
     let subtotal_mantissa = decimal_mantissa_at_scale(subtotal, currency_exponent);
-    let line = RadrootsTradeCandidateLineV1 {
-        line_id: RadrootsDTag::parse("line-1")
+    let line = TradeCandidateLineV1 {
+        line_id: DTag::parse("line-1")
             .map_err(|error| RuntimeError::Config(format!("invalid line id: {error}")))?,
-        listing_addr: RadrootsClassifiedListingAddress::parse(product.listing_addr.as_str())
+        listing_addr: ClassifiedListingAddress::parse(product.listing_addr.as_str())
             .map_err(|error| RuntimeError::Config(format!("invalid listing address: {error}")))?,
         listing_event_id: listing_state
             .last_event_id
@@ -750,7 +714,7 @@ fn candidate_terms(
         replaces_line_id: None,
     };
     let now = now_unix();
-    Ok(RadrootsTradeCandidateTermsV1 {
+    Ok(TradeCandidateTermsV1 {
         candidate_id: None,
         schema_version: RADROOTS_TRADE_SCHEMA_VERSION,
         base_candidate_id: None,
@@ -760,7 +724,7 @@ fn candidate_terms(
         farm_id,
         lines: vec![line],
         line_tombstones: Vec::new(),
-        economics: RadrootsTradeEconomicsProfileV1 {
+        economics: TradeEconomicsProfileV1 {
             profile_id: "mvp-fixed".to_owned(),
             currency_code: product.price_currency.clone(),
             currency_exponent: u8::try_from(currency_exponent)
@@ -772,7 +736,7 @@ fn candidate_terms(
             total_mantissa: subtotal_mantissa,
             adjustments: Vec::new(),
         },
-        fulfillment: RadrootsFulfillmentProfileV1 {
+        fulfillment: FulfillmentProfileV1 {
             profile_id: "market-pickup".to_owned(),
             method: "pickup".to_owned(),
             starts_at_unix_s: now + DEFAULT_FULFILLMENT_START_OFFSET_SECONDS,
@@ -785,7 +749,7 @@ fn candidate_terms(
             location_class: "seller_public_listing".to_owned(),
             requires_private_terms: false,
         },
-        cancellation: RadrootsTradeCancellationProfileV1 {
+        cancellation: TradeCancellationProfileV1 {
             profile_id: "buyer-pre-agreement".to_owned(),
             buyer_pre_agreement: true,
             post_agreement_cutoff_unix_s: None,
@@ -818,14 +782,14 @@ fn resolve_active_listing_state(
             "listing address `{listing_addr}` is missing latest listing event state; run `radroots market pull`"
         ))
     })?;
-    RadrootsTradeMutationId::parse(state.content_hash.as_str()).map_err(|error| {
+    MutationId::parse(state.content_hash.as_str()).map_err(|error| {
         RuntimeError::Config(format!(
             "listing content hash is not a 32-byte hex digest: {error}"
         ))
     })?;
     state
         .last_event_id
-        .parse::<radroots_event::ids::RadrootsEventId>()
+        .parse::<radroots_event::id::RadrootsEventId>()
         .map_err(|error| {
             RuntimeError::Config(format!("listing latest event id is invalid: {error}"))
         })?;
@@ -835,22 +799,19 @@ fn resolve_active_listing_state(
     })
 }
 
-fn resolve_farm_id(
-    config: &RuntimeConfig,
-    seller_pubkey: &str,
-) -> Result<RadrootsDTag, RuntimeError> {
+fn resolve_farm_id(config: &RuntimeConfig, seller_pubkey: &str) -> Result<DTag, RuntimeError> {
     let db = ReplicaSql::new(SqlxSqliteExecutor::open(&config.local.replica_store_path)?);
     let d_tag = db.farm_unique_d_tag_by_pubkey(seller_pubkey)?.ok_or_else(|| {
         RuntimeError::Config(format!(
             "seller `{seller_pubkey}` must have exactly one farm profile in the local replica before creating a trade proposal draft"
         ))
     })?;
-    RadrootsDTag::parse(d_tag.as_str())
+    DTag::parse(d_tag.as_str())
         .map_err(|error| RuntimeError::Config(format!("farm d tag is invalid: {error}")))
 }
 
 fn parse_listing_addr(raw: &str) -> Result<ParsedListingAddress, RuntimeError> {
-    let parsed = RadrootsClassifiedListingAddress::parse(raw)
+    let parsed = ClassifiedListingAddress::parse(raw)
         .map_err(|error| RuntimeError::Config(format!("listing address is invalid: {error}")))?;
     let (kind, rest) = parsed
         .as_str()
@@ -869,10 +830,8 @@ fn parse_listing_addr(raw: &str) -> Result<ParsedListingAddress, RuntimeError> {
     })
 }
 
-fn proposal_economics_view(
-    envelope: &RadrootsTradeMutationEnvelopeV1,
-) -> TradeCandidateDraftEconomicsView {
-    let RadrootsTradeMutationBodyV1::Proposal { candidate } = &envelope.body else {
+fn proposal_economics_view(envelope: &TradeMutationEnvelopeV1) -> TradeCandidateDraftEconomicsView {
+    let TradeMutationBodyV1::Proposal { candidate } = &envelope.body else {
         unreachable!("proposal draft envelope is a proposal")
     };
     TradeCandidateDraftEconomicsView {
@@ -885,8 +844,8 @@ fn proposal_economics_view(
     }
 }
 
-fn proposal_candidate_id(envelope: &RadrootsTradeMutationEnvelopeV1) -> Option<String> {
-    let RadrootsTradeMutationBodyV1::Proposal { candidate } = &envelope.body else {
+fn proposal_candidate_id(envelope: &TradeMutationEnvelopeV1) -> Option<String> {
+    let TradeMutationBodyV1::Proposal { candidate } = &envelope.body else {
         return None;
     };
     candidate.candidate_id.as_ref().map(ToString::to_string)
@@ -953,10 +912,10 @@ fn validate_product_bin(product: &ProductFacts, bin_id: &str) -> Result<(), Runt
     Ok(())
 }
 
-fn exact_positive_decimal(value: &str, field: &str) -> Result<RadrootsCoreDecimal, RuntimeError> {
+fn exact_positive_decimal(value: &str, field: &str) -> Result<Decimal, RuntimeError> {
     let parsed = value
         .trim()
-        .parse::<RadrootsCoreDecimal>()
+        .parse::<Decimal>()
         .map_err(|error| RuntimeError::Config(format!("listing {field} is invalid: {error}")))?;
     if parsed.is_zero() || parsed.is_sign_negative() {
         return Err(RuntimeError::Config(format!(
@@ -966,7 +925,7 @@ fn exact_positive_decimal(value: &str, field: &str) -> Result<RadrootsCoreDecima
     Ok(parsed)
 }
 
-fn decimal_mantissa_at_scale(mut value: RadrootsCoreDecimal, scale: u32) -> String {
+fn decimal_mantissa_at_scale(mut value: Decimal, scale: u32) -> String {
     value.rescale(scale);
     value.0.mantissa().to_string()
 }
@@ -979,7 +938,7 @@ fn candidate_draft_file(config: &RuntimeConfig, trade_id: &str) -> PathBuf {
         .join(format!("{trade_id}.json"))
 }
 
-fn next_trade_id() -> Result<RadrootsTradeId, RuntimeError> {
+fn next_trade_id() -> Result<TradeId, RuntimeError> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
@@ -996,23 +955,23 @@ fn now_unix() -> u64 {
         .unwrap_or_default()
 }
 
-fn trade_id(value: &str, field: &str) -> Result<RadrootsTradeId, RuntimeError> {
-    RadrootsTradeId::parse(value)
+fn trade_id(value: &str, field: &str) -> Result<TradeId, RuntimeError> {
+    TradeId::parse(value)
         .map_err(|error| RuntimeError::Config(format!("{field} is invalid: {error}")))
 }
 
-fn trade_candidate_id(value: &str, field: &str) -> Result<RadrootsTradeCandidateId, RuntimeError> {
-    RadrootsTradeCandidateId::parse(value)
+fn trade_candidate_id(value: &str, field: &str) -> Result<CandidateId, RuntimeError> {
+    CandidateId::parse(value)
         .map_err(|error| RuntimeError::Config(format!("{field} is invalid: {error}")))
 }
 
-fn inventory_bin_id(value: &str, field: &str) -> Result<RadrootsInventoryBinId, RuntimeError> {
-    RadrootsInventoryBinId::parse(value)
+fn inventory_bin_id(value: &str, field: &str) -> Result<InventoryBinId, RuntimeError> {
+    InventoryBinId::parse(value)
         .map_err(|error| RuntimeError::Config(format!("{field} is invalid: {error}")))
 }
 
-fn pubkey(value: &str, field: &str) -> Result<RadrootsPublicKey, RuntimeError> {
-    RadrootsPublicKey::parse(value)
+fn pubkey(value: &str, field: &str) -> Result<PublicKey, RuntimeError> {
+    PublicKey::parse(value)
         .map_err(|error| RuntimeError::Config(format!("{field} is invalid: {error}")))
 }
 

@@ -1,29 +1,21 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use radroots_authority::RadrootsActorContext;
-use radroots_event::contract::RadrootsActorRole;
-use radroots_event::farm::{RadrootsFarm, RadrootsFarmPublicLocation};
-use radroots_event::ids::RadrootsAddressableCoordinate;
-use radroots_event::kinds::{KIND_FARM, KIND_PROFILE};
-use radroots_event::operational_listing::RadrootsOperationalListingPublicLocation;
-use radroots_event::profile::{RadrootsAuthoredProfile, RadrootsNip05Identifier};
+use radroots_event::contract::AuthorRole;
+use radroots_event::envelope::kind::{KIND_FARM, KIND_PROFILE};
+use radroots_event::farm::{Farm, FarmPublicLocation};
+use radroots_event::id::AddressableCoordinate;
+use radroots_event::listing::operational::OperationalListingPublicLocation;
+use radroots_event::profile::{AuthoredProfile, Nip05Identifier};
 use radroots_event_codec::d_tag::is_d_tag_base64url;
 use radroots_event_codec::profile::authored::authored_profile_to_wire_parts;
-use radroots_sdk::{
-    FarmEnqueuePublishRequest, FarmEnqueueReceipt, FarmPreparePublishRequest,
-    FarmPrivateLocationClearRequest, FarmPrivateLocationInput, FarmPrivateLocationLookupCandidate,
-    FarmPrivateLocationReceipt, FarmPrivateLocationSetRequest, FarmPrivateLocationSetResult,
-    FarmPublishPlan, GeocoderLocalityQuery, PushOutboxEventReceipt, PushOutboxEventState,
-    PushOutboxReceipt, PushOutboxRequest, PushOutboxTargetOutcomeKind, SdkExactLocation,
-    SdkMutationState,
-};
+use radroots_sdk::farm::{self as sdk_farm, Plan as FarmPlan};
+use radroots_signing::{Actor, actor::ActorSource};
 use serde_json::json;
 
 use crate::cli::global::{
     FarmCreateArgs, FarmFieldArg, FarmPrivateLocationKeyArgs, FarmPrivateLocationSetArgs,
-    FarmPrivateLocationSetInput, FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs,
-    FarmUpdateArgs,
+    FarmPublishArgs, FarmRebindArgs, FarmScopeArg, FarmScopedArgs, FarmUpdateArgs,
 };
 use crate::runtime::RuntimeError;
 use crate::runtime::account::{self, AccountRecordView};
@@ -34,17 +26,13 @@ use crate::runtime::farm_config::{
     SUPPORTED_FARM_CONFIG_VERSION,
 };
 use crate::runtime::runtime_store::append_local_work;
-use crate::runtime::sdk::{
-    CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_outcome_kind_label,
-    sdk_target_policy, sdk_transport_outcome_kind_label, validate_configured_signer_for_actor,
-};
+use crate::runtime::sdk::{CliSdkAdapterError, validate_configured_signer_for_actor};
 use crate::runtime::signer::ActorWriteBindingError;
 use crate::view::runtime::{
     FarmConfigDocumentView, FarmConfigSummaryView, FarmGetView, FarmListingDefaultsView,
-    FarmPrivateExactLocationView, FarmPrivateLocationCandidateView, FarmPrivateLocationView,
-    FarmPrivatePublicLocalityView, FarmProfileDraftView, FarmPublicationView,
-    FarmPublishComponentView, FarmPublishEventView, FarmPublishView, FarmRebindView,
-    FarmSelectionView, FarmSetView, FarmSetupView, FarmStatusView, TransportTargetFailureView,
+    FarmPrivateLocationView, FarmProfileDraftView, FarmPublicationView, FarmPublishComponentView,
+    FarmPublishEventView, FarmPublishView, FarmRebindView, FarmSelectionView, FarmSetView,
+    FarmSetupView, FarmStatusView,
 };
 
 const FARM_CONFIG_SOURCE: &str = "farm config · local first";
@@ -347,46 +335,12 @@ pub fn private_location_set(
     config: &RuntimeConfig,
     args: &FarmPrivateLocationSetArgs,
 ) -> Result<FarmPrivateLocationView, CliSdkAdapterError> {
-    let target = match private_location_target(config, args.farm_d_tag.as_deref())? {
-        Some(target) => target,
-        None => return Ok(private_location_unconfigured_view()),
-    };
-    let session = CliSdkSession::connect(config)?;
-    let geonames_status = session.sdk().geonames().ensure()?;
-    let mut request = FarmPrivateLocationSetRequest::new(
-        target.actor.clone(),
-        target.farm_d_tag.clone(),
-        sdk_private_location_input(&args.input),
-    );
-    if let Some(label) = args.label.clone() {
-        request = request.with_label(label);
-    }
-    let geonames_database_path = Some(geonames_status.path.display().to_string());
-    match session.block_on(session.sdk().farms().set_private_location(request))? {
-        FarmPrivateLocationSetResult::Stored(receipt) => Ok(private_location_view_from_receipt(
-            "set",
-            target,
-            Some(receipt),
-            geonames_database_path,
-            None,
-        )),
-        FarmPrivateLocationSetResult::NoMatch(lookup) => Ok(private_location_view_from_lookup(
-            "no_match",
-            target,
-            lookup.candidates,
-            geonames_database_path,
-            Some("GeoNames lookup returned no matching locality".to_owned()),
-        )),
-        FarmPrivateLocationSetResult::Ambiguous(lookup) => Ok(private_location_view_from_lookup(
-            "ambiguous",
-            target,
-            lookup.candidates,
-            geonames_database_path,
-            Some(
-                "GeoNames lookup matched multiple localities; retry with --region, --country, or --geonames-id"
-                    .to_owned(),
-            ),
-        )),
+    match private_location_target(config, args.farm_d_tag.as_deref())? {
+        Some(_) => Err(RuntimeError::Config(
+            "private farm location writes require a host-owned private artifact adapter".to_owned(),
+        )
+        .into()),
+        None => Ok(private_location_unconfigured_view()),
     }
 }
 
@@ -394,68 +348,27 @@ pub fn private_location_get(
     config: &RuntimeConfig,
     args: &FarmPrivateLocationKeyArgs,
 ) -> Result<FarmPrivateLocationView, CliSdkAdapterError> {
-    let target = match private_location_target(config, args.farm_d_tag.as_deref())? {
-        Some(target) => target,
-        None => return Ok(private_location_unconfigured_view()),
-    };
-    let session = CliSdkSession::connect(config)?;
-    let receipt = session.block_on(session.sdk().farms().private_location(&target.farm_addr))?;
-    let state = if receipt.is_some() {
-        "ready"
-    } else {
-        "missing"
-    };
-    let reason = receipt
-        .is_none()
-        .then(|| "no private exact farm location is stored for this farm".to_owned());
-    Ok(private_location_view_from_receipt(
-        state, target, receipt, None, reason,
-    ))
+    match private_location_target(config, args.farm_d_tag.as_deref())? {
+        Some(_) => Err(RuntimeError::Config(
+            "private farm location reads require a host-owned private artifact adapter".to_owned(),
+        )
+        .into()),
+        None => Ok(private_location_unconfigured_view()),
+    }
 }
 
 pub fn private_location_clear(
     config: &RuntimeConfig,
     args: &FarmPrivateLocationKeyArgs,
 ) -> Result<FarmPrivateLocationView, CliSdkAdapterError> {
-    let target = match private_location_target(config, args.farm_d_tag.as_deref())? {
-        Some(target) => target,
-        None => return Ok(private_location_unconfigured_view()),
-    };
-    let session = CliSdkSession::connect(config)?;
-    let request =
-        FarmPrivateLocationClearRequest::new(target.actor.clone(), target.farm_d_tag.clone());
-    let receipt = session.block_on(session.sdk().farms().clear_private_location(request))?;
-    Ok(FarmPrivateLocationView {
-        state: if receipt.cleared {
-            "cleared"
-        } else {
-            "missing"
-        }
-        .to_owned(),
-        source: SDK_FARM_PRIVATE_LOCATION_SOURCE.to_owned(),
-        farm_addr: Some(receipt.farm_addr.to_string()),
-        farm_d_tag: Some(target.farm_d_tag),
-        seller_account_id: Some(target.seller_account_id),
-        seller_pubkey: Some(target.seller_pubkey),
-        label: None,
-        exact_location: None,
-        public_locality: None,
-        geonames_feature_id: None,
-        geonames_country_id: None,
-        geonames_database_path: None,
-        cleared: Some(receipt.cleared),
-        candidates: Vec::new(),
-        reason: (!receipt.cleared)
-            .then(|| "no private exact farm location was stored for this farm".to_owned()),
-        actions: if receipt.cleared {
-            Vec::new()
-        } else {
-            vec![
-                "radroots farm location set --city <city> --region <region> --country <country>"
-                    .to_owned(),
-            ]
-        },
-    })
+    match private_location_target(config, args.farm_d_tag.as_deref())? {
+        Some(_) => Err(RuntimeError::Config(
+            "private farm location deletion requires a host-owned private artifact adapter"
+                .to_owned(),
+        )
+        .into()),
+        None => Ok(private_location_unconfigured_view()),
+    }
 }
 
 pub fn status(
@@ -793,11 +706,12 @@ fn publish_via_sdk(
             };
         }
 
-        let session = CliSdkSession::connect_memory(config)?;
-        let plan = session
-            .sdk()
-            .farms()
-            .prepare_publish(FarmPreparePublishRequest::new(input.actor, input.farm))?;
+        let plan = sdk_farm::prepare(sdk_farm::PrepareRequest::new(
+            input.actor,
+            input.farm,
+            now_unix(),
+        ))
+        .map_err(|error| RuntimeError::Config(format!("invalid SDK farm plan: {error}")))?;
         return Ok(sdk_prepared_publish_view(
             config,
             args,
@@ -810,56 +724,22 @@ fn publish_via_sdk(
         ));
     }
 
-    let session = CliSdkSession::connect_for_actor(
-        config,
-        Some(resolved.document.selection.account.as_str()),
-        account_pubkey.as_str(),
-        "farm seller",
-    )?;
-    let mut request =
-        FarmEnqueuePublishRequest::new(input.actor, input.farm, sdk_target_policy(config));
-    if let Some(idempotency_key) = farm_idempotency_key.as_deref() {
-        request = request.try_with_idempotency_key(idempotency_key)?;
-    }
-    let enqueue = session.block_on(session.sdk().farms().enqueue_publish(request))?;
-    let push = session.block_on(
-        session.sdk().sync().push_outbox(
-            PushOutboxRequest::new()
-                .with_limit(1)
-                .with_nostr_relay_url_policy(sdk_nostr_relay_url_policy(config)),
-        ),
-    )?;
-    let view = sdk_enqueued_publish_view(
-        config,
-        args,
-        &resolved,
-        account_pubkey.as_str(),
-        previews,
-        profile_idempotency_key,
-        farm_idempotency_key,
-        &enqueue,
-        &push,
-    );
-    if view.farm.state == "published" {
-        persist_farm_publication(
-            config,
-            &mut resolved,
-            enqueue.signed_event_id.as_str().to_owned(),
-        )?;
-    }
-    Ok(view)
+    Err(RuntimeError::Config(
+        "farm commit is unavailable until the shared sync engine is configured".to_owned(),
+    )
+    .into())
 }
 
 #[derive(Debug, Clone)]
 struct SdkFarmPublishInput {
-    actor: RadrootsActorContext,
-    farm: RadrootsFarm,
+    actor: Actor,
+    farm: Farm,
 }
 
 #[derive(Debug, Clone)]
 struct PrivateFarmLocationTarget {
-    actor: RadrootsActorContext,
-    farm_addr: RadrootsAddressableCoordinate,
+    actor: Actor,
+    farm_addr: AddressableCoordinate,
     farm_d_tag: String,
     seller_account_id: String,
     seller_pubkey: String,
@@ -977,10 +857,8 @@ fn build_publish_previews(
     })
 }
 
-fn authored_profile_from_draft(
-    draft: &FarmProfileDraft,
-) -> Result<RadrootsAuthoredProfile, RuntimeError> {
-    let mut profile = RadrootsAuthoredProfile::new(draft.name.clone())
+fn authored_profile_from_draft(draft: &FarmProfileDraft) -> Result<AuthoredProfile, RuntimeError> {
+    let mut profile = AuthoredProfile::new(draft.name.clone())
         .map_err(|error| RuntimeError::Config(format!("invalid farm profile: {error}")))?;
     if let Some(display_name) = draft.display_name.as_deref().and_then(non_empty) {
         profile = profile.with_display_name(display_name);
@@ -989,7 +867,7 @@ fn authored_profile_from_draft(
         profile = profile.with_about(about);
     }
     if let Some(nip05) = draft.nip05.as_deref().and_then(non_empty) {
-        let identifier = RadrootsNip05Identifier::parse(nip05.as_str()).map_err(|error| {
+        let identifier = Nip05Identifier::parse(nip05.as_str()).map_err(|error| {
             RuntimeError::Config(format!("invalid farm profile NIP-05 identifier: {error}"))
         })?;
         profile = profile.with_nip05(identifier);
@@ -1011,7 +889,7 @@ fn authored_profile_from_draft(
 
 fn require_verified_publish_media(
     profile: &FarmProfileDraft,
-    farm: &RadrootsFarm,
+    farm: &Farm,
 ) -> Result<(), RuntimeError> {
     let contains_unverified_media = [
         profile.picture.as_deref(),
@@ -1171,10 +1049,10 @@ fn sdk_farm_publish_input(
     resolved: &ResolvedFarmConfig,
     account_pubkey: &str,
 ) -> Result<SdkFarmPublishInput, RuntimeError> {
-    let actor = RadrootsActorContext::local_account(
+    let actor = Actor::from_public_key_hex(
         account_pubkey,
-        resolved.document.selection.account.clone(),
-        [RadrootsActorRole::Farmer],
+        ActorSource::ExplicitPublicKey,
+        [AuthorRole::Farmer],
     )
     .map_err(|error| RuntimeError::Config(format!("invalid farm SDK actor: {error}")))?;
     Ok(SdkFarmPublishInput {
@@ -1195,7 +1073,7 @@ fn sdk_prepared_publish_view(
     previews: FarmPublishPreviews,
     profile_idempotency_key: Option<String>,
     farm_idempotency_key: Option<String>,
-    plan: FarmPublishPlan,
+    plan: FarmPlan,
 ) -> FarmPublishView {
     base_publish_view(
         "dry_run",
@@ -1212,8 +1090,8 @@ fn sdk_prepared_publish_view(
             state: "not_submitted".to_owned(),
             reason: Some("dry run requested; SDK enqueue and transport push skipped".to_owned()),
             signer_mode: Some(config.signer.backend.as_str().to_owned()),
-            event_id: Some(plan.expected_event_id().as_str().to_owned()),
-            event_addr: Some(plan.farm_addr().as_str().to_owned()),
+            event_id: Some(plan.draft().expected_event_id().as_str().to_owned()),
+            event_addr: Some(plan.coordinate().as_str().to_owned()),
             event: args.print_event.then_some(sdk_plan_event_view(&plan)),
             ..preview_component(
                 farm_publish_rpc_method(config),
@@ -1228,182 +1106,15 @@ fn sdk_prepared_publish_view(
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "publish view construction mirrors the V1 output contract fields"
-)]
-fn sdk_enqueued_publish_view(
-    config: &RuntimeConfig,
-    args: &FarmPublishArgs,
-    resolved: &ResolvedFarmConfig,
-    account_pubkey: &str,
-    previews: FarmPublishPreviews,
-    profile_idempotency_key: Option<String>,
-    farm_idempotency_key: Option<String>,
-    enqueue: &FarmEnqueueReceipt,
-    push: &PushOutboxReceipt,
-) -> FarmPublishView {
-    let push_event = sdk_push_event_for_farm(enqueue, push);
-    let state = sdk_publish_state(push_event);
-    let view_state = state.clone();
-    let reason = sdk_publish_reason(push_event);
-    base_publish_view(
-        view_state.as_str(),
-        config,
-        args,
-        resolved,
-        account_pubkey,
-        profile_not_submitted_component(
-            profile_idempotency_key,
-            args,
-            Some(previews.profile.event),
-        ),
-        FarmPublishComponentView {
-            state,
-            deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
-            target_transport_endpoints: push_event
-                .map(sdk_push_target_transport_endpoints)
-                .unwrap_or_else(|| config.transport.nostr_relay_urls.clone()),
-            attempted_transport_endpoints: push_event
-                .map(sdk_push_attempted_transport_endpoints)
-                .unwrap_or_default(),
-            accepted_transport_endpoints: push_event
-                .map(sdk_push_accepted_transport_endpoints)
-                .unwrap_or_default(),
-            failed_transport_targets: push_event
-                .map(sdk_push_failed_transport_targets)
-                .unwrap_or_default(),
-            signer_mode: Some(config.signer.backend.as_str().to_owned()),
-            event_id: Some(enqueue.signed_event_id.as_str().to_owned()),
-            event_addr: Some(enqueue.farm_addr.as_str().to_owned()),
-            idempotency_key: farm_idempotency_key,
-            reason: sdk_publish_reason(push_event),
-            ..preview_component(farm_publish_rpc_method(config), KIND_FARM, None, args, None)
-        },
-        reason,
-        sdk_publish_actions(push_event),
-    )
-}
-
-fn sdk_plan_event_view(plan: &FarmPublishPlan) -> FarmPublishEventView {
+fn sdk_plan_event_view(plan: &FarmPlan) -> FarmPublishEventView {
     FarmPublishEventView {
-        kind: plan.frozen_draft().kind_u32(),
-        author: plan.frozen_draft().expected_pubkey_str().to_owned(),
-        content: plan.frozen_draft().content().to_owned(),
-        tags: plan.frozen_draft().tags_as_vec(),
-        event_id: Some(plan.expected_event_id().as_str().to_owned()),
-        event_addr: Some(plan.farm_addr().as_str().to_owned()),
+        kind: plan.draft().kind_u32(),
+        author: plan.draft().expected_pubkey().to_hex(),
+        content: plan.draft().content().to_owned(),
+        tags: plan.draft().tags_as_vec(),
+        event_id: Some(plan.draft().expected_event_id().as_str().to_owned()),
+        event_addr: Some(plan.coordinate().as_str().to_owned()),
     }
-}
-
-fn sdk_push_event_for_farm<'a>(
-    enqueue: &FarmEnqueueReceipt,
-    push: &'a PushOutboxReceipt,
-) -> Option<&'a PushOutboxEventReceipt> {
-    push.events
-        .iter()
-        .find(|event| event.event_id == enqueue.signed_event_id)
-}
-
-fn sdk_publish_state(push_event: Option<&PushOutboxEventReceipt>) -> String {
-    match push_event.map(|event| event.final_state) {
-        Some(PushOutboxEventState::Published) => "published",
-        Some(PushOutboxEventState::PublishRetryable | PushOutboxEventState::FailedTerminal) => {
-            "unavailable"
-        }
-        Some(_) | None => "queued",
-    }
-    .to_owned()
-}
-
-fn sdk_publish_reason(push_event: Option<&PushOutboxEventReceipt>) -> Option<String> {
-    match push_event.map(|event| event.final_state) {
-        Some(PushOutboxEventState::Published) => None,
-        Some(PushOutboxEventState::PublishRetryable) => Some(
-            "SDK transport publish did not reach accepted quorum; outbox event remains retryable"
-                .to_owned(),
-        ),
-        Some(PushOutboxEventState::FailedTerminal) => {
-            Some("SDK transport publish failed terminally".to_owned())
-        }
-        Some(state) => Some(format!(
-            "SDK transport push left event in state `{state:?}`"
-        )),
-        None => Some(
-            "farm publish queued in SDK outbox; no ready SDK outbox event was pushed".to_owned(),
-        ),
-    }
-}
-
-fn sdk_publish_actions(push_event: Option<&PushOutboxEventReceipt>) -> Vec<String> {
-    if !matches!(
-        push_event.map(|event| event.final_state),
-        Some(PushOutboxEventState::Published)
-    ) {
-        return vec!["radroots sync push".to_owned()];
-    }
-    Vec::new()
-}
-
-fn sdk_push_target_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
-    event
-        .targets
-        .iter()
-        .map(|target| target.endpoint_uri.clone())
-        .collect()
-}
-
-fn sdk_push_attempted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
-    event
-        .targets
-        .iter()
-        .filter(|target| target.attempted)
-        .map(|target| target.endpoint_uri.clone())
-        .collect()
-}
-
-fn sdk_push_accepted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
-    event
-        .targets
-        .iter()
-        .filter(|target| {
-            matches!(
-                target.outcome_kind,
-                PushOutboxTargetOutcomeKind::Accepted
-                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
-            )
-        })
-        .map(|target| target.endpoint_uri.clone())
-        .collect()
-}
-
-fn sdk_push_failed_transport_targets(
-    event: &PushOutboxEventReceipt,
-) -> Vec<TransportTargetFailureView> {
-    event
-        .targets
-        .iter()
-        .filter(|target| {
-            !matches!(
-                target.outcome_kind,
-                PushOutboxTargetOutcomeKind::Accepted
-                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
-            )
-        })
-        .map(|target| TransportTargetFailureView {
-            transport_kind: target.transport_kind.clone(),
-            endpoint_uri: target.endpoint_uri.clone(),
-            target_scope: target.target_scope.clone(),
-            target_label: target.target_label.clone(),
-            transport_outcome_kind: target
-                .transport_outcome_kind
-                .map(sdk_transport_outcome_kind_label),
-            reason: target
-                .message
-                .clone()
-                .unwrap_or_else(|| sdk_target_outcome_kind_label(target.outcome_kind)),
-        })
-        .collect()
 }
 
 fn profile_not_submitted_component(
@@ -1421,33 +1132,6 @@ fn profile_not_submitted_component(
             event,
         )
     }
-}
-
-fn persist_farm_publication(
-    config: &RuntimeConfig,
-    resolved: &mut ResolvedFarmConfig,
-    event_id: String,
-) -> Result<(), RuntimeError> {
-    persist_publication(config, resolved, None, Some(event_id))
-}
-
-fn persist_publication(
-    config: &RuntimeConfig,
-    resolved: &mut ResolvedFarmConfig,
-    profile_event_id: Option<String>,
-    farm_event_id: Option<String>,
-) -> Result<(), RuntimeError> {
-    let published_at = now_unix();
-    if let Some(event_id) = profile_event_id.and_then(|value| non_empty(value.as_str())) {
-        resolved.document.publication.profile_event_id = Some(event_id);
-        resolved.document.publication.profile_published_at = Some(published_at);
-    }
-    if let Some(event_id) = farm_event_id.and_then(|value| non_empty(value.as_str())) {
-        resolved.document.publication.farm_event_id = Some(event_id);
-        resolved.document.publication.farm_published_at = Some(published_at);
-    }
-    farm_config::write(&config.paths, resolved.scope, &resolved.document)?;
-    Ok(())
 }
 
 fn farm_write_source(config: &RuntimeConfig) -> &'static str {
@@ -1487,16 +1171,16 @@ fn private_location_target(
     let farm_d_tag = farm_d_tag
         .map(str::to_owned)
         .unwrap_or_else(|| resolved.document.selection.farm_d_tag.clone());
-    let actor = RadrootsActorContext::local_account(
+    let actor = Actor::from_public_key_hex(
         seller_pubkey.as_str(),
-        seller_account_id.clone(),
-        [RadrootsActorRole::Farmer],
+        ActorSource::ExplicitPublicKey,
+        [AuthorRole::Farmer],
     )
     .map_err(|error| {
         RuntimeError::Config(format!("invalid farm private location actor: {error}"))
     })?;
     let farm_addr =
-        RadrootsAddressableCoordinate::parse(format!("{KIND_FARM}:{seller_pubkey}:{farm_d_tag}"))
+        AddressableCoordinate::parse(format!("{KIND_FARM}:{seller_pubkey}:{farm_d_tag}"))
             .map_err(|error| RuntimeError::Config(format!("invalid farm address: {error}")))?;
     Ok(Some(PrivateFarmLocationTarget {
         actor,
@@ -1539,134 +1223,6 @@ fn private_location_unconfigured_view() -> FarmPrivateLocationView {
             "radroots farm create".to_owned(),
         ],
     }
-}
-
-fn private_location_view_from_receipt(
-    state: &str,
-    target: PrivateFarmLocationTarget,
-    receipt: Option<FarmPrivateLocationReceipt>,
-    geonames_database_path: Option<String>,
-    reason: Option<String>,
-) -> FarmPrivateLocationView {
-    let receipt_ref = receipt.as_ref();
-    FarmPrivateLocationView {
-        state: state.to_owned(),
-        source: SDK_FARM_PRIVATE_LOCATION_SOURCE.to_owned(),
-        farm_addr: Some(target.farm_addr.to_string()),
-        farm_d_tag: Some(target.farm_d_tag),
-        seller_account_id: Some(target.seller_account_id),
-        seller_pubkey: Some(target.seller_pubkey),
-        label: receipt_ref.and_then(|receipt| receipt.label.clone()),
-        exact_location: receipt_ref.map(|receipt| FarmPrivateExactLocationView {
-            lat: receipt.exact_location.latitude,
-            lng: receipt.exact_location.longitude,
-        }),
-        public_locality: receipt_ref.map(|receipt| FarmPrivatePublicLocalityView {
-            primary: receipt.public_locality.primary.clone(),
-            city: receipt.public_locality.city.clone(),
-            region: receipt.public_locality.region.clone(),
-            country: receipt.public_locality.country.clone(),
-            geohash5: receipt.public_locality.geohash5.clone(),
-        }),
-        geonames_feature_id: receipt_ref.and_then(|receipt| receipt.geonames_feature_id),
-        geonames_country_id: receipt_ref.and_then(|receipt| receipt.geonames_country_id.clone()),
-        geonames_database_path,
-        cleared: None,
-        candidates: Vec::new(),
-        reason,
-        actions: if receipt.is_some() {
-            Vec::new()
-        } else {
-            vec![
-                "radroots farm location set --city <city> --region <region> --country <country>"
-                    .to_owned(),
-            ]
-        },
-    }
-}
-
-fn private_location_view_from_lookup(
-    state: &str,
-    target: PrivateFarmLocationTarget,
-    candidates: Vec<FarmPrivateLocationLookupCandidate>,
-    geonames_database_path: Option<String>,
-    reason: Option<String>,
-) -> FarmPrivateLocationView {
-    let actions = if state == "ambiguous" {
-        vec![
-            "radroots farm location set --geonames-id <id>".to_owned(),
-            "radroots farm location set --city <city> --region <region> --country <country>"
-                .to_owned(),
-        ]
-    } else {
-        vec![
-            "radroots farm location set --query \"<city>, <region>, <country>\"".to_owned(),
-            "radroots farm location set --lat <lat> --lng <lng>".to_owned(),
-        ]
-    };
-    FarmPrivateLocationView {
-        state: state.to_owned(),
-        source: SDK_FARM_PRIVATE_LOCATION_SOURCE.to_owned(),
-        farm_addr: Some(target.farm_addr.to_string()),
-        farm_d_tag: Some(target.farm_d_tag),
-        seller_account_id: Some(target.seller_account_id),
-        seller_pubkey: Some(target.seller_pubkey),
-        label: None,
-        exact_location: None,
-        public_locality: None,
-        geonames_feature_id: None,
-        geonames_country_id: None,
-        geonames_database_path,
-        cleared: None,
-        candidates: private_location_candidate_views(candidates),
-        reason,
-        actions,
-    }
-}
-
-fn sdk_private_location_input(input: &FarmPrivateLocationSetInput) -> FarmPrivateLocationInput {
-    match input {
-        FarmPrivateLocationSetInput::Exact {
-            latitude,
-            longitude,
-        } => FarmPrivateLocationInput::exact(SdkExactLocation::new(*latitude, *longitude)),
-        FarmPrivateLocationSetInput::City {
-            city,
-            region,
-            country,
-        } => {
-            let mut query = GeocoderLocalityQuery::structured(city.clone());
-            if let Some(region) = region {
-                query = query.with_region(region.clone());
-            }
-            if let Some(country) = country {
-                query = query.with_country(country.clone());
-            }
-            FarmPrivateLocationInput::Locality(query)
-        }
-        FarmPrivateLocationSetInput::Query(query) => FarmPrivateLocationInput::query(query.clone()),
-        FarmPrivateLocationSetInput::GeonamesId(id) => FarmPrivateLocationInput::geonames_id(*id),
-    }
-}
-
-fn private_location_candidate_views(
-    candidates: Vec<FarmPrivateLocationLookupCandidate>,
-) -> Vec<FarmPrivateLocationCandidateView> {
-    candidates
-        .into_iter()
-        .map(|candidate| FarmPrivateLocationCandidateView {
-            geonames_feature_id: candidate.geonames_feature_id,
-            geonames_country_id: candidate.geonames_country_id,
-            name: candidate.name,
-            display_name: candidate.display_name,
-            exact_location: FarmPrivateExactLocationView {
-                lat: candidate.exact_location.latitude,
-                lng: candidate.exact_location.longitude,
-            },
-            region: candidate.region,
-            country: candidate.country,
-        })
-        .collect()
 }
 
 fn init_document(
@@ -1763,14 +1319,14 @@ fn init_document(
             lud16: None,
             bot: None,
         },
-        farm: RadrootsFarm {
+        farm: Farm {
             d_tag: farm_d_tag,
             name,
             about,
             website,
             picture,
             banner,
-            location: Some(RadrootsFarmPublicLocation {
+            location: Some(FarmPublicLocation {
                 primary: location_primary.clone(),
                 city: city.clone(),
                 region: region.clone(),
@@ -1781,7 +1337,7 @@ fn init_document(
         },
         listing_defaults: FarmListingDefaults {
             delivery_method,
-            location: RadrootsOperationalListingPublicLocation {
+            location: OperationalListingPublicLocation {
                 primary: location_primary,
                 city,
                 region,
@@ -2046,22 +1602,19 @@ fn apply_field_update(
     Ok(())
 }
 
-fn ensure_farm_location(document: &mut FarmConfigDocument) -> &mut RadrootsFarmPublicLocation {
+fn ensure_farm_location(document: &mut FarmConfigDocument) -> &mut FarmPublicLocation {
     let primary = document.listing_defaults.location.primary.clone();
     let city = document.listing_defaults.location.city.clone();
     let region = document.listing_defaults.location.region.clone();
     let country = document.listing_defaults.location.country.clone();
     let geohash = document.listing_defaults.location.geohash.clone();
-    document
-        .farm
-        .location
-        .get_or_insert(RadrootsFarmPublicLocation {
-            primary,
-            city,
-            region,
-            country,
-            geohash,
-        })
+    document.farm.location.get_or_insert(FarmPublicLocation {
+        primary,
+        city,
+        region,
+        country,
+        geohash,
+    })
 }
 
 fn publication_for_document(
@@ -2378,7 +1931,7 @@ mod tests {
     use super::{authored_profile_from_draft, generate_d_tag, require_verified_publish_media};
     use crate::runtime::RuntimeError;
     use crate::runtime::farm_config::FarmProfileDraft;
-    use radroots_event::farm::RadrootsFarm;
+    use radroots_event::farm::Farm;
     use radroots_event_codec::d_tag::is_d_tag_base64url;
     use radroots_event_codec::profile::authored::authored_profile_to_wire_parts;
     use serde_json::json;
@@ -2448,8 +2001,8 @@ mod tests {
         assert_blossom_proof_error(require_verified_publish_media(&draft, &farm));
     }
 
-    fn sample_farm() -> RadrootsFarm {
-        RadrootsFarm {
+    fn sample_farm() -> Farm {
+        Farm {
             d_tag: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             name: "Moss Street Farm".to_owned(),
             about: None,

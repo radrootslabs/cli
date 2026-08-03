@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use radroots_event::farm::RadrootsFarm;
-use radroots_event::operational_listing::{
-    RadrootsOperationalListingDeliveryMethod, RadrootsOperationalListingPublicLocation,
+use radroots_event::farm::Farm;
+use radroots_event::listing::operational::{
+    OperationalListingDeliveryMethod, OperationalListingPublicLocation,
 };
 use radroots_event_codec::d_tag::is_d_tag_base64url;
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,7 @@ pub struct FarmConfigDocument {
     pub version: u32,
     pub selection: FarmConfigSelection,
     pub profile: FarmProfileDraft,
-    pub farm: RadrootsFarm,
+    pub farm: Farm,
     pub listing_defaults: FarmListingDefaults,
     #[serde(default)]
     pub publication: FarmPublicationStatus,
@@ -74,13 +74,11 @@ pub struct FarmConfigSelection {
 #[serde(deny_unknown_fields)]
 pub struct FarmListingDefaults {
     pub delivery_method: String,
-    pub location: RadrootsOperationalListingPublicLocation,
+    pub location: OperationalListingPublicLocation,
 }
 
 impl FarmListingDefaults {
-    pub fn delivery_method_model(
-        &self,
-    ) -> Result<RadrootsOperationalListingDeliveryMethod, RuntimeError> {
+    pub fn delivery_method_model(&self) -> Result<OperationalListingDeliveryMethod, RuntimeError> {
         parse_delivery_method(self.delivery_method.as_str())
     }
 }
@@ -375,9 +373,7 @@ fn location_geohash(document: &FarmConfigDocument) -> Option<&str> {
     })
 }
 
-fn parse_delivery_method(
-    value: &str,
-) -> Result<RadrootsOperationalListingDeliveryMethod, RuntimeError> {
+fn parse_delivery_method(value: &str) -> Result<OperationalListingDeliveryMethod, RuntimeError> {
     let method = trimmed(value);
     if method.is_empty() {
         return Err(RuntimeError::Config(
@@ -385,10 +381,10 @@ fn parse_delivery_method(
         ));
     }
     Ok(match method {
-        "pickup" => RadrootsOperationalListingDeliveryMethod::Pickup,
-        "local_delivery" => RadrootsOperationalListingDeliveryMethod::LocalDelivery,
-        "shipping" => RadrootsOperationalListingDeliveryMethod::Shipping,
-        other => RadrootsOperationalListingDeliveryMethod::Other {
+        "pickup" => OperationalListingDeliveryMethod::Pickup,
+        "local_delivery" => OperationalListingDeliveryMethod::LocalDelivery,
+        "shipping" => OperationalListingDeliveryMethod::Shipping,
+        other => OperationalListingDeliveryMethod::Other {
             method: other.to_owned(),
         },
     })
@@ -413,7 +409,7 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use radroots_event::farm::RadrootsFarmPublicLocation;
+    use radroots_event::farm::FarmPublicLocation;
     use tempfile::tempdir;
 
     fn sample_paths(profile: &str, root: &Path) -> PathsConfig {
@@ -462,14 +458,14 @@ mod tests {
                 lud16: None,
                 bot: None,
             },
-            farm: RadrootsFarm {
+            farm: Farm {
                 d_tag: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
                 name: "La Huerta".to_owned(),
                 about: Some("Small mixed vegetable farm.".to_owned()),
                 website: Some("https://example.invalid/la-huerta".to_owned()),
                 picture: None,
                 banner: None,
-                location: Some(RadrootsFarmPublicLocation {
+                location: Some(FarmPublicLocation {
                     primary: "San Francisco, CA".to_owned(),
                     city: Some("San Francisco".to_owned()),
                     region: Some("CA".to_owned()),
@@ -480,7 +476,7 @@ mod tests {
             },
             listing_defaults: FarmListingDefaults {
                 delivery_method: "pickup".to_owned(),
-                location: RadrootsOperationalListingPublicLocation {
+                location: OperationalListingPublicLocation {
                     primary: "San Francisco, CA".to_owned(),
                     city: Some("San Francisco".to_owned()),
                     region: Some("CA".to_owned()),

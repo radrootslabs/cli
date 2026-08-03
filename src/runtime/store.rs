@@ -1,28 +1,28 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use radroots_replica_store::export::{ReplicaStoreExportManifestRs, export_manifest};
 use radroots_replica_store::migrations;
 use radroots_replica_sync::radroots_replica_sync_status;
-use radroots_sdk::{
-    BackupReceipt, BackupRequest, IntegrityReceipt, IntegrityRequest, RadrootsClient,
-    RestoreReceipt, RestoreRequest, SdkBackupState, SdkEventStoreStorageStatus,
-    SdkOutboxStorageStatus, SdkRestoreState, SdkSqliteStoreStatus, SdkStorageKind,
-    StorageStatusReceipt, StorageStatusRequest,
-};
+use radroots_sdk::storage::{IntegrityStatus, Status as StorageStatus};
 use radroots_sql_core::SqlxSqliteExecutor;
+use radroots_storage::{
+    backup::{BackupFormatVersion, BackupId, BackupPlan, BackupSecretPolicy, RestorePlan},
+    status::{IntegrityHealth, ShutdownState, StorageBackend, StorageOpenMode, WriterPolicy},
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::cli::global::LocalExportFormatArg;
 use crate::runtime::RuntimeError;
 use crate::runtime::config::RuntimeConfig;
-use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_runtime, sdk_storage_root};
+use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_storage_root};
 use crate::runtime::sync::ensure_sync_run_table;
 use crate::view::runtime::{
     LocalBackupView, LocalDerivedProjectionStatusView, LocalExportView, LocalInitView,
     LocalReplicaCountsView, LocalReplicaSyncView, LocalRestoreView, LocalStatusView,
-    SdkEventStoreStatusView, SdkIntegrityView, SdkOutboxStatusView, SdkSqliteStatusView,
+    SdkIntegrityView, SdkStorageStatusView,
 };
 
 const DERIVED_PROJECTION_SOURCE: &str = "local derived projection cache";
@@ -32,7 +32,6 @@ const SDK_BACKUP_KIND: &str = "sdk_canonical";
 const SDK_BACKUP_MANIFEST_FILE: &str = "manifest.json";
 const SDK_RUNTIME_FILE: &str = "runtime.sqlite";
 const SDK_PRIVATE_FILE: &str = "private.sqlite";
-const SDK_STUDIO_FILE: &str = "studio.sqlite";
 
 pub fn init(config: &RuntimeConfig) -> Result<LocalInitView, RuntimeError> {
     let existed = config.local.replica_store_path.exists();
@@ -90,8 +89,8 @@ pub fn status(config: &RuntimeConfig) -> Result<LocalStatusView, CliSdkAdapterEr
     let sdk_existed_before_open = sdk_storage_files_exist(sdk_root.as_path());
     let derived_projection = derived_projection_status(config)?;
     let session = CliSdkSession::connect(config)?;
-    let receipt = session.block_on(session.sdk().storage_status(StorageStatusRequest::new()))?;
-    let integrity = session.block_on(session.sdk().integrity(IntegrityRequest::new()))?;
+    let receipt = session.block_on(session.sdk().storage_status())?;
+    let integrity = session.block_on(session.sdk().storage_integrity())?;
     Ok(sdk_status_view(
         config,
         sdk_root,
@@ -159,8 +158,34 @@ pub fn backup(
 ) -> Result<LocalBackupView, CliSdkAdapterError> {
     ensure_safe_sdk_backup_destination(config, output)?;
     let session = CliSdkSession::connect(config)?;
-    let receipt = session.block_on(session.sdk().backup(BackupRequest::new(output)))?;
-    sdk_backup_view(receipt)
+    let plan = sdk_backup_plan()?;
+    let operation = session
+        .block_on(session.sdk().storage_operations()?.begin_backup(plan))
+        .map_err(|error| RuntimeError::Config(format!("SDK backup planning failed: {error}")))?;
+    Ok(LocalBackupView {
+        state: format!("{:?}", operation.stage()).to_lowercase(),
+        source: SDK_CANONICAL_SOURCE.to_owned(),
+        backup_kind: SDK_BACKUP_KIND.to_owned(),
+        canonical_store: SDK_CANONICAL_STORE.to_owned(),
+        destination: output.display().to_string(),
+        file: output.join(SDK_BACKUP_MANIFEST_FILE).display().to_string(),
+        event_store_file: None,
+        outbox_file: None,
+        manifest_file: None,
+        size_bytes: 0,
+        manifest: json!({
+            "backup_id": hex_bytes(operation.plan().backup_id().as_bytes()),
+            "format_version": operation.plan().format_version().get(),
+            "secret_policy": format!("{:?}", operation.plan().secret_policy()).to_lowercase(),
+            "requested_at_unix_ms": operation.plan().requested_at_unix_ms(),
+            "revision": operation.revision().get(),
+        }),
+        reason: Some(
+            "backup is durably planned; the host capture worker must complete staged capture, verification, and finalization"
+                .to_owned(),
+        ),
+        actions: vec!["radroots store status".to_owned()],
+    })
 }
 
 pub fn backup_preflight(
@@ -169,8 +194,8 @@ pub fn backup_preflight(
 ) -> Result<LocalBackupView, CliSdkAdapterError> {
     ensure_safe_sdk_backup_destination(config, output)?;
     let session = CliSdkSession::connect(config)?;
-    let status = session.block_on(session.sdk().storage_status(StorageStatusRequest::new()))?;
-    let integrity = session.block_on(session.sdk().integrity(IntegrityRequest::new()))?;
+    let status = session.block_on(session.sdk().storage_status())?;
+    let integrity = session.block_on(session.sdk().storage_integrity())?;
     let manifest = sdk_backup_manifest_preview(output, &status, &integrity);
     Ok(LocalBackupView {
         state: "dry_run".to_owned(),
@@ -202,13 +227,50 @@ pub fn restore(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| sdk_storage_root(config));
     ensure_safe_sdk_restore_destination(config, &destination)?;
-    let request = RestoreRequest::new(source)
-        .with_destination(destination)
-        .with_overwrite(overwrite)
-        .with_dry_run(dry_run);
-    let runtime = sdk_runtime()?;
-    let receipt = runtime.block_on(RadrootsClient::restore(request))?;
-    sdk_restore_view(receipt, overwrite, dry_run)
+    let manifest_path = source.join(SDK_BACKUP_MANIFEST_FILE);
+    let manifest = serde_json::from_slice::<radroots_storage::backup::BackupManifest>(&fs::read(
+        &manifest_path,
+    )?)
+    .map_err(|error| RuntimeError::Config(format!("invalid backup manifest: {error}")))?;
+    let plan = RestorePlan::new(manifest.clone(), manifest.secret_policy(), unix_ms()?)
+        .map_err(|error| RuntimeError::Config(format!("invalid restore plan: {error}")))?;
+    let session = CliSdkSession::connect(config)?;
+    let operation = session
+        .block_on(session.sdk().storage_operations()?.begin_restore(plan))
+        .map_err(|error| RuntimeError::Config(format!("SDK restore planning failed: {error}")))?;
+    if !dry_run {
+        return Err(RuntimeError::Config(
+            "restore is planned but requires the host staging and atomic replacement worker"
+                .to_owned(),
+        )
+        .into());
+    }
+    Ok(LocalRestoreView {
+        state: "dry_run".to_owned(),
+        source: SDK_CANONICAL_SOURCE.to_owned(),
+        restore_kind: SDK_BACKUP_KIND.to_owned(),
+        canonical_store: SDK_CANONICAL_STORE.to_owned(),
+        backup_source: source.display().to_string(),
+        destination: destination.display().to_string(),
+        event_store_file: source.join(SDK_RUNTIME_FILE).display().to_string(),
+        outbox_file: source.join(SDK_RUNTIME_FILE).display().to_string(),
+        manifest_file: manifest_path.display().to_string(),
+        destination_event_store_file: Some(
+            destination.join(SDK_RUNTIME_FILE).display().to_string(),
+        ),
+        destination_outbox_file: Some(destination.join(SDK_RUNTIME_FILE).display().to_string()),
+        restored_event_store_file: None,
+        restored_outbox_file: None,
+        manifest: json_value(&manifest)?,
+        verification: json!({
+            "stage": format!("{:?}", operation.stage()).to_lowercase(),
+            "revision": operation.revision().get(),
+        }),
+        overwrite,
+        dry_run,
+        reason: Some("dry run requested; restore was validated and not staged".to_owned()),
+        actions: vec!["radroots store restore <backup-dir>".to_owned()],
+    })
 }
 
 pub fn export(
@@ -339,127 +401,109 @@ fn validate_directory_target(path: &Path) -> Result<(), RuntimeError> {
 }
 
 fn sdk_storage_files_exist(sdk_root: &Path) -> bool {
-    sdk_root.join(SDK_RUNTIME_FILE).exists()
-        && sdk_root.join(SDK_PRIVATE_FILE).exists()
-        && sdk_root.join(SDK_STUDIO_FILE).exists()
+    sdk_root.join(SDK_RUNTIME_FILE).exists() && sdk_root.join(SDK_PRIVATE_FILE).exists()
 }
 
 fn sdk_status_view(
     config: &RuntimeConfig,
     sdk_root: PathBuf,
     sdk_existed_before_open: bool,
-    receipt: StorageStatusReceipt,
-    integrity: IntegrityReceipt,
+    status: StorageStatus,
+    integrity: IntegrityStatus,
     derived_projection: LocalDerivedProjectionStatusView,
 ) -> LocalStatusView {
-    let runtime_path = receipt
-        .paths
-        .as_ref()
-        .map(|paths| paths.runtime_path.display().to_string());
-    let state = sdk_status_state(&receipt, &integrity).to_owned();
-    let reason = sdk_status_reason(&state);
-    let actions = sdk_status_actions(&state);
-    LocalStatusView {
-        state,
-        source: SDK_CANONICAL_SOURCE.to_owned(),
-        local_root: config.local.root.display().to_string(),
-        canonical_store: SDK_CANONICAL_STORE.to_owned(),
-        sdk_storage: sdk_storage_kind_label(receipt.storage).to_owned(),
-        sdk_root: sdk_root.display().to_string(),
-        sdk_existed_before_open,
-        event_store: sdk_event_store_status_view(receipt.event_store, runtime_path.clone()),
-        outbox: sdk_outbox_status_view(receipt.outbox, runtime_path),
-        integrity: sdk_integrity_view(integrity),
-        derived_projection,
-        reason,
-        actions,
-    }
-}
-
-fn sdk_status_state(receipt: &StorageStatusReceipt, integrity: &IntegrityReceipt) -> &'static str {
-    if receipt.event_store.store.integrity_ok
-        && receipt.outbox.store.integrity_ok
-        && integrity.event_store_ok
-        && integrity.outbox_ok
-    {
+    let state = if integrity.health() == IntegrityHealth::Healthy {
         "ready"
     } else {
         "needs_attention"
+    };
+    LocalStatusView {
+        state: state.to_owned(),
+        source: SDK_CANONICAL_SOURCE.to_owned(),
+        local_root: config.local.root.display().to_string(),
+        canonical_store: SDK_CANONICAL_STORE.to_owned(),
+        sdk_storage: storage_backend_label(status.backend()).to_owned(),
+        sdk_root: sdk_root.display().to_string(),
+        sdk_existed_before_open,
+        storage: SdkStorageStatusView {
+            backend: storage_backend_label(status.backend()).to_owned(),
+            open_mode: storage_open_mode_label(status.open_mode()).to_owned(),
+            writer_policy: writer_policy_label(status.writer_policy()).to_owned(),
+            shutdown: shutdown_state_label(status.shutdown()).to_owned(),
+            wal_enabled: status.wal_enabled(),
+            busy_timeout_ms: status.busy_timeout_ms(),
+        },
+        integrity: SdkIntegrityView {
+            health: integrity_health_label(integrity.health()).to_owned(),
+            checked_at_unix_ms: integrity.checked_at_unix_ms(),
+            verified_members: integrity.verified_members(),
+            failed_members: integrity.failed_members(),
+        },
+        derived_projection,
+        reason: (state != "ready")
+            .then(|| "SDK canonical store integrity requires attention".to_owned()),
+        actions: if state == "ready" {
+            Vec::new()
+        } else {
+            vec!["radroots store inspect".to_owned()]
+        },
     }
 }
 
-fn sdk_status_reason(state: &str) -> Option<String> {
-    match state {
-        "ready" => None,
-        _ => Some("SDK canonical store integrity check failed".to_owned()),
+fn storage_backend_label(value: StorageBackend) -> &'static str {
+    match value {
+        StorageBackend::Memory => "memory",
+        StorageBackend::Sqlite => "sqlite",
     }
 }
 
-fn sdk_status_actions(state: &str) -> Vec<String> {
-    match state {
-        "ready" => Vec::new(),
-        _ => vec!["radroots store inspect".to_owned()],
+fn storage_open_mode_label(value: StorageOpenMode) -> &'static str {
+    match value {
+        StorageOpenMode::ReadOnly => "read_only",
+        StorageOpenMode::ReadWriteExisting => "read_write_existing",
+        StorageOpenMode::Create => "create",
     }
 }
 
-fn sdk_event_store_status_view(
-    status: SdkEventStoreStorageStatus,
-    path: Option<String>,
-) -> SdkEventStoreStatusView {
-    SdkEventStoreStatusView {
-        path,
-        store: sdk_sqlite_status_view(status.store),
-        total_events: status.total_events,
-        valid_stream_events: status.valid_stream_events,
-        transport_observations: status.transport_observations,
-        last_event_seq: status.last_event_seq,
-        last_event_updated_at_ms: status.last_event_updated_at_ms,
+fn writer_policy_label(value: WriterPolicy) -> &'static str {
+    match value {
+        WriterPolicy::NoWriter => "no_writer",
+        WriterPolicy::AdvisoryProcessLock => "advisory_process_lock",
     }
 }
 
-fn sdk_outbox_status_view(
-    status: SdkOutboxStorageStatus,
-    path: Option<String>,
-) -> SdkOutboxStatusView {
-    SdkOutboxStatusView {
-        path,
-        store: sdk_sqlite_status_view(status.store),
-        total_events: status.total_events,
-        pending_events: status.pending_events,
-        retryable_events: status.retryable_events,
-        terminal_events: status.terminal_events,
-        failed_terminal_events: status.failed_terminal_events,
-        deferred_until_implemented_events: status.deferred_until_implemented_events,
-        ready_signed_events: status.ready_signed_events,
-        publishing_events: status.publishing_events,
-        last_attempt_at_ms: status.last_attempt_at_ms,
-        last_error: status.last_error,
+fn shutdown_state_label(value: ShutdownState) -> &'static str {
+    match value {
+        ShutdownState::Open => "open",
+        ShutdownState::Closing => "closing",
+        ShutdownState::Closed => "closed",
     }
 }
 
-fn sdk_sqlite_status_view(status: SdkSqliteStoreStatus) -> SdkSqliteStatusView {
-    SdkSqliteStatusView {
-        schema_version: status.schema_version,
-        journal_mode: status.journal_mode,
-        foreign_keys_enabled: status.foreign_keys_enabled,
-        busy_timeout_ms: status.busy_timeout_ms,
-        integrity_ok: status.integrity_ok,
-        integrity_result: status.integrity_result,
+fn integrity_health_label(value: IntegrityHealth) -> &'static str {
+    match value {
+        IntegrityHealth::Healthy => "healthy",
+        IntegrityHealth::Degraded => "degraded",
+        IntegrityHealth::Corrupt => "corrupt",
+        IntegrityHealth::Unknown => "unknown",
     }
 }
 
-fn sdk_integrity_view(receipt: IntegrityReceipt) -> SdkIntegrityView {
-    SdkIntegrityView {
-        checked_paths: receipt
-            .checked_paths
-            .into_iter()
-            .map(|path| path.display().to_string())
-            .collect(),
-        event_store_ok: receipt.event_store_ok,
-        outbox_ok: receipt.outbox_ok,
-        event_store_result: receipt.event_store_result,
-        outbox_result: receipt.outbox_result,
-    }
+fn sdk_backup_manifest_preview(
+    output: &Path,
+    status: &StorageStatus,
+    integrity: &IntegrityStatus,
+) -> Value {
+    json!({
+        "manifest_kind": "sdk_canonical_backup_preview",
+        "destination": output.display().to_string(),
+        "backup_paths": {
+            "runtime_path": output.join(SDK_RUNTIME_FILE).display().to_string(),
+            "private_path": output.join(SDK_PRIVATE_FILE).display().to_string(),
+        },
+        "source_status": status,
+        "integrity": integrity,
+    })
 }
 
 fn ensure_safe_sdk_backup_destination(
@@ -469,13 +513,11 @@ fn ensure_safe_sdk_backup_destination(
     let sdk_root = sdk_storage_root(config);
     let sdk_runtime_path = sdk_root.join(SDK_RUNTIME_FILE);
     let sdk_private_path = sdk_root.join(SDK_PRIVATE_FILE);
-    let sdk_studio_path = sdk_root.join(SDK_STUDIO_FILE);
     let forbidden_paths = [
         sdk_root.as_path(),
         config.local.replica_store_path.as_path(),
         sdk_runtime_path.as_path(),
         sdk_private_path.as_path(),
-        sdk_studio_path.as_path(),
     ];
     if forbidden_paths.contains(&output) {
         return Err(RuntimeError::Config(format!(
@@ -499,13 +541,11 @@ fn ensure_safe_sdk_restore_destination(
     let sdk_root = sdk_storage_root(config);
     let sdk_runtime_path = sdk_root.join(SDK_RUNTIME_FILE);
     let sdk_private_path = sdk_root.join(SDK_PRIVATE_FILE);
-    let sdk_studio_path = sdk_root.join(SDK_STUDIO_FILE);
     let forbidden_paths = [
         config.local.root.as_path(),
         config.local.replica_store_path.as_path(),
         sdk_runtime_path.as_path(),
         sdk_private_path.as_path(),
-        sdk_studio_path.as_path(),
     ];
     if forbidden_paths.contains(&destination) {
         return Err(RuntimeError::Config(format!(
@@ -525,148 +565,42 @@ fn ensure_safe_sdk_restore_destination(
     Ok(())
 }
 
-fn sdk_backup_view(receipt: BackupReceipt) -> Result<LocalBackupView, CliSdkAdapterError> {
-    let event_store_file = receipt
-        .runtime_path
-        .as_ref()
-        .map(|path| display_path(path.as_path()));
-    let outbox_file = receipt
-        .runtime_path
-        .as_ref()
-        .map(|path| display_path(path.as_path()));
-    let manifest_file = receipt
-        .manifest_path
-        .as_ref()
-        .map(|path| display_path(path.as_path()));
-    let size_bytes = path_size(receipt.runtime_path.as_ref())?
-        + path_size(receipt.private_path.as_ref())?
-        + path_size(receipt.studio_path.as_ref())?
-        + path_size(receipt.manifest_path.as_ref())?;
-    Ok(LocalBackupView {
-        state: sdk_backup_state_label(receipt.state).to_owned(),
-        source: SDK_CANONICAL_SOURCE.to_owned(),
-        backup_kind: SDK_BACKUP_KIND.to_owned(),
-        canonical_store: SDK_CANONICAL_STORE.to_owned(),
-        destination: display_path(&receipt.destination),
-        file: manifest_file
-            .clone()
-            .unwrap_or_else(|| receipt.destination.display().to_string()),
-        event_store_file,
-        outbox_file,
-        manifest_file,
-        size_bytes,
-        manifest: json_value(&receipt.manifest)?,
-        reason: None,
-        actions: Vec::new(),
-    })
-}
-
-fn sdk_restore_view(
-    receipt: RestoreReceipt,
-    overwrite: bool,
-    dry_run: bool,
-) -> Result<LocalRestoreView, CliSdkAdapterError> {
-    let destination_paths = receipt.destination_paths.as_ref();
-    let restored_paths = receipt.restored_paths.as_ref();
-    Ok(LocalRestoreView {
-        state: sdk_restore_state_label(receipt.state).to_owned(),
-        source: SDK_CANONICAL_SOURCE.to_owned(),
-        restore_kind: SDK_BACKUP_KIND.to_owned(),
-        canonical_store: SDK_CANONICAL_STORE.to_owned(),
-        backup_source: display_path(&receipt.source),
-        destination: receipt
-            .destination
-            .as_ref()
-            .map(|path| display_path(path.as_path()))
-            .unwrap_or_default(),
-        event_store_file: display_path(&receipt.runtime_path),
-        outbox_file: display_path(&receipt.runtime_path),
-        manifest_file: display_path(&receipt.manifest_path),
-        destination_event_store_file: destination_paths
-            .map(|paths| display_path(&paths.runtime_path)),
-        destination_outbox_file: destination_paths.map(|paths| display_path(&paths.runtime_path)),
-        restored_event_store_file: restored_paths.map(|paths| display_path(&paths.runtime_path)),
-        restored_outbox_file: restored_paths.map(|paths| display_path(&paths.runtime_path)),
-        manifest: json_value(&receipt.manifest)?,
-        verification: json_value(&receipt.verification)?,
-        overwrite,
-        dry_run,
-        reason: if dry_run {
-            Some("dry run requested; SDK canonical store was not restored".to_owned())
-        } else {
-            None
-        },
-        actions: if dry_run {
-            vec!["radroots store restore <backup-dir>".to_owned()]
-        } else {
-            Vec::new()
-        },
-    })
-}
-
-fn sdk_restore_state_label(state: SdkRestoreState) -> &'static str {
-    match state {
-        SdkRestoreState::Validated => "validated",
-        SdkRestoreState::DryRun => "dry_run",
-        SdkRestoreState::Completed => "completed",
-        _ => "unknown",
-    }
-}
-
-fn sdk_backup_manifest_preview(
-    output: &Path,
-    status: &StorageStatusReceipt,
-    integrity: &IntegrityReceipt,
-) -> Value {
-    json!({
-        "manifest_kind": "sdk_canonical_backup_preview",
-        "destination": output.display().to_string(),
-        "source_storage": sdk_storage_kind_label(status.storage),
-        "source_paths": &status.paths,
-        "backup_paths": {
-            "runtime_path": output.join(SDK_RUNTIME_FILE).display().to_string(),
-            "private_path": output.join(SDK_PRIVATE_FILE).display().to_string(),
-            "studio_path": output.join(SDK_STUDIO_FILE).display().to_string(),
-        },
-        "source_status": status,
-        "backup_verification": {
-            "event_store_ok": integrity.event_store_ok,
-            "outbox_ok": integrity.outbox_ok,
-            "event_store_result": &integrity.event_store_result,
-            "outbox_result": &integrity.outbox_result,
-        },
-    })
-}
-
-fn sdk_storage_kind_label(kind: SdkStorageKind) -> &'static str {
-    match kind {
-        SdkStorageKind::Memory => "memory",
-        SdkStorageKind::Directory => "directory",
-        _ => "unknown",
-    }
-}
-
-fn sdk_backup_state_label(state: SdkBackupState) -> &'static str {
-    match state {
-        SdkBackupState::Planned => "planned",
-        SdkBackupState::Completed => "completed",
-        _ => "unknown",
-    }
-}
-
 fn json_value(value: impl Serialize) -> Result<Value, RuntimeError> {
     serde_json::to_value(value).map_err(RuntimeError::from)
 }
 
-fn path_size(path: Option<&PathBuf>) -> Result<u64, RuntimeError> {
-    path.map(fs::metadata)
-        .transpose()?
-        .map(|metadata| metadata.len())
-        .ok_or_else(|| RuntimeError::Config("SDK backup did not report all file paths".to_owned()))
+fn sdk_backup_plan() -> Result<BackupPlan, RuntimeError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| RuntimeError::Config(format!("failed to generate backup ID: {error}")))?;
+    let backup_id = BackupId::new(bytes)
+        .map_err(|error| RuntimeError::Config(format!("invalid backup ID: {error}")))?;
+    BackupPlan::new(
+        backup_id,
+        BackupFormatVersion::V1,
+        BackupSecretPolicy::ExcludeProtectedStorage,
+        unix_ms()?,
+    )
+    .map_err(|error| RuntimeError::Config(format!("invalid backup plan: {error}")))
 }
 
-fn display_path(path: &Path) -> String {
-    path.display().to_string()
+fn unix_ms() -> Result<u64, RuntimeError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| RuntimeError::Config(format!("system clock error: {error}")))?
+        .as_millis()
+        .try_into()
+        .map_err(|_| RuntimeError::Config("system clock is outside SDK range".to_owned()))
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn create_parent_dir(path: &Path) -> Result<(), RuntimeError> {

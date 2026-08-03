@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use radroots_event::kinds::{
+use radroots_event::envelope::kind::{
     KIND_CLASSIFIED_LISTING, KIND_FARM, KIND_LIST_SET_APP_CURATION, KIND_LIST_SET_BOOKMARK,
     KIND_LIST_SET_CALENDAR, KIND_LIST_SET_CURATION, KIND_LIST_SET_EMOJI, KIND_LIST_SET_FOLLOW,
     KIND_LIST_SET_GENERIC, KIND_LIST_SET_INTEREST, KIND_LIST_SET_KIND_MUTE,
@@ -1780,16 +1780,16 @@ fn relative_age(age_seconds: u64) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use radroots_event::farm::{RadrootsFarm, RadrootsFarmRef};
-    use radroots_event::ids::RadrootsEventId;
-    use radroots_event::kinds::{
+    use radroots_event::envelope::kind::{
         KIND_CLASSIFIED_LISTING, KIND_FARM, KIND_LIST_SET_GENERIC, KIND_POST,
     };
+    use radroots_event::farm::{Farm, FarmRef};
+    use radroots_event::id::RadrootsEventId;
     use radroots_event::list::RadrootsListEntry;
     use radroots_event::list_set::RadrootsListSet;
     use radroots_event::plot::RadrootsPlot;
-    use radroots_event::profile::RadrootsAuthoredProfile;
-    use radroots_event::wire::{DEFAULT_CONTENT_MAX_BYTES, RadrootsNip01EventWireParts};
+    use radroots_event::profile::AuthoredProfile;
+    use radroots_event::wire::{DEFAULT_CONTENT_MAX_BYTES, Nip01EventWireParts};
     use radroots_event_codec::farm::encode as farm_encode;
     use radroots_event_codec::list_set::encode as list_set_encode;
     use radroots_event_codec::plot::encode as plot_encode;
@@ -2954,7 +2954,7 @@ mod tests {
         let events = vec![
             signed_event(
                 &seller,
-                RadrootsNip01EventWireParts {
+                Nip01EventWireParts {
                     kind: KIND_CLASSIFIED_LISTING,
                     content: "x".repeat(DEFAULT_CONTENT_MAX_BYTES + 1),
                     tags: Vec::new(),
@@ -2962,7 +2962,7 @@ mod tests {
             ),
             signed_event(
                 &seller,
-                RadrootsNip01EventWireParts {
+                Nip01EventWireParts {
                     kind: KIND_POST,
                     content: "hello".to_owned(),
                     tags: Vec::new(),
@@ -2970,7 +2970,7 @@ mod tests {
             ),
             signed_event(
                 &seller,
-                RadrootsNip01EventWireParts {
+                Nip01EventWireParts {
                     kind: KIND_CLASSIFIED_LISTING,
                     content: "not a listing".to_owned(),
                     tags: Vec::new(),
@@ -3052,7 +3052,7 @@ mod tests {
     }
 
     fn profile_event(identity: &RadrootsIdentity) -> RadrootsNostrEvent {
-        let profile = RadrootsAuthoredProfile::new("seller")
+        let profile = AuthoredProfile::new("seller")
             .expect("profile")
             .with_display_name("Seller")
             .with_about("market seller");
@@ -3063,7 +3063,7 @@ mod tests {
     }
 
     fn farm_event(identity: &RadrootsIdentity) -> RadrootsNostrEvent {
-        let farm = RadrootsFarm {
+        let farm = Farm {
             d_tag: FARM_D_TAG.to_owned(),
             name: "Relay Farm".to_owned(),
             about: Some("relay farm".to_owned()),
@@ -3082,7 +3082,7 @@ mod tests {
     fn plot_event(identity: &RadrootsIdentity) -> RadrootsNostrEvent {
         let plot = RadrootsPlot {
             d_tag: PLOT_D_TAG.to_owned(),
-            farm: RadrootsFarmRef {
+            farm: FarmRef {
                 pubkey: identity.public_key_hex(),
                 d_tag: FARM_D_TAG.to_owned(),
             },
@@ -3125,7 +3125,7 @@ mod tests {
         title: &str,
         created_at: u64,
     ) -> RadrootsNostrEvent {
-        let mut builder = wire_fixture_builder(RadrootsNip01EventWireParts {
+        let mut builder = wire_fixture_builder(Nip01EventWireParts {
             kind: KIND_CLASSIFIED_LISTING,
             content: "# Pasture Eggs".to_owned(),
             tags: vec![
@@ -3175,16 +3175,13 @@ mod tests {
             .expect("signed event")
     }
 
-    fn signed_event(
-        identity: &RadrootsIdentity,
-        parts: RadrootsNip01EventWireParts,
-    ) -> RadrootsNostrEvent {
+    fn signed_event(identity: &RadrootsIdentity, parts: Nip01EventWireParts) -> RadrootsNostrEvent {
         wire_fixture_builder(parts)
             .sign_with_keys(identity.keys())
             .expect("signed event")
     }
 
-    fn wire_fixture_builder(parts: RadrootsNip01EventWireParts) -> nostr::EventBuilder {
+    fn wire_fixture_builder(parts: Nip01EventWireParts) -> nostr::EventBuilder {
         let kind = u16::try_from(parts.kind).expect("fixture kind must fit NIP-01");
         let tags = parts
             .tags

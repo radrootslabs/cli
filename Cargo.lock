@@ -2139,7 +2139,9 @@ dependencies = [
  "radroots_runtime_store",
  "radroots_sdk",
  "radroots_secret_vault",
+ "radroots_signing",
  "radroots_sql_core",
+ "radroots_storage",
  "radroots_trade",
  "radroots_transport",
  "radroots_transport_nostr",
@@ -2489,6 +2491,7 @@ dependencies = [
  "radroots_event",
  "radroots_identity",
  "radroots_protocol",
+ "serde",
 ]
 
 [[package]]
@@ -2511,6 +2514,7 @@ dependencies = [
  "radroots_protocol",
  "radroots_trade",
  "radroots_transport",
+ "serde",
 ]
 
 [[package]]
@@ -2561,6 +2565,7 @@ dependencies = [
  "radroots_event",
  "radroots_identity",
  "radroots_protocol",
+ "serde",
  "sha2",
 ]
 

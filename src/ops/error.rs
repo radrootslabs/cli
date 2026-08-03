@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 
-use radroots_sdk::{RadrootsSdkError, RadrootsSdkErrorClass, RadrootsSdkRecoveryAction};
+use radroots_protocol::error::v1::{Class as ErrorClass, RecoveryAction};
+use radroots_sdk::Error as SdkError;
 use serde_json::{Map, Value, json};
 
 use crate::out::envelope::{CliExitCode, OutputError};
@@ -355,13 +356,14 @@ impl OperationAdapterError {
         }
     }
 
-    pub fn sdk_failure(operation_id: &str, error: RadrootsSdkError) -> Self {
-        let code = error.code().to_owned();
-        let class = sdk_error_class_name(error.class()).to_owned();
-        let message = error.to_string();
-        let exit_code = sdk_error_exit_code(error.class());
-        let mut detail = error.detail_json();
-        let actions = sdk_recovery_next_actions(operation_id, &error.recovery_actions());
+    pub fn sdk_failure(operation_id: &str, error: SdkError) -> Self {
+        let report = error.to_report();
+        let code = report.code().as_str().to_owned();
+        let class = sdk_error_class_name(report.class()).to_owned();
+        let message = report.message().as_str().to_owned();
+        let exit_code = sdk_error_exit_code(report.class());
+        let mut detail = serde_json::to_value(&report).unwrap_or_else(|_| json!({}));
+        let actions = sdk_recovery_next_actions(operation_id, report.recovery_actions());
         if !actions.is_empty()
             && let Some(detail) = detail.as_object_mut()
         {
@@ -560,57 +562,74 @@ impl OperationAdapterError {
     }
 }
 
-fn sdk_error_exit_code(class: RadrootsSdkErrorClass) -> CliExitCode {
+fn sdk_error_exit_code(class: ErrorClass) -> CliExitCode {
     match class {
-        RadrootsSdkErrorClass::Authorization => CliExitCode::AuthorizationFailed,
-        RadrootsSdkErrorClass::Clock
-        | RadrootsSdkErrorClass::Configuration
-        | RadrootsSdkErrorClass::Request => CliExitCode::InvalidInput,
-        RadrootsSdkErrorClass::Storage => CliExitCode::RuntimeUnavailable,
-        RadrootsSdkErrorClass::Transport => CliExitCode::SyncOrNetworkFailure,
-        RadrootsSdkErrorClass::Unsupported => CliExitCode::RuntimeUnavailable,
+        ErrorClass::Authorization | ErrorClass::Security => CliExitCode::AuthorizationFailed,
+        ErrorClass::Validation | ErrorClass::Contract | ErrorClass::Conflict => {
+            CliExitCode::InvalidInput
+        }
+        ErrorClass::Storage
+        | ErrorClass::Resource
+        | ErrorClass::Capability
+        | ErrorClass::Maintenance => CliExitCode::RuntimeUnavailable,
+        ErrorClass::Network | ErrorClass::Sync => CliExitCode::SyncOrNetworkFailure,
         _ => CliExitCode::InternalError,
     }
 }
 
-fn sdk_error_class_name(class: RadrootsSdkErrorClass) -> &'static str {
+fn sdk_error_class_name(class: ErrorClass) -> &'static str {
     match class {
-        RadrootsSdkErrorClass::Authorization => "authorization",
-        RadrootsSdkErrorClass::Clock => "clock",
-        RadrootsSdkErrorClass::Configuration => "configuration",
-        RadrootsSdkErrorClass::Request => "request",
-        RadrootsSdkErrorClass::Storage => "storage",
-        RadrootsSdkErrorClass::Transport => "transport",
-        RadrootsSdkErrorClass::Unsupported => "unsupported",
-        _ => "internal",
+        ErrorClass::Validation => "validation",
+        ErrorClass::Contract => "contract",
+        ErrorClass::Storage => "storage",
+        ErrorClass::Resource => "resource",
+        ErrorClass::Conflict => "conflict",
+        ErrorClass::Operation => "operation",
+        ErrorClass::Authorization => "authorization",
+        ErrorClass::Signer => "signer",
+        ErrorClass::Network => "network",
+        ErrorClass::Sync => "sync",
+        ErrorClass::Runtime => "runtime",
+        ErrorClass::Projection => "projection",
+        ErrorClass::Query => "query",
+        ErrorClass::Capability => "capability",
+        ErrorClass::Privacy => "privacy",
+        ErrorClass::Security => "security",
+        ErrorClass::Maintenance => "maintenance",
+        ErrorClass::Internal => "internal",
+        ErrorClass::Unknown => "unknown",
     }
 }
 
 fn sdk_recovery_next_actions(
     operation_id: &str,
-    recovery_actions: &[RadrootsSdkRecoveryAction],
+    recovery_actions: &[RecoveryAction],
 ) -> Vec<String> {
     recovery_actions
         .iter()
         .filter_map(|action| match action {
-            RadrootsSdkRecoveryAction::RetryOperationWithSameIdempotencyKey
-            | RadrootsSdkRecoveryAction::FixRequest => Some(operation_retry_action(operation_id)),
-            RadrootsSdkRecoveryAction::InspectLocalStores => {
-                Some("radroots store inspect".to_owned())
-            }
-            RadrootsSdkRecoveryAction::ConfigureTransportTargets => {
-                Some("radroots transport config inspect".to_owned())
-            }
-            RadrootsSdkRecoveryAction::SelectAuthorizedActor => {
-                Some("radroots account list".to_owned())
-            }
-            RadrootsSdkRecoveryAction::RetryAfterTransportFailure => {
+            RecoveryAction::RetryOperationWithSameIdempotencyKey | RecoveryAction::FixRequest => {
                 Some(operation_retry_action(operation_id))
             }
-            RadrootsSdkRecoveryAction::EnableRequiredFeature => {
+            RecoveryAction::InspectLocalStores => Some("radroots store inspect".to_owned()),
+            RecoveryAction::ConfigureStorage => Some("radroots store init".to_owned()),
+            RecoveryAction::InspectGeoNamesAsset | RecoveryAction::ConfigureGeoNamesCache => {
                 Some("radroots health inspect".to_owned())
             }
-            _ => None,
+            RecoveryAction::ConfigureTransportTargets => {
+                Some("radroots transport config inspect".to_owned())
+            }
+            RecoveryAction::ConfigureSigner => Some("radroots signer status".to_owned()),
+            RecoveryAction::SelectAuthorizedActor => Some("radroots account list".to_owned()),
+            RecoveryAction::CompleteSignerAuthentication => {
+                Some("radroots signer status".to_owned())
+            }
+            RecoveryAction::RetryAfterTransportFailure | RecoveryAction::RetryGeoNamesDownload => {
+                Some(operation_retry_action(operation_id))
+            }
+            RecoveryAction::EnableRequiredFeature | RecoveryAction::RecreateClient => {
+                Some("radroots health inspect".to_owned())
+            }
         })
         .fold(Vec::new(), |mut actions, action| {
             if !actions.contains(&action) {

@@ -1,8 +1,8 @@
 use std::process::ExitCode;
 
-use radroots_event::farm::RadrootsFarm;
-use radroots_event::ids::RadrootsClassifiedListingAddress;
-use radroots_event::operational_listing::RadrootsOperationalListingPublicLocation;
+use radroots_event::farm::Farm;
+use radroots_event::id::ClassifiedListingAddress;
+use radroots_event::listing::operational::OperationalListingPublicLocation;
 use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
 use serde::Serialize;
 
@@ -577,8 +577,7 @@ pub struct LocalStatusView {
     pub sdk_storage: String,
     pub sdk_root: String,
     pub sdk_existed_before_open: bool,
-    pub event_store: SdkEventStoreStatusView,
-    pub outbox: SdkOutboxStatusView,
+    pub storage: SdkStorageStatusView,
     pub integrity: SdkIntegrityView,
     pub derived_projection: LocalDerivedProjectionStatusView,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -598,84 +597,22 @@ impl LocalStatusView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SdkSqliteStatusView {
-    pub schema_version: i64,
-    pub journal_mode: String,
-    pub foreign_keys_enabled: bool,
-    pub busy_timeout_ms: i64,
-    pub integrity_ok: bool,
-    pub integrity_result: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SdkEventStoreStatusView {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    pub store: SdkSqliteStatusView,
-    pub total_events: i64,
-    pub valid_stream_events: i64,
-    pub transport_observations: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_event_seq: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_event_updated_at_ms: Option<i64>,
-}
-
-#[cfg(test)]
-mod sdk_event_store_status_view_tests {
-    use super::{SdkEventStoreStatusView, SdkSqliteStatusView};
-
-    #[test]
-    fn serializes_valid_stream_events_without_legacy_projection_key() {
-        let value = serde_json::to_value(SdkEventStoreStatusView {
-            path: None,
-            store: SdkSqliteStatusView {
-                schema_version: 1,
-                journal_mode: "wal".to_owned(),
-                foreign_keys_enabled: true,
-                busy_timeout_ms: 5_000,
-                integrity_ok: true,
-                integrity_result: "ok".to_owned(),
-            },
-            total_events: 11,
-            valid_stream_events: 7,
-            transport_observations: 3,
-            last_event_seq: Some(11),
-            last_event_updated_at_ms: Some(1_700_000_000_000),
-        })
-        .expect("event store status view");
-
-        assert_eq!(value["valid_stream_events"], 7);
-        assert!(value.get("projection_eligible_events").is_none());
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SdkOutboxStatusView {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    pub store: SdkSqliteStatusView,
-    pub total_events: i64,
-    pub pending_events: i64,
-    pub retryable_events: i64,
-    pub terminal_events: i64,
-    pub failed_terminal_events: i64,
-    pub deferred_until_implemented_events: i64,
-    pub ready_signed_events: i64,
-    pub publishing_events: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_attempt_at_ms: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+pub struct SdkStorageStatusView {
+    pub backend: String,
+    pub open_mode: String,
+    pub writer_policy: String,
+    pub shutdown: String,
+    pub wal_enabled: bool,
+    pub busy_timeout_ms: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SdkIntegrityView {
-    pub checked_paths: Vec<String>,
-    pub event_store_ok: bool,
-    pub outbox_ok: bool,
-    pub event_store_result: String,
-    pub outbox_result: String,
+    pub health: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at_unix_ms: Option<u64>,
+    pub verified_members: u32,
+    pub failed_members: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1108,7 +1045,7 @@ pub struct FarmConfigSummaryView {
 pub struct FarmConfigDocumentView {
     pub selection: FarmSelectionView,
     pub profile: FarmProfileDraftView,
-    pub farm: RadrootsFarm,
+    pub farm: Farm,
     pub listing_defaults: FarmListingDefaultsView,
     pub publication: FarmPublicationView,
 }
@@ -1146,7 +1083,7 @@ pub struct FarmSelectionView {
 #[derive(Debug, Clone, Serialize)]
 pub struct FarmListingDefaultsView {
     pub delivery_method: String,
-    pub location: RadrootsOperationalListingPublicLocation,
+    pub location: OperationalListingPublicLocation,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1235,9 +1172,8 @@ impl MarketReadinessView {
         price_currency: &str,
         price_per_amount: f64,
     ) -> Self {
-        let protocol_valid = listing_addr.is_some_and(|listing_addr| {
-            RadrootsClassifiedListingAddress::parse(listing_addr).is_ok()
-        });
+        let protocol_valid = listing_addr
+            .is_some_and(|listing_addr| ClassifiedListingAddress::parse(listing_addr).is_ok());
         let marketplace_eligible = protocol_valid
             && title.is_some_and(|title| !title.trim().is_empty())
             && category.is_some_and(|category| !category.trim().is_empty());

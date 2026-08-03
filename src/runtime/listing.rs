@@ -4,32 +4,25 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use radroots_authority::RadrootsActorContext;
-use radroots_core::{
-    RadrootsCoreCurrency, RadrootsCoreDecimal, RadrootsCoreDiscount, RadrootsCoreDiscountScope,
-    RadrootsCoreDiscountThreshold, RadrootsCoreDiscountValue, RadrootsCoreMoney,
-    RadrootsCorePercent, RadrootsCoreQuantity, RadrootsCoreQuantityPrice, RadrootsCoreUnit,
+use radroots_core::pricing::{Discount, DiscountScope, DiscountThreshold, DiscountValue};
+use radroots_core::{Currency, Decimal, Money, Percent, Quantity, QuantityPrice, Unit};
+use radroots_event::contract::AuthorRole;
+use radroots_event::envelope::kind::KIND_CLASSIFIED_LISTING;
+use radroots_event::farm::FarmRef;
+use radroots_event::id::{DTag, InventoryBinId};
+use radroots_event::listing::operational::{
+    OperationalListing, OperationalListingAvailability, OperationalListingBin,
+    OperationalListingDeliveryMethod, OperationalListingProduct, OperationalListingPublicLocation,
+    OperationalListingStatus,
 };
-use radroots_event::contract::RadrootsActorRole;
-use radroots_event::farm::RadrootsFarmRef;
-use radroots_event::ids::{RadrootsDTag, RadrootsInventoryBinId, RadrootsPublicKey};
-use radroots_event::kinds::KIND_CLASSIFIED_LISTING;
-use radroots_event::operational_listing::{
-    RadrootsOperationalListing, RadrootsOperationalListingAvailability,
-    RadrootsOperationalListingBin, RadrootsOperationalListingDeliveryMethod,
-    RadrootsOperationalListingProduct, RadrootsOperationalListingPublicLocation,
-    RadrootsOperationalListingStatus,
-};
-use radroots_event::trade_validation::RadrootsOperationalListingValidationError;
+use radroots_event::trade::validation::OperationalListingValidationError;
 use radroots_event_codec::d_tag::is_d_tag_base64url;
 use radroots_event_codec::operational_listing::encode::to_wire_parts_with_kind;
+use radroots_identity::PublicKey;
 use radroots_replica_store::ReplicaSql;
 use radroots_runtime_store::{RuntimeStoreRecord, RuntimeStoreRecordFamily, SourceRuntime};
-use radroots_sdk::{
-    ListingEnqueuePublishRequest, ListingEnqueueReceipt, ListingPreparePublishRequest,
-    ListingPublishPlan, PushOutboxEventReceipt, PushOutboxEventState, PushOutboxReceipt,
-    PushOutboxRequest, PushOutboxTargetOutcomeKind, SdkMutationState,
-};
+use radroots_sdk::listing::{self as sdk_listing, Plan as ListingPlan};
+use radroots_signing::{Actor, actor::ActorSource};
 use radroots_sql_core::SqlxSqliteExecutor;
 use radroots_trade::operational_listing::{
     RadrootsOperationalListingEditDocumentV1, validate_operational_listing_model,
@@ -49,10 +42,7 @@ use crate::runtime::runtime_store::{
     append_local_work, get_shared_record, list_shared_records_before, list_shared_records_latest,
     shared_runtime_store_db_path,
 };
-use crate::runtime::sdk::{
-    CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy, sdk_target_outcome_kind_label,
-    sdk_target_policy, sdk_transport_outcome_kind_label, validate_configured_signer_for_actor,
-};
+use crate::runtime::sdk::{CliSdkAdapterError, validate_configured_signer_for_actor};
 use crate::runtime::sync::{
     RelayIngestScope, freshness_for_scope_from_executor, market_refresh, missing_freshness,
 };
@@ -61,7 +51,6 @@ use crate::view::runtime::{
     ListingAppRecordListView, ListingAppRecordSummaryView, ListingGetView, ListingListView,
     ListingMutationEventView, ListingMutationView, ListingNewView, ListingRebindView,
     ListingSummaryView, ListingValidateView, ListingValidationIssueView, MarketReadinessView,
-    TransportTargetFailureView,
 };
 
 const DRAFT_KIND: &str = "listing_draft_v1";
@@ -78,16 +67,13 @@ const APP_RECORD_LIST_LIMIT: u32 = 500;
 
 static D_TAG_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn protocol_d_tag(value: &str, field: &str) -> Result<RadrootsDTag, RuntimeError> {
+fn protocol_d_tag(value: &str, field: &str) -> Result<DTag, RuntimeError> {
     value
         .parse()
         .map_err(|error| RuntimeError::Config(format!("{field} is not a valid d tag: {error}")))
 }
 
-fn protocol_inventory_bin_id(
-    value: &str,
-    field: &str,
-) -> Result<RadrootsInventoryBinId, RuntimeError> {
+fn protocol_inventory_bin_id(value: &str, field: &str) -> Result<InventoryBinId, RuntimeError> {
     value.parse().map_err(|error| {
         RuntimeError::Config(format!("{field} is not a valid inventory bin id: {error}"))
     })
@@ -232,13 +218,13 @@ struct CanonicalListingDraft {
     seller_pubkey: String,
     seller_actor_source: String,
     farm_d_tag: String,
-    listing: RadrootsOperationalListing,
+    listing: OperationalListing,
 }
 
 #[derive(Debug, Clone)]
 struct SdkListingPublishInput {
     canonical: CanonicalListingDraft,
-    actor: RadrootsActorContext,
+    actor: Actor,
     document: RadrootsOperationalListingEditDocumentV1,
 }
 
@@ -1536,8 +1522,8 @@ fn normalize_app_listing_availability(draft: &mut ListingDraftDocument) -> Resul
 fn normalize_app_listing_units(draft: &mut ListingDraftDocument) {
     let quantity_unit = draft.primary_bin.quantity_unit.trim().to_owned();
     let price_per_unit = draft.primary_bin.price_per_unit.trim().to_owned();
-    let quantity_unit_supported = quantity_unit.parse::<RadrootsCoreUnit>().is_ok();
-    let price_per_unit_supported = price_per_unit.parse::<RadrootsCoreUnit>().is_ok();
+    let quantity_unit_supported = quantity_unit.parse::<Unit>().is_ok();
+    let price_per_unit_supported = price_per_unit.parse::<Unit>().is_ok();
     if quantity_unit_supported && price_per_unit_supported {
         return;
     }
@@ -1733,59 +1719,25 @@ pub fn publish_via_sdk(
     args: &ListingMutationArgs,
 ) -> Result<ListingMutationView, CliSdkAdapterError> {
     let input = sdk_listing_publish_input(config, args)?;
-    if config.output.dry_run {
-        validate_configured_listing_signer(config, &input.canonical)?;
-        let session = CliSdkSession::connect_memory(config)?;
-        let plan = session.sdk().listings().prepare_publish(
-            ListingPreparePublishRequest::from_document(
-                input.actor.clone(),
-                input.document.clone(),
-            ),
-        )?;
-        return Ok(sdk_prepared_publish_view(
-            config,
-            args,
-            ListingMutationOperation::Publish,
-            &input.canonical,
-            plan,
-        ));
-    }
-
-    let session = CliSdkSession::connect_for_actor(
-        config,
-        Some(input.canonical.seller_account_id.as_str()),
-        input.canonical.seller_pubkey.as_str(),
-        "listing seller",
-    )?;
-    let mut request = ListingEnqueuePublishRequest::from_document(
+    validate_configured_listing_signer(config, &input.canonical)?;
+    let plan = sdk_listing::prepare(sdk_listing::PrepareRequest::publish(
         input.actor,
         input.document,
-        sdk_target_policy(config),
-    );
-    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
-        request = request.try_with_idempotency_key(idempotency_key)?;
-    }
-    let enqueue_receipt = session.block_on(session.sdk().listings().enqueue_publish(request))?;
-    let push_receipt = if args.offline {
-        None
-    } else {
-        Some(
-            session.block_on(
-                session.sdk().sync().push_outbox(
-                    PushOutboxRequest::new()
-                        .with_limit(1)
-                        .with_nostr_relay_url_policy(sdk_nostr_relay_url_policy(config)),
-                ),
-            )?,
+        sdk_created_at_unix()?,
+    ))
+    .map_err(|error| RuntimeError::Config(format!("invalid SDK listing plan: {error}")))?;
+    if !config.output.dry_run {
+        return Err(RuntimeError::Config(
+            "listing commit is unavailable until the shared sync engine is configured".to_owned(),
         )
-    };
-    Ok(sdk_enqueued_publish_view(
+        .into());
+    }
+    Ok(sdk_prepared_publish_view(
         config,
         args,
         ListingMutationOperation::Publish,
         &input.canonical,
-        enqueue_receipt,
-        push_receipt,
+        plan,
     ))
 }
 
@@ -1824,10 +1776,10 @@ fn sdk_listing_publish_input(
         ))
     })?;
     ensure_listing_bound_account(config, &canonical, args.file.as_path())?;
-    let actor = RadrootsActorContext::local_account(
+    let actor = Actor::from_public_key_hex(
         canonical.seller_pubkey.as_str(),
-        canonical.seller_account_id.clone(),
-        [RadrootsActorRole::Seller],
+        ActorSource::ExplicitPublicKey,
+        [AuthorRole::Seller],
     )
     .map_err(|error| RuntimeError::Config(format!("invalid listing SDK actor: {error}")))?;
     let document = RadrootsOperationalListingEditDocumentV1::new(canonical.listing.clone());
@@ -1843,9 +1795,9 @@ fn sdk_prepared_publish_view(
     args: &ListingMutationArgs,
     operation: ListingMutationOperation,
     canonical: &CanonicalListingDraft,
-    plan: ListingPublishPlan,
+    plan: ListingPlan,
 ) -> ListingMutationView {
-    let listing_addr = plan.public_listing_addr().as_str().to_owned();
+    let listing_addr = plan.address().as_str().to_owned();
     let event = sdk_plan_event_view(&plan);
     ListingMutationView {
         state: "dry_run".to_owned(),
@@ -1867,7 +1819,7 @@ fn sdk_prepared_publish_view(
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        event_id: Some(plan.expected_event_id().as_str().to_owned()),
+        event_id: Some(plan.draft().expected_event_id().as_str().to_owned()),
         event_addr: Some(listing_addr),
         idempotency_key: args.idempotency_key.clone(),
         local_replica: None,
@@ -1878,201 +1830,17 @@ fn sdk_prepared_publish_view(
     }
 }
 
-fn sdk_enqueued_publish_view(
-    config: &RuntimeConfig,
-    args: &ListingMutationArgs,
-    operation: ListingMutationOperation,
-    canonical: &CanonicalListingDraft,
-    enqueue: ListingEnqueueReceipt,
-    push: Option<PushOutboxReceipt>,
-) -> ListingMutationView {
-    let push_event = push
-        .as_ref()
-        .and_then(|receipt| sdk_push_event_for_listing(&enqueue, receipt));
-    let state = sdk_publish_state(args, push_event);
-    let reason = sdk_publish_reason(args, push_event);
-    let target_transport_endpoints = push_event
-        .map(sdk_push_target_transport_endpoints)
-        .unwrap_or_else(|| config.transport.nostr_relay_urls.clone());
-    let attempted_transport_endpoints = push_event
-        .map(sdk_push_attempted_transport_endpoints)
-        .unwrap_or_default();
-    let accepted_transport_endpoints = push_event
-        .map(sdk_push_accepted_transport_endpoints)
-        .unwrap_or_default();
-    let failed_transport_targets = push_event
-        .map(sdk_push_failed_transport_targets)
-        .unwrap_or_default();
-    let event_id = enqueue.signed_event_id.as_str().to_owned();
-    let listing_addr = enqueue.public_listing_addr.as_str().to_owned();
-    ListingMutationView {
-        state,
-        operation: operation.as_str().to_owned(),
-        source: SDK_LISTING_WRITE_SOURCE.to_owned(),
-        file: args.file.display().to_string(),
-        listing_id: canonical.listing_id.clone(),
-        listing_addr: listing_addr.clone(),
-        seller_account_id: canonical.seller_account_id.clone(),
-        seller_pubkey: canonical.seller_pubkey.clone(),
-        seller_actor_source: canonical.seller_actor_source.clone(),
-        event_kind: KIND_CLASSIFIED_LISTING,
-        dry_run: false,
-        deduplicated: matches!(enqueue.state, SdkMutationState::AlreadyQueued),
-        target_transport_endpoints,
-        attempted_transport_endpoints,
-        accepted_transport_endpoints,
-        failed_transport_targets,
-        job_id: None,
-        job_status: None,
-        signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        event_id: Some(event_id),
-        event_addr: Some(listing_addr),
-        idempotency_key: args.idempotency_key.clone(),
-        local_replica: None,
-        reason,
-        job: None,
-        event: None,
-        actions: sdk_publish_actions(args, push_event),
-    }
-}
-
-fn sdk_plan_event_view(plan: &ListingPublishPlan) -> ListingMutationEventView {
+fn sdk_plan_event_view(plan: &ListingPlan) -> ListingMutationEventView {
     ListingMutationEventView {
-        kind: plan.frozen_draft().kind_u32(),
-        author: plan.frozen_draft().expected_pubkey_str().to_owned(),
-        created_at: Some(plan.frozen_draft().created_at_u64()),
-        content: plan.frozen_draft().content().to_owned(),
-        tags: plan.frozen_draft().tags_as_vec(),
-        event_id: Some(plan.expected_event_id().as_str().to_owned()),
+        kind: plan.draft().kind_u32(),
+        author: plan.draft().expected_pubkey().to_hex(),
+        created_at: Some(plan.draft().created_at_u64()),
+        content: plan.draft().content().to_owned(),
+        tags: plan.draft().tags_as_vec(),
+        event_id: Some(plan.draft().expected_event_id().as_str().to_owned()),
         signature: None,
-        event_addr: plan.public_listing_addr().as_str().to_owned(),
+        event_addr: plan.address().as_str().to_owned(),
     }
-}
-
-fn sdk_push_event_for_listing<'a>(
-    enqueue: &ListingEnqueueReceipt,
-    push: &'a PushOutboxReceipt,
-) -> Option<&'a PushOutboxEventReceipt> {
-    push.events
-        .iter()
-        .find(|event| event.event_id == enqueue.signed_event_id)
-}
-
-fn sdk_publish_state(
-    args: &ListingMutationArgs,
-    push_event: Option<&PushOutboxEventReceipt>,
-) -> String {
-    match push_event.map(|event| event.final_state) {
-        Some(PushOutboxEventState::Published) => "published",
-        Some(PushOutboxEventState::PublishRetryable | PushOutboxEventState::FailedTerminal) => {
-            "unavailable"
-        }
-        Some(_) | None if args.offline => "queued",
-        Some(_) | None => "queued",
-    }
-    .to_owned()
-}
-
-fn sdk_publish_reason(
-    args: &ListingMutationArgs,
-    push_event: Option<&PushOutboxEventReceipt>,
-) -> Option<String> {
-    match push_event.map(|event| event.final_state) {
-        Some(PushOutboxEventState::Published) => None,
-        Some(PushOutboxEventState::PublishRetryable) => Some(
-            "SDK transport publish did not reach accepted quorum; outbox event remains retryable"
-                .to_owned(),
-        ),
-        Some(PushOutboxEventState::FailedTerminal) => {
-            Some("SDK transport publish failed terminally".to_owned())
-        }
-        Some(state) => Some(format!(
-            "SDK transport push left event in state `{state:?}`"
-        )),
-        None if args.offline => Some(
-            "listing publish queued in SDK outbox; transport push skipped for offline mode"
-                .to_owned(),
-        ),
-        None => Some(
-            "listing publish queued in SDK outbox; no ready SDK outbox event was pushed".to_owned(),
-        ),
-    }
-}
-
-fn sdk_publish_actions(
-    args: &ListingMutationArgs,
-    push_event: Option<&PushOutboxEventReceipt>,
-) -> Vec<String> {
-    if args.offline
-        || !matches!(
-            push_event.map(|event| event.final_state),
-            Some(PushOutboxEventState::Published)
-        )
-    {
-        return vec!["radroots sync push".to_owned()];
-    }
-    Vec::new()
-}
-
-fn sdk_push_target_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
-    event
-        .targets
-        .iter()
-        .map(|target| target.endpoint_uri.clone())
-        .collect()
-}
-
-fn sdk_push_attempted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
-    event
-        .targets
-        .iter()
-        .filter(|target| target.attempted)
-        .map(|target| target.endpoint_uri.clone())
-        .collect()
-}
-
-fn sdk_push_accepted_transport_endpoints(event: &PushOutboxEventReceipt) -> Vec<String> {
-    event
-        .targets
-        .iter()
-        .filter(|target| {
-            matches!(
-                target.outcome_kind,
-                PushOutboxTargetOutcomeKind::Accepted
-                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
-            )
-        })
-        .map(|target| target.endpoint_uri.clone())
-        .collect()
-}
-
-fn sdk_push_failed_transport_targets(
-    event: &PushOutboxEventReceipt,
-) -> Vec<TransportTargetFailureView> {
-    event
-        .targets
-        .iter()
-        .filter(|target| {
-            !matches!(
-                target.outcome_kind,
-                PushOutboxTargetOutcomeKind::Accepted
-                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
-            )
-        })
-        .map(|target| TransportTargetFailureView {
-            transport_kind: target.transport_kind.clone(),
-            endpoint_uri: target.endpoint_uri.clone(),
-            target_scope: target.target_scope.clone(),
-            target_label: target.target_label.clone(),
-            transport_outcome_kind: target
-                .transport_outcome_kind
-                .map(sdk_transport_outcome_kind_label),
-            reason: target
-                .message
-                .clone()
-                .unwrap_or_else(|| sdk_target_outcome_kind_label(target.outcome_kind)),
-        })
-        .collect()
 }
 
 pub fn update(
@@ -2134,8 +1902,8 @@ fn mutate(
     ensure_listing_bound_account(config, &canonical, args.file.as_path())?;
 
     if let Some(status) = operation.listing_status() {
-        canonical.listing.availability = Some(RadrootsOperationalListingAvailability::Status {
-            status: RadrootsOperationalListingStatus::Other {
+        canonical.listing.availability = Some(OperationalListingAvailability::Status {
+            status: OperationalListingStatus::Other {
                 value: status.to_owned(),
             },
         });
@@ -2154,57 +1922,36 @@ fn mutate_via_sdk_from_canonical(
     operation: ListingMutationOperation,
     canonical: CanonicalListingDraft,
 ) -> Result<ListingMutationView, CliSdkAdapterError> {
-    let actor = RadrootsActorContext::local_account(
+    let actor = Actor::from_public_key_hex(
         canonical.seller_pubkey.as_str(),
-        canonical.seller_account_id.clone(),
-        [RadrootsActorRole::Seller],
+        ActorSource::ExplicitPublicKey,
+        [AuthorRole::Seller],
     )
     .map_err(|error| RuntimeError::Config(format!("invalid listing SDK actor: {error}")))?;
     let document = RadrootsOperationalListingEditDocumentV1::new(canonical.listing.clone());
-    if config.output.dry_run {
-        let session = CliSdkSession::connect_memory(config)?;
-        let plan = session
-            .sdk()
-            .listings()
-            .prepare_publish(ListingPreparePublishRequest::from_document(actor, document))?;
-        return Ok(sdk_prepared_publish_view(
-            config, args, operation, &canonical, plan,
-        ));
-    }
-
-    let session = CliSdkSession::connect_for_actor(
-        config,
-        Some(canonical.seller_account_id.as_str()),
-        canonical.seller_pubkey.as_str(),
-        "listing seller",
-    )?;
-    let mut request =
-        ListingEnqueuePublishRequest::from_document(actor, document, sdk_target_policy(config));
-    if let Some(idempotency_key) = args.idempotency_key.as_deref() {
-        request = request.try_with_idempotency_key(idempotency_key)?;
-    }
-    let enqueue_receipt = session.block_on(session.sdk().listings().enqueue_publish(request))?;
-    let push_receipt = if args.offline {
-        None
+    let request = if matches!(operation, ListingMutationOperation::Publish) {
+        sdk_listing::PrepareRequest::publish(actor, document, sdk_created_at_unix()?)
     } else {
-        Some(
-            session.block_on(
-                session.sdk().sync().push_outbox(
-                    PushOutboxRequest::new()
-                        .with_limit(1)
-                        .with_nostr_relay_url_policy(sdk_nostr_relay_url_policy(config)),
-                ),
-            )?,
-        )
+        sdk_listing::PrepareRequest::update(actor, document, sdk_created_at_unix()?)
     };
-    Ok(sdk_enqueued_publish_view(
-        config,
-        args,
-        operation,
-        &canonical,
-        enqueue_receipt,
-        push_receipt,
+    let plan = sdk_listing::prepare(request)
+        .map_err(|error| RuntimeError::Config(format!("invalid SDK listing plan: {error}")))?;
+    if !config.output.dry_run {
+        return Err(RuntimeError::Config(
+            "listing commit is unavailable until the shared sync engine is configured".to_owned(),
+        )
+        .into());
+    }
+    Ok(sdk_prepared_publish_view(
+        config, args, operation, &canonical, plan,
     ))
+}
+
+fn sdk_created_at_unix() -> Result<u64, RuntimeError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|error| RuntimeError::Config(format!("system clock error: {error}")))
 }
 
 fn scaffold_contents(draft: &ListingDraftDocument) -> Result<String, RuntimeError> {
@@ -2336,7 +2083,7 @@ fn canonicalize_draft(
         contents,
         "primary_bin.quantity_unit",
     )?;
-    let quantity = RadrootsCoreQuantity::new(quantity_amount, quantity_unit)
+    let quantity = Quantity::new(quantity_amount, quantity_unit)
         .with_optional_label(non_empty(draft.primary_bin.label.clone()))
         .to_canonical()
         .map_err(|error| {
@@ -2367,9 +2114,9 @@ fn canonicalize_draft(
         contents,
         "primary_bin.price_per_unit",
     )?;
-    let price = RadrootsCoreQuantityPrice::new(
-        RadrootsCoreMoney::new(price_amount, price_currency),
-        RadrootsCoreQuantity::new(price_per_amount, price_per_unit),
+    let price = QuantityPrice::new(
+        Money::new(price_amount, price_currency),
+        Quantity::new(price_per_amount, price_per_unit),
     )
     .try_to_canonical_unit_price()
     .map_err(|error| {
@@ -2405,7 +2152,7 @@ fn canonicalize_draft(
             },
         )?;
 
-    let listing = RadrootsOperationalListing {
+    let listing = OperationalListing {
         d_tag: protocol_d_tag(listing_id.as_str(), "listing d_tag").map_err(|error| {
             issue_for_field(
                 contents,
@@ -2414,11 +2161,11 @@ fn canonicalize_draft(
             )
         })?,
         published_at: None,
-        farm: RadrootsFarmRef {
+        farm: FarmRef {
             pubkey: seller_pubkey.clone(),
             d_tag: farm_d_tag.clone(),
         },
-        product: RadrootsOperationalListingProduct {
+        product: OperationalListingProduct {
             key: draft.product.key.trim().to_owned(),
             title: draft.product.title.trim().to_owned(),
             category: draft.product.category.trim().to_owned(),
@@ -2430,7 +2177,7 @@ fn canonicalize_draft(
             year: None,
         },
         primary_bin_id: primary_bin_id.clone(),
-        bins: vec![RadrootsOperationalListingBin {
+        bins: vec![OperationalListingBin {
             bin_id: primary_bin_id,
             quantity,
             price_per_canonical_unit: price,
@@ -2463,7 +2210,7 @@ fn canonicalize_draft(
 fn build_availability(
     draft: &ListingDraftDocument,
     contents: &str,
-) -> Result<RadrootsOperationalListingAvailability, ListingValidationIssueView> {
+) -> Result<OperationalListingAvailability, ListingValidationIssueView> {
     let kind = if draft.availability.kind.trim().is_empty() {
         if draft.availability.start.is_some() || draft.availability.end.is_some() {
             "window"
@@ -2484,17 +2231,17 @@ fn build_availability(
                     "missing availability status",
                 ));
             }
-            Ok(RadrootsOperationalListingAvailability::Status {
+            Ok(OperationalListingAvailability::Status {
                 status: match status {
-                    "active" => RadrootsOperationalListingStatus::Active,
-                    "sold" => RadrootsOperationalListingStatus::Sold,
-                    other => RadrootsOperationalListingStatus::Other {
+                    "active" => OperationalListingStatus::Active,
+                    "sold" => OperationalListingStatus::Sold,
+                    other => OperationalListingStatus::Other {
                         value: other.to_owned(),
                     },
                 },
             })
         }
-        "window" => Ok(RadrootsOperationalListingAvailability::Window {
+        "window" => Ok(OperationalListingAvailability::Window {
             start: draft.availability.start,
             end: draft.availability.end,
         }),
@@ -2509,7 +2256,7 @@ fn build_availability(
 fn build_delivery_method(
     draft: &ListingDraftDocument,
     contents: &str,
-) -> Result<RadrootsOperationalListingDeliveryMethod, ListingValidationIssueView> {
+) -> Result<OperationalListingDeliveryMethod, ListingValidationIssueView> {
     let method = draft.delivery.method.trim();
     if method.is_empty() {
         return Err(issue_for_field(
@@ -2520,17 +2267,17 @@ fn build_delivery_method(
     }
 
     Ok(match method {
-        "pickup" => RadrootsOperationalListingDeliveryMethod::Pickup,
-        "local_delivery" => RadrootsOperationalListingDeliveryMethod::LocalDelivery,
-        "shipping" => RadrootsOperationalListingDeliveryMethod::Shipping,
-        other => RadrootsOperationalListingDeliveryMethod::Other {
+        "pickup" => OperationalListingDeliveryMethod::Pickup,
+        "local_delivery" => OperationalListingDeliveryMethod::LocalDelivery,
+        "shipping" => OperationalListingDeliveryMethod::Shipping,
+        other => OperationalListingDeliveryMethod::Other {
             method: other.to_owned(),
         },
     })
 }
 
-fn build_location(draft: &ListingDraftDocument) -> RadrootsOperationalListingPublicLocation {
-    RadrootsOperationalListingPublicLocation {
+fn build_location(draft: &ListingDraftDocument) -> OperationalListingPublicLocation {
+    OperationalListingPublicLocation {
         primary: draft.location.primary.trim().to_owned(),
         city: draft.location.city.clone().and_then(non_empty),
         region: draft.location.region.clone().and_then(non_empty),
@@ -2543,8 +2290,8 @@ fn build_listing_discounts(
     draft: &ListingDraftDocument,
     contents: &str,
     primary_bin_id: &str,
-    price_currency: RadrootsCoreCurrency,
-) -> Result<Option<Vec<RadrootsCoreDiscount>>, ListingValidationIssueView> {
+    price_currency: Currency,
+) -> Result<Option<Vec<Discount>>, ListingValidationIssueView> {
     let mut discounts = Vec::new();
     for (index, discount) in draft.discounts.iter().enumerate() {
         let field_prefix = format!("discounts.{index}");
@@ -2580,14 +2327,14 @@ fn build_listing_discounts(
                         "percent discount requires value",
                     ));
                 }
-                let percent = raw.parse::<RadrootsCorePercent>().map_err(|error| {
+                let percent = raw.parse::<Percent>().map_err(|error| {
                     issue_for_field(
                         contents,
                         field_prefix.as_str(),
                         format!("percent discount value is invalid: {error}"),
                     )
                 })?;
-                RadrootsCoreDiscountValue::Percent(percent)
+                DiscountValue::Percent(percent)
             }
             "amount" => {
                 let raw_amount = discount.amount.trim();
@@ -2608,7 +2355,7 @@ fn build_listing_discounts(
                         field_prefix.as_str(),
                     )?
                 };
-                RadrootsCoreDiscountValue::MoneyPerBin(RadrootsCoreMoney::new(amount, currency))
+                DiscountValue::MoneyPerBin(Money::new(amount, currency))
             }
             other => {
                 return Err(issue_for_field(
@@ -2618,9 +2365,9 @@ fn build_listing_discounts(
                 ));
             }
         };
-        let discount = RadrootsCoreDiscount {
-            scope: RadrootsCoreDiscountScope::Bin,
-            threshold: RadrootsCoreDiscountThreshold::BinCount { bin_id, min },
+        let discount = Discount {
+            scope: DiscountScope::Bin,
+            threshold: DiscountThreshold::BinCount { bin_id, min },
             value,
         };
         if !discount.is_non_negative() {
@@ -2795,60 +2542,60 @@ fn validate_configured_listing_signer(
 
 fn validate_operational_listing_draft(
     canonical: &CanonicalListingDraft,
-) -> Result<(), RadrootsOperationalListingValidationError> {
-    let seller_pubkey = RadrootsPublicKey::parse(canonical.seller_pubkey.as_str())
-        .map_err(|_| RadrootsOperationalListingValidationError::InvalidSeller)?;
+) -> Result<(), OperationalListingValidationError> {
+    let seller_pubkey = PublicKey::parse(canonical.seller_pubkey.as_str())
+        .map_err(|_| OperationalListingValidationError::InvalidSeller)?;
     validate_operational_listing_model(canonical.listing.clone(), &seller_pubkey).map(|_| ())
 }
 
 fn issue_from_trade_validation(
-    error: RadrootsOperationalListingValidationError,
+    error: OperationalListingValidationError,
     contents: &str,
 ) -> ListingValidationIssueView {
     match error {
-        RadrootsOperationalListingValidationError::InvalidSeller => issue_for_field(
+        OperationalListingValidationError::InvalidSeller => issue_for_field(
             contents,
             "seller_actor.pubkey",
             "listing author does not match the farm pubkey",
         ),
-        RadrootsOperationalListingValidationError::MissingTitle => {
+        OperationalListingValidationError::MissingTitle => {
             issue_for_field(contents, "product.title", "missing listing title")
         }
-        RadrootsOperationalListingValidationError::MissingDescription => {
+        OperationalListingValidationError::MissingDescription => {
             issue_for_field(contents, "product.summary", "missing listing description")
         }
-        RadrootsOperationalListingValidationError::MissingProductType => {
+        OperationalListingValidationError::MissingProductType => {
             issue_for_field(contents, "product.category", "missing listing product type")
         }
-        RadrootsOperationalListingValidationError::MissingBins
-        | RadrootsOperationalListingValidationError::MissingPrimaryBin
-        | RadrootsOperationalListingValidationError::InvalidBin => {
+        OperationalListingValidationError::MissingBins
+        | OperationalListingValidationError::MissingPrimaryBin
+        | OperationalListingValidationError::InvalidBin => {
             issue_for_field(contents, "primary_bin.bin_id", error.to_string())
         }
-        RadrootsOperationalListingValidationError::MissingPrice
-        | RadrootsOperationalListingValidationError::InvalidPrice => issue_for_field(
+        OperationalListingValidationError::MissingPrice
+        | OperationalListingValidationError::InvalidPrice => issue_for_field(
             contents,
             "primary_bin.price_amount",
             "invalid listing price",
         ),
-        RadrootsOperationalListingValidationError::MissingInventory
-        | RadrootsOperationalListingValidationError::InvalidInventory => {
+        OperationalListingValidationError::MissingInventory
+        | OperationalListingValidationError::InvalidInventory => {
             issue_for_field(contents, "inventory.available", error.to_string())
         }
-        RadrootsOperationalListingValidationError::MissingAvailability => issue_for_field(
+        OperationalListingValidationError::MissingAvailability => issue_for_field(
             contents,
             "availability.status",
             "missing listing availability",
         ),
-        RadrootsOperationalListingValidationError::MissingLocation
-        | RadrootsOperationalListingValidationError::MissingLocationLocality => {
+        OperationalListingValidationError::MissingLocation
+        | OperationalListingValidationError::MissingLocationLocality => {
             issue_for_field(contents, "location.primary", error.to_string())
         }
-        RadrootsOperationalListingValidationError::MissingLocationGeohash
-        | RadrootsOperationalListingValidationError::InvalidLocationGeohash => {
+        OperationalListingValidationError::MissingLocationGeohash
+        | OperationalListingValidationError::InvalidLocationGeohash => {
             issue_for_field(contents, "location.geohash", error.to_string())
         }
-        RadrootsOperationalListingValidationError::MissingDeliveryMethod => issue_for_field(
+        OperationalListingValidationError::MissingDeliveryMethod => issue_for_field(
             contents,
             "delivery.method",
             "missing listing delivery method",
@@ -2951,9 +2698,7 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
     Ok(defaults)
 }
 
-fn draft_location_from_model(
-    location: &RadrootsOperationalListingPublicLocation,
-) -> ListingDraftLocation {
+fn draft_location_from_model(location: &OperationalListingPublicLocation) -> ListingDraftLocation {
     ListingDraftLocation {
         primary: location.primary.clone(),
         city: location.city.clone(),
@@ -3001,8 +2746,8 @@ fn parse_decimal_field(
     value: &str,
     contents: &str,
     field: &str,
-) -> Result<RadrootsCoreDecimal, ListingValidationIssueView> {
-    value.trim().parse::<RadrootsCoreDecimal>().map_err(|_| {
+) -> Result<Decimal, ListingValidationIssueView> {
+    value.trim().parse::<Decimal>().map_err(|_| {
         issue_for_field(
             contents,
             field,
@@ -3015,8 +2760,8 @@ fn parse_unit_field(
     value: &str,
     contents: &str,
     field: &str,
-) -> Result<RadrootsCoreUnit, ListingValidationIssueView> {
-    value.parse::<RadrootsCoreUnit>().map_err(|_| {
+) -> Result<Unit, ListingValidationIssueView> {
+    value.parse::<Unit>().map_err(|_| {
         issue_for_field(
             contents,
             field,
@@ -3029,9 +2774,9 @@ fn parse_currency_field(
     value: &str,
     contents: &str,
     field: &str,
-) -> Result<RadrootsCoreCurrency, ListingValidationIssueView> {
+) -> Result<Currency, ListingValidationIssueView> {
     let upper = value.trim().to_ascii_uppercase();
-    RadrootsCoreCurrency::from_str_upper(&upper).map_err(|_| {
+    Currency::from_str_upper(&upper).map_err(|_| {
         issue_for_field(
             contents,
             field,
@@ -3148,18 +2893,8 @@ fn encode_base64url_no_pad(bytes: [u8; 16]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DRAFT_KIND, ListingDraftDocument, encode_base64url_no_pad, generate_d_tag,
-        sdk_publish_actions, sdk_publish_reason, sdk_publish_state,
-        sdk_push_accepted_transport_endpoints, sdk_push_failed_transport_targets,
-    };
-    use crate::cli::global::ListingMutationArgs;
-    use radroots_event::ids::RadrootsEventId;
+    use super::{DRAFT_KIND, ListingDraftDocument, encode_base64url_no_pad, generate_d_tag};
     use radroots_event_codec::d_tag::is_d_tag_base64url;
-    use radroots_sdk::{
-        PushOutboxEventReceipt, PushOutboxEventState, PushOutboxTargetOutcomeKind,
-        PushOutboxTargetReceipt, PushOutboxTransportOutcomeKind,
-    };
 
     #[test]
     fn generated_listing_d_tag_is_valid_base64url() {
@@ -3172,49 +2907,6 @@ mod tests {
         let encoded = encode_base64url_no_pad([0u8; 16]);
         assert_eq!(encoded.len(), 22);
         assert!(is_d_tag_base64url(&encoded));
-    }
-
-    #[test]
-    fn sdk_push_receipt_helpers_map_published_and_auth_required_states() {
-        let accepted = sdk_push_event(
-            PushOutboxEventState::Published,
-            PushOutboxTargetOutcomeKind::Accepted,
-            Some("accepted".to_owned()),
-        );
-        let args = listing_mutation_args(false);
-
-        assert_eq!(sdk_publish_state(&args, Some(&accepted)), "published");
-        assert!(sdk_publish_reason(&args, Some(&accepted)).is_none());
-        assert!(sdk_publish_actions(&args, Some(&accepted)).is_empty());
-        assert_eq!(
-            sdk_push_accepted_transport_endpoints(&accepted),
-            vec!["ws://127.0.0.1:19000".to_owned()]
-        );
-        assert!(sdk_push_failed_transport_targets(&accepted).is_empty());
-
-        let auth_required = sdk_push_event(
-            PushOutboxEventState::PublishRetryable,
-            PushOutboxTargetOutcomeKind::AuthRequired,
-            Some("auth required".to_owned()),
-        );
-        let failed = sdk_push_failed_transport_targets(&auth_required);
-
-        assert_eq!(
-            sdk_publish_state(&args, Some(&auth_required)),
-            "unavailable"
-        );
-        assert!(
-            sdk_publish_reason(&args, Some(&auth_required))
-                .expect("retry reason")
-                .contains("accepted quorum")
-        );
-        assert_eq!(failed.len(), 1);
-        assert_eq!(failed[0].endpoint_uri, "ws://127.0.0.1:19000");
-        assert_eq!(failed[0].reason, "auth required");
-        assert_eq!(
-            sdk_publish_actions(&args, Some(&auth_required)),
-            vec!["radroots sync push".to_owned()]
-        );
     }
 
     #[test]
@@ -3358,89 +3050,7 @@ mod tests {
         missing_description.listing.product.summary = Some(" ".to_owned());
         assert_eq!(
             super::validate_operational_listing_draft(&missing_description),
-            Err(
-                radroots_event::trade_validation::RadrootsOperationalListingValidationError::MissingDescription
-            )
+            Err(super::OperationalListingValidationError::MissingDescription)
         );
-    }
-
-    fn sdk_push_event(
-        final_state: PushOutboxEventState,
-        outcome_kind: PushOutboxTargetOutcomeKind,
-        message: Option<String>,
-    ) -> PushOutboxEventReceipt {
-        PushOutboxEventReceipt {
-            event_id: RadrootsEventId::parse("e".repeat(64)).expect("event id"),
-            outbox_event_id: 7,
-            final_state,
-            attempted_count: 1,
-            accepted_count: usize::from(matches!(
-                outcome_kind,
-                PushOutboxTargetOutcomeKind::Accepted
-                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
-            )),
-            retryable_count: usize::from(matches!(
-                outcome_kind,
-                PushOutboxTargetOutcomeKind::AuthRequired
-                    | PushOutboxTargetOutcomeKind::Timeout
-                    | PushOutboxTargetOutcomeKind::ConnectionFailed
-            )),
-            terminal_count: 0,
-            quorum: 1,
-            quorum_met: matches!(
-                outcome_kind,
-                PushOutboxTargetOutcomeKind::Accepted
-                    | PushOutboxTargetOutcomeKind::DuplicateAccepted
-            ),
-            targets: vec![PushOutboxTargetReceipt {
-                transport_kind: "nostr".to_owned(),
-                endpoint_uri: "ws://127.0.0.1:19000".to_owned(),
-                target_scope: None,
-                target_label: None,
-                outcome_kind,
-                transport_outcome_kind: test_transport_outcome_kind(outcome_kind),
-                attempted: true,
-                message,
-            }],
-        }
-    }
-
-    fn test_transport_outcome_kind(
-        kind: PushOutboxTargetOutcomeKind,
-    ) -> Option<PushOutboxTransportOutcomeKind> {
-        Some(match kind {
-            PushOutboxTargetOutcomeKind::Accepted => PushOutboxTransportOutcomeKind::Accepted,
-            PushOutboxTargetOutcomeKind::DuplicateAccepted => {
-                PushOutboxTransportOutcomeKind::DuplicateAccepted
-            }
-            PushOutboxTargetOutcomeKind::Timeout => PushOutboxTransportOutcomeKind::Timeout,
-            PushOutboxTargetOutcomeKind::ConnectionFailed => {
-                PushOutboxTransportOutcomeKind::ConnectionFailed
-            }
-            PushOutboxTargetOutcomeKind::AuthRequired
-            | PushOutboxTargetOutcomeKind::Blocked
-            | PushOutboxTargetOutcomeKind::RateLimited
-            | PushOutboxTargetOutcomeKind::Invalid
-            | PushOutboxTargetOutcomeKind::PowRequired
-            | PushOutboxTargetOutcomeKind::Restricted
-            | PushOutboxTargetOutcomeKind::Muted
-            | PushOutboxTargetOutcomeKind::Unsupported
-            | PushOutboxTargetOutcomeKind::PaymentRequired
-            | PushOutboxTargetOutcomeKind::Error
-            | PushOutboxTargetOutcomeKind::TargetUriRejected
-            | PushOutboxTargetOutcomeKind::SkippedAlreadyAccepted
-            | PushOutboxTargetOutcomeKind::DeferredUntilImplemented
-            | PushOutboxTargetOutcomeKind::Unknown => PushOutboxTransportOutcomeKind::Rejected,
-            _ => PushOutboxTransportOutcomeKind::Rejected,
-        })
-    }
-
-    fn listing_mutation_args(offline: bool) -> ListingMutationArgs {
-        ListingMutationArgs {
-            file: "listing.toml".into(),
-            idempotency_key: None,
-            print_event: false,
-            offline,
-        }
     }
 }
