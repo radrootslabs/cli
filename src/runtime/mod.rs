@@ -12,6 +12,7 @@ pub mod provider;
 pub mod runtime_store;
 pub mod sdk;
 pub mod signer;
+pub mod signing;
 pub mod store;
 pub mod sync;
 pub mod trade;

@@ -1,12 +1,10 @@
 use std::{fmt, path::Path, sync::Arc};
 
 use radroots_identity::{
-    IdentityError, RadrootsIdentity, RadrootsIdentityPublic, load_identity_profile,
+    AccountId, PublicIdentity,
+    account::{Record as AccountRecord, Status as AccountStatus},
 };
-use radroots_nostr_accounts::prelude::{
-    RadrootsNostrAccountRecord, RadrootsNostrAccountStatus, RadrootsNostrAccountsError,
-    RadrootsNostrAccountsManager,
-};
+use radroots_nostr_accounts::prelude::{RadrootsNostrAccountsError, RadrootsNostrAccountsManager};
 use radroots_protected_store::RadrootsProtectedFileSecretVault;
 use radroots_secret_vault::{
     RadrootsHostVaultCapabilities, RadrootsResolvedSecretBackend, RadrootsSecretBackend,
@@ -65,7 +63,7 @@ impl AccountRuntimeFailure {
         Self::Unresolved(AccountRuntimeFailureIssue::with_detail(message, detail))
     }
 
-    pub fn watch_only(account_id: &radroots_identity::RadrootsIdentityId) -> Self {
+    pub fn watch_only(account_id: &AccountId) -> Self {
         Self::WatchOnly(AccountRuntimeFailureIssue::new(format!(
             "resolved account `{account_id}` is watch_only and cannot sign because it is not secret-backed"
         )))
@@ -123,7 +121,7 @@ pub struct AccountSnapshot {
 
 #[derive(Debug, Clone)]
 pub struct AccountRecordView {
-    pub record: RadrootsNostrAccountRecord,
+    pub record: AccountRecord,
     pub is_default: bool,
     pub custody: AccountCustody,
     pub write_capable: bool,
@@ -213,15 +211,15 @@ pub struct AccountResolution {
     pub default_account: Option<AccountRecordView>,
 }
 
-#[derive(Debug, Clone)]
-pub struct AccountSigningIdentity {
+#[derive(Debug)]
+pub struct AccountLocalSigner {
     pub account: AccountRecordView,
-    pub identity: RadrootsIdentity,
+    pub signer: radroots_nostr::signing::LocalSigner,
 }
 
 pub fn create_default_account(config: &RuntimeConfig) -> Result<AccountCreateResult, RuntimeError> {
     let manager = account_manager(config)?;
-    let created_account_id = manager.generate_identity(None, false)?;
+    let created_account_id = manager.generate_keys(None, false)?;
 
     let snapshot = snapshot(config)?;
     let account = snapshot_account(
@@ -261,7 +259,7 @@ pub fn preview_public_identity_import(
     if let Some(existing) = snapshot
         .accounts
         .iter()
-        .find(|account| account.record.account_id == public_identity.id)
+        .find(|account| account.record.id() == AccountId::from(&public_identity))
         .cloned()
     {
         let mut account = existing;
@@ -272,7 +270,7 @@ pub fn preview_public_identity_import(
     }
 
     Ok(AccountRecordView {
-        record: RadrootsNostrAccountRecord::new(public_identity, None, 0),
+        record: AccountRecord::new(public_identity, None, 0),
         is_default: make_default,
         custody: AccountCustody::WatchOnly,
         write_capable: false,
@@ -288,8 +286,8 @@ pub fn preview_identity_secret_attachment(
     let manager = account_manager(config)?;
     let snapshot = snapshot_from_manager(&manager)?;
     let mut account = resolve_selector_account(&manager, &snapshot, selector)?;
-    let identity = load_secret_identity_for_attachment(path)?;
-    validate_identity_secret_matches_account(&account.record, &identity)?;
+    let secret = load_secret_key_for_attachment(path)?;
+    validate_secret_matches_account(&account.record, &secret)?;
     if make_default {
         account.is_default = true;
     }
@@ -307,14 +305,14 @@ pub fn attach_identity_secret(
     let manager = account_manager(config)?;
     let snapshot = snapshot_from_manager(&manager)?;
     let account = resolve_selector_account(&manager, &snapshot, selector)?;
-    let identity = load_secret_identity_for_attachment(path)?;
-    validate_identity_secret_matches_account(&account.record, &identity)?;
-    let attached =
-        manager.attach_identity_secret(&account.record.account_id, &identity, make_default)?;
+    let secret = load_secret_key_for_attachment(path)?;
+    validate_secret_matches_account(&account.record, &secret)?;
+    let keys = nostr::Keys::new(secret);
+    let attached = manager.attach_secret_keys(&account.record.id(), &keys, make_default)?;
     let snapshot = snapshot_from_manager(&manager)?;
     snapshot_account(
         &snapshot,
-        &attached.account_id,
+        &attached.id(),
         "attached account missing after account secret attachment",
     )
 }
@@ -366,12 +364,12 @@ pub fn select_account(
     let snapshot = snapshot_from_manager(&manager)?;
     let account = resolve_selector_account(&manager, &snapshot, selector)?;
 
-    manager.set_default_account(&account.record.account_id)?;
+    manager.set_default_account(&account.record.id())?;
     let snapshot = snapshot_from_manager(&manager)?;
     snapshot
         .accounts
         .into_iter()
-        .find(|candidate| candidate.record.account_id == account.record.account_id)
+        .find(|candidate| candidate.record.id() == account.record.id())
         .ok_or_else(|| {
             RuntimeError::Accounts(
                 radroots_nostr_accounts::prelude::RadrootsNostrAccountsError::InvalidState(
@@ -416,7 +414,7 @@ pub fn remove_account(
     let snapshot = snapshot_from_manager(&manager)?;
     let removed_account = resolve_selector_account(&manager, &snapshot, selector)?;
     let default_cleared = removed_account.is_default;
-    manager.remove_account(&removed_account.record.account_id)?;
+    manager.remove_account(&removed_account.record.id())?;
     let remaining_account_count = snapshot_from_manager(&manager)?.accounts.len();
     Ok(AccountRemoveResult {
         removed_account,
@@ -441,49 +439,52 @@ pub fn preview_account_removal(
 
 pub fn resolved_account_signing_status(
     config: &RuntimeConfig,
-) -> Result<RadrootsNostrAccountStatus, RuntimeError> {
+) -> Result<AccountStatus, RuntimeError> {
     let manager = account_manager(config)?;
     let resolution = resolve_account_resolution(config)?;
     let Some(account) = resolution.resolved_account else {
-        return Ok(RadrootsNostrAccountStatus::NotConfigured);
+        return Ok(AccountStatus::NotConfigured);
     };
 
-    Ok(
-        match manager.get_signing_identity(&account.record.account_id)? {
-            Some(_) => RadrootsNostrAccountStatus::Ready {
-                account: account.record.clone(),
-            },
-            None => RadrootsNostrAccountStatus::PublicOnly {
-                account: account.record.clone(),
-            },
+    Ok(match manager.get_signing_keys(&account.record.id())? {
+        Some(_) => AccountStatus::Ready {
+            account: account.record.clone(),
         },
-    )
+        None => AccountStatus::PublicOnly {
+            account: account.record.clone(),
+        },
+    })
 }
 
 pub fn resolve_local_signing_identity(
     config: &RuntimeConfig,
-) -> Result<AccountSigningIdentity, RuntimeError> {
+) -> Result<AccountLocalSigner, RuntimeError> {
     let manager = account_manager(config)?;
     let resolution = resolve_account_resolution(config)?;
     let Some(account) = resolution.resolved_account else {
         return Err(AccountRuntimeFailure::unresolved(unresolved_account_reason(config)?).into());
     };
-    let Some(identity) = manager.get_signing_identity(&account.record.account_id)? else {
-        return Err(AccountRuntimeFailure::watch_only(&account.record.account_id).into());
+    let Some(secret) = manager.export_secret_hex(&account.record.id())? else {
+        return Err(AccountRuntimeFailure::watch_only(&account.record.id()).into());
     };
-    Ok(AccountSigningIdentity { account, identity })
+    let secret = zeroize::Zeroizing::new(secret);
+    let secret = radroots_nostr::key::parse_secret_key(secret.trim())
+        .map_err(|_| RuntimeError::Config("local account secret is invalid".to_owned()))?;
+    let signer = radroots_nostr::signing::LocalSigner::new(secret)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    Ok(AccountLocalSigner { account, signer })
 }
 
 pub fn resolve_local_signing_identity_for_account(
     config: &RuntimeConfig,
     account_id: &str,
-) -> Result<AccountSigningIdentity, RuntimeError> {
+) -> Result<AccountLocalSigner, RuntimeError> {
     let manager = account_manager(config)?;
     let snapshot = snapshot_from_manager(&manager)?;
     let Some(account) = snapshot
         .accounts
         .iter()
-        .find(|account| account.record.account_id.as_str() == account_id)
+        .find(|account| account.record.id().to_hex() == account_id)
         .cloned()
     else {
         return Err(AccountRuntimeFailure::unresolved(format!(
@@ -491,10 +492,15 @@ pub fn resolve_local_signing_identity_for_account(
         ))
         .into());
     };
-    let Some(identity) = manager.get_signing_identity(&account.record.account_id)? else {
-        return Err(AccountRuntimeFailure::watch_only(&account.record.account_id).into());
+    let Some(secret) = manager.export_secret_hex(&account.record.id())? else {
+        return Err(AccountRuntimeFailure::watch_only(&account.record.id()).into());
     };
-    Ok(AccountSigningIdentity { account, identity })
+    let secret = zeroize::Zeroizing::new(secret);
+    let secret = radroots_nostr::key::parse_secret_key(secret.trim())
+        .map_err(|_| RuntimeError::Config("local account secret is invalid".to_owned()))?;
+    let signer = radroots_nostr::signing::LocalSigner::new(secret)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    Ok(AccountLocalSigner { account, signer })
 }
 
 pub fn account_summary_view(account: &AccountRecordView) -> AccountSummaryView {
@@ -599,7 +605,7 @@ fn snapshot_from_manager(
     for record in manager.list_accounts()? {
         let is_default = default_account_id
             .as_deref()
-            .is_some_and(|default| default == record.account_id.as_str());
+            .is_some_and(|default| default == record.id().to_hex());
         let runtime = account_runtime_facts(manager, &record)?;
         accounts.push(AccountRecordView {
             record,
@@ -614,13 +620,13 @@ fn snapshot_from_manager(
 
 fn snapshot_account(
     snapshot: &AccountSnapshot,
-    account_id: &radroots_identity::RadrootsIdentityId,
+    account_id: &AccountId,
     missing_message: &str,
 ) -> Result<AccountRecordView, RuntimeError> {
     snapshot
         .accounts
         .iter()
-        .find(|account| account.record.account_id == *account_id)
+        .find(|account| account.record.id() == *account_id)
         .cloned()
         .ok_or_else(|| {
             RuntimeError::Accounts(
@@ -642,7 +648,7 @@ fn resolve_selector_account(
     snapshot
         .accounts
         .iter()
-        .find(|account| account.record.account_id == record.account_id)
+        .find(|account| account.record.id() == record.id())
         .cloned()
         .ok_or_else(|| {
             RuntimeError::Accounts(RadrootsNostrAccountsError::InvalidState(
@@ -673,66 +679,64 @@ fn selector_runtime_error(selector: &str, error: RadrootsNostrAccountsError) -> 
 
 fn account_runtime_facts(
     manager: &RadrootsNostrAccountsManager,
-    record: &RadrootsNostrAccountRecord,
+    record: &AccountRecord,
 ) -> Result<AccountRuntimeFacts, RuntimeError> {
-    Ok(
-        if manager.get_signing_identity(&record.account_id)?.is_some() {
-            AccountRuntimeFacts {
-                custody: AccountCustody::SecretBacked,
-                write_capable: true,
-            }
-        } else {
-            AccountRuntimeFacts {
-                custody: AccountCustody::WatchOnly,
-                write_capable: false,
-            }
-        },
-    )
+    Ok(if manager.get_signing_keys(&record.id())?.is_some() {
+        AccountRuntimeFacts {
+            custody: AccountCustody::SecretBacked,
+            write_capable: true,
+        }
+    } else {
+        AccountRuntimeFacts {
+            custody: AccountCustody::WatchOnly,
+            write_capable: false,
+        }
+    })
 }
 
-fn format_identity_error(error: IdentityError) -> String {
-    match error {
-        IdentityError::NotFound(path) => format!("path not found: {}", path.display()),
-        other => other.to_string(),
-    }
-}
-
-fn load_public_identity_for_import(path: &Path) -> Result<RadrootsIdentityPublic, RuntimeError> {
-    load_identity_profile(path).map_err(|error| {
+fn load_public_identity_for_import(path: &Path) -> Result<PublicIdentity, RuntimeError> {
+    let bytes = std::fs::read(path).map_err(|error| {
         RuntimeError::Config(format!(
-            "failed to import account from {}: {}",
-            path.display(),
-            format_identity_error(error)
+            "failed to read account import {}: {error}",
+            path.display()
+        ))
+    })?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        RuntimeError::Config(format!(
+            "failed to import canonical public identity from {}: {error}",
+            path.display()
         ))
     })
 }
 
-fn load_secret_identity_for_attachment(path: &Path) -> Result<RadrootsIdentity, RuntimeError> {
-    RadrootsIdentity::load_from_path_auto(path).map_err(|error| {
+fn load_secret_key_for_attachment(path: &Path) -> Result<nostr::SecretKey, RuntimeError> {
+    let secret = std::fs::read_to_string(path).map_err(|error| {
         RuntimeError::Config(format!(
-            "failed to import account secret from {}: {}",
+            "failed to read account secret from {}: {error}",
             path.display(),
-            format_identity_error(error)
+        ))
+    })?;
+    nostr::SecretKey::parse(secret.trim()).map_err(|_| {
+        RuntimeError::Config(format!(
+            "failed to import account secret from {}: invalid hex or nsec key",
+            path.display()
         ))
     })
 }
 
-fn validate_identity_secret_matches_account(
-    record: &RadrootsNostrAccountRecord,
-    identity: &RadrootsIdentity,
+fn validate_secret_matches_account(
+    record: &AccountRecord,
+    secret: &nostr::SecretKey,
 ) -> Result<(), RuntimeError> {
-    let secret_public_key_hex = identity.public_key_hex();
-    if record
-        .public_identity
-        .public_key_hex
-        .eq_ignore_ascii_case(secret_public_key_hex.as_str())
-    {
+    let secret_public_key_hex = nostr::Keys::new(secret.clone()).public_key().to_hex();
+    let public_key_hex = record.public_identity().public_key().to_hex();
+    if public_key_hex.eq_ignore_ascii_case(secret_public_key_hex.as_str()) {
         return Ok(());
     }
 
     Err(AccountRuntimeFailure::mismatch(format!(
         "account mismatch: resolved account `{}` public key `{}` does not match secret public key `{}`",
-        record.account_id, record.public_identity.public_key_hex, secret_public_key_hex
+        record.id(), public_key_hex, secret_public_key_hex
     ))
     .into())
 }

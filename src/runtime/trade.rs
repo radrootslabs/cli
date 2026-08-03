@@ -240,10 +240,10 @@ fn trade_prepared_view(
     TradePreparedView {
         state: "prepared".to_owned(),
         operation: operation.to_owned(),
-        trade_id: plan.workflow().trade_id().as_str().to_owned(),
-        mutation_id: plan.workflow().mutation_id().as_str().to_owned(),
+        trade_id: plan.workflow().trade_id().to_string(),
+        mutation_id: plan.workflow().mutation_id().to_string(),
         mutation_kind: format!("{:?}", plan.workflow().kind()),
-        event_id: plan.draft().expected_event_id().as_str().to_owned(),
+        event_id: plan.draft().expected_event_id().to_string(),
         event_kind: plan.draft().kind_u32(),
         author: plan.draft().expected_pubkey().to_hex(),
         required_actions: plan
@@ -384,10 +384,8 @@ fn scaffold_proposal_draft_inner(
     let listing_state =
         resolve_active_listing_state(config, product.listing_addr.as_str(), &parsed_listing)?;
     let farm_id = resolve_farm_id(config, parsed_listing.seller_pubkey.as_str())?;
-    let buyer_pubkey = pubkey(
-        buyer.record.public_identity.public_key_hex.as_str(),
-        "buyer_pubkey",
-    )?;
+    let buyer_public_key_hex = buyer.record.public_identity().public_key().to_hex();
+    let buyer_pubkey = pubkey(buyer_public_key_hex.as_str(), "buyer_pubkey")?;
     let seller_pubkey = pubkey(parsed_listing.seller_pubkey.as_str(), "seller_pubkey")?;
     let candidate = candidate_terms(
         &product,
@@ -407,17 +405,14 @@ fn scaffold_proposal_draft_inner(
         seller_pubkey: seller_pubkey.clone(),
         farm_id: farm_id.clone(),
         parent_mutation_ids: Vec::new(),
-        author_pubkey: pubkey(
-            buyer.record.public_identity.public_key_hex.as_str(),
-            "author_pubkey",
-        )?,
+        author_pubkey: pubkey(buyer_public_key_hex.as_str(), "author_pubkey")?,
         counterparty_pubkey: seller_pubkey,
         authored_at_unix_s: now_unix(),
         body: TradeMutationBodyV1::Proposal { candidate },
     };
     let canonical = canonical_trade_mutation_content(envelope)
         .map_err(|error| RuntimeError::Config(format!("build trade proposal envelope: {error}")))?;
-    let file = candidate_draft_file(config, canonical.envelope.trade_id.as_str());
+    let file = candidate_draft_file(config, canonical.envelope.trade_id.to_string().as_str());
     if !dry_run {
         if let Some(parent) = file.parent() {
             fs::create_dir_all(parent)?;
@@ -441,7 +436,7 @@ fn scaffold_proposal_draft_inner(
         listing_addr: product.listing_addr,
         listing_event_id: listing_state.last_event_id,
         listing_snapshot_sha256: listing_state.content_hash,
-        buyer_pubkey: buyer.record.public_identity.public_key_hex,
+        buyer_pubkey: buyer_public_key_hex,
         seller_pubkey: parsed_listing.seller_pubkey,
         farm_id: farm_id.to_string(),
         ready_for_submit: true,
@@ -473,25 +468,25 @@ fn actor_for_envelope(
     let account = account::resolve_account(config)?.ok_or_else(|| {
         RuntimeError::Config(format!("{operation} requires a selected signer account"))
     })?;
-    let author_pubkey = envelope.author_pubkey.as_str();
-    let account_pubkey = account.record.public_identity.public_key_hex.as_str();
-    if !account_pubkey.eq_ignore_ascii_case(author_pubkey) {
+    let author_pubkey = envelope.author_pubkey.to_hex();
+    let account_pubkey = account.record.public_identity().public_key().to_hex();
+    if !account_pubkey.eq_ignore_ascii_case(author_pubkey.as_str()) {
         return Err(RuntimeError::Config(format!(
             "{operation} envelope author `{author_pubkey}` does not match selected account `{}` public key `{account_pubkey}`",
-            account.record.account_id
+            account.record.id()
         ))
         .into());
     }
     let role = if envelope
         .buyer_pubkey
-        .as_str()
-        .eq_ignore_ascii_case(author_pubkey)
+        .to_hex()
+        .eq_ignore_ascii_case(author_pubkey.as_str())
     {
         AuthorRole::Buyer
     } else if envelope
         .seller_pubkey
-        .as_str()
-        .eq_ignore_ascii_case(author_pubkey)
+        .to_hex()
+        .eq_ignore_ascii_case(author_pubkey.as_str())
     {
         AuthorRole::Seller
     } else {
@@ -500,13 +495,16 @@ fn actor_for_envelope(
         ))
         .into());
     };
-    let actor =
-        Actor::from_public_key_hex(author_pubkey, ActorSource::ExplicitPublicKey, [role])
-            .map_err(|error| RuntimeError::Config(format!("invalid trade SDK actor: {error}")))?;
+    let actor = Actor::from_public_key_hex(
+        author_pubkey.as_str(),
+        ActorSource::ExplicitPublicKey,
+        [role],
+    )
+    .map_err(|error| RuntimeError::Config(format!("invalid trade SDK actor: {error}")))?;
     validate_configured_signer_for_actor(
         config,
-        Some(account.record.account_id.as_str()),
-        author_pubkey,
+        Some(account.record.id().to_hex().as_str()),
+        author_pubkey.as_str(),
         operation,
     )?;
     Ok(actor)
@@ -668,7 +666,8 @@ fn candidate_terms(
             RuntimeError::Config(format!("listing price_currency is invalid: {error}"))
         })?;
     let quantity_amount = exact_positive_decimal(product.qty_amt_exact.as_str(), "qty_amt_exact")?
-        * Decimal::from(bin_count);
+        .checked_mul(Decimal::from(bin_count))
+        .map_err(|error| RuntimeError::Config(format!("trade quantity overflow: {error}")))?;
     let quantity_unit = product
         .qty_unit
         .parse::<Unit>()
@@ -685,8 +684,13 @@ fn candidate_terms(
                 "listing quantity and price units are incompatible: {error}"
             ))
         })?;
-    let unit_price_amount = (price_amount / price_quantity_amount) * quantity_unit_in_price_units;
-    let subtotal = unit_price_amount * quantity_amount;
+    let unit_price_amount = price_amount
+        .checked_div(price_quantity_amount)
+        .and_then(|value| value.checked_mul(quantity_unit_in_price_units))
+        .map_err(|error| RuntimeError::Config(format!("trade unit price is invalid: {error}")))?;
+    let subtotal = unit_price_amount
+        .checked_mul(quantity_amount)
+        .map_err(|error| RuntimeError::Config(format!("trade subtotal overflow: {error}")))?;
     let quantity_scale = u8::try_from(quantity_amount.scale())
         .map_err(|_| RuntimeError::Config("trade quantity scale exceeds u8".to_owned()))?;
     let currency_exponent = currency.minor_unit_exponent();
@@ -927,7 +931,7 @@ fn exact_positive_decimal(value: &str, field: &str) -> Result<Decimal, RuntimeEr
 
 fn decimal_mantissa_at_scale(mut value: Decimal, scale: u32) -> String {
     value.rescale(scale);
-    value.0.mantissa().to_string()
+    value.to_string().replace('.', "")
 }
 
 fn candidate_draft_file(config: &RuntimeConfig, trade_id: &str) -> PathBuf {
@@ -971,7 +975,7 @@ fn inventory_bin_id(value: &str, field: &str) -> Result<InventoryBinId, RuntimeE
 }
 
 fn pubkey(value: &str, field: &str) -> Result<PublicKey, RuntimeError> {
-    PublicKey::parse(value)
+    PublicKey::from_hex(value)
         .map_err(|error| RuntimeError::Config(format!("{field} is invalid: {error}")))
 }
 

@@ -237,7 +237,7 @@ impl OperationService<AccountRemoveRequest> for CoreOperationService<'_> {
         let result = remove_account(self.config, selector.as_str()).map_err(|error| {
             OperationAdapterError::unconfigured(request.operation_id(), error.to_string())
         })?;
-        let removed_account_id = result.removed_account.record.account_id.to_string();
+        let removed_account_id = result.removed_account.record.id().to_string();
         let farm_orphan_warning =
             account_remove_farm_orphan_warning(resolved_farm_config.as_ref(), &removed_account_id);
         let mut result_value = json!({
@@ -549,9 +549,7 @@ fn nostr_publish_readiness(
         return (
             "unconfigured",
             false,
-            Some(
-                AccountRuntimeFailure::watch_only(&resolved_account.record.account_id).to_string(),
-            ),
+            Some(AccountRuntimeFailure::watch_only(&resolved_account.record.id()).to_string()),
         );
     }
 

@@ -923,8 +923,12 @@ fn rebind_inner(
     let from_seller_pubkey = non_empty(draft.seller_actor.pubkey.clone());
     let from_seller_actor_source = non_empty(draft.seller_actor.source.clone());
     let from_farm_d_tag = non_empty(draft.listing.farm_d_tag.clone());
-    let target_account_id = target_account.record.account_id.to_string();
-    let target_pubkey = target_account.record.public_identity.public_key_hex.clone();
+    let target_account_id = target_account.record.id().to_string();
+    let target_pubkey = target_account
+        .record
+        .public_identity()
+        .public_key()
+        .to_hex();
     let target_farm_d_tag = resolve_rebind_farm_d_tag(
         config,
         args,
@@ -1819,7 +1823,7 @@ fn sdk_prepared_publish_view(
         job_id: None,
         job_status: None,
         signer_mode: Some(config.signer.backend.as_str().to_owned()),
-        event_id: Some(plan.draft().expected_event_id().as_str().to_owned()),
+        event_id: Some(plan.draft().expected_event_id().to_string()),
         event_addr: Some(listing_addr),
         idempotency_key: args.idempotency_key.clone(),
         local_replica: None,
@@ -1837,7 +1841,7 @@ fn sdk_plan_event_view(plan: &ListingPlan) -> ListingMutationEventView {
         created_at: Some(plan.draft().created_at_u64()),
         content: plan.draft().content().to_owned(),
         tags: plan.draft().tags_as_vec(),
-        event_id: Some(plan.draft().expected_event_id().as_str().to_owned()),
+        event_id: Some(plan.draft().expected_event_id().to_string()),
         signature: None,
         event_addr: plan.address().as_str().to_owned(),
     }
@@ -2083,7 +2087,14 @@ fn canonicalize_draft(
         contents,
         "primary_bin.quantity_unit",
     )?;
-    let quantity = Quantity::new(quantity_amount, quantity_unit)
+    let quantity = Quantity::try_new(quantity_amount, quantity_unit)
+        .map_err(|error| {
+            issue_for_field(
+                contents,
+                "primary_bin.quantity_amount",
+                format!("invalid primary_bin quantity: {error}"),
+            )
+        })?
         .with_optional_label(non_empty(draft.primary_bin.label.clone()))
         .to_canonical()
         .map_err(|error| {
@@ -2114,18 +2125,22 @@ fn canonicalize_draft(
         contents,
         "primary_bin.price_per_unit",
     )?;
-    let price = QuantityPrice::new(
-        Money::new(price_amount, price_currency),
-        Quantity::new(price_per_amount, price_per_unit),
-    )
-    .try_to_canonical_unit_price()
-    .map_err(|error| {
-        issue_for_field(
-            contents,
-            "primary_bin.price_per_unit",
-            format!("invalid primary_bin price definition: {error:?}"),
-        )
+    let price_money = Money::try_new(price_amount, price_currency).map_err(|error| {
+        issue_for_field(contents, "primary_bin.price_amount", error.to_string())
     })?;
+    let price_quantity = Quantity::try_new(price_per_amount, price_per_unit).map_err(|error| {
+        issue_for_field(contents, "primary_bin.price_per_amount", error.to_string())
+    })?;
+    let price = QuantityPrice::try_new(price_money, price_quantity)
+        .map_err(|error| issue_for_field(contents, "primary_bin.price_amount", error.to_string()))?
+        .try_to_canonical_unit_price()
+        .map_err(|error| {
+            issue_for_field(
+                contents,
+                "primary_bin.price_per_unit",
+                format!("invalid primary_bin price definition: {error:?}"),
+            )
+        })?;
 
     let inventory_available = parse_decimal_field(
         draft.inventory.available.as_str(),
@@ -2355,7 +2370,9 @@ fn build_listing_discounts(
                         field_prefix.as_str(),
                     )?
                 };
-                DiscountValue::MoneyPerBin(Money::new(amount, currency))
+                DiscountValue::MoneyPerBin(Money::try_new(amount, currency).map_err(|error| {
+                    issue_for_field(contents, field_prefix.as_str(), error.to_string())
+                })?)
             }
             other => {
                 return Err(issue_for_field(
@@ -2397,7 +2414,7 @@ fn listing_bound_account_issue(
             ),
         )));
     };
-    let account_pubkey = account.record.public_identity.public_key_hex;
+    let account_pubkey = account.record.public_identity().public_key().to_hex();
     if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
         return Ok(Some(issue_for_field(
             contents,
@@ -2432,7 +2449,7 @@ fn ensure_listing_bound_account(
         )
         .into());
     };
-    let account_pubkey = account.record.public_identity.public_key_hex;
+    let account_pubkey = account.record.public_identity().public_key().to_hex();
     if !account_pubkey.eq_ignore_ascii_case(canonical.seller_pubkey.as_str()) {
         return Err(account::AccountRuntimeFailure::mismatch_with_detail(
             format!(
@@ -2468,18 +2485,18 @@ fn validate_invocation_account_matches_bound(
         return Ok(());
     };
     let attempted = account::resolve_account_selector(config, selector)?;
-    if attempted.record.account_id.to_string() == canonical.seller_account_id {
+    if attempted.record.id().to_string() == canonical.seller_account_id {
         return Ok(());
     }
     Err(account::AccountRuntimeFailure::mismatch_with_detail(
         format!(
             "account mismatch: listing draft is bound to seller account `{}`; invocation selected `{}`",
-            canonical.seller_account_id, attempted.record.account_id
+            canonical.seller_account_id, attempted.record.id()
         ),
         json!({
             "seller_actor_source": canonical.seller_actor_source,
             "listing_seller_account_id": canonical.seller_account_id,
-            "attempted_seller_account_id": attempted.record.account_id.to_string(),
+            "attempted_seller_account_id": attempted.record.id().to_string(),
             "listing_file": file.display().to_string(),
             "actions": listing_bound_account_recovery_actions(file),
         }),
@@ -2543,7 +2560,7 @@ fn validate_configured_listing_signer(
 fn validate_operational_listing_draft(
     canonical: &CanonicalListingDraft,
 ) -> Result<(), OperationalListingValidationError> {
-    let seller_pubkey = PublicKey::parse(canonical.seller_pubkey.as_str())
+    let seller_pubkey = PublicKey::from_hex(canonical.seller_pubkey.as_str())
         .map_err(|_| OperationalListingValidationError::InvalidSeller)?;
     validate_operational_listing_model(canonical.listing.clone(), &seller_pubkey).map(|_| ())
 }
@@ -2628,12 +2645,12 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
                 .to_owned(),
         ),
         farm_name: None,
-        seller_account_id: selected_account.record.account_id.to_string(),
+        seller_account_id: selected_account.record.id().to_string(),
         seller_pubkey: selected_account
             .record
-            .public_identity
-            .public_key_hex
-            .clone(),
+            .public_identity()
+            .public_key()
+            .to_hex(),
         seller_actor_source: LISTING_SELLER_ACTOR_SOURCE_RESOLVED_ACCOUNT.to_owned(),
         selected_farm_d_tag: None,
         delivery_method: None,
@@ -2668,7 +2685,7 @@ fn authoring_defaults(config: &RuntimeConfig) -> Result<ListingAuthoringDefaults
         .or_else(|| non_empty(resolved.document.profile.name.clone()))
         .or_else(|| non_empty(resolved.document.farm.name.clone()));
     defaults.seller_account_id = resolved.document.selection.account.clone();
-    defaults.seller_pubkey = account.record.public_identity.public_key_hex.clone();
+    defaults.seller_pubkey = account.record.public_identity().public_key().to_hex();
     defaults.seller_actor_source = LISTING_SELLER_ACTOR_SOURCE_FARM_CONFIG.to_owned();
     defaults.selected_farm_d_tag = Some(resolved.document.selection.farm_d_tag.clone());
     let draft_missing = farm_config::missing_fields(&resolved.document);
@@ -2739,7 +2756,7 @@ fn configured_account(
     Ok(snapshot
         .accounts
         .into_iter()
-        .find(|account| account.record.account_id.as_str() == account_id))
+        .find(|account| account.record.id().to_hex() == account_id))
 }
 
 fn parse_decimal_field(

@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use radroots_event::farm::Farm;
 use radroots_event::id::ClassifiedListingAddress;
 use radroots_event::listing::operational::OperationalListingPublicLocation;
-use radroots_nostr_accounts::prelude::RadrootsNostrAccountRecord;
+use radroots_identity::account::Record as AccountRecord;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,11 +427,12 @@ pub struct IdentityPublicView {
 }
 
 impl IdentityPublicView {
-    pub fn from_public_identity(identity: &radroots_identity::RadrootsIdentityPublic) -> Self {
+    pub fn from_public_identity(identity: &radroots_identity::PublicIdentity) -> Self {
         Self {
-            id: identity.id.to_string(),
-            public_key_hex: identity.public_key_hex.clone(),
-            public_key_npub: identity.public_key_npub.clone(),
+            id: identity.id().to_string(),
+            public_key_hex: identity.public_key().to_hex(),
+            public_key_npub: radroots_nostr::key::public_key_to_npub(identity.public_key())
+                .unwrap_or_else(|_| identity.public_key().to_hex()),
         }
     }
 }
@@ -449,15 +450,15 @@ pub struct AccountSummaryView {
 
 impl AccountSummaryView {
     pub fn from_account_runtime(
-        record: &RadrootsNostrAccountRecord,
+        record: &AccountRecord,
         signer: &str,
         custody: &str,
         write_capable: bool,
         is_default: bool,
     ) -> Self {
         Self {
-            id: record.account_id.to_string(),
-            display_name: record.label.clone(),
+            id: record.id().to_string(),
+            display_name: record.label().map(ToOwned::to_owned),
             signer: signer.to_owned(),
             custody: custody.to_owned(),
             write_capable,

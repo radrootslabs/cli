@@ -13,14 +13,7 @@ use radroots_event::envelope::kind::{
     KIND_CLASSIFIED_LISTING, KIND_FARM, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION,
     KIND_TRADE_PROPOSAL, KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
 };
-use radroots_nostr_accounts::prelude::RadrootsNostrAccountStatus;
-use radroots_nostr_connect::prelude::RadrootsNostrConnectPermissions;
-use radroots_nostr_signer::prelude::{
-    RadrootsNostrLocalSignerAvailability, RadrootsNostrLocalSignerCapability,
-    RadrootsNostrSignerCapability,
-};
-use radroots_sdk::radroots_sdk_myc_nip46_product_permission_strings;
-use std::str::FromStr;
+use radroots_identity::account::Status as AccountStatus;
 use url::Url;
 
 const SIGNER_BINDING_PROVIDER_RUNTIME_ID: &str = "myc";
@@ -69,7 +62,7 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 resolution
                     .resolved_account
                     .as_ref()
-                    .map(|account| account.record.account_id.to_string()),
+                    .map(|account| account.record.id().to_string()),
             ),
             Err(error) => {
                 let reason = error.to_string();
@@ -125,66 +118,50 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
         .unwrap_or_else(|| "unknown".to_owned());
 
     match crate::runtime::account::resolved_account_signing_status(config) {
-        Ok(RadrootsNostrAccountStatus::Ready { account }) => {
-            let capability = RadrootsNostrSignerCapability::LocalAccount(Box::new(
-                RadrootsNostrLocalSignerCapability::new(
-                    account.account_id.clone(),
-                    account.public_identity.clone(),
-                    RadrootsNostrLocalSignerAvailability::SecretBacked,
+        Ok(AccountStatus::Ready { account }) => SignerStatusView {
+            mode: config.signer.backend.as_str().to_owned(),
+            state: "ready".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
+            signer_account_id: Some(account.id().to_string()),
+            account_resolution: account_resolution.clone(),
+            reason: None,
+            binding: disabled_binding_status(),
+            write_kinds: local_write_kind_readiness(true, None),
+            local: Some(LocalSignerStatusView {
+                account_id: account.id().to_string(),
+                public_identity: IdentityPublicView::from_public_identity(
+                    account.public_identity(),
                 ),
-            ));
-            let local = capability
-                .local_account()
-                .expect("local signer capability")
-                .clone();
-            SignerStatusView {
-                mode: config.signer.backend.as_str().to_owned(),
-                state: "ready".to_owned(),
-                source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
-                signer_account_id: Some(local.account_id.to_string()),
-                account_resolution: account_resolution.clone(),
-                reason: None,
-                binding: disabled_binding_status(),
-                write_kinds: local_write_kind_readiness(true, None),
-                local: Some(LocalSignerStatusView {
-                    account_id: local.account_id.to_string(),
-                    public_identity: IdentityPublicView::from_public_identity(
-                        &local.public_identity,
-                    ),
-                    availability: local_availability(local.availability).to_owned(),
-                    secret_backed: local.is_secret_backed(),
-                    backend: backend.clone(),
-                }),
-                myc: None,
-            }
-        }
-        Ok(RadrootsNostrAccountStatus::PublicOnly { account }) => {
-            let reason = AccountRuntimeFailure::watch_only(&account.account_id).to_string();
+                availability: "secret_backed".to_owned(),
+                secret_backed: true,
+                backend: backend.clone(),
+            }),
+            myc: None,
+        },
+        Ok(AccountStatus::PublicOnly { account }) => {
+            let reason = AccountRuntimeFailure::watch_only(&account.id()).to_string();
             SignerStatusView {
                 mode: config.signer.backend.as_str().to_owned(),
                 state: "unconfigured".to_owned(),
                 source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
-                signer_account_id: Some(account.account_id.to_string()),
+                signer_account_id: Some(account.id().to_string()),
                 account_resolution: account_resolution.clone(),
                 reason: Some(reason.clone()),
                 binding: disabled_binding_status(),
                 write_kinds: local_write_kind_readiness(false, Some(reason)),
                 local: Some(LocalSignerStatusView {
-                    account_id: account.account_id.to_string(),
+                    account_id: account.id().to_string(),
                     public_identity: IdentityPublicView::from_public_identity(
-                        &account.public_identity,
+                        account.public_identity(),
                     ),
-                    availability: local_availability(
-                        RadrootsNostrLocalSignerAvailability::PublicOnly,
-                    )
-                    .to_owned(),
+                    availability: "public_only".to_owned(),
                     secret_backed: false,
                     backend: backend.clone(),
                 }),
                 myc: None,
             }
         }
-        Ok(RadrootsNostrAccountStatus::NotConfigured) => SignerStatusView {
+        Ok(AccountStatus::NotConfigured) => SignerStatusView {
             mode: config.signer.backend.as_str().to_owned(),
             state: "unconfigured".to_owned(),
             source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
@@ -195,6 +172,21 @@ fn resolve_local_signer_status(config: &RuntimeConfig) -> SignerStatusView {
             write_kinds: local_write_kind_readiness(
                 false,
                 crate::runtime::account::unresolved_account_reason(config).ok(),
+            ),
+            local: None,
+            myc: None,
+        },
+        Ok(_) => SignerStatusView {
+            mode: config.signer.backend.as_str().to_owned(),
+            state: "error".to_owned(),
+            source: SHARED_ACCOUNT_STORE_SOURCE.to_owned(),
+            signer_account_id: resolved_account_id,
+            account_resolution,
+            reason: Some("account status is not supported by this CLI version".to_owned()),
+            binding: disabled_binding_status(),
+            write_kinds: local_write_kind_readiness(
+                false,
+                Some("account status is not supported by this CLI version".to_owned()),
             ),
             local: None,
             myc: None,
@@ -224,11 +216,11 @@ fn resolve_myc_signer_status(config: &RuntimeConfig) -> SignerStatusView {
                 let actor_account_id = resolution
                     .resolved_account
                     .as_ref()
-                    .map(|account| account.record.account_id.to_string());
+                    .map(|account| account.record.id().to_string());
                 let actor_pubkey = resolution
                     .resolved_account
                     .as_ref()
-                    .map(|account| account.record.public_identity.public_key_hex.clone());
+                    .map(|account| account.record.public_identity().public_key().to_hex());
                 (
                     crate::runtime::account::account_resolution_view(&resolution),
                     actor_account_id,
@@ -349,13 +341,6 @@ fn local_write_kind_readiness(
             reason: if ready { None } else { reason.clone() },
         })
         .collect()
-}
-
-fn local_availability(value: RadrootsNostrLocalSignerAvailability) -> &'static str {
-    match value {
-        RadrootsNostrLocalSignerAvailability::PublicOnly => "public_only",
-        RadrootsNostrLocalSignerAvailability::SecretBacked => "secret_backed",
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -503,11 +488,11 @@ fn validate_myc_target(value: &str) -> Result<(), String> {
                 "signer.remote_nip46 discovery target is missing `uri` query parameter".to_owned()
             })?
     };
-    match radroots_nostr_connect::prelude::RadrootsNostrConnectUri::parse(bunker_uri.as_str())
+    match radroots_nostr_connect::uri::Uri::parse(bunker_uri.as_str())
         .map_err(|error| format!("signer.remote_nip46 target is invalid: {error}"))?
     {
-        radroots_nostr_connect::prelude::RadrootsNostrConnectUri::Bunker(_) => Ok(()),
-        radroots_nostr_connect::prelude::RadrootsNostrConnectUri::Client(_) => Err(
+        radroots_nostr_connect::uri::Uri::Bunker(_) => Ok(()),
+        radroots_nostr_connect::uri::Uri::Client(_) => Err(
             "signer.remote_nip46 target must resolve to a bunker URI; raw nostrconnect client URIs are signer-side only"
                 .to_owned(),
         ),
@@ -518,58 +503,16 @@ fn myc_write_kind_readiness(
     ready: bool,
     reason: Option<String>,
 ) -> Vec<SignerWriteKindReadinessView> {
-    myc_write_kind_readiness_for_permissions(ready, reason, sdk_myc_nip46_product_permissions())
-}
-
-fn sdk_myc_nip46_product_permissions() -> Result<RadrootsNostrConnectPermissions, String> {
-    RadrootsNostrConnectPermissions::from_str(
-        radroots_sdk_myc_nip46_product_permission_strings()
-            .join(",")
-            .as_str(),
-    )
-    .map_err(|error| format!("SDK Myc signer permissions are invalid: {error}"))
-}
-
-fn myc_write_kind_readiness_for_permissions(
-    ready: bool,
-    reason: Option<String>,
-    permissions: Result<RadrootsNostrConnectPermissions, String>,
-) -> Vec<SignerWriteKindReadinessView> {
-    let permissions = match permissions {
-        Ok(permissions) => permissions,
-        Err(error) => {
-            return cli_write_kinds()
-                .iter()
-                .map(|kind| SignerWriteKindReadinessView {
-                    command: kind.command.to_owned(),
-                    event_kind: kind.event_kind,
-                    permission: sign_event_permission_for_kind(kind.event_kind),
-                    ready: false,
-                    reason: Some(error.clone()),
-                })
-                .collect();
-        }
-    };
     cli_write_kinds()
         .iter()
         .map(|kind| {
             let permission = sign_event_permission_for_kind(kind.event_kind);
-            let permission_ready = ready && permissions.allows_sign_event_kind(kind.event_kind);
             SignerWriteKindReadinessView {
                 command: kind.command.to_owned(),
                 event_kind: kind.event_kind,
                 permission,
-                ready: permission_ready,
-                reason: if permission_ready {
-                    None
-                } else {
-                    reason.clone().or_else(|| {
-                        Some(
-                            "SDK Myc signer permission is not configured for this event kind"
-                                .to_owned(),
-                        )
-                    })
-                },
+                ready,
+                reason: if ready { None } else { reason.clone() },
             }
         })
         .collect()
@@ -585,10 +528,7 @@ mod tests {
         KIND_CLASSIFIED_LISTING, KIND_FARM, KIND_TRADE_CANCELLATION, KIND_TRADE_DECISION,
         KIND_TRADE_PROPOSAL, KIND_TRADE_REVISION_DECISION, KIND_TRADE_REVISION_PROPOSAL,
         cli_write_kinds, myc_managed_account_ref_matches, myc_write_kind_readiness,
-        myc_write_kind_readiness_for_permissions, sign_event_permission_for_kind,
-    };
-    use radroots_nostr_connect::prelude::{
-        RadrootsNostrConnectMethod, RadrootsNostrConnectPermission, RadrootsNostrConnectPermissions,
+        sign_event_permission_for_kind,
     };
 
     #[test]
@@ -656,31 +596,6 @@ mod tests {
             assert!(entry.ready, "{command} should be ready");
             assert_eq!(entry.reason, None);
         }
-    }
-
-    #[test]
-    fn myc_write_readiness_uses_typed_kind_permissions() {
-        let readiness = myc_write_kind_readiness_for_permissions(
-            true,
-            None,
-            Ok(RadrootsNostrConnectPermissions::from(vec![
-                RadrootsNostrConnectPermission::with_parameter(
-                    RadrootsNostrConnectMethod::SignEvent,
-                    format!("kind:{KIND_CLASSIFIED_LISTING}"),
-                ),
-            ])),
-        );
-        let listing = readiness
-            .iter()
-            .find(|kind| kind.command == "listing.publish")
-            .expect("listing readiness");
-        let farm = readiness
-            .iter()
-            .find(|kind| kind.command == "farm.publish")
-            .expect("farm readiness");
-
-        assert!(listing.ready);
-        assert!(!farm.ready);
     }
 
     #[test]

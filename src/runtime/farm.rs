@@ -87,8 +87,9 @@ pub fn init_preflight(
             Some(
                 selected_account
                     .record
-                    .public_identity
-                    .public_key_hex
+                    .public_identity()
+                    .public_key()
+                    .to_hex()
                     .as_str(),
             ),
         )),
@@ -143,10 +144,14 @@ fn rebind_inner(
     let from_account = configured_account(config, &resolved.document.selection.account)?;
     let from_seller_pubkey = from_account
         .as_ref()
-        .map(|account| account.record.public_identity.public_key_hex.clone());
+        .map(|account| account.record.public_identity().public_key().to_hex());
     let target_account = account::resolve_account_selector(config, args.selector.as_str())
         .map_err(|error| farm_rebind_selector_error(args.selector.as_str(), error))?;
-    let to_seller_pubkey = target_account.record.public_identity.public_key_hex.clone();
+    let to_seller_pubkey = target_account
+        .record
+        .public_identity()
+        .public_key()
+        .to_hex();
     let seller_pubkey_changed = from_seller_pubkey
         .as_deref()
         .is_none_or(|pubkey| !pubkey.eq_ignore_ascii_case(to_seller_pubkey.as_str()));
@@ -156,7 +161,7 @@ fn rebind_inner(
         "preserved"
     };
     let mut document = resolved.document.clone();
-    document.selection.account = target_account.record.account_id.to_string();
+    document.selection.account = target_account.record.id().to_string();
     if seller_pubkey_changed {
         document.publication = FarmPublicationStatus::default();
     }
@@ -185,7 +190,7 @@ fn rebind_inner(
         seller_actor_source: FARM_SELLER_ACTOR_SOURCE.to_owned(),
         from_seller_account_id: Some(resolved.document.selection.account.clone()),
         from_seller_pubkey,
-        to_seller_account_id: Some(target_account.record.account_id.to_string()),
+        to_seller_account_id: Some(target_account.record.id().to_string()),
         to_seller_pubkey: Some(to_seller_pubkey.clone()),
         seller_pubkey_changed: Some(seller_pubkey_changed),
         publication_state_action: Some(publication_state_action.to_owned()),
@@ -246,9 +251,10 @@ pub fn set(config: &RuntimeConfig, args: &FarmUpdateArgs) -> Result<FarmSetView,
     apply_field_update(&mut resolved.document, args.field, field_value.as_str())?;
     let written_path = farm_config::write(&config.paths, resolved.scope, &resolved.document)?;
     let configured_account = configured_account(config, &resolved.document.selection.account)?;
-    let account_pubkey = configured_account
+    let account_public_key_hex = configured_account
         .as_ref()
-        .map(|account| account.record.public_identity.public_key_hex.as_str());
+        .map(|account| account.record.public_identity().public_key().to_hex());
+    let account_pubkey = account_public_key_hex.as_deref();
     append_farm_local_work(
         config,
         resolved.scope,
@@ -303,9 +309,10 @@ pub fn set_preflight(
     let field_value = required_text(raw_value.as_str(), "farm set value")?;
     apply_field_update(&mut resolved.document, args.field, field_value.as_str())?;
     let configured_account = configured_account(config, &resolved.document.selection.account)?;
-    let account_pubkey = configured_account
+    let account_public_key_hex = configured_account
         .as_ref()
-        .map(|account| account.record.public_identity.public_key_hex.as_str());
+        .map(|account| account.record.public_identity().public_key().to_hex());
+    let account_pubkey = account_public_key_hex.as_deref();
     let reason = if configured_account.is_none() {
         Some(format!(
             "dry run requested; farm draft was not written; {}",
@@ -439,9 +446,10 @@ pub fn status(
     } else {
         actions.extend(missing_field_actions(draft_missing.as_slice()));
     }
-    let account_pubkey = account
+    let account_public_key_hex = account
         .as_ref()
-        .map(|account| account.record.public_identity.public_key_hex.as_str());
+        .map(|account| account.record.public_identity().public_key().to_hex());
+    let account_pubkey = account_public_key_hex.as_deref();
 
     Ok(FarmStatusView {
         state: state.to_owned(),
@@ -555,8 +563,13 @@ fn transport_farm_publish_readiness(
     if matches!(config.signer.backend, SignerBackend::Myc) {
         if let Err(error) = validate_configured_signer_for_actor(
             config,
-            Some(account.record.account_id.as_str()),
-            account.record.public_identity.public_key_hex.as_str(),
+            Some(account.record.id().to_hex().as_str()),
+            account
+                .record
+                .public_identity()
+                .public_key()
+                .to_hex()
+                .as_str(),
             "farm seller",
         ) {
             return FarmPublishReadiness {
@@ -581,7 +594,7 @@ fn transport_farm_publish_readiness(
             state: "unconfigured",
             executable: false,
             reason: Some(
-                account::AccountRuntimeFailure::watch_only(&account.record.account_id).to_string(),
+                account::AccountRuntimeFailure::watch_only(&account.record.id()).to_string(),
             ),
             missing: vec!["Write-capable farm-bound seller account".to_owned()],
             actions: vec!["radroots account create".to_owned()],
@@ -653,11 +666,11 @@ pub fn publish(
             config.output.dry_run,
             true,
             resolved.document.selection.account.clone(),
-            account.record.public_identity.public_key_hex.clone(),
+            account.record.public_identity().public_key().to_hex(),
             resolved.document.selection.farm_d_tag.clone(),
         ));
     }
-    let account_pubkey = account.record.public_identity.public_key_hex.clone();
+    let account_pubkey = account.record.public_identity().public_key().to_hex();
     let previews = build_publish_previews(&resolved.document, account_pubkey.as_str())?;
     let profile_idempotency_key = component_idempotency_key(args, "profile")?;
     let farm_idempotency_key = component_idempotency_key(args, "farm")?;
@@ -1090,7 +1103,7 @@ fn sdk_prepared_publish_view(
             state: "not_submitted".to_owned(),
             reason: Some("dry run requested; SDK enqueue and transport push skipped".to_owned()),
             signer_mode: Some(config.signer.backend.as_str().to_owned()),
-            event_id: Some(plan.draft().expected_event_id().as_str().to_owned()),
+            event_id: Some(plan.draft().expected_event_id().to_string()),
             event_addr: Some(plan.coordinate().as_str().to_owned()),
             event: args.print_event.then_some(sdk_plan_event_view(&plan)),
             ..preview_component(
@@ -1112,7 +1125,7 @@ fn sdk_plan_event_view(plan: &FarmPlan) -> FarmPublishEventView {
         author: plan.draft().expected_pubkey().to_hex(),
         content: plan.draft().content().to_owned(),
         tags: plan.draft().tags_as_vec(),
-        event_id: Some(plan.draft().expected_event_id().as_str().to_owned()),
+        event_id: Some(plan.draft().expected_event_id().to_string()),
         event_addr: Some(plan.coordinate().as_str().to_owned()),
     }
 }
@@ -1166,8 +1179,8 @@ fn private_location_target(
     let Some(account) = configured_account(config, &resolved.document.selection.account)? else {
         return Ok(None);
     };
-    let seller_pubkey = account.record.public_identity.public_key_hex.clone();
-    let seller_account_id = account.record.account_id.to_string();
+    let seller_pubkey = account.record.public_identity().public_key().to_hex();
+    let seller_account_id = account.record.id().to_string();
     let farm_d_tag = farm_d_tag
         .map(str::to_owned)
         .unwrap_or_else(|| resolved.document.selection.farm_d_tag.clone());
@@ -1233,19 +1246,20 @@ fn init_document(
 ) -> Result<FarmConfigDocument, RuntimeError> {
     let existing_document = existing.map(|resolved| &resolved.document);
     if let Some(document) = existing_document
-        && document.selection.account != account.record.account_id.to_string()
+        && document.selection.account != account.record.id().to_string()
     {
         let message = format!(
             "account mismatch: farm config is bound to seller account `{}`; select account `{}` before updating this farm config",
-            document.selection.account, account.record.account_id
+            document.selection.account,
+            account.record.id()
         );
         return Err(account::AccountRuntimeFailure::mismatch_with_detail(
             message,
             json!({
                 "seller_actor_source": FARM_SELLER_ACTOR_SOURCE,
                 "farm_bound_seller_account_id": document.selection.account,
-                "attempted_seller_account_id": account.record.account_id.to_string(),
-                "actions": farm_rebind_recovery_actions(account.record.account_id.as_str()),
+                "attempted_seller_account_id": account.record.id().to_string(),
+                "actions": farm_rebind_recovery_actions(account.record.id().to_hex().as_str()),
             }),
         )
         .into());
@@ -1304,7 +1318,7 @@ fn init_document(
         version: SUPPORTED_FARM_CONFIG_VERSION,
         selection: FarmConfigSelection {
             scope,
-            account: account.record.account_id.to_string(),
+            account: account.record.id().to_string(),
             farm_d_tag: farm_d_tag.clone(),
         },
         profile: FarmProfileDraft {
@@ -1364,7 +1378,14 @@ fn save_draft_view(
         scope,
         written_path.display().to_string(),
         document,
-        Some(account.record.public_identity.public_key_hex.as_str()),
+        Some(
+            account
+                .record
+                .public_identity()
+                .public_key()
+                .to_hex()
+                .as_str(),
+        ),
     )?;
     Ok(FarmSetupView {
         state: state.to_owned(),
@@ -1373,7 +1394,14 @@ fn save_draft_view(
             scope,
             written_path.display().to_string(),
             document,
-            Some(account.record.public_identity.public_key_hex.as_str()),
+            Some(
+                account
+                    .record
+                    .public_identity()
+                    .public_key()
+                    .to_hex()
+                    .as_str(),
+            ),
         )),
         reason,
         actions,
@@ -1625,7 +1653,7 @@ fn publication_for_document(
     existing_document
         .filter(|document| {
             document.farm.d_tag == farm_d_tag
-                && document.selection.account == account.record.account_id.as_str()
+                && document.selection.account == account.record.id().to_hex()
         })
         .map(|document| document.publication.clone())
         .unwrap_or_default()
@@ -1639,7 +1667,7 @@ fn configured_account(
     Ok(snapshot
         .accounts
         .into_iter()
-        .find(|account| account.record.account_id.as_str() == account_id))
+        .find(|account| account.record.id().to_hex() == account_id))
 }
 
 fn summary_view(
@@ -1750,10 +1778,9 @@ fn optional_arg_or_existing(arg: Option<&String>, existing: Option<&String>) -> 
 fn draft_name_from_account(account: &AccountRecordView) -> Option<String> {
     account
         .record
-        .label
-        .as_deref()
+        .label()
         .and_then(non_empty)
-        .or_else(|| non_empty(account.record.account_id.as_str()))
+        .or_else(|| non_empty(account.record.id().to_hex().as_str()))
 }
 
 fn existing_name(existing_document: Option<&FarmConfigDocument>) -> Option<String> {
