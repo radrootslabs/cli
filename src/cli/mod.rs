@@ -48,31 +48,52 @@ pub enum TargetOutputFormat {
     disable_help_subcommand = true
 )]
 pub struct TargetCliArgs {
-    #[arg(long = "format", global = true, value_enum)]
+    #[arg(
+        long = "format",
+        global = true,
+        value_enum,
+        help = "Select terminal, JSON, or streaming NDJSON output"
+    )]
     pub format: Option<TargetOutputFormat>,
-    #[arg(long = "account-id", global = true)]
+    #[arg(
+        long = "account-id",
+        global = true,
+        help = "Use this exact local account for the invocation"
+    )]
     pub account_id: Option<String>,
-    #[arg(long = "offline", global = true, action = ArgAction::SetTrue, conflicts_with = "online")]
+    #[arg(long = "offline", global = true, action = ArgAction::SetTrue, conflicts_with = "online", help = "Forbid network access and use local state only")]
     pub offline: bool,
-    #[arg(long = "online", global = true, action = ArgAction::SetTrue, conflicts_with = "offline")]
+    #[arg(long = "online", global = true, action = ArgAction::SetTrue, conflicts_with = "offline", help = "Allow network-backed operations")]
     pub online: bool,
-    #[arg(long = "dry-run", global = true, action = ArgAction::SetTrue)]
+    #[arg(long = "dry-run", global = true, action = ArgAction::SetTrue, help = "Validate and preview without committing effects")]
     pub dry_run: bool,
-    #[arg(long = "idempotency-key", global = true)]
+    #[arg(
+        long = "idempotency-key",
+        global = true,
+        help = "Provide a stable retry key for a mutation"
+    )]
     pub idempotency_key: Option<String>,
-    #[arg(long = "correlation-id", global = true)]
+    #[arg(
+        long = "correlation-id",
+        global = true,
+        help = "Attach a correlation identifier to emitted receipts"
+    )]
     pub correlation_id: Option<String>,
-    #[arg(long = "yes", global = true, action = ArgAction::SetTrue)]
+    #[arg(long = "yes", global = true, action = ArgAction::SetTrue, help = "Approve an interactive confirmation")]
     pub yes: bool,
-    #[arg(long = "approval-proof", global = true)]
+    #[arg(
+        long = "approval-proof",
+        global = true,
+        help = "Supply an external approval proof where required"
+    )]
     pub approval_proof: Option<String>,
-    #[arg(long = "no-input", global = true, action = ArgAction::SetTrue)]
+    #[arg(long = "no-input", global = true, action = ArgAction::SetTrue, help = "Fail instead of prompting for input")]
     pub no_input: bool,
-    #[arg(long = "quiet", global = true, action = ArgAction::SetTrue)]
+    #[arg(long = "quiet", global = true, action = ArgAction::SetTrue, help = "Render only essential output")]
     pub quiet: bool,
-    #[arg(long = "verbose", global = true, action = ArgAction::SetTrue)]
+    #[arg(long = "verbose", global = true, action = ArgAction::SetTrue, help = "Include operational details")]
     pub verbose: bool,
-    #[arg(long = "trace", global = true, action = ArgAction::SetTrue)]
+    #[arg(long = "trace", global = true, action = ArgAction::SetTrue, help = "Include trace-level diagnostic context")]
     pub trace: bool,
     #[command(subcommand)]
     pub command: TargetCommand,

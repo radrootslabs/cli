@@ -2087,16 +2087,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
-name = "radroots_authority"
-version = "0.1.0-alpha"
-dependencies = [
- "radroots_event",
- "radroots_identity",
-]
-
-[[package]]
 name = "radroots_blossom"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9088b79d81fc7e89a8ec14592b2c176000e25bf7e04a91f2cf188f2b3059842d"
 dependencies = [
  "mediatype",
  "serde",
@@ -2117,7 +2111,6 @@ dependencies = [
  "getrandom 0.2.17",
  "nostr",
  "nostr-sdk",
- "radroots_authority",
  "radroots_core",
  "radroots_event",
  "radroots_event_codec",
@@ -2127,8 +2120,6 @@ dependencies = [
  "radroots_nostr",
  "radroots_nostr_accounts",
  "radroots_nostr_connect",
- "radroots_nostr_signer",
- "radroots_outbox",
  "radroots_protected_store",
  "radroots_protocol",
  "radroots_replica_schema",
@@ -2163,6 +2154,8 @@ dependencies = [
 [[package]]
 name = "radroots_core"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e025474387307ad31b9badba61d40a6780772c76bf797d108802394fc454ace3"
 dependencies = [
  "rust_decimal",
  "serde",
@@ -2171,6 +2164,8 @@ dependencies = [
 [[package]]
 name = "radroots_event"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02af0e49a14deed13c93b35f10705c7dd6f4abbe70c925a67af614d55decf3a3"
 dependencies = [
  "hex",
  "jiff-tzdb",
@@ -2188,6 +2183,8 @@ dependencies = [
 [[package]]
 name = "radroots_event_codec"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "730541f773566e0adf46705f36be06f6441410c2e1c9da5b147e2aa7c004eb20"
 dependencies = [
  "radroots_blossom",
  "radroots_core",
@@ -2200,26 +2197,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "radroots_event_store"
-version = "0.1.0-alpha"
-dependencies = [
- "getrandom 0.2.17",
- "hex",
- "radroots_blossom",
- "radroots_event",
- "radroots_event_codec",
- "radroots_identity",
- "radroots_transport",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "radroots_geonames"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb32a26e5e06f15cbf79e1556873e456a2e0d4a4bb01eec22bc3e2a97db03960"
 dependencies = [
  "fs2",
  "rusqlite",
@@ -2231,6 +2212,8 @@ dependencies = [
 [[package]]
 name = "radroots_identity"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bc11dc4df1afba04add840f7a1231bee15d989931808ea7ffef20a4277af9a6"
 dependencies = [
  "k256",
  "serde",
@@ -2240,6 +2223,8 @@ dependencies = [
 [[package]]
 name = "radroots_log"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "588181ad5ca25e01e775bf953c6861dd4545ea08c6db691df8a4eb753eca62f6"
 dependencies = [
  "chrono",
  "serde_json",
@@ -2252,6 +2237,8 @@ dependencies = [
 [[package]]
 name = "radroots_mesh"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b4a4fc196644ae4b6d2cb023bcf4074883edfb7db8f0731b462dfecf49b96ad"
 dependencies = [
  "radroots_transport",
 ]
@@ -2259,6 +2246,8 @@ dependencies = [
 [[package]]
 name = "radroots_nostr"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d988d9ea535c33adb6f26704f8cc29170d07bb5fc16486a5abdb38c27e824dfa"
 dependencies = [
  "nostr",
  "radroots_event",
@@ -2273,6 +2262,8 @@ dependencies = [
 [[package]]
 name = "radroots_nostr_accounts"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29fc51468b787b9578a6b3a18d3a6c11e15e40a37966734c3839199519419428"
 dependencies = [
  "nostr",
  "radroots_identity",
@@ -2289,6 +2280,8 @@ dependencies = [
 [[package]]
 name = "radroots_nostr_connect"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80f998e609addddbd54dc139a93da734e331e80666cfb5d6d4ce6d80f3632a94"
 dependencies = [
  "nostr",
  "radroots_event",
@@ -2304,6 +2297,8 @@ dependencies = [
 [[package]]
 name = "radroots_nostr_signer"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08e7f193bbf32f4f14c620de249defe242b3ef61439c0b1f1bd6625fdaf49037"
 dependencies = [
  "hex",
  "nostr",
@@ -2320,24 +2315,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "radroots_outbox"
-version = "0.1.0-alpha"
-dependencies = [
- "hex",
- "radroots_event",
- "radroots_event_store",
- "radroots_protocol",
- "radroots_transport",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "radroots_protected_store"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9715a7c7b7c259257393e2486f3f5ffc34891d958e8bf1a11e403d7d5484a6e"
 dependencies = [
  "chacha20poly1305",
  "getrandom 0.2.17",
@@ -2350,6 +2331,8 @@ dependencies = [
 [[package]]
 name = "radroots_protocol"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adfbada19f5ddf856da0df008f54e5ebf37737863f5df067c26d4ac40ce5aa18"
 dependencies = [
  "serde",
 ]
@@ -2357,6 +2340,8 @@ dependencies = [
 [[package]]
 name = "radroots_protocol_contract_v1"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12f718ed748702f7f2b00af58bc6a6cb1b2030fe7f3b8bbcd7835bfe6741f66e"
 dependencies = [
  "serde",
 ]
@@ -2364,6 +2349,8 @@ dependencies = [
 [[package]]
 name = "radroots_replica_schema"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c17d02275bd4e5e97e9bd9571bdbe778da73a94dfb531de2656917a0869d998d"
 dependencies = [
  "serde",
  "serde_json",
@@ -2372,6 +2359,8 @@ dependencies = [
 [[package]]
 name = "radroots_replica_store"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d159430b5ffda4abd0129fad668c733860c26408b06fdec0f00ec08b8961e297"
 dependencies = [
  "hex",
  "radroots_replica_schema",
@@ -2384,6 +2373,8 @@ dependencies = [
 [[package]]
 name = "radroots_replica_sync"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34a043971a295e66d5db56ec347da11467e2ca1f83c67d910c2242c756158a5d"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -2402,6 +2393,8 @@ dependencies = [
 [[package]]
 name = "radroots_runtime"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b35b19bdc24751b0cc0a2ab835ea94a31d0409fec2ea53b9438430f1f351c9d"
 dependencies = [
  "anyhow",
  "chacha20poly1305",
@@ -2424,6 +2417,8 @@ dependencies = [
 [[package]]
 name = "radroots_runtime_contract_v1"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecb8d0655dac16f64b0df451cfa2c600d375934b2054c5a8822ad7637dd3083e"
 dependencies = [
  "radroots_protocol_contract_v1",
  "serde",
@@ -2432,6 +2427,8 @@ dependencies = [
 [[package]]
 name = "radroots_runtime_paths"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a930344bed69f7f43625eb33969c02290be5fb69c424dda3e34fe9cbaa75c120"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -2440,6 +2437,8 @@ dependencies = [
 [[package]]
 name = "radroots_runtime_store"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a6a1f494999d2c4d1f64b293ec9d775a44136d8cd8d65bc0629fe035421f406"
 dependencies = [
  "radroots_sql_core",
  "serde",
@@ -2450,6 +2449,8 @@ dependencies = [
 [[package]]
 name = "radroots_sdk"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d38a596e3aeff8f0529e446f5fa014b6519dcf8b7a4312d2836348119b0506f6"
 dependencies = [
  "radroots_core",
  "radroots_event",
@@ -2475,6 +2476,8 @@ dependencies = [
 [[package]]
 name = "radroots_secret_vault"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8f323939c546a0e680c916d33dfcf6092cc4f2ab8195c02007ead012b215653"
 dependencies = [
  "keyring",
 ]
@@ -2482,6 +2485,8 @@ dependencies = [
 [[package]]
 name = "radroots_secrets"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f586ada77097ae1d806d4cc966d5e8161e6e28e55e57935e989bb0b0a9a14ad"
 dependencies = [
  "chacha20poly1305",
  "zeroize",
@@ -2490,6 +2495,8 @@ dependencies = [
 [[package]]
 name = "radroots_signing"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69d5ed02d28a3e166f4e10c90a78b1c0eae7235ed39a145c9530617ab7e188d0"
 dependencies = [
  "radroots_event",
  "radroots_identity",
@@ -2500,6 +2507,8 @@ dependencies = [
 [[package]]
 name = "radroots_sql_core"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f5bdb02012b0570df7411d87a1a61c87abd36dd0dca63fffefeed9525069f54"
 dependencies = [
  "chrono",
  "futures-executor",
@@ -2512,6 +2521,8 @@ dependencies = [
 [[package]]
 name = "radroots_storage"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7b3118e52ab4c54a38739aa74465a6ae0ed57bd0138f8ea0f60a659fb72a6ee"
 dependencies = [
  "radroots_event",
  "radroots_protocol",
@@ -2523,6 +2534,8 @@ dependencies = [
 [[package]]
 name = "radroots_storage_sqlite"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d162bc66eb22ee13fbe7fc5eae02581bcff3ab062efac66a32cf334cf941210"
 dependencies = [
  "fs2",
  "radroots_event_codec",
@@ -2535,6 +2548,8 @@ dependencies = [
 [[package]]
 name = "radroots_sync"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fbb2beab3b3b33590e72b1ae759d46580ef92f645be3e65dff8dcca6249d8a0"
 dependencies = [
  "radroots_event",
  "radroots_event_codec",
@@ -2550,6 +2565,8 @@ dependencies = [
 [[package]]
 name = "radroots_trade"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baea4d0b37c59f04f063964c8696d4b3ad64eac26b374fc5c1d59808053bfc9e"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -2565,6 +2582,8 @@ dependencies = [
 [[package]]
 name = "radroots_transport"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcd67a15b7c49483534985dad0307c7318c9eca19b6f3005a7bf73dccdbc42a4"
 dependencies = [
  "radroots_event",
  "radroots_identity",
@@ -2576,6 +2595,8 @@ dependencies = [
 [[package]]
 name = "radroots_transport_nostr"
 version = "0.1.0-alpha"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71f7efee834ae72dfbc1bf8f99cd2cafe606d50eb9505c739774cfc543209584"
 dependencies = [
  "async-wsocket",
  "nostr-relay-pool",
@@ -4369,19 +4390,3 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
-
-[[patch.unused]]
-name = "radroots_event_index"
-version = "0.1.0-alpha"
-
-[[patch.unused]]
-name = "radroots_geocoder"
-version = "0.1.0-alpha"
-
-[[patch.unused]]
-name = "radroots_transport_publish_protocol"
-version = "0.1.0-alpha"
-
-[[patch.unused]]
-name = "radroots_transport_reticulum"
-version = "0.1.0-alpha"

@@ -1,14 +1,102 @@
-# radroots_cli
+# Radroots CLI
 
-This is the README for `cli` which provides the `radroots` command-line
-interface for Rad Roots.
+`radroots` is the local-first command-line client for Radroots accounts, farms,
+listings, markets, baskets, trades, transport, and synchronization. The CLI is
+a downstream consumer of the versioned `radroots_sdk` package and retains only
+host concerns such as configuration, presentation, local process integration,
+and command orchestration.
 
-## Copyright
+The CLI is pre-release software. Its current package graph uses exact alpha
+versions so a lockfile and the matching Radroots package set travel together.
+
+## Install and run
+
+Use Rust `1.97.1`, then build with the committed lockfile:
+
+```sh
+cargo build --locked
+cargo run --locked -- --help
+```
+
+In the Radroots development workspace, route those commands through extbuild
+and opt into the ignored local override file described in
+[`docs/engineering/local-overrides.md`](docs/engineering/local-overrides.md).
+Release and packaged-consumer checks never use sibling path overrides.
+
+## Command model
+
+Commands are organized by resource. Inspect any level with `--help`:
+
+```sh
+radroots health inspect
+radroots account list --format json
+radroots transport status inspect
+radroots store inspect --offline
+radroots sync status
+radroots market product search apples --format ndjson
+radroots listing create --dry-run
+```
+
+Global controls include:
+
+- `--format terminal|json|ndjson` for stable output envelopes;
+- `--account-id` for an invocation-scoped account selection;
+- `--offline` or `--online` for explicit network policy;
+- `--dry-run` for validation without durable effects;
+- `--idempotency-key` and `--correlation-id` for mutation receipts;
+- `--no-input`, `--yes`, and `--approval-proof` for automation-safe approval;
+- `--quiet`, `--verbose`, and `--trace` for presentation detail.
+
+Machine consumers should prefer JSON for a single response and NDJSON for a
+stream. A non-zero exit is paired with the structured error in the output
+envelope; scripts should evaluate both.
+
+## Configuration
+
+Configuration resolves in this order: command-line flags, process environment,
+the selected environment file, user configuration, workspace configuration,
+and built-in defaults. Unknown or retired keys fail closed.
+
+For a repository-local development profile, copy `.env.example` to `.env` and
+adjust its explicit runtime root. The important settings are:
+
+```text
+RADROOTS_CLI_PATHS_PROFILE=repo_local
+RADROOTS_CLI_PATHS_REPO_LOCAL_ROOT=infra/local/runtime/radroots
+RADROOTS_CLI_OUTPUT_FORMAT=terminal
+RADROOTS_CLI_ACCOUNT_SECRET_BACKEND=encrypted_file
+```
+
+Use `radroots profile inspect` and `radroots health inspect` to see resolved
+paths and actionable readiness state before attempting a write. Account secrets
+are never accepted as command-line values; import them from a protected file or
+use the configured host secret backend.
+
+## Package migration
+
+The v1 crate migration replaced compatibility namespaces and CLI-owned generic
+signing, transport, storage, and sync engines with the final SDK composition.
+See [`docs/migration/crates-release-v1.md`](docs/migration/crates-release-v1.md)
+for renamed commands, configuration changes, and downstream package rules.
+
+## Verification
+
+The standalone source checks are:
+
+```sh
+cargo fmt --all -- --check
+cargo check --all-targets --locked
+cargo test --all-targets --locked
+```
+
+Release qualification additionally packages the CLI, resolves every Radroots
+dependency from a local registry containing `.crate` archives, extracts the CLI
+archive, and repeats check, test, and `radroots --help` against that extracted
+source. This catches workspace-path and package-content drift.
+
+## Copyright and license
 
 Except as otherwise noted, all files in the `radroots_cli` distribution are
+Copyright © 2026 Tyson Lupul.
 
-    Copyright (c) 2026 Tyson Lupul
-
-## License
-
-This repository is licensed under GPL-3.0-or-later. See LICENSE.
+This repository is licensed under GPL-3.0-or-later. See [`LICENSE`](LICENSE).
