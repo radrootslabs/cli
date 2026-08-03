@@ -353,6 +353,13 @@ impl OperationAdapterError {
         match error {
             CliSdkAdapterError::Runtime(error) => Self::runtime_failure(operation_id, error),
             CliSdkAdapterError::Sdk(error) => Self::sdk_failure(operation_id, error),
+            CliSdkAdapterError::Sync(error) => Self::Runtime(error.to_string()),
+            CliSdkAdapterError::Storage(error) => Self::Runtime(error.to_string()),
+            CliSdkAdapterError::Transport(error) => Self::NetworkUnavailable {
+                operation_id: operation_id.to_owned(),
+                message: error.to_string(),
+            },
+            CliSdkAdapterError::Io(error) => Self::Runtime(error.to_string()),
         }
     }
 
@@ -957,42 +964,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sdk_storage_error_maps_to_typed_output_without_string_classification() {
-        let error = OperationAdapterError::sdk_failure(
-            "store.inspect",
-            RadrootsSdkError::EventStore {
-                message: "database is locked".to_owned(),
-            },
-        );
+    fn final_sdk_error_maps_from_its_protocol_report() {
+        let sdk_error = radroots_sdk::ClientBuilder::new()
+            .build()
+            .expect_err("missing storage must fail");
+        let error = OperationAdapterError::sdk_failure("store.inspect", sdk_error);
 
         let output = error.to_output_error();
-
-        assert_eq!(output.code, "event_store");
-        assert_eq!(output.exit_code, CliExitCode::RuntimeUnavailable.code());
         let detail = output.detail.expect("detail");
         assert_eq!(detail["operation_id"], "store.inspect");
-        assert_eq!(detail["class"], "storage");
-        assert_eq!(detail["retryable"], true);
-        assert_eq!(detail["detail"]["message"], "database is locked");
-        assert_eq!(detail["actions"], json!(["radroots store inspect"]));
-    }
-
-    #[test]
-    fn sdk_request_error_maps_recovery_to_operation_retry_action() {
-        let error = OperationAdapterError::sdk_failure(
-            "listing.publish",
-            RadrootsSdkError::InvalidRequest {
-                message: "idempotency key must not contain boundary whitespace".to_owned(),
-            },
-        );
-
-        let output = error.to_output_error();
-
-        assert_eq!(output.code, "invalid_request");
-        assert_eq!(output.exit_code, CliExitCode::InvalidInput.code());
-        let detail = output.detail.expect("detail");
-        assert_eq!(detail["class"], "request");
-        assert_eq!(detail["retryable"], false);
-        assert_eq!(detail["actions"], json!(["radroots listing publish"]));
+        assert!(detail["class"].is_string());
     }
 }

@@ -341,18 +341,15 @@ mod tests {
             .expect("sync status envelope");
 
         assert_eq!(envelope.operation_id, "sync.status");
-        assert_eq!(envelope.result["state"], "ready");
-        assert_eq!(
-            envelope.result["source"],
-            "SDK canonical event store and outbox"
-        );
-        assert_eq!(
-            envelope.result["replica_store"],
-            "derived_projection_not_checked"
-        );
+        assert_eq!(envelope.result["state"], "degraded");
+        assert_eq!(envelope.result["source"], "canonical SDK sync engine");
+        assert_eq!(envelope.result["replica_store"], "canonical");
         assert_eq!(envelope.result["queue"]["pending_count"], 0);
         assert_eq!(envelope.result["queue"]["total_count"], 0);
-        assert_eq!(envelope.result["actions"][0], "radroots sync pull");
+        assert_eq!(
+            envelope.result["actions"][0],
+            "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com"
+        );
     }
 
     fn sample_config(root: &Path, relays: Vec<String>) -> RuntimeConfig {

@@ -2143,6 +2143,8 @@ dependencies = [
  "radroots_signing",
  "radroots_sql_core",
  "radroots_storage",
+ "radroots_storage_sqlite",
+ "radroots_sync",
  "radroots_trade",
  "radroots_transport",
  "radroots_transport_nostr",
@@ -2541,6 +2543,7 @@ dependencies = [
  "radroots_storage",
  "radroots_trade",
  "radroots_transport",
+ "serde",
  "sha2",
 ]
 

@@ -1,12 +1,6 @@
-use radroots_sdk::{
-    PushOutboxEventState, PushOutboxReceipt, PushOutboxRequest, PushOutboxTargetOutcomeKind,
-    SyncStatusRequest,
-};
 use radroots_transport::{
-    RADROOTS_RETICULUM_ENDPOINT_URI, RADROOTS_RETICULUM_SCOPE_ID,
-    RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE, RadrootsTransportCapabilityAvailability,
-    RadrootsTransportCapabilityMaturity, RadrootsTransportImplementationState,
-    RadrootsTransportKind, RadrootsTransportStatus,
+    RadrootsTransportCapabilityAvailability, RadrootsTransportCapabilityMaturity,
+    RadrootsTransportImplementationState, RadrootsTransportKind, RadrootsTransportStatus,
 };
 use serde_json::Value as JsonValue;
 use std::fs;
@@ -15,7 +9,7 @@ use toml::{Value, map::Map};
 use crate::ops::OperationData;
 use crate::runtime::RuntimeError;
 use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
-use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession, sdk_nostr_relay_url_policy};
+use crate::runtime::sdk::{CliSdkAdapterError, CliSdkSession};
 use crate::view::runtime::{
     TransportDeliveryInspectView, TransportDeliveryRetryView, TransportOperationCapabilitiesView,
     TransportProfileSummaryView, TransportProfileView, TransportRuntimeStatusView,
@@ -23,6 +17,10 @@ use crate::view::runtime::{
 };
 
 const TRANSPORT_SOURCE: &str = "transport profile config";
+const RADROOTS_RETICULUM_ENDPOINT_URI: &str = "reticulum:local";
+const RADROOTS_RETICULUM_SCOPE_ID: &str = "local";
+const RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE: &str =
+    "Reticulum transport is not available in this release";
 pub fn profile(config: &RuntimeConfig) -> TransportProfileView {
     active_profile_view(config)
 }
@@ -132,7 +130,8 @@ pub fn outbox_status(
     } else {
         CliSdkSession::connect_storage_status(config)?
     };
-    let receipt = session.block_on(session.sdk().sync().status(SyncStatusRequest::new()))?;
+    let receipt = crate::runtime::sync::canonical_status(&session)?;
+    let outbox = receipt.outbox();
     let state = if profile.configured_state == "configured" {
         "ready".to_owned()
     } else {
@@ -142,15 +141,15 @@ pub fn outbox_status(
         state,
         source: "SDK transport outbox".to_owned(),
         transport_profile: profile.profile_id,
-        total_count: receipt.outbox.total_events,
-        pending_count: receipt.outbox.pending_events,
-        retryable_count: receipt.outbox.retryable_events,
-        terminal_count: receipt.outbox.terminal_events,
-        deferred_until_implemented_count: receipt.outbox.deferred_until_implemented_events,
-        ready_signed_count: receipt.outbox.ready_signed_events,
-        publishing_count: receipt.outbox.publishing_events,
-        last_attempt_at_ms: receipt.outbox.last_attempt_at_ms,
-        last_error: receipt.outbox.last_error,
+        total_count: i64::try_from(outbox.total().unwrap_or_default()).unwrap_or(i64::MAX),
+        pending_count: i64::try_from(outbox.pending).unwrap_or(i64::MAX),
+        retryable_count: i64::try_from(outbox.retryable).unwrap_or(i64::MAX),
+        terminal_count: i64::try_from(outbox.satisfied + outbox.exhausted).unwrap_or(i64::MAX),
+        deferred_until_implemented_count: 0,
+        ready_signed_count: i64::try_from(outbox.pending + outbox.retryable).unwrap_or(i64::MAX),
+        publishing_count: i64::try_from(outbox.leased).unwrap_or(i64::MAX),
+        last_attempt_at_ms: None,
+        last_error: None,
         actions: vec!["radroots transport outbox push".to_owned()],
     })
 }
@@ -173,73 +172,38 @@ pub fn outbox_push(
         });
     }
     let session = CliSdkSession::connect(config)?;
-    let receipt = session.block_on(session.sdk().sync().push_outbox(
-        PushOutboxRequest::new().with_nostr_relay_url_policy(sdk_nostr_relay_url_policy(config)),
-    ))?;
-    let target_count = receipt
-        .events
-        .iter()
-        .flat_map(|event| event.targets.iter())
-        .count();
-    let failed_count = receipt.retryable_events + receipt.terminal_events;
-    let state = transport_outbox_push_state(&receipt, failed_count).to_owned();
+    let receipt = crate::runtime::sync::deliver_pending(&session)?;
+    let attempted_events = receipt.outcomes().len();
+    let published_events = receipt.succeeded();
+    let failed_count = receipt.failed();
+    let state = if attempted_events == 0 {
+        "ready"
+    } else if failed_count == 0 {
+        "published"
+    } else if published_events > 0 {
+        "partial"
+    } else {
+        "unavailable"
+    };
     Ok(TransportDeliveryRetryView {
-        state,
+        state: state.to_owned(),
         source: "SDK transport outbox".to_owned(),
-        attempted_events: receipt.attempted_events,
-        published_events: receipt.published_events,
-        retryable_events: receipt.retryable_events,
-        terminal_events: receipt.terminal_events,
-        target_count,
-        reason: transport_outbox_push_reason(&receipt),
+        attempted_events,
+        published_events,
+        retryable_events: failed_count,
+        terminal_events: 0,
+        target_count: config.transport.nostr_relay_urls.len(),
+        reason: if attempted_events == 0 {
+            Some("canonical outbox had no ready delivery plans".to_owned())
+        } else if failed_count > 0 {
+            Some(format!(
+                "{failed_count} canonical delivery outcome(s) failed"
+            ))
+        } else {
+            None
+        },
         actions: vec!["radroots transport outbox status".to_owned()],
     })
-}
-
-fn transport_outbox_push_state(receipt: &PushOutboxReceipt, failed_count: usize) -> &'static str {
-    if receipt.attempted_events == 0 {
-        return transport_outbox_reported_deferred_state(receipt).unwrap_or("ready");
-    }
-    if receipt.published_events > 0 && failed_count > 0 {
-        "partial"
-    } else if failed_count > 0 {
-        "unavailable"
-    } else if receipt.published_events > 0 {
-        "published"
-    } else {
-        "ready"
-    }
-}
-
-fn transport_outbox_reported_deferred_state(receipt: &PushOutboxReceipt) -> Option<&'static str> {
-    let mut deferred = false;
-    for event in &receipt.events {
-        if event.final_state == PushOutboxEventState::DeferredUntilImplemented {
-            deferred = true;
-        }
-        for target in &event.targets {
-            if target.outcome_kind == PushOutboxTargetOutcomeKind::DeferredUntilImplemented {
-                deferred = true;
-            }
-        }
-    }
-    deferred.then_some("deferred_until_implemented")
-}
-
-fn transport_outbox_push_reason(receipt: &PushOutboxReceipt) -> Option<String> {
-    if receipt.attempted_events == 0 {
-        if let Some(state) = transport_outbox_reported_deferred_state(receipt) {
-            return Some(match state {
-                "deferred_until_implemented" => {
-                    "SDK outbox push reported Reticulum work as deferred until implemented without network delivery"
-                }
-                _ => "SDK outbox push reported Reticulum work without network delivery",
-            }
-            .to_owned());
-        }
-        return Some("SDK outbox had no ready signed events to push".to_owned());
-    }
-    None
 }
 
 fn active_profile_view(config: &RuntimeConfig) -> TransportProfileView {
@@ -424,6 +388,7 @@ fn transport_implementation_label(state: RadrootsTransportImplementationState) -
 
 fn transport_maturity_label(maturity: RadrootsTransportCapabilityMaturity) -> &'static str {
     match maturity {
+        RadrootsTransportCapabilityMaturity::Experimental => "experimental",
         RadrootsTransportCapabilityMaturity::Preview => "preview",
         RadrootsTransportCapabilityMaturity::Stable => "stable",
     }
@@ -545,66 +510,23 @@ fn string_array_input(input: &OperationData, key: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use radroots_event::id::RadrootsEventId;
-    use radroots_sdk::{
-        PushOutboxEventReceipt, PushOutboxTargetReceipt, PushOutboxTransportOutcomeKind,
-    };
 
     #[test]
-    fn transport_outbox_push_reports_reticulum_deferred_without_attempts() {
-        let cases = [(
-            PushOutboxEventState::DeferredUntilImplemented,
-            PushOutboxTargetOutcomeKind::DeferredUntilImplemented,
-            "deferred_until_implemented",
-            "SDK outbox push reported Reticulum work as deferred until implemented without network delivery",
-        )];
-
-        for (final_state, outcome_kind, expected_state, expected_reason) in cases {
-            let receipt = reticulum_receipt(final_state, outcome_kind);
-
-            assert_eq!(transport_outbox_push_state(&receipt, 0), expected_state);
-            assert_eq!(
-                transport_outbox_push_reason(&receipt).as_deref(),
-                Some(expected_reason)
-            );
-        }
+    fn reticulum_profile_remains_explicitly_unavailable() {
+        let status = reticulum_transport_status("reticulum");
+        assert!(!status.usable_for_delivery);
+        assert_eq!(
+            status.endpoint_uri.as_deref(),
+            Some(RADROOTS_RETICULUM_ENDPOINT_URI)
+        );
+        assert_eq!(status.message, RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE);
     }
 
-    fn reticulum_receipt(
-        final_state: PushOutboxEventState,
-        outcome_kind: PushOutboxTargetOutcomeKind,
-    ) -> PushOutboxReceipt {
-        PushOutboxReceipt {
-            attempted_events: 0,
-            published_events: 0,
-            retryable_events: 0,
-            terminal_events: 0,
-            events: vec![PushOutboxEventReceipt {
-                event_id: RadrootsEventId::parse("d".repeat(64).as_str()).expect("event id"),
-                outbox_event_id: 11,
-                final_state,
-                attempted_count: 0,
-                accepted_count: 0,
-                retryable_count: 0,
-                terminal_count: 0,
-                quorum: 1,
-                quorum_met: false,
-                targets: vec![PushOutboxTargetReceipt {
-                    transport_kind: "reticulum".to_owned(),
-                    endpoint_uri: RADROOTS_RETICULUM_ENDPOINT_URI.to_owned(),
-                    target_scope: Some(RADROOTS_RETICULUM_SCOPE_ID.to_owned()),
-                    target_label: None,
-                    outcome_kind,
-                    transport_outcome_kind: Some(match outcome_kind {
-                        PushOutboxTargetOutcomeKind::DeferredUntilImplemented => {
-                            PushOutboxTransportOutcomeKind::DeferredUntilImplemented
-                        }
-                        _ => PushOutboxTransportOutcomeKind::TransportUnavailable,
-                    }),
-                    attempted: false,
-                    message: Some(RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE.to_owned()),
-                }],
-            }],
-        }
+    #[test]
+    fn experimental_maturity_has_a_stable_terminal_label() {
+        assert_eq!(
+            transport_maturity_label(RadrootsTransportCapabilityMaturity::Experimental),
+            "experimental"
+        );
     }
 }

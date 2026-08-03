@@ -793,7 +793,7 @@ fn resolve_active_listing_state(
     })?;
     state
         .last_event_id
-        .parse::<radroots_event::id::RadrootsEventId>()
+        .parse::<radroots_event::EventId>()
         .map_err(|error| {
             RuntimeError::Config(format!("listing latest event id is invalid: {error}"))
         })?;

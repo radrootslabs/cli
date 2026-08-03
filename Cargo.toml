@@ -54,6 +54,8 @@ radroots_secret_vault = { version = "=0.1.0-alpha", features = ["std", "os-keyri
 radroots_signing = { version = "=0.1.0-alpha", features = ["std"] }
 radroots_sql_core = { version = "=0.1.0-alpha", features = ["native"] }
 radroots_storage = "=0.1.0-alpha"
+radroots_storage_sqlite = "=0.1.0-alpha"
+radroots_sync = "=0.1.0-alpha"
 radroots_trade = "=0.1.0-alpha"
 radroots_protocol = "=0.1.0-alpha"
 serde = { version = "1.0", features = ["derive"] }

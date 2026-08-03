@@ -276,7 +276,10 @@ mod tests {
         assert_eq!(envelope.operation_id, "market.pull");
         assert_eq!(envelope.result["state"], "unconfigured");
         assert_eq!(envelope.result["direction"], "pull");
-        assert_eq!(envelope.result["actions"][0], "radroots store inspect");
+        assert_eq!(
+            envelope.result["actions"][0],
+            "radroots transport config update --kind nostr --nostr-relay wss://relay.example.com"
+        );
     }
 
     #[test]
@@ -299,7 +302,7 @@ mod tests {
         assert_eq!(envelope.operation_id, "market.pull");
         assert!(envelope.dry_run);
         assert_eq!(envelope.result["state"], "unconfigured");
-        assert_eq!(envelope.result["replica_store"], "missing");
+        assert_eq!(envelope.result["replica_store"], "canonical");
         assert_eq!(envelope.result["direction"], "pull");
     }
 
@@ -308,7 +311,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let mut config = sample_config(dir.path());
         config.output.dry_run = true;
-        config.transport.nostr_relay_urls = vec!["wss://relay.example.com".to_owned()];
+        config.transport = crate::runtime::config::TransportConfig::from_nostr_relay_urls(vec![
+            "wss://relay.example.com".to_owned(),
+        ]);
         crate::runtime::store::init(&config).expect("store init");
 
         let service = OperationAdapter::new(MarketOperationService::new(&config));
@@ -325,7 +330,7 @@ mod tests {
             .expect("market refresh envelope");
 
         assert_eq!(envelope.operation_id, "market.pull");
-        assert_eq!(envelope.result["state"], "ready");
+        assert_eq!(envelope.result["state"], "dry_run");
         assert_eq!(
             envelope.result["target_transport_endpoints"][0],
             "wss://relay.example.com"

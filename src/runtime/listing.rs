@@ -2382,18 +2382,12 @@ fn build_listing_discounts(
                 ));
             }
         };
-        let discount = Discount {
-            scope: DiscountScope::Bin,
-            threshold: DiscountThreshold::BinCount { bin_id, min },
+        let discount = Discount::try_new(
+            DiscountScope::Bin,
+            DiscountThreshold::BinCount { bin_id, min },
             value,
-        };
-        if !discount.is_non_negative() {
-            return Err(issue_for_field(
-                contents,
-                field_prefix.as_str(),
-                "discount value must not be negative",
-            ));
-        }
+        )
+        .map_err(|error| issue_for_field(contents, field_prefix.as_str(), error.to_string()))?;
         discounts.push(discount);
     }
     Ok((!discounts.is_empty()).then_some(discounts))

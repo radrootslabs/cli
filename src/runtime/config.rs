@@ -7,10 +7,8 @@ use std::path::PathBuf;
 use radroots_runtime::{parse_bool_value, parse_strict_env_file, parse_u64_value};
 use radroots_runtime_paths::RadrootsPathResolver;
 use radroots_secret_vault::{RadrootsHostVaultPolicy, RadrootsSecretBackend};
-use radroots_transport::{RADROOTS_RETICULUM_SCOPE_ID, RadrootsTransportMeshScopeId};
-use radroots_transport_nostr::{
-    RadrootsRelayTransportError, RadrootsRelayUrl, RadrootsRelayUrlPolicy,
-};
+use radroots_transport::RadrootsTransportMeshScopeId;
+use radroots_transport_nostr::{Error as RelayTransportError, RelayUrl, RelayUrlPolicy};
 use serde::Deserialize;
 use url::Url;
 
@@ -20,6 +18,9 @@ pub use crate::runtime::paths::PathsConfig;
 use crate::runtime::paths::{ENV_CLI_PATHS_PROFILE, ENV_CLI_PATHS_REPO_LOCAL_ROOT, resolve_paths};
 
 const DEFAULT_LOG_FILTER: &str = "info";
+pub(crate) const RADROOTS_RETICULUM_SCOPE_ID: &str = "local";
+pub(crate) const RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE: &str =
+    "Reticulum transport is not available in this release";
 const DEFAULT_ENV_PATH: &str = ".env";
 const DEFAULT_LOCAL_STATE_DIR: &str = "replica";
 const DEFAULT_LOCAL_DB_FILE: &str = "replica.sqlite";
@@ -1956,9 +1957,20 @@ fn validate_relay_url(value: &str, source: &str) -> Result<String, RuntimeError>
             "{source} contains an empty relay url"
         )));
     }
-    RadrootsRelayUrl::parse(trimmed, nostr_relay_url_policy_for_url(trimmed)).map(|relay| relay.into_string()).map_err(|error| match error {
-        RadrootsRelayTransportError::UnsupportedRelayScheme { .. }
-        | RadrootsRelayTransportError::WsRequiresLocalhostPolicy { .. } => {
+    let relay = if trimmed.starts_with("ws://") {
+        radroots_transport::Target::nostr_relay(trimmed)
+            .map(|target| target.uri().as_str().to_owned())
+            .map_err(|error| RelayTransportError::InvalidRelayUrl {
+                url: trimmed.to_owned(),
+                reason: error.to_string(),
+            })
+    } else {
+        RelayUrl::parse(trimmed, nostr_relay_url_policy_for_url(trimmed))
+            .map(|relay| relay.as_str().to_owned())
+    };
+    relay.map_err(|error| match error {
+        RelayTransportError::RelaySchemeDenied { .. }
+        | RelayTransportError::RelayDestinationDenied { .. } => {
             RuntimeError::Config(format!("{source} must use websocket relay urls allowed by the active Nostr policy, got `{trimmed}`"))
         }
         other => RuntimeError::Config(format!(
@@ -1967,11 +1979,11 @@ fn validate_relay_url(value: &str, source: &str) -> Result<String, RuntimeError>
     })
 }
 
-pub(crate) fn nostr_relay_url_policy_for_url(value: &str) -> RadrootsRelayUrlPolicy {
+pub(crate) fn nostr_relay_url_policy_for_url(value: &str) -> RelayUrlPolicy {
     if value.trim_start().starts_with("ws://") {
-        RadrootsRelayUrlPolicy::Localhost
+        RelayUrlPolicy::Local
     } else {
-        RadrootsRelayUrlPolicy::Public
+        RelayUrlPolicy::Public
     }
 }
 

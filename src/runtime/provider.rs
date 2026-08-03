@@ -1,3 +1,4 @@
+use crate::runtime::config::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
 #[cfg(test)]
 use crate::runtime::config::{
     CapabilityBindingInspection, CapabilityBindingInspectionState, INFERENCE_HYF_STDIO_CAPABILITY,
@@ -6,7 +7,6 @@ use crate::runtime::config::{RuntimeConfig, TransportProfileKind};
 #[cfg(test)]
 use crate::runtime::hyf;
 use crate::view::runtime::PublishRuntimeView;
-use radroots_transport::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
 
 #[cfg(test)]
 const WRITE_PLANE_TARGET_DETAIL: &str =

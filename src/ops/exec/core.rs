@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use radroots_transport::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
+use crate::runtime::config::RADROOTS_RETICULUM_UNAVAILABLE_MESSAGE;
 use serde::Serialize;
 use serde_json::{Value, json};
 

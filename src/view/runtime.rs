@@ -1230,7 +1230,7 @@ impl MarketReadinessView {
 mod market_readiness_tests {
     use super::MarketReadinessView;
 
-    const LISTING_ADDR: &str = "30402:1111111111111111111111111111111111111111111111111111111111111111:AAAAAAAAAAAAAAAAAAAAAg";
+    const LISTING_ADDR: &str = "30402:585591529da0bab31b3b1b1f986611cf5f435dca84f978c89ee8a40cca7103df:AAAAAAAAAAAAAAAAAAAAAg";
 
     #[test]
     fn market_readiness_separates_protocol_marketplace_and_order_request_state() {
