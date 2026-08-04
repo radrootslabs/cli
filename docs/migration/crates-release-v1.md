@@ -6,7 +6,7 @@ engines, and implicit workspace paths are no longer supported.
 
 ## Dependency migration
 
-- Depend on `radroots_sdk = "=0.1.0-alpha"` for the supported application API.
+- Depend on `radroots = "=0.1.0-alpha"` for the supported ordinary application API.
 - Keep exact versions and a committed lockfile during the coordinated alpha.
 - Do not add sibling `path` dependencies to a production manifest.
 - Local contributors may use the explicit ignored patch file documented in
@@ -19,11 +19,11 @@ or merge those repositories.
 
 ## Runtime migration
 
-The CLI now composes the canonical SDK and shared crates for event codecs,
-signing, Nostr transport, storage, and sync. CLI code continues to own command
-parsing, configuration precedence, terminal and structured presentation,
-process integration, and local host policy. It must not reintroduce a generic
-relay pagination loop, ingest reducer, outbox engine, or signer protocol.
+The CLI now composes only the canonical `radroots` facade. CLI code owns
+command parsing and terminal or structured presentation; storage, signing,
+transport, and sync behavior remain with the final crates. It must not
+reintroduce a generic relay pagination loop, ingest reducer, outbox engine, or
+signer protocol.
 
 The old environment and TOML groups are rejected instead of silently mapped.
 Start from `.env.example`, inspect the resolved profile, and address health
@@ -32,10 +32,11 @@ actions in order:
 ```sh
 radroots profile inspect --format json
 radroots health inspect --format json
-radroots signer status --format json
-radroots transport status inspect --format json
-radroots sync status --format json
 ```
+
+Other resource commands remain parseable but fail closed with
+`unsupported_operation` until a future release enables their canonical SDK
+orchestration. This is an intentional breaking change from the private runtime.
 
 Automation should use `--no-input`, explicit online/offline policy, and stable
 idempotency and correlation identifiers for writes. Retired commands and flags

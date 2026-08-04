@@ -1,776 +1,117 @@
 #![forbid(unsafe_code)]
 
-use std::io::Write;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use radroots_cli::{ops, registry, runtime};
-use radroots_runtime_contract_v1::{
-    ExecutionModeV1, RUNTIME_CONTRACT_NAME_V1, RUNTIME_CONTRACT_VERSION_V1, RuntimeContractErrorV1,
-    RuntimeRequestEnvelopeV1,
+use radroots_cli::cli::{
+    HealthCommand, ProfileCommand, TargetCliArgs, TargetCommand, TargetOutputFormat,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
-use radroots_cli::cli::input::runtime_invocation_args_from_target;
-use radroots_cli::cli::{TargetCliArgs, TargetOutputFormat};
-use radroots_cli::ops::exec::{
-    BasketOperationService, CoreOperationService, FarmOperationService, ListingOperationService,
-    MarketOperationService, RuntimeOperationService, TradeOperationService,
-    ValidationOperationService,
-};
-use radroots_cli::ops::{
-    OperationAdapter, OperationAdapterError, OperationNetworkMode, OperationOutputFormat,
-    OperationRequest, OperationRequestPayload, OperationResultPayload, OperationService,
-    TargetOperationRequest,
-};
-use radroots_cli::out::envelope::{CliExitCode, EnvelopeContext, OutputEnvelope, OutputError};
-use radroots_cli::out::terminal::errors::terminal_error_document;
-use radroots_cli::out::terminal::registry::TerminalRendererRegistryError;
-use radroots_cli::out::terminal::registry::terminal_renderer_registry;
-use radroots_cli::out::terminal::renderer::{
-    TerminalRenderContext, TerminalVerbosity, render_terminal_document,
-};
-use radroots_cli::registry::{
-    NetworkRequirement, OPERATION_REGISTRY, network_requirement,
-    requires_delivery_capable_transport_profile, requires_local_signer_mode,
-};
-use radroots_cli::runtime::config::{
-    OutputFormat as RuntimeOutputFormat, RuntimeConfig, SignerBackend, TransportProfileKind,
-    Verbosity,
-};
-use radroots_cli::runtime::logging::initialize_logging;
+const OUTPUT_SCHEMA: &str = "radroots.cli.output.v1";
 
-static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-fn main() -> ExitCode {
-    match run() {
-        Ok(exit_code) => exit_code,
-        Err(error) => {
-            let _ = writeln!(std::io::stderr(), "{error}");
-            error.exit_code()
-        }
-    }
-}
-
-fn run() -> Result<ExitCode, runtime::RuntimeError> {
-    debug_assert!(registry::registry_linkage_is_valid());
-    debug_assert!(ops::adapter_registry_linkage_is_valid());
+#[tokio::main]
+async fn main() -> ExitCode {
     let args = TargetCliArgs::parse();
-    let mut request =
-        TargetOperationRequest::from_target_args(&args).map_err(operation_config_error)?;
-    let pre_runtime_render_config =
-        render_config_from_target_args(&args, args.format.unwrap_or(TargetOutputFormat::Terminal));
-    if let Err(error) = validate_pre_runtime_request_contract(&request) {
-        let envelope = failure_envelope(&request, error);
-        return render_envelope(&envelope, &pre_runtime_render_config);
-    }
-    let config = match RuntimeConfig::from_system(&runtime_invocation_args_from_target(&args)) {
-        Ok(config) => config,
-        Err(error) => {
-            let envelope = runtime_config_failure_envelope(&request, error);
-            return render_envelope(&envelope, &pre_runtime_render_config);
-        }
-    };
-    request.set_output_format(OperationOutputFormat::from(config.output.format));
-    let runtime_render_config = render_config_from_runtime(&config);
-    let logging = match initialize_logging(&config.logging) {
-        Ok(logging) => logging,
-        Err(error) => {
-            let envelope = runtime_config_failure_envelope(&request, error.into());
-            return render_envelope(&envelope, &runtime_render_config);
-        }
-    };
-    let envelope = match validate_request_contract(&request, &config) {
-        Ok(()) => execute_request(request, &config, &logging),
-        Err(error) => failure_envelope(&request, error),
-    };
-    render_envelope(&envelope, &runtime_render_config)
-}
+    let operation_id = args.command.operation_id();
+    let format = args.format.unwrap_or(TargetOutputFormat::Terminal);
 
-fn execute_request(
-    request: TargetOperationRequest,
-    config: &RuntimeConfig,
-    logging: &runtime::logging::LoggingState,
-) -> OutputEnvelope {
-    match request {
-        TargetOperationRequest::ProfileReset(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::ProfileInspect(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::AccountCreate(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::AccountImport(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::AccountList(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::AccountRemove(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::AccountSelect(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::StoreInspect(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::StoreBackup(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::StoreRestore(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-        TargetOperationRequest::SignerStatus(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TransportCapabilityList(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TransportConfigInspect(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TransportConfigUpdate(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TransportStatusInspect(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TransportDeliveryInspect(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TransportDeliveryRetry(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::SyncStatus(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::SyncPull(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::SyncPush(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::DiagnosticsInspect(request) => {
-            execute_with(RuntimeOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmCreate(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmGet(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmUpdate(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmList(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::FarmPublish(request) => {
-            execute_with(FarmOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingCreate(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingGet(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingList(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingUpdate(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingPublish(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingPause(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::ListingWithdraw(request) => {
-            execute_with(ListingOperationService::new(config), request)
-        }
-        TargetOperationRequest::MarketPull(request) => {
-            execute_with(MarketOperationService::new(config), request)
-        }
-        TargetOperationRequest::MarketSearch(request) => {
-            execute_with(MarketOperationService::new(config), request)
-        }
-        TargetOperationRequest::MarketGet(request) => {
-            execute_with(MarketOperationService::new(config), request)
-        }
-        TargetOperationRequest::BasketCreate(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::BasketGet(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::BasketList(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::BasketItemAdd(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::BasketItemUpdate(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::BasketItemRemove(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::BasketQuote(request) => {
-            execute_with(BasketOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeProposalSubmit(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeRevisionPropose(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeCandidateDecide(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeCancellationSubmit(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeOperationResume(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeGet(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeList(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeEvidenceRefresh(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradeEvidenceInspect(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradePrivateArtifactSeal(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradePrivateArtifactOpen(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::TradePrivateArtifactDelete(request) => {
-            execute_with(TradeOperationService::new(config), request)
-        }
-        TargetOperationRequest::ValidationStatus(request) => {
-            execute_with(ValidationOperationService::new(config), request)
-        }
-        TargetOperationRequest::HealthInspect(request) => {
-            execute_with(CoreOperationService::new(config, logging), request)
-        }
-    }
-}
-
-fn execute_with<S, P>(service: S, request: OperationRequest<P>) -> OutputEnvelope
-where
-    S: OperationService<P>,
-    P: OperationRequestPayload,
-    S::Result: OperationResultPayload,
-{
-    let operation_id = request.operation_id().to_owned();
-    let envelope_context = request
-        .context
-        .envelope_context(next_request_id(&operation_id));
-    match OperationAdapter::new(service)
-        .execute(request)
-        .and_then(|result| result.to_envelope(envelope_context.clone()))
-    {
-        Ok(envelope) => envelope,
-        Err(error) => {
-            OutputEnvelope::failure(operation_id, error.to_output_error(), envelope_context)
-        }
-    }
-}
-
-fn validate_request_contract(
-    request: &TargetOperationRequest,
-    config: &RuntimeConfig,
-) -> Result<(), OperationAdapterError> {
-    validate_pre_runtime_request_contract(request)?;
-    validate_transport_profile_contract(request, config)?;
-    validate_signer_mode_contract(request, config)?;
-    validate_network_contract(request, config)?;
-    Ok(())
-}
-
-fn validate_pre_runtime_request_contract(
-    request: &TargetOperationRequest,
-) -> Result<(), OperationAdapterError> {
-    let spec = request.spec();
-    if matches!(
-        request.context().output_format,
-        OperationOutputFormat::Ndjson
-    ) && !spec.supports_ndjson
-    {
-        return Err(OperationAdapterError::InvalidInput {
-            operation_id: spec.operation_id.to_owned(),
-            message: format!("`{}` does not support --format ndjson", spec.cli_path),
-        });
-    }
-    if request.context().dry_run && !spec.supports_dry_run() {
-        return Err(OperationAdapterError::InvalidInput {
-            operation_id: spec.operation_id.to_owned(),
-            message: format!("`{}` does not support --dry-run", spec.cli_path),
-        });
-    }
-    validate_idempotency_contract(request)?;
-    if !request.context().dry_run
-        && spec.requires_approval()
-        && !request.context().has_operator_approval()
-    {
-        return Err(OperationAdapterError::approval_required(spec.operation_id));
-    }
-    Ok(())
-}
-
-fn validate_idempotency_contract(
-    request: &TargetOperationRequest,
-) -> Result<(), OperationAdapterError> {
-    let spec = request.spec();
-    RuntimeRequestEnvelopeV1 {
-        contract: RUNTIME_CONTRACT_NAME_V1.to_owned(),
-        contract_version: RUNTIME_CONTRACT_VERSION_V1,
-        operation_id: spec.runtime_operation_id,
-        operation_schema_version: spec.descriptor.schema_version,
-        request_id: "cli-pre-runtime-contract-validation".to_owned(),
-        actor_pubkey: None,
-        idempotency_key: request.context().idempotency_key.clone(),
-        approval: request.context().approval_proof.clone(),
-        execution_mode: ExecutionModeV1::Embedded,
-        request_json: "{}".to_owned(),
-    }
-    .validate()
-    .map_err(|error| idempotency_contract_error(spec.operation_id, error))
-}
-
-fn idempotency_contract_error(
-    operation_id: &str,
-    error: RuntimeContractErrorV1,
-) -> OperationAdapterError {
-    OperationAdapterError::InvalidInput {
-        operation_id: operation_id.to_owned(),
-        message: error.to_string(),
-    }
-}
-
-fn validate_signer_mode_contract(
-    request: &TargetOperationRequest,
-    config: &RuntimeConfig,
-) -> Result<(), OperationAdapterError> {
-    let spec = request.spec();
-    if matches!(config.signer.backend, SignerBackend::Myc)
-        && requires_local_signer_mode_for_transport_profile(spec.operation_id, config)
-    {
-        return Err(OperationAdapterError::SignerModeDeferred {
-            operation_id: spec.operation_id.to_owned(),
-            message: format!(
-                "`{}` cannot run with signer mode `myc`; use signer mode `local`",
-                spec.cli_path
-            ),
-        });
-    }
-    Ok(())
-}
-
-fn validate_network_contract(
-    request: &TargetOperationRequest,
-    config: &RuntimeConfig,
-) -> Result<(), OperationAdapterError> {
-    let spec = request.spec();
-    let requirement = network_requirement(spec.operation_id);
-    match request.context().network_mode {
-        OperationNetworkMode::Default => Ok(()),
-        OperationNetworkMode::Offline => {
-            if allows_offline_local_mutation(spec.operation_id) {
-                return Ok(());
-            }
-            if let NetworkRequirement::External {
-                dry_run_requires_network,
-            } = requirement
-                && (!request.context().dry_run || dry_run_requires_network)
-            {
-                return Err(OperationAdapterError::OfflineForbidden {
-                    operation_id: spec.operation_id.to_owned(),
-                    message: format!(
-                        "`{}` requires transport, provider, or workflow network access",
-                        spec.cli_path
-                    ),
-                });
-            }
-            Ok(())
-        }
-        OperationNetworkMode::Online => {
-            if let NetworkRequirement::External {
-                dry_run_requires_network,
-            } = requirement
-                && (!request.context().dry_run || dry_run_requires_network)
-                && requires_pre_runtime_transport_target(spec.operation_id)
-                && let Some(reason) = transport_profile_delivery_unavailable_reason(config)
-            {
-                return Err(OperationAdapterError::NetworkUnavailable {
-                    operation_id: spec.operation_id.to_owned(),
-                    message: format!(
-                        "`{}` requires a delivery-capable transport profile for online execution: {reason}",
-                        spec.cli_path,
-                    ),
-                });
-            }
-            Ok(())
-        }
-    }
-}
-
-fn requires_local_signer_mode_for_transport_profile(
-    operation_id: &str,
-    config: &RuntimeConfig,
-) -> bool {
-    let _ = config;
-    requires_local_signer_mode(operation_id)
-}
-
-fn requires_pre_runtime_transport_target(operation_id: &str) -> bool {
-    !requires_delivery_capable_transport_profile(operation_id)
-}
-
-fn allows_offline_local_mutation(operation_id: &str) -> bool {
-    matches!(operation_id, "listing.publish")
-}
-
-fn validate_transport_profile_contract(
-    request: &TargetOperationRequest,
-    config: &RuntimeConfig,
-) -> Result<(), OperationAdapterError> {
-    let spec = request.spec();
-    if !requires_delivery_capable_transport_profile(spec.operation_id) {
-        return Ok(());
-    }
-    if request.context().dry_run
-        || matches!(
-            request.context().network_mode,
-            OperationNetworkMode::Offline
-        )
-    {
-        return Ok(());
-    }
-    if matches!(
-        config.transport.profile,
-        TransportProfileKind::LocalOnly | TransportProfileKind::Reticulum
-    ) {
-        return Err(OperationAdapterError::NetworkUnavailable {
-            operation_id: spec.operation_id.to_owned(),
-            message: format!(
-                "`{}` requires a delivery-capable transport profile; active profile `{}` cannot deliver",
-                spec.cli_path,
-                config.transport.profile.as_str()
-            ),
-        });
-    }
-    if matches!(
-        config.transport.profile,
-        TransportProfileKind::Nostr | TransportProfileKind::MultiTarget
-    ) && config.transport.nostr_relay_urls.is_empty()
-    {
-        return Err(OperationAdapterError::NetworkUnavailable {
-            operation_id: spec.operation_id.to_owned(),
-            message: format!(
-                "`{}` requires at least one configured Nostr relay in the active transport profile",
-                spec.cli_path
-            ),
-        });
-    }
-    Ok(())
-}
-
-fn transport_profile_delivery_unavailable_reason(config: &RuntimeConfig) -> Option<String> {
-    match config.transport.profile {
-        TransportProfileKind::Nostr | TransportProfileKind::MultiTarget => {
-            config.transport.nostr_relay_urls.is_empty().then(|| {
-                format!(
-                    "active {} transport profile has no configured Nostr relay targets",
-                    config.transport.profile.as_str()
-                )
-            })
-        }
-        TransportProfileKind::LocalOnly => {
-            Some("active local_only transport profile cannot deliver".to_owned())
-        }
-        TransportProfileKind::Reticulum => {
-            Some("active reticulum transport profile cannot deliver".to_owned())
-        }
-    }
-}
-
-fn failure_envelope(
-    request: &TargetOperationRequest,
-    error: OperationAdapterError,
-) -> OutputEnvelope {
-    OutputEnvelope::failure(
-        request.operation_id(),
-        error.to_output_error(),
-        request
-            .context()
-            .envelope_context(next_request_id(request.operation_id())),
-    )
-}
-
-fn runtime_config_failure_envelope(
-    request: &TargetOperationRequest,
-    error: runtime::RuntimeError,
-) -> OutputEnvelope {
-    OutputEnvelope::failure(
-        request.operation_id(),
-        OutputError::new(
-            "invalid_input",
-            error.to_string(),
-            CliExitCode::InvalidInput,
-        ),
-        request
-            .context()
-            .envelope_context(next_request_id(request.operation_id())),
-    )
-}
-
-fn next_request_id(operation_id: &str) -> String {
-    let sequence = REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    format!(
-        "req_{}_{}_{}_{}",
-        operation_id.replace('.', "_"),
-        std::process::id(),
-        timestamp,
-        sequence
-    )
-}
-
-#[derive(Debug, Clone)]
-struct EnvelopeRenderConfig {
-    format: RenderOutputFormat,
-    terminal: TerminalRenderContext,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RenderOutputFormat {
-    Terminal,
-    Json,
-    Ndjson,
-}
-
-fn render_config_from_target_args(
-    args: &TargetCliArgs,
-    format: TargetOutputFormat,
-) -> EnvelopeRenderConfig {
-    EnvelopeRenderConfig {
-        format: match format {
-            TargetOutputFormat::Terminal => RenderOutputFormat::Terminal,
-            TargetOutputFormat::Json => RenderOutputFormat::Json,
-            TargetOutputFormat::Ndjson => RenderOutputFormat::Ndjson,
-        },
-        terminal: TerminalRenderContext {
-            verbosity: terminal_verbosity_from_flags(args.quiet, args.verbose, args.trace),
-            width: 80,
-            dry_run: args.dry_run,
-        },
-    }
-}
-
-fn render_config_from_runtime(config: &RuntimeConfig) -> EnvelopeRenderConfig {
-    EnvelopeRenderConfig {
-        format: match config.output.format {
-            RuntimeOutputFormat::Terminal => RenderOutputFormat::Terminal,
-            RuntimeOutputFormat::Json => RenderOutputFormat::Json,
-            RuntimeOutputFormat::Ndjson => RenderOutputFormat::Ndjson,
-        },
-        terminal: TerminalRenderContext {
-            verbosity: terminal_verbosity_from_runtime(config.output.verbosity),
-            width: 80,
-            dry_run: config.output.dry_run,
-        },
-    }
-}
-
-fn terminal_verbosity_from_flags(quiet: bool, verbose: bool, trace: bool) -> TerminalVerbosity {
-    if trace {
-        TerminalVerbosity::Trace
-    } else if verbose {
-        TerminalVerbosity::Verbose
-    } else if quiet {
-        TerminalVerbosity::Quiet
-    } else {
-        TerminalVerbosity::Normal
-    }
-}
-
-fn terminal_verbosity_from_runtime(verbosity: Verbosity) -> TerminalVerbosity {
-    match verbosity {
-        Verbosity::Quiet => TerminalVerbosity::Quiet,
-        Verbosity::Normal => TerminalVerbosity::Normal,
-        Verbosity::Verbose => TerminalVerbosity::Verbose,
-        Verbosity::Trace => TerminalVerbosity::Trace,
-    }
-}
-
-fn render_envelope(
-    envelope: &OutputEnvelope,
-    config: &EnvelopeRenderConfig,
-) -> Result<ExitCode, runtime::RuntimeError> {
-    match config.format {
-        RenderOutputFormat::Terminal => render_terminal_envelope(envelope, &config.terminal),
-        RenderOutputFormat::Json => {
-            let stdout = std::io::stdout();
-            let mut handle = stdout.lock();
-            serde_json::to_writer_pretty(&mut handle, envelope)?;
-            writeln!(handle)?;
-            Ok(envelope_exit_code(envelope))
-        }
-        RenderOutputFormat::Ndjson => {
-            let stdout = std::io::stdout();
-            let mut handle = stdout.lock();
-            for frame in envelope.to_ndjson_frames() {
-                serde_json::to_writer(&mut handle, &frame)?;
-                writeln!(handle)?;
-            }
-            Ok(envelope_exit_code(envelope))
-        }
-    }
-}
-
-fn render_terminal_envelope(
-    envelope: &OutputEnvelope,
-    cx: &TerminalRenderContext,
-) -> Result<ExitCode, runtime::RuntimeError> {
-    let registry = terminal_renderer_registry();
-    if let Err(error) = registry.validate_against_operations(OPERATION_REGISTRY) {
-        let failure = terminal_registry_failure_envelope(envelope, error);
-        render_terminal_failure_document(&failure, cx)?;
-        return Ok(envelope_exit_code(&failure));
-    }
-    let renderer = match registry.renderer_for(envelope.operation_id.as_str()) {
-        Ok(renderer) => renderer,
-        Err(error) => {
-            let failure = terminal_registry_failure_envelope(envelope, error);
-            render_terminal_failure_document(&failure, cx)?;
-            return Ok(envelope_exit_code(&failure));
-        }
-    };
-    let document = renderer.render(envelope, cx);
-    let rendered = render_terminal_document(&document, cx);
-    if envelope.errors.is_empty() {
-        let stdout = std::io::stdout();
-        let mut handle = stdout.lock();
-        writeln!(handle, "{rendered}")?;
-    } else {
-        let stderr = std::io::stderr();
-        let mut handle = stderr.lock();
-        writeln!(handle, "{rendered}")?;
-    }
-    Ok(envelope_exit_code(envelope))
-}
-
-fn render_terminal_failure_document(
-    envelope: &OutputEnvelope,
-    cx: &TerminalRenderContext,
-) -> Result<(), runtime::RuntimeError> {
-    let document = terminal_error_document(envelope);
-    let rendered = render_terminal_document(&document, cx);
-    let stderr = std::io::stderr();
-    let mut handle = stderr.lock();
-    writeln!(handle, "{rendered}")?;
-    Ok(())
-}
-
-fn terminal_registry_failure_envelope(
-    envelope: &OutputEnvelope,
-    error: TerminalRendererRegistryError,
-) -> OutputEnvelope {
-    let mut output_error = OutputError::new(
-        "internal_error",
-        format!(
-            "terminal renderer registry invariant failed for {}",
-            envelope.operation_id
-        ),
-        CliExitCode::InternalError,
-    );
-    output_error.detail = Some(json!({
-        "class": "internal",
-        "operation_id": envelope.operation_id,
-        "violations": error.violations().iter().map(|violation| {
+    let result = execute(&args.command).await;
+    let (status, data, error, exit_code) = match result {
+        Ok(data) => ("ok", data, Value::Null, ExitCode::SUCCESS),
+        Err(message) => (
+            "error",
+            Value::Null,
             json!({
-                "kind": violation.kind(),
-                "operation_id": violation.operation_id(),
-                "count": violation.count(),
-            })
-        }).collect::<Vec<_>>(),
-    }));
-    let mut context = EnvelopeContext::new(envelope.request_id.clone(), envelope.dry_run);
-    context.output_format = envelope.output_format;
-    context.correlation_id = envelope.correlation_id.clone();
-    context.idempotency_key = envelope.idempotency_key.clone();
-    context.actor = envelope.actor.clone();
-    OutputEnvelope::failure(envelope.operation_id.clone(), output_error, context)
+                "code": "unsupported_operation",
+                "message": message,
+                "recovery": "use `radroots health inspect` to inspect the release-v1 host surface"
+            }),
+            ExitCode::from(2),
+        ),
+    };
+
+    let envelope = json!({
+        "schema": OUTPUT_SCHEMA,
+        "operation_id": operation_id,
+        "status": status,
+        "data": data,
+        "error": error,
+    });
+    render(format, operation_id, status, &envelope);
+    exit_code
 }
 
-fn envelope_exit_code(envelope: &OutputEnvelope) -> ExitCode {
-    envelope
-        .errors
-        .first()
-        .map(|error| ExitCode::from(error.exit_code))
-        .unwrap_or_else(|| ExitCode::from(0))
+async fn execute(command: &TargetCommand) -> Result<Value, String> {
+    match command {
+        TargetCommand::Profile(args) if matches!(args.command, ProfileCommand::Inspect) => {
+            inspect_local_profile().await
+        }
+        TargetCommand::Health(args) if matches!(args.command, HealthCommand::Inspect) => {
+            inspect_health().await
+        }
+        _ => Err(format!(
+            "`{}` is not available in the crates-release-v1 CLI host",
+            command.operation_id()
+        )),
+    }
 }
 
-fn operation_config_error(error: OperationAdapterError) -> runtime::RuntimeError {
-    runtime::RuntimeError::Config(error.to_string())
+async fn inspect_local_profile() -> Result<Value, String> {
+    let client = radroots::client::memory()
+        .build()
+        .map_err(|error| format!("failed to construct the local SDK client: {error}"))?;
+    let profile = radroots::client::local_only();
+    client
+        .close()
+        .await
+        .map_err(|error| format!("failed to close the local SDK client: {error}"))?;
+
+    Ok(json!({
+        "profile": "local_only",
+        "network_enabled": !profile.is_local_only(),
+        "storage": "memory",
+        "artifact_graph": "registry"
+    }))
+}
+
+async fn inspect_health() -> Result<Value, String> {
+    let profile = inspect_local_profile().await?;
+    Ok(json!({
+        "ready": true,
+        "release": "crates-v1",
+        "profile": profile
+    }))
+}
+
+fn render(format: TargetOutputFormat, operation_id: &str, status: &str, envelope: &Value) {
+    match format {
+        TargetOutputFormat::Json | TargetOutputFormat::Ndjson => println!("{envelope}"),
+        TargetOutputFormat::Terminal => {
+            if status == "ok" {
+                println!("{operation_id}: ready");
+            } else {
+                let message = envelope["error"]["message"]
+                    .as_str()
+                    .unwrap_or("operation failed");
+                eprintln!("{operation_id}: {message}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
-
-    use radroots_cli::out::envelope::{EnvelopeContext, OutputEnvelope, OutputStatus};
-    use radroots_cli::out::terminal::errors::terminal_error_document;
-    use radroots_cli::out::terminal::registry::TerminalRendererRegistry;
-    use radroots_cli::out::terminal::renderer::{TerminalRenderContext, render_terminal_document};
-
     use super::*;
 
     #[test]
-    fn terminal_registry_failure_envelope_is_structured_internal_error() {
-        let original = OutputEnvelope::success(
-            "profile.inspect",
-            Value::Null,
-            EnvelopeContext::new("req_test", false),
-        );
-        let error = TerminalRendererRegistry::new()
-            .validate_operation_ids(["profile.inspect"])
-            .expect_err("missing renderer should fail");
-        let failure = terminal_registry_failure_envelope(&original, error);
-
-        assert_eq!(failure.status, OutputStatus::Error);
-        assert_eq!(failure.reason_code.as_deref(), Some("internal_error"));
-        assert_eq!(failure.errors[0].code, "internal_error");
-        let detail = failure.errors[0].detail.as_ref().expect("error detail");
-        assert_eq!(detail["violations"][0]["kind"], "missing");
-
-        let rendered = render_terminal_document(
-            &terminal_error_document(&failure),
-            &TerminalRenderContext::default(),
-        );
-        assert!(rendered.starts_with("✕ Command failed\n"));
-        assert!(
-            rendered.contains(
-                "Reason  terminal renderer registry invariant failed for profile.inspect"
-            )
-        );
-        assert!(!rendered.contains("RuntimeError::Config"));
+    fn unsupported_operations_fail_closed() {
+        let args = TargetCliArgs::try_parse_from(["radroots", "account", "list"])
+            .expect("valid resource command");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let error = runtime
+            .block_on(execute(&args.command))
+            .expect_err("unsupported operation");
+        assert!(error.contains("account.list"));
     }
 }

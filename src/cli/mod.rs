@@ -1,11 +1,8 @@
-pub mod global;
-
 pub mod account;
 pub mod basket;
 pub mod diagnostics;
 pub mod farm;
 pub mod health;
-pub mod input;
 pub mod listing;
 pub mod market;
 pub mod profile;
@@ -254,19 +251,6 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{TargetCliArgs, TargetCommand, TargetOutputFormat};
-    use crate::registry::OPERATION_REGISTRY;
-
-    #[test]
-    fn target_parser_accepts_every_generated_registry_path() {
-        for operation in OPERATION_REGISTRY {
-            let parsed = TargetCliArgs::try_parse_from(operation.cli_path.split_whitespace())
-                .unwrap_or_else(|error| {
-                    panic!("{} failed to parse: {error}", operation.cli_path);
-                });
-            assert_eq!(parsed.command.operation_id(), operation.operation_id);
-        }
-    }
-
     #[test]
     fn target_parser_exposes_only_v1_namespaces() {
         let actual = TargetCliArgs::command()

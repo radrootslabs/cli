@@ -1,10 +1,8 @@
 # Radroots CLI
 
-`radroots` is the local-first command-line client for Radroots accounts, farms,
-listings, markets, baskets, trades, transport, and synchronization. The CLI is
-a downstream consumer of the versioned `radroots_sdk` package and retains only
-host concerns such as configuration, presentation, local process integration,
-and command orchestration.
+`radroots` is the local-first command-line host for the release-v1 Radroots
+crate graph. It consumes the canonical `radroots` facade and retains only
+command parsing and presentation concerns.
 
 The CLI is pre-release software. Its current package graph uses exact alpha
 versions so a lockfile and the matching Radroots package set travel together.
@@ -23,19 +21,20 @@ and opt into the ignored local override file described in
 [`docs/engineering/local-overrides.md`](docs/engineering/local-overrides.md).
 Release and packaged-consumer checks never use sibling path overrides.
 
-## Command model
+## Release-v1 command model
 
 Commands are organized by resource. Inspect any level with `--help`:
 
 ```sh
-radroots health inspect
-radroots account list --format json
-radroots transport status inspect
-radroots store inspect --offline
-radroots sync status
-radroots market product search apples --format ndjson
-radroots listing create --dry-run
+radroots profile inspect --format json
+radroots health inspect --format json
 ```
+
+Only local profile and health inspection are executable in the initial crate
+release. The complete resource vocabulary remains parseable so automation gets
+a stable, structured `unsupported_operation` response while private predecessor
+runtimes are retired. No command silently falls back to a sibling checkout or
+legacy engine.
 
 Global controls include:
 
@@ -67,15 +66,16 @@ RADROOTS_CLI_OUTPUT_FORMAT=terminal
 RADROOTS_CLI_ACCOUNT_SECRET_BACKEND=encrypted_file
 ```
 
-Use `radroots profile inspect` and `radroots health inspect` to see resolved
-paths and actionable readiness state before attempting a write. Account secrets
-are never accepted as command-line values; import them from a protected file or
-use the configured host secret backend.
+Use `radroots profile inspect` and `radroots health inspect` to verify that the
+registry-backed facade can construct and close its local-only memory client.
+Write operations remain fail-closed until their canonical SDK orchestration is
+enabled in a future release.
 
 ## Package migration
 
-The v1 crate migration replaced compatibility namespaces and CLI-owned generic
-signing, transport, storage, and sync engines with the final SDK composition.
+The v1 crate migration removed compatibility namespaces and the CLI-owned
+generic signing, transport, storage, and sync engines. The initial CLI host
+uses only the final facade composition.
 See [`docs/migration/crates-release-v1.md`](docs/migration/crates-release-v1.md)
 for renamed commands, configuration changes, and downstream package rules.
 
