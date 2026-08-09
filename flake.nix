@@ -58,6 +58,7 @@
                     set -euo pipefail
                     repo_root="$(git rev-parse --show-toplevel)"
                     cd "$repo_root"
+                    ./tools/verify-repository-boundary.sh
                     export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
                     export LIBRARY_PATH="${libraryPath}:''${LIBRARY_PATH:-}"
                     export DYLD_FALLBACK_LIBRARY_PATH="${libraryPath}:''${DYLD_FALLBACK_LIBRARY_PATH:-}"
