@@ -23,10 +23,12 @@ paths, or an enclosing monorepo layout.
 ## Authority and published-source boundary
 
 Repository-local machine authority is limited to manifests and locks,
-`radroots.lib.source-lock.v1.toml`, and explicit machine-readable contracts
-added under `contracts/**`. Source and tests are implementation evidence, and
-`flake.nix` owns the standalone command surfaces. The root `README` is concise
-public routing material, not a substitute for a machine contract.
+`radroots.lib.source-lock.v1.toml`, the checked-in dependency-policy store, and
+explicit machine-readable contracts added under `contracts/**`. Source and
+tests are implementation evidence. Native Cargo and repository scripts own
+the standalone command surfaces; checked-in Nix material is deferred and
+unclaimed through RCLD-RSHR-170. The root `README` is concise public routing
+material, not a substitute for a machine contract.
 
 `.env.example` is non-authoritative pre-refactor evidence. It does not describe
 current runtime behavior and remains only until its owning later cleanup
@@ -100,17 +102,21 @@ then route repository-owned commands through `cargo extbuild run -- ...`.
 Standalone public verification surfaces are:
 
 ```sh
-nix run .#fmt
-nix run .#check
-nix run .#test
-nix run .#release-acceptance
+cargo fmt --all --check
+cargo check --all-targets --locked
+cargo test --all-targets --locked
+cargo clippy --all-targets --locked -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+scripts/verify-supply-chain.sh
+tools/verify-repository-boundary.sh
 ```
 
-Use the smallest relevant surface during development and the complete release
-acceptance surface for a production candidate. Rust changes additionally
-require the relevant locked `cargo fmt`, `cargo check`, `cargo test`, and
-warnings-denied `cargo clippy` lanes. Run `git diff --check` and inspect the
-final status and diff before every checkpoint.
+Use the smallest relevant surface during development and the complete native
+set for a production candidate. The supply-chain gate uses exact cargo-deny
+0.19.8 and cargo-vet 0.10.2; its checked-in exemptions are visible accepted
+review debt, not claims of independent source audits. Nix and OCI remain
+deferred and unclaimed through RCLD-RSHR-170. Run `git diff --check` and
+inspect the final status and diff before every checkpoint.
 
 Never claim a lane passed unless it ran successfully. Record unavailable or
 environment-blocked lanes exactly, and do not treat parent-only automation as a
