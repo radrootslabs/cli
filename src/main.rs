@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use radroots_cli::cli::{
+use radroots_cli::{
     HealthCommand, ProfileCommand, TargetCliArgs, TargetCommand, TargetOutputFormat,
 };
 use serde_json::{Value, json};

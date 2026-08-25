@@ -107,6 +107,7 @@ cargo check --all-targets --locked
 cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+scripts/verify-boundaries.sh
 scripts/verify-supply-chain.sh
 tools/verify-repository-boundary.sh
 ```

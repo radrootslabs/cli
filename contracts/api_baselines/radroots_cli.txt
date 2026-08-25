@@ -1,0 +1,319 @@
+pub mod radroots_cli
+pub enum radroots_cli::AccountCommand
+pub radroots_cli::AccountCommand::Create
+pub radroots_cli::AccountCommand::Import(radroots_cli::AccountImportArgs)
+pub radroots_cli::AccountCommand::List
+pub radroots_cli::AccountCommand::Remove(radroots_cli::AccountSelectorArgs)
+pub radroots_cli::AccountCommand::Select(radroots_cli::AccountSelectorArgs)
+pub enum radroots_cli::BasketCommand
+pub radroots_cli::BasketCommand::Create(radroots_cli::BasketCreateArgs)
+pub radroots_cli::BasketCommand::Get(radroots_cli::BasketKeyArgs)
+pub radroots_cli::BasketCommand::Item(radroots_cli::BasketItemArgs)
+pub radroots_cli::BasketCommand::List
+pub radroots_cli::BasketCommand::Quote(radroots_cli::BasketKeyArgs)
+pub enum radroots_cli::BasketItemCommand
+pub radroots_cli::BasketItemCommand::Add(radroots_cli::BasketItemMutationArgs)
+pub radroots_cli::BasketItemCommand::Remove(radroots_cli::BasketItemRemoveArgs)
+pub radroots_cli::BasketItemCommand::Update(radroots_cli::BasketItemMutationArgs)
+pub enum radroots_cli::DiagnosticsCommand
+pub radroots_cli::DiagnosticsCommand::Inspect
+pub enum radroots_cli::FarmCommand
+pub radroots_cli::FarmCommand::Create(alloc::boxed::Box<radroots_cli::FarmCreateArgs>)
+pub radroots_cli::FarmCommand::Get
+pub radroots_cli::FarmCommand::List
+pub radroots_cli::FarmCommand::Publish
+pub radroots_cli::FarmCommand::Update(radroots_cli::FarmUpdateArgs)
+pub enum radroots_cli::HealthCommand
+pub radroots_cli::HealthCommand::Inspect
+pub enum radroots_cli::ListingCommand
+pub radroots_cli::ListingCommand::Create(alloc::boxed::Box<radroots_cli::ListingCreateArgs>)
+pub radroots_cli::ListingCommand::Get(radroots_cli::LookupArgs)
+pub radroots_cli::ListingCommand::List
+pub radroots_cli::ListingCommand::Pause(radroots_cli::FileArgs)
+pub radroots_cli::ListingCommand::Publish(radroots_cli::FileArgs)
+pub radroots_cli::ListingCommand::Update(radroots_cli::FileArgs)
+pub radroots_cli::ListingCommand::Withdraw(radroots_cli::FileArgs)
+pub enum radroots_cli::MarketCommand
+pub radroots_cli::MarketCommand::Get(radroots_cli::LookupArgs)
+pub radroots_cli::MarketCommand::Pull
+pub radroots_cli::MarketCommand::Search(radroots_cli::QueryArgs)
+pub enum radroots_cli::ProfileCommand
+pub radroots_cli::ProfileCommand::Inspect
+pub radroots_cli::ProfileCommand::Reset
+pub enum radroots_cli::ReticulumBehaviorArg
+pub radroots_cli::ReticulumBehaviorArg::DeferDeliveryPlans
+pub radroots_cli::ReticulumBehaviorArg::RejectDeliveryAttempts
+impl radroots_cli::ReticulumBehaviorArg
+pub fn radroots_cli::ReticulumBehaviorArg::as_str(self) -> &'static str
+pub enum radroots_cli::SignerCommand
+pub radroots_cli::SignerCommand::Status
+pub enum radroots_cli::StoreCommand
+pub radroots_cli::StoreCommand::Backup
+pub radroots_cli::StoreCommand::Inspect
+pub radroots_cli::StoreCommand::Restore(radroots_cli::StoreRestoreArgs)
+pub enum radroots_cli::SyncCommand
+pub radroots_cli::SyncCommand::Pull
+pub radroots_cli::SyncCommand::Push
+pub radroots_cli::SyncCommand::Status
+pub enum radroots_cli::TargetCommand
+pub radroots_cli::TargetCommand::Account(radroots_cli::AccountArgs)
+pub radroots_cli::TargetCommand::Basket(radroots_cli::BasketArgs)
+pub radroots_cli::TargetCommand::Diagnostics(radroots_cli::DiagnosticsArgs)
+pub radroots_cli::TargetCommand::Farm(radroots_cli::FarmArgs)
+pub radroots_cli::TargetCommand::Health(radroots_cli::HealthArgs)
+pub radroots_cli::TargetCommand::Listing(radroots_cli::ListingArgs)
+pub radroots_cli::TargetCommand::Market(radroots_cli::MarketArgs)
+pub radroots_cli::TargetCommand::Profile(radroots_cli::ProfileArgs)
+pub radroots_cli::TargetCommand::Signer(radroots_cli::SignerArgs)
+pub radroots_cli::TargetCommand::Store(radroots_cli::StoreArgs)
+pub radroots_cli::TargetCommand::Sync(radroots_cli::SyncArgs)
+pub radroots_cli::TargetCommand::Trade(radroots_cli::TradeArgs)
+pub radroots_cli::TargetCommand::Transport(radroots_cli::TransportArgs)
+pub radroots_cli::TargetCommand::Validation(radroots_cli::ValidationArgs)
+impl radroots_cli::TargetCommand
+pub fn radroots_cli::TargetCommand::operation_id(&self) -> &'static str
+pub enum radroots_cli::TargetOutputFormat
+pub radroots_cli::TargetOutputFormat::Json
+pub radroots_cli::TargetOutputFormat::Ndjson
+pub radroots_cli::TargetOutputFormat::Terminal
+pub enum radroots_cli::TradeCancellationCommand
+pub radroots_cli::TradeCancellationCommand::Submit(radroots_cli::TradeEnvelopeFileArgs)
+pub enum radroots_cli::TradeCandidateCommand
+pub radroots_cli::TradeCandidateCommand::Decide(radroots_cli::TradeDecisionEnvelopeArgs)
+pub enum radroots_cli::TradeCommand
+pub radroots_cli::TradeCommand::Cancellation(radroots_cli::TradeCancellationArgs)
+pub radroots_cli::TradeCommand::Candidate(radroots_cli::TradeCandidateArgs)
+pub radroots_cli::TradeCommand::Evidence(radroots_cli::TradeEvidenceArgs)
+pub radroots_cli::TradeCommand::Get(radroots_cli::TradeKeyArgs)
+pub radroots_cli::TradeCommand::List(radroots_cli::TradeListArgs)
+pub radroots_cli::TradeCommand::Operation(radroots_cli::TradeOperationArgs)
+pub radroots_cli::TradeCommand::PrivateArtifact(radroots_cli::TradePrivateArtifactArgs)
+pub radroots_cli::TradeCommand::Proposal(radroots_cli::TradeProposalArgs)
+pub radroots_cli::TradeCommand::Revision(radroots_cli::TradeRevisionArgs)
+pub enum radroots_cli::TradeEvidenceCommand
+pub radroots_cli::TradeEvidenceCommand::Inspect(radroots_cli::TradeEvidenceInspectArgs)
+pub radroots_cli::TradeEvidenceCommand::Refresh(radroots_cli::TradeKeyArgs)
+pub enum radroots_cli::TradeOperationCommand
+pub radroots_cli::TradeOperationCommand::Resume(radroots_cli::TradeResumeArgs)
+pub enum radroots_cli::TradePrivateArtifactCommand
+pub radroots_cli::TradePrivateArtifactCommand::Delete(radroots_cli::TradePrivateArtifactDeleteArgs)
+pub radroots_cli::TradePrivateArtifactCommand::Open(radroots_cli::TradePrivateArtifactOpenArgs)
+pub radroots_cli::TradePrivateArtifactCommand::Seal(radroots_cli::TradePrivateArtifactSealArgs)
+pub enum radroots_cli::TradePrivateArtifactKindArg
+pub radroots_cli::TradePrivateArtifactKindArg::BindingTerms
+pub radroots_cli::TradePrivateArtifactKindArg::ContactBundle
+pub radroots_cli::TradePrivateArtifactKindArg::DeliveryInstruction
+pub radroots_cli::TradePrivateArtifactKindArg::Message
+impl radroots_cli::TradePrivateArtifactKindArg
+pub fn radroots_cli::TradePrivateArtifactKindArg::as_str(self) -> &'static str
+pub enum radroots_cli::TradeProposalCommand
+pub radroots_cli::TradeProposalCommand::Submit(radroots_cli::TradeEnvelopeFileArgs)
+pub enum radroots_cli::TradeResumeOperationKindArg
+pub radroots_cli::TradeResumeOperationKindArg::Cancel
+pub radroots_cli::TradeResumeOperationKindArg::DecideCandidate
+pub radroots_cli::TradeResumeOperationKindArg::ProposeRevision
+pub radroots_cli::TradeResumeOperationKindArg::SubmitProposal
+impl radroots_cli::TradeResumeOperationKindArg
+pub fn radroots_cli::TradeResumeOperationKindArg::as_sdk_operation_kind(self) -> &'static str
+pub enum radroots_cli::TradeRevisionCommand
+pub radroots_cli::TradeRevisionCommand::Propose(radroots_cli::TradeEnvelopeFileArgs)
+pub enum radroots_cli::TransportCapabilityCommand
+pub radroots_cli::TransportCapabilityCommand::List
+pub enum radroots_cli::TransportCommand
+pub radroots_cli::TransportCommand::Capability(radroots_cli::TransportCapabilityArgs)
+pub radroots_cli::TransportCommand::Config(radroots_cli::TransportConfigArgs)
+pub radroots_cli::TransportCommand::Delivery(radroots_cli::TransportDeliveryArgs)
+pub radroots_cli::TransportCommand::Status(radroots_cli::TransportStatusArgs)
+pub enum radroots_cli::TransportConfigCommand
+pub radroots_cli::TransportConfigCommand::Inspect
+pub radroots_cli::TransportConfigCommand::Update(radroots_cli::TransportConfigUpdateArgs)
+pub enum radroots_cli::TransportDeliveryCommand
+pub radroots_cli::TransportDeliveryCommand::Inspect
+pub radroots_cli::TransportDeliveryCommand::Retry
+pub enum radroots_cli::TransportProfileKindArg
+pub radroots_cli::TransportProfileKindArg::LocalOnly
+pub radroots_cli::TransportProfileKindArg::MultiTarget
+pub radroots_cli::TransportProfileKindArg::Nostr
+pub radroots_cli::TransportProfileKindArg::Reticulum
+impl radroots_cli::TransportProfileKindArg
+pub fn radroots_cli::TransportProfileKindArg::as_str(self) -> &'static str
+pub enum radroots_cli::TransportStatusCommand
+pub radroots_cli::TransportStatusCommand::Inspect
+pub enum radroots_cli::ValidationCommand
+pub radroots_cli::ValidationCommand::Status
+pub struct radroots_cli::AccountArgs
+pub radroots_cli::AccountArgs::command: radroots_cli::AccountCommand
+pub struct radroots_cli::AccountImportArgs
+pub radroots_cli::AccountImportArgs::default: bool
+pub radroots_cli::AccountImportArgs::path: core::option::Option<std::path::PathBuf>
+pub struct radroots_cli::AccountSelectorArgs
+pub radroots_cli::AccountSelectorArgs::selector: core::option::Option<alloc::string::String>
+pub struct radroots_cli::BasketArgs
+pub radroots_cli::BasketArgs::command: radroots_cli::BasketCommand
+pub struct radroots_cli::BasketCreateArgs
+pub radroots_cli::BasketCreateArgs::basket_id: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketCreateArgs::bin_id: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketCreateArgs::listing: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketCreateArgs::listing_addr: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketCreateArgs::quantity: core::option::Option<alloc::string::String>
+pub struct radroots_cli::BasketItemArgs
+pub radroots_cli::BasketItemArgs::command: radroots_cli::BasketItemCommand
+pub struct radroots_cli::BasketItemMutationArgs
+pub radroots_cli::BasketItemMutationArgs::basket_id: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketItemMutationArgs::bin_id: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketItemMutationArgs::item_id: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketItemMutationArgs::listing: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketItemMutationArgs::listing_addr: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketItemMutationArgs::quantity: core::option::Option<alloc::string::String>
+pub struct radroots_cli::BasketItemRemoveArgs
+pub radroots_cli::BasketItemRemoveArgs::basket_id: core::option::Option<alloc::string::String>
+pub radroots_cli::BasketItemRemoveArgs::item_id: core::option::Option<alloc::string::String>
+pub struct radroots_cli::BasketKeyArgs
+pub radroots_cli::BasketKeyArgs::basket_id: core::option::Option<alloc::string::String>
+pub struct radroots_cli::DiagnosticsArgs
+pub radroots_cli::DiagnosticsArgs::command: radroots_cli::DiagnosticsCommand
+pub struct radroots_cli::FarmArgs
+pub radroots_cli::FarmArgs::command: radroots_cli::FarmCommand
+pub struct radroots_cli::FarmCreateArgs
+pub radroots_cli::FarmCreateArgs::about: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::banner: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::city: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::country: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::delivery_method: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::display_name: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::farm_d_tag: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::geohash: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::location: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::name: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::picture: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::region: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmCreateArgs::website: core::option::Option<alloc::string::String>
+pub struct radroots_cli::FarmUpdateArgs
+pub radroots_cli::FarmUpdateArgs::field: core::option::Option<alloc::string::String>
+pub radroots_cli::FarmUpdateArgs::value: core::option::Option<alloc::string::String>
+pub struct radroots_cli::FileArgs
+pub radroots_cli::FileArgs::file: core::option::Option<std::path::PathBuf>
+pub struct radroots_cli::HealthArgs
+pub radroots_cli::HealthArgs::command: radroots_cli::HealthCommand
+pub struct radroots_cli::ListingArgs
+pub radroots_cli::ListingArgs::command: radroots_cli::ListingCommand
+pub struct radroots_cli::ListingCreateArgs
+pub radroots_cli::ListingCreateArgs::available: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::bin_id: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::category: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::discount_amount: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::discount_currency: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::discount_id: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::discount_kind: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::discount_label: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::discount_value: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::key: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::label: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::output: core::option::Option<std::path::PathBuf>
+pub radroots_cli::ListingCreateArgs::price_amount: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::price_currency: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::price_per_amount: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::price_per_unit: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::quantity_amount: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::quantity_unit: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::summary: core::option::Option<alloc::string::String>
+pub radroots_cli::ListingCreateArgs::title: core::option::Option<alloc::string::String>
+pub struct radroots_cli::LookupArgs
+pub radroots_cli::LookupArgs::key: core::option::Option<alloc::string::String>
+pub struct radroots_cli::MarketArgs
+pub radroots_cli::MarketArgs::command: radroots_cli::MarketCommand
+pub struct radroots_cli::ProfileArgs
+pub radroots_cli::ProfileArgs::command: radroots_cli::ProfileCommand
+pub struct radroots_cli::QueryArgs
+pub radroots_cli::QueryArgs::query: alloc::vec::Vec<alloc::string::String>
+pub struct radroots_cli::SignerArgs
+pub radroots_cli::SignerArgs::command: radroots_cli::SignerCommand
+pub struct radroots_cli::StoreArgs
+pub radroots_cli::StoreArgs::command: radroots_cli::StoreCommand
+pub struct radroots_cli::StoreRestoreArgs
+pub radroots_cli::StoreRestoreArgs::destination: core::option::Option<std::path::PathBuf>
+pub radroots_cli::StoreRestoreArgs::overwrite: bool
+pub radroots_cli::StoreRestoreArgs::source: std::path::PathBuf
+pub struct radroots_cli::SyncArgs
+pub radroots_cli::SyncArgs::command: radroots_cli::SyncCommand
+pub struct radroots_cli::TargetCliArgs
+pub radroots_cli::TargetCliArgs::account_id: core::option::Option<alloc::string::String>
+pub radroots_cli::TargetCliArgs::approval_proof: core::option::Option<alloc::string::String>
+pub radroots_cli::TargetCliArgs::command: radroots_cli::TargetCommand
+pub radroots_cli::TargetCliArgs::correlation_id: core::option::Option<alloc::string::String>
+pub radroots_cli::TargetCliArgs::dry_run: bool
+pub radroots_cli::TargetCliArgs::format: core::option::Option<radroots_cli::TargetOutputFormat>
+pub radroots_cli::TargetCliArgs::idempotency_key: core::option::Option<alloc::string::String>
+pub radroots_cli::TargetCliArgs::no_input: bool
+pub radroots_cli::TargetCliArgs::offline: bool
+pub radroots_cli::TargetCliArgs::online: bool
+pub radroots_cli::TargetCliArgs::quiet: bool
+pub radroots_cli::TargetCliArgs::trace: bool
+pub radroots_cli::TargetCliArgs::verbose: bool
+pub radroots_cli::TargetCliArgs::yes: bool
+pub struct radroots_cli::TradeArgs
+pub radroots_cli::TradeArgs::command: radroots_cli::TradeCommand
+pub struct radroots_cli::TradeCancellationArgs
+pub radroots_cli::TradeCancellationArgs::command: radroots_cli::TradeCancellationCommand
+pub struct radroots_cli::TradeCandidateArgs
+pub radroots_cli::TradeCandidateArgs::command: radroots_cli::TradeCandidateCommand
+pub struct radroots_cli::TradeDecisionEnvelopeArgs
+pub radroots_cli::TradeDecisionEnvelopeArgs::acknowledge_private_terms: bool
+pub radroots_cli::TradeDecisionEnvelopeArgs::file: std::path::PathBuf
+pub struct radroots_cli::TradeEnvelopeFileArgs
+pub radroots_cli::TradeEnvelopeFileArgs::file: std::path::PathBuf
+pub struct radroots_cli::TradeEvidenceArgs
+pub radroots_cli::TradeEvidenceArgs::command: radroots_cli::TradeEvidenceCommand
+pub struct radroots_cli::TradeEvidenceInspectArgs
+pub radroots_cli::TradeEvidenceInspectArgs::cursor: core::option::Option<alloc::string::String>
+pub radroots_cli::TradeEvidenceInspectArgs::limit: core::option::Option<u32>
+pub radroots_cli::TradeEvidenceInspectArgs::trade_id: core::option::Option<alloc::string::String>
+pub struct radroots_cli::TradeKeyArgs
+pub radroots_cli::TradeKeyArgs::trade_id: core::option::Option<alloc::string::String>
+pub struct radroots_cli::TradeListArgs
+pub radroots_cli::TradeListArgs::cursor: core::option::Option<alloc::string::String>
+pub radroots_cli::TradeListArgs::limit: core::option::Option<u32>
+pub struct radroots_cli::TradeOperationArgs
+pub radroots_cli::TradeOperationArgs::command: radroots_cli::TradeOperationCommand
+pub struct radroots_cli::TradePrivateArtifactArgs
+pub radroots_cli::TradePrivateArtifactArgs::command: radroots_cli::TradePrivateArtifactCommand
+pub struct radroots_cli::TradePrivateArtifactDeleteArgs
+pub radroots_cli::TradePrivateArtifactDeleteArgs::artifact_id: alloc::string::String
+pub struct radroots_cli::TradePrivateArtifactOpenArgs
+pub radroots_cli::TradePrivateArtifactOpenArgs::artifact_id: alloc::string::String
+pub radroots_cli::TradePrivateArtifactOpenArgs::output: core::option::Option<std::path::PathBuf>
+pub struct radroots_cli::TradePrivateArtifactSealArgs
+pub radroots_cli::TradePrivateArtifactSealArgs::artifact_id: core::option::Option<alloc::string::String>
+pub radroots_cli::TradePrivateArtifactSealArgs::candidate_id: core::option::Option<alloc::string::String>
+pub radroots_cli::TradePrivateArtifactSealArgs::expires_at_ms: core::option::Option<i64>
+pub radroots_cli::TradePrivateArtifactSealArgs::input: core::option::Option<std::path::PathBuf>
+pub radroots_cli::TradePrivateArtifactSealArgs::kind: radroots_cli::TradePrivateArtifactKindArg
+pub radroots_cli::TradePrivateArtifactSealArgs::retention_class: core::option::Option<alloc::string::String>
+pub radroots_cli::TradePrivateArtifactSealArgs::schema_id: core::option::Option<alloc::string::String>
+pub radroots_cli::TradePrivateArtifactSealArgs::trade_id: core::option::Option<alloc::string::String>
+pub struct radroots_cli::TradeProposalArgs
+pub radroots_cli::TradeProposalArgs::command: radroots_cli::TradeProposalCommand
+pub struct radroots_cli::TradeResumeArgs
+pub radroots_cli::TradeResumeArgs::acknowledge_private_terms: bool
+pub radroots_cli::TradeResumeArgs::file: std::path::PathBuf
+pub radroots_cli::TradeResumeArgs::operation_kind: core::option::Option<radroots_cli::TradeResumeOperationKindArg>
+pub struct radroots_cli::TradeRevisionArgs
+pub radroots_cli::TradeRevisionArgs::command: radroots_cli::TradeRevisionCommand
+pub struct radroots_cli::TransportArgs
+pub radroots_cli::TransportArgs::command: radroots_cli::TransportCommand
+pub struct radroots_cli::TransportCapabilityArgs
+pub radroots_cli::TransportCapabilityArgs::command: radroots_cli::TransportCapabilityCommand
+pub struct radroots_cli::TransportConfigArgs
+pub radroots_cli::TransportConfigArgs::command: radroots_cli::TransportConfigCommand
+pub struct radroots_cli::TransportConfigUpdateArgs
+pub radroots_cli::TransportConfigUpdateArgs::kind: radroots_cli::TransportProfileKindArg
+pub radroots_cli::TransportConfigUpdateArgs::nostr_relay: alloc::vec::Vec<alloc::string::String>
+pub radroots_cli::TransportConfigUpdateArgs::reticulum_agent_endpoint: core::option::Option<alloc::string::String>
+pub radroots_cli::TransportConfigUpdateArgs::reticulum_behavior: core::option::Option<radroots_cli::ReticulumBehaviorArg>
+pub radroots_cli::TransportConfigUpdateArgs::reticulum_scope: core::option::Option<alloc::string::String>
+pub struct radroots_cli::TransportDeliveryArgs
+pub radroots_cli::TransportDeliveryArgs::command: radroots_cli::TransportDeliveryCommand
+pub struct radroots_cli::TransportStatusArgs
+pub radroots_cli::TransportStatusArgs::command: radroots_cli::TransportStatusCommand
+pub struct radroots_cli::ValidationArgs
+pub radroots_cli::ValidationArgs::command: radroots_cli::ValidationCommand

@@ -1,32 +1,49 @@
-pub mod account;
-pub mod basket;
-pub mod diagnostics;
-pub mod farm;
-pub mod health;
-pub mod listing;
-pub mod market;
-pub mod profile;
-pub mod signer;
-pub mod store;
-pub mod sync;
-pub mod trade;
-pub mod transport;
-pub mod validation;
+mod account;
+mod basket;
+mod diagnostics;
+mod farm;
+mod health;
+mod listing;
+mod market;
+mod profile;
+mod signer;
+mod store;
+mod sync;
+mod trade;
+mod transport;
+mod validation;
 
-pub use account::*;
-pub use basket::*;
-pub use diagnostics::*;
-pub use farm::*;
-pub use health::*;
-pub use listing::*;
-pub use market::*;
-pub use profile::*;
-pub use signer::*;
-pub use store::*;
-pub use sync::*;
-pub use trade::*;
-pub use transport::*;
-pub use validation::*;
+pub use account::{AccountArgs, AccountCommand, AccountImportArgs, AccountSelectorArgs};
+pub use basket::{
+    BasketArgs, BasketCommand, BasketCreateArgs, BasketItemArgs, BasketItemCommand,
+    BasketItemMutationArgs, BasketItemRemoveArgs, BasketKeyArgs,
+};
+pub use diagnostics::{DiagnosticsArgs, DiagnosticsCommand};
+pub use farm::{FarmArgs, FarmCommand, FarmCreateArgs, FarmUpdateArgs};
+pub use health::{HealthArgs, HealthCommand};
+pub use listing::{FileArgs, ListingArgs, ListingCommand, ListingCreateArgs, LookupArgs};
+pub use market::{MarketArgs, MarketCommand, QueryArgs};
+pub use profile::{ProfileArgs, ProfileCommand};
+pub use signer::{SignerArgs, SignerCommand};
+pub use store::{StoreArgs, StoreCommand, StoreRestoreArgs};
+pub use sync::{SyncArgs, SyncCommand};
+pub use trade::{
+    TradeArgs, TradeCancellationArgs, TradeCancellationCommand, TradeCandidateArgs,
+    TradeCandidateCommand, TradeCommand, TradeDecisionEnvelopeArgs, TradeEnvelopeFileArgs,
+    TradeEvidenceArgs, TradeEvidenceCommand, TradeEvidenceInspectArgs, TradeKeyArgs, TradeListArgs,
+    TradeOperationArgs, TradeOperationCommand, TradePrivateArtifactArgs,
+    TradePrivateArtifactCommand, TradePrivateArtifactDeleteArgs, TradePrivateArtifactKindArg,
+    TradePrivateArtifactOpenArgs, TradePrivateArtifactSealArgs, TradeProposalArgs,
+    TradeProposalCommand, TradeResumeArgs, TradeResumeOperationKindArg, TradeRevisionArgs,
+    TradeRevisionCommand,
+};
+pub use transport::{
+    ReticulumBehaviorArg, TransportArgs, TransportCapabilityArgs, TransportCapabilityCommand,
+    TransportCommand, TransportConfigArgs, TransportConfigCommand, TransportConfigUpdateArgs,
+    TransportDeliveryArgs, TransportDeliveryCommand, TransportProfileKindArg, TransportStatusArgs,
+    TransportStatusCommand,
+};
+pub use validation::{ValidationArgs, ValidationCommand};
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 

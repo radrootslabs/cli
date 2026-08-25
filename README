@@ -81,15 +81,18 @@ cargo check --all-targets --locked
 cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+scripts/verify-boundaries.sh
 scripts/verify-supply-chain.sh
 tools/verify-repository-boundary.sh
 ```
 
-The supply-chain command validates the exact locked dependency graph, license
-policy, approved registries and immutable Lib source, then rejects forbidden
-capsule-local documentation and workflow roots. An extbuild-enabled checkout
-routes these commands through `cargo extbuild run -- ...`. Nix and OCI are
-deferred and unclaimed through RCLD-RSHR-170.
+The boundary command byte-compares the root-only public API against its
+reviewed baseline and rejects forbidden repository roots or credential
+material. The supply-chain command validates the exact locked dependency
+graph, license policy, approved registries and immutable Lib source, then
+rejects forbidden capsule-local documentation and workflow roots. An
+extbuild-enabled checkout routes these commands through `cargo extbuild run --
+...`. Nix and OCI are deferred and unclaimed through RCLD-RSHR-170.
 
 ## Copyright and license
 
