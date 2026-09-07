@@ -4,7 +4,7 @@
   inputs = {
     crane.url = "github:ipetkov/crane/01bc1d404a51a0a07e9d8759cd50a7903e218c82";
     lib = {
-      url = "github:radrootslabs/lib/055096853fca95e15d0f813d33a14aca13be3881";
+      url = "github:radrootslabs/lib/3563f3b5a4331eb2cb3f925cafc9de524d844228";
       inputs.crane.follows = "crane";
     };
     nixpkgs.follows = "lib/nixpkgs";
@@ -20,7 +20,10 @@
       ...
     }:
     let
-      systems = lib.lib.supportedSystems;
+      systems = [
+        "aarch64-darwin"
+        "x86_64-linux"
+      ];
       forAllSystems =
         function:
         builtins.listToAttrs (
