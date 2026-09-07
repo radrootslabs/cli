@@ -3,6 +3,7 @@
 const ROOT: &str = include_str!("../src/lib.rs");
 const CLI_ROOT: &str = include_str!("../src/cli/mod.rs");
 const PUBLIC_API: &str = include_str!("../contracts/api_baselines/radroots_cli.txt");
+const FLAKE: &str = include_str!("../flake.nix");
 
 #[test]
 fn implementation_modules_are_private_and_api_is_root_only() {
@@ -37,5 +38,38 @@ fn implementation_modules_are_private_and_api_is_root_only() {
     }
     for dependency in ["clap::", "radroots::", "serde_json::"] {
         assert!(!PUBLIC_API.contains(dependency), "leaked {dependency}");
+    }
+}
+
+#[test]
+fn nix_outputs_are_real_owned_and_exactly_bounded() {
+    for required in [
+        "github:radrootslabs/lib/055096853fca95e15d0f813d33a14aca13be3881",
+        "systems = lib.lib.supportedSystems",
+        "craneLib.buildPackage",
+        "craneLib.mkCargoDerivation",
+        "program = \"${package}/bin/radroots\"",
+        "default = (cliOutputs system).package",
+        "default = (cliOutputs system).check",
+        "default = (cliOutputs system).app",
+    ] {
+        assert!(
+            FLAKE.contains(required),
+            "missing governed Nix source: {required}"
+        );
+    }
+    for forbidden in [
+        "writeShellApplication",
+        "git rev-parse",
+        "repo_root",
+        "devShells",
+        "nixosModules",
+        "aarch64-linux",
+        "x86_64-darwin",
+    ] {
+        assert!(
+            !FLAKE.contains(forbidden),
+            "forbidden Nix surface is present: {forbidden}"
+        );
     }
 }

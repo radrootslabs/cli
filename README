@@ -92,7 +92,11 @@ material. The supply-chain command validates the exact locked dependency
 graph, license policy, approved registries and immutable Lib source, then
 rejects forbidden capsule-local documentation and workflow roots. An
 extbuild-enabled checkout routes these commands through `cargo extbuild run --
-...`. Nix and OCI are deferred and unclaimed through RCLD-RSHR-170.
+...`.
+
+The standalone flake exposes exactly one real `radroots` package, check, and
+application for `aarch64-darwin` and `x86_64-linux`. It exposes no checkout
+wrapper, development shell, NixOS module, OCI artifact, or other system.
 
 ## Copyright and license
 
