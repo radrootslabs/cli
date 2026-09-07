@@ -969,6 +969,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "radroots_cli_xtask"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "radroots_core"
 version = "0.1.0-alpha"
 source = "git+https://github.com/radrootslabs/lib.git?rev=3563f3b5a4331eb2cb3f925cafc9de524d844228#3563f3b5a4331eb2cb3f925cafc9de524d844228"
