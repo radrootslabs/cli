@@ -82,11 +82,15 @@ cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 scripts/verify-boundaries.sh
+scripts/verify-source-lock.sh
 scripts/verify-supply-chain.sh
 tools/verify-repository-boundary.sh
 ```
 
-The boundary command byte-compares the root-only public API against its
+The source-lock command checks the exact Cargo lock digest, public dependency
+revision, declared version and resolved shared package sources. It runs offline
+and rejects local overrides or mismatched inputs. The boundary command includes
+this check and byte-compares the root-only public API against its
 reviewed baseline and rejects forbidden repository roots or credential
 material. The supply-chain command validates the exact locked dependency
 graph, license policy, approved registries and immutable Lib source, then

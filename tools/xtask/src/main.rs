@@ -2,10 +2,15 @@
 
 mod rshr_202_step_302_gate;
 mod rshr_202_step_302_platform;
+mod source_lock;
 
 fn main() {
     if run().is_err() {
-        eprintln!("step_302_gate_failed");
+        if std::env::args().nth(1).as_deref() == Some("source-lock-check") {
+            eprintln!("source_lock_check_failed");
+        } else {
+            eprintln!("step_302_gate_failed");
+        }
         std::process::exit(1);
     }
 }
@@ -13,6 +18,7 @@ fn main() {
 fn run() -> Result<(), ()> {
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
+        Some("source-lock-check") if arguments.next().is_none() => source_lock::run(),
         Some("rshr-step-302-gate") => {
             let args = parse_gate_args(arguments.collect())?;
             rshr_202_step_302_gate::run(args).map_err(|_| ())

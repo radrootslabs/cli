@@ -5,6 +5,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 tools/verify-repository-boundary.sh
+scripts/verify-source-lock.sh
 test "$(cargo public-api --version)" = "cargo-public-api 0.52.0"
 temporary_api="$(mktemp)"
 trap 'rm -f "$temporary_api"' EXIT
