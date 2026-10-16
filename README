@@ -102,6 +102,11 @@ The standalone flake exposes exactly one real `radroots` package, check, and
 application for `aarch64-darwin` and `x86_64-linux`. It exposes no checkout
 wrapper, development shell, NixOS module, OCI artifact, or other system.
 
+Current source inputs select Rust 1.99.0 and the exact public Lib cohort.
+`contracts/release/cli-artifact-contract.v4.json` requires separate current
+execution evidence. The original V3 descriptor and Step 302 replay retain
+their historical scope; source binding alone does not qualify new artifacts.
+
 ## Copyright and license
 
 Except as otherwise noted, all files in the `radroots_cli` distribution are

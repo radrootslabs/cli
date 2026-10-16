@@ -30,6 +30,12 @@ the standalone command surfaces; checked-in Nix material is deferred and
 unclaimed through RCLD-RSHR-170. The root `README` is concise public routing
 material, not a substitute for a machine contract.
 
+Current compiler/provider preparation uses the exact V1 Lib source lock and
+`contracts/release/cli-artifact-contract.v4.json`. Current Nix execution and
+artifact qualification require separate source-scoped evidence. The original
+V3 descriptor and Step 302 replay retain their original scope and do not
+qualify new compiler or provider inputs.
+
 `.env.example` is non-authoritative pre-refactor evidence. It does not describe
 current runtime behavior and remains only until its owning later cleanup
 checkpoint; do not use it to invent or preserve configuration behavior.

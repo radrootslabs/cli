@@ -4,7 +4,7 @@
   inputs = {
     crane.url = "github:ipetkov/crane/01bc1d404a51a0a07e9d8759cd50a7903e218c82";
     lib = {
-      url = "github:radrootslabs/lib/3563f3b5a4331eb2cb3f925cafc9de524d844228";
+      url = "github:radrootslabs/lib/386e2d7e8cca95bdd0f6ce3444b5e741ea61ef8a";
       inputs.crane.follows = "crane";
     };
     nixpkgs.follows = "lib/nixpkgs";
