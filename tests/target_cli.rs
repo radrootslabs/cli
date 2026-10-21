@@ -15,7 +15,7 @@ fn help_exposes_the_resource_command_tree() {
 }
 
 #[test]
-fn health_uses_the_registry_backed_facade() {
+fn health_uses_the_explicit_local_preview_facade() {
     let output = radroots()
         .args(["health", "inspect", "--format", "json"])
         .output()
@@ -27,6 +27,9 @@ fn health_uses_the_registry_backed_facade() {
     assert_eq!(value["status"], "ok");
     assert_eq!(value["data"]["ready"], true);
     assert_eq!(value["data"]["profile"]["artifact_graph"], "registry");
+    assert_eq!(value["data"]["profile"]["profile"], "local_only");
+    assert_eq!(value["data"]["profile"]["storage"], "memory");
+    assert_eq!(value["data"]["profile"]["network_enabled"], false);
 }
 
 #[test]

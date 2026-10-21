@@ -58,9 +58,7 @@ async fn execute(command: &TargetCommand) -> Result<Value, String> {
 }
 
 async fn inspect_local_profile() -> Result<Value, String> {
-    let client = radroots::client::memory()
-        .build()
-        .map_err(|error| format!("failed to construct the local SDK client: {error}"))?;
+    let client = radroots::Client::preview();
     let profile = radroots::client::local_only();
     client
         .close()

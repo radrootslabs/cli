@@ -56,7 +56,7 @@ envelope; scripts should evaluate both.
 The current executable accepts only the command-line controls shown by
 `radroots --help`; it does not load `.env`, user, or workspace configuration.
 `profile inspect` and `health inspect` construct and close the pinned facade's
-local-only memory client. All write operations remain fail closed until their
+explicit in-memory preview client. All write operations remain fail closed until their
 canonical SDK orchestration is implemented by a later release.
 
 `.env.example` is retained as pre-refactor implementation evidence, not as a
