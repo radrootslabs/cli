@@ -44,7 +44,7 @@ fn implementation_modules_are_private_and_api_is_root_only() {
 #[test]
 fn nix_outputs_are_real_owned_and_exactly_bounded() {
     for required in [
-        "github:radrootslabs/lib/60ce9294ff271bc311b7d18af97dc78e48e75377",
+        "github:radrootslabs/lib/05ad0ff0f521535f7649027d4f3391e6464f7fa1",
         "\"aarch64-darwin\"",
         "\"x86_64-linux\"",
         "craneLib.buildPackage",

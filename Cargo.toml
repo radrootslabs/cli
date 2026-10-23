@@ -28,9 +28,9 @@ test-fixture-geonames-asset = ["radroots/geonames"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-radroots = { git = "https://github.com/radrootslabs/lib.git", rev = "60ce9294ff271bc311b7d18af97dc78e48e75377", version = "=0.1.0-alpha" }
+radroots = { git = "https://github.com/radrootslabs/lib.git", rev = "05ad0ff0f521535f7649027d4f3391e6464f7fa1", version = "=0.1.0-alpha" }
 serde_json = "1.0"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"
